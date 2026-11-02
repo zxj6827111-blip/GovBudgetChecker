@@ -57,10 +57,25 @@ def require_no_activity_disposition(rule, doc):
     terms, sources = proof
     reason = ('原表明确无三公支出且十二格原件留空，但说明存在正数或百分比，需核对披露'
               if conflict else '原表明确本年度无三公支出且十二格原件留空，金额复算不适用')
+    diagnosis = None
+    if conflict:
+        from .diagnostics import make_diagnosis
+        diagnosis = make_diagnosis(
+            reason_codes=['text_binding_failed'],
+            next_action='human_confirm',
+        )
     receipt(rule, doc, 'three_public:explicit_empty', terms,
             status='insufficient_data' if conflict else 'not_applicable',
             formula='literal no-activity disclosure + certified native blank grid',
-            reason=reason, disclosure_sources=sources)
+            reason=reason, disclosure_sources=sources, diagnosis=diagnosis)
     if conflict:
-        raise RuleDeferred(rule.code, detail=reason)
+        raise RuleDeferred(
+            rule.code, detail=reason,
+            reason_codes=list(diagnosis['reason_codes']),
+            blocked_by=diagnosis['blocked_by'],
+            missing_operands=diagnosis['missing_operands'],
+            candidates=diagnosis['candidates'],
+            next_action=diagnosis['next_action'],
+            root_cause_key=diagnosis['root_cause_key'],
+        )
     raise RuleNotApplicable(rule.code, detail=reason)

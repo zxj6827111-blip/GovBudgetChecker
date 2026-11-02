@@ -9,9 +9,10 @@ import re
 from decimal import Decimal
 
 from .amount_math import classify_amount_diff, compute_dynamic_envelope
+from .diagnostics import blocker, make_diagnosis, merge_diagnoses
 from .fact_context import (
     _canonical_budget_stage, _column_mappings_for_instance, _fragment_for_instance,
-    operand_rejection_reason,
+    operand_rejection_diagnosis, operand_rejection_reason,
 )
 from .native_table_arithmetic import cluster_rounding, finish, receipt
 from .native_three_public_ratios import operand_ref
@@ -111,21 +112,74 @@ def _unrepresented_source_codes(artifact, table, row_codes, measure_start):
     return list(dict.fromkeys(missing))
 
 
+def _table_page(table) -> int | None:
+    for cell in getattr(table, 'cells', []) or []:
+        page = getattr(cell, 'page_number', None)
+        if type(page) is int and page > 0:
+            return page
+    return None
+
+
+def _row_missing_operand(table_code, title, page, row_key, *, role='row_identity', year=None):
+    return {
+        'source': 'table', 'role': role, 'table_code': table_code, 'page': page,
+        'row_key': row_key, 'column': None, 'fund_scope': None,
+        'stage': '决算', 'year': year,
+    }
+
+
 def _table_view(doc, table_code, *, include_income_sources=False):
     artifact, context = getattr(doc, 'parse_artifact', None), getattr(doc, 'fact_context', None)
     title = DETAIL_TABLES[table_code]
+    year = getattr(context, 'fiscal_year', None)
+    page = None
+
+    def fail(reason, diagnosis):
+        return None, reason, diagnosis
+
     if context is None or artifact is None:
-        return None, f'{title}缺少当前版本财政事实或解析产物'
+        return fail(
+            f'{title}缺少当前版本财政事实或解析产物',
+            make_diagnosis(
+                reason_codes=['table_mapping_incomplete'],
+                blocked_by=[blocker('instance_uid', table_code, 'table_mapping_incomplete')],
+                missing_operands=[_row_missing_operand(table_code, title, None, 'complete_table', year=year)],
+            ),
+        )
     if context.file_hash != artifact.source_file_hash or context.parse_run_uid != artifact.parse_run_uid:
-        return None, f'{title}财政事实与当前解析产物版本不一致'
+        return fail(
+            f'{title}财政事实与当前解析产物版本不一致',
+            make_diagnosis(
+                reason_codes=['table_mapping_incomplete'],
+                blocked_by=[blocker('instance_uid', table_code, 'table_mapping_incomplete')],
+                missing_operands=[_row_missing_operand(table_code, title, None, 'complete_table', year=year)],
+            ),
+        )
     instances = [(i, _fragment_for_instance(artifact, i)) for i in artifact.logical_tables
                  if i.table_code == table_code]
     instances = [(i, t) for i, t in instances if t is not None and t.extraction_method != 'page_text_fallback']
     if len(instances) != 1:
-        return None, f'{title}未找到唯一完整表实例'
+        code = 'table_missing' if not instances else 'table_mapping_incomplete'
+        return fail(
+            f'{title}未找到唯一完整表实例',
+            make_diagnosis(
+                reason_codes=[code],
+                blocked_by=[blocker('instance_uid', table_code, code)],
+                missing_operands=[_row_missing_operand(table_code, title, None, 'complete_table', year=year)],
+            ),
+        )
     instance, table = instances[0]
+    page = _table_page(table)
     if instance.identity_conflict:
-        return None, f'{title}续表身份冲突：{"；".join(instance.conflict_reasons)}'
+        return fail(
+            f'{title}续表身份冲突：{"；".join(instance.conflict_reasons)}',
+            make_diagnosis(
+                reason_codes=['table_mapping_incomplete'],
+                blocked_by=[blocker('instance_uid', instance.instance_uid or table_code,
+                                    'table_mapping_incomplete')],
+                missing_operands=[_row_missing_operand(table_code, title, page, 'complete_table', year=year)],
+            ),
+        )
     mappings = _column_mappings_for_instance(instance, table)
     # This rule owns the total/basic/project roles. The remaining income and
     # expenditure components have dedicated horizontal arithmetic rules.
@@ -137,21 +191,41 @@ def _table_view(doc, table_code, *, include_income_sources=False):
                       'operational_income', 'subsidiary_income', 'other_income'})
     mappings = [m for m in mappings if m.get('canonical_measure') in roles]
     if not mappings or not any(m['canonical_measure'] == 'total_actual' for m in mappings):
-        return None, f'{title}本年合计金额列身份未绑定'
+        return fail(
+            f'{title}本年合计金额列身份未绑定',
+            make_diagnosis(
+                reason_codes=['column_identity_unconfirmed'],
+                blocked_by=[blocker('column', title, 'column_identity_unconfirmed')],
+                missing_operands=[_row_missing_operand(
+                    table_code, title, page, 'total', role='total_actual', year=year)],
+            ),
+        )
     start = min(int(m['source_col_idx']) for m in mappings)
     source_cells = {(c.row_idx, c.col_idx): c for c in table.cells}
-    code_rows, issues = {}, []
+    code_rows, problems = {}, []
     row_signatures = {}
     for row_idx, row in enumerate(table.rows):
         if row_idx < table.header_row_count or is_index_header(row):
             continue
         code = _row_code(row, start)
         measure_cells = [source_cells.get((row_idx, int(m['source_col_idx']))) for m in mappings]
+        row_page = next(
+            (int(c.page_number) for c in measure_cells if c is not None and getattr(c, 'page_number', None)),
+            page,
+        )
         if code is None:
             # Repeated actual headers have no numeric amount cells; unknown
             # amount rows cannot be omitted from a complete sum.
             if any(c is not None and c.numeric_value is not None and not c.is_header for c in measure_cells):
-                issues.append(f'{title}第{row_idx + 1}行金额科目编码未唯一识别')
+                problems.append((
+                    f'{title}第{row_idx + 1}行金额科目编码未唯一识别',
+                    make_diagnosis(
+                        reason_codes=['row_code_missing'],
+                        blocked_by=[blocker('row', f'{title}第{row_idx + 1}行', 'row_code_missing')],
+                        missing_operands=[_row_missing_operand(
+                            table_code, title, row_page, f'第{row_idx + 1}行', year=year)],
+                    ),
+                ))
             continue
         signature = tuple(re.sub(r'\s+', '', str(value or '')) for value in row)
         if code in code_rows:
@@ -160,28 +234,59 @@ def _table_view(doc, table_code, *, include_income_sources=False):
             # 这种重复不携带第二个业务项，按一行参与合计；整行不一致的重复仍是
             # 身份歧义，必须转人工，不能挑一行当答案。
             if row_signatures[code] != signature:
-                issues.append(f'{title}科目{code}存在重复行身份')
+                problems.append((
+                    f'{title}科目{code}存在重复行身份',
+                    make_diagnosis(
+                        reason_codes=['row_identity_duplicate'],
+                        blocked_by=[blocker('row', f'{title}科目{code}', 'row_identity_duplicate')],
+                        missing_operands=[_row_missing_operand(table_code, title, row_page, code, year=year)],
+                    ),
+                ))
             continue
         row_signatures[code] = signature
         code_rows[code] = row_idx
-    issues += _unrepresented_source_codes(artifact, table, code_rows, start)
+    for missing_code in _unrepresented_source_codes(artifact, table, code_rows, start):
+        problems.append((
+            missing_code,
+            make_diagnosis(
+                reason_codes=['table_mapping_incomplete'],
+                blocked_by=[blocker('instance_uid', instance.instance_uid or table_code,
+                                    'table_mapping_incomplete')],
+                missing_operands=[_row_missing_operand(table_code, title, page, missing_code, year=year)],
+            ),
+        ))
     if not code_rows or 'total' not in code_rows:
-        issues.append(f'{title}未找到唯一合计行')
-    if issues:
-        return None, '；'.join(issues)
+        problems.append((
+            f'{title}未找到唯一合计行',
+            make_diagnosis(
+                reason_codes=['row_level_unresolved'],
+                blocked_by=[blocker('row', f'{title}合计行', 'row_level_unresolved')],
+                missing_operands=[_row_missing_operand(
+                    table_code, title, page, 'total', role='total_actual', year=year)],
+            ),
+        ))
+    if problems:
+        return fail(
+            '；'.join(text for text, _diag in problems),
+            merge_diagnoses(diag for _text, diag in problems),
+        )
     facts = [f for f in context.facts if f.table_code == table_code and f.instance_uid == instance.instance_uid]
-    return (instance, table, mappings, source_cells, code_rows, facts), None
+    return (instance, table, mappings, source_cells, code_rows, facts), None, None
 
 
 def _select(doc, view, code, indicator):
     instance, table, mappings, source_cells, code_rows, facts = view
     mapping = next(m for m in mappings if m['canonical_measure'] == indicator)
     cell = source_cells.get((code_rows[code], int(mapping['source_col_idx'])))
+    page = cell.page_number if cell is not None else _table_page(table)
+    year = getattr(doc.fact_context, 'fiscal_year', None)
+    missing = [_row_missing_operand(
+        table.table_code, table.title, page, code, role=indicator, year=year)]
     candidates = [f for f in facts if f.subject_code == code and f.indicator == indicator]
     if not candidates and cell is not None and cell.native_blank_verified:
         term = blank_term(doc, table.table_code, indicator, code=code)
         if term is not None:
-            return term, None
+            return term, None, None
     if len(candidates) > 1 and cell is not None:
         # 同一原行被排版重复时会有多条事实；只认绑定到本行这一格的唯一事实，
         # 不按顺序挑第一条。
@@ -192,7 +297,33 @@ def _select(doc, view, code, indicator):
         if len(bound) == 1:
             candidates = bound
     if cell is None or not str(cell.raw_text or '').strip() or len(candidates) != 1:
-        return None, f'{table.title}科目{code}/{indicator}原始单元格或当前事实缺失、不唯一'
+        reason = f'{table.title}科目{code}/{indicator}原始单元格或当前事实缺失、不唯一'
+        if cell is None:
+            diagnosis = make_diagnosis(
+                reason_codes=['column_identity_unconfirmed'],
+                blocked_by=[blocker('column', mapping.get('source_col_name') or indicator,
+                                    'column_identity_unconfirmed')],
+                missing_operands=missing,
+            )
+        elif not str(cell.raw_text or '').strip():
+            diagnosis = make_diagnosis(
+                reason_codes=['cell_blank_semantics_unknown'],
+                blocked_by=[blocker('cell', _cell_id(table, cell), 'cell_blank_semantics_unknown')],
+                missing_operands=missing,
+            )
+        elif len(candidates) > 1:
+            from .fact_context import ambiguous_operand_diagnosis
+            diagnosis = ambiguous_operand_diagnosis(
+                candidates, role=indicator, table_code=table.table_code,
+                stage='决算', year=year, fund_scope=None,
+            )
+        else:
+            diagnosis = make_diagnosis(
+                reason_codes=['cell_unbound'],
+                blocked_by=[blocker('cell', _cell_id(table, cell), 'cell_unbound')],
+                missing_operands=missing,
+            )
+        return None, reason, diagnosis
     fact = candidates[0]
     reason = operand_rejection_reason(fact, doc.fact_context.org_name)
     if (fact.unit not in _UNITS or doc.fact_context.fiscal_year is None
@@ -206,7 +337,26 @@ def _select(doc, view, code, indicator):
                      and ref.get('file_hash') == doc.fact_context.file_hash]
     if len(matching_refs) != 1:
         reason = reason or '当前事实未绑定到唯一原页原格'
-    return (None, f'{table.title}科目{code}/{indicator}：{reason}') if reason else (fact, None)
+    if reason:
+        diagnosis = operand_rejection_diagnosis(
+            fact, doc.fact_context.org_name, role=indicator,
+            table_code=table.table_code, stage='决算', year=year,
+            fund_scope=fact.fund_scope, column=indicator,
+        )
+        if fact.unit not in _UNITS:
+            diagnosis = merge_diagnoses([diagnosis, make_diagnosis(
+                reason_codes=['cell_low_confidence'],
+                blocked_by=[blocker('cell', _cell_id(table, cell), 'cell_low_confidence')],
+                missing_operands=missing,
+            )])
+        if len(matching_refs) != 1:
+            diagnosis = merge_diagnoses([diagnosis, make_diagnosis(
+                reason_codes=['cell_unbound'],
+                blocked_by=[blocker('cell', _cell_id(table, cell), 'cell_unbound')],
+                missing_operands=missing,
+            )])
+        return None, f'{table.title}科目{code}/{indicator}：{reason}', diagnosis
+    return fact, None, None
 
 
 def _compare(rule, doc, title, key, code, indicator, parent, children, *, column_total=False):
@@ -214,12 +364,37 @@ def _compare(rule, doc, title, key, code, indicator, parent, children, *, column
     scope = ('instance_uid', 'org_scope', 'fund_scope', 'fiscal_year', 'budget_stage')
     if any(any(getattr(f, k) != getattr(parent, k) for k in scope) for f in children):
         reason = f'{title}科目{code}/{indicator}操作数口径不一致'
-        receipt(rule, doc, key, facts, status='insufficient_data', formula='parent = sum(children)', reason=reason)
+        diagnosis = make_diagnosis(
+            reason_codes=['scope_unconfirmed'],
+            blocked_by=[blocker('fund_scope', '资金口径', 'scope_unconfirmed')],
+            missing_operands=[{
+                'source': 'table', 'role': 'fund_scope', 'table_code': parent.table_code,
+                'page': None, 'row_key': code,
+                'column': 'fund_scope', 'fund_scope': getattr(parent, 'fund_scope', None),
+                'stage': getattr(parent, 'budget_stage', None),
+                'year': getattr(parent, 'fiscal_year', None),
+            }],
+        )
+        receipt(rule, doc, key, facts, status='insufficient_data',
+                formula='parent = sum(children)', reason=reason, diagnosis=diagnosis)
         return [], [reason]
     total = sum((f.normalized_value for f in children), Decimal('0'))
     if isinstance(parent, NativeBlankTerm) and total != 0:
         reason = f'{title}科目{code}/{indicator}合计格原件留空而明细有金额'
-        receipt(rule, doc, key, facts, status='insufficient_data', formula='parent = sum(children)', reason=reason)
+        observation = (parent.extra_dims or {}).get('native_blank_observation') or {}
+        diagnosis = make_diagnosis(
+            reason_codes=['cell_blank_semantics_unknown'],
+            blocked_by=[blocker('cell', observation.get('source_cell_id') or parent.fact_uid,
+                                'cell_blank_semantics_unknown')],
+            missing_operands=[{
+                'source': 'table', 'role': indicator, 'table_code': parent.table_code,
+                'page': observation.get('physical_page'), 'row_key': code,
+                'column': indicator, 'fund_scope': parent.fund_scope,
+                'stage': parent.budget_stage, 'year': parent.fiscal_year,
+            }],
+        )
+        receipt(rule, doc, key, facts, status='insufficient_data',
+                formula='parent = sum(children)', reason=reason, diagnosis=diagnosis)
         return [], [reason]
     if all(isinstance(f, NativeBlankTerm) for f in facts):
         receipt(rule, doc, key, facts, status='not_applicable', formula='原件完整网格各项均为空白，无发生额关系')
@@ -299,7 +474,7 @@ def check_native_detail_tables(rule, doc, *, table_codes=None, include_income_so
     每一金额列按完整行集合检查直接父子和总计；总计只累计根科目一次，
     不重复累计其子级。一个操作数不完整只阻断该关系，并留下不足回执。
     """
-    issues, unresolved = [], []
+    issues, unresolved, diagnostics = [], [], []
     present = {item.table_code for item in getattr(getattr(doc, "parse_artifact", None), "logical_tables", [])}
     targets = list(table_codes) if table_codes is not None else [code for code in DETAIL_TABLES if code in present]
     if not targets:
@@ -308,11 +483,15 @@ def check_native_detail_tables(rule, doc, *, table_codes=None, include_income_so
     # physically present table still requires its own complete operands.
     for table_code in targets:
         title = DETAIL_TABLES[table_code]
-        view, error = _table_view(doc, table_code, include_income_sources=include_income_sources)
+        view, error, view_diagnosis = _table_view(
+            doc, table_code, include_income_sources=include_income_sources
+        )
         if error:
             unresolved.append(error)
+            if view_diagnosis:
+                diagnostics.append(view_diagnosis)
             receipt(rule, doc, f'{table_code}:complete_table', [], status='insufficient_data',
-                    formula='complete logical table', reason=error)
+                    formula='complete logical table', reason=error, diagnosis=view_diagnosis)
             continue
         _, _, mappings, _, rows, _ = view
         # 整行排版重复只在表格级规则（V33-005）报一次，避免同一缺陷在收入/支出
@@ -358,6 +537,13 @@ def check_native_detail_tables(rule, doc, *, table_codes=None, include_income_so
         paths = hierarchy_paths(codes)
         if len(set(paths.values())) != len(paths):
             unresolved.append(f'{title}科目层级存在重复身份')
+            diagnostics.append(make_diagnosis(
+                reason_codes=['row_identity_duplicate'],
+                blocked_by=[blocker('row', f'{title}科目层级', 'row_identity_duplicate')],
+                missing_operands=[_row_missing_operand(
+                    table_code, title, _table_page(view[1]), '科目层级',
+                    year=getattr(doc.fact_context, 'fiscal_year', None))],
+            ))
             continue
         roots = [code for code in codes if not any(paths[code].startswith(paths[p]) and code != p for p in codes)]
         relations = [('total', roots)] + [(code, [c for c in codes if paths[c].startswith(paths[code])
@@ -372,22 +558,35 @@ def check_native_detail_tables(rule, doc, *, table_codes=None, include_income_so
             for mapping in mappings:
                 indicator = mapping['canonical_measure']
                 key = f'{table_code}:{parent_code}:{indicator}'
-                operands, errors = [], []
+                operands, errors, select_diags = [], [], []
                 for code in [parent_code] + child_codes:
-                    fact, reason = _select(doc, view, code, indicator)
+                    fact, reason, select_diag = _select(doc, view, code, indicator)
                     if fact is not None:
                         operands.append(fact)
                     if reason:
                         errors.append(reason)
+                    if select_diag:
+                        select_diags.append(select_diag)
                 if gap or not child_codes:
                     errors.append(f'{title}科目{parent_code}/{indicator}直接层级明细不完整')
+                    select_diags.append(make_diagnosis(
+                        reason_codes=['row_level_unresolved'],
+                        blocked_by=[blocker('row', f'{title}科目{parent_code}', 'row_level_unresolved')],
+                        missing_operands=[_row_missing_operand(
+                            table_code, title, _table_page(view[1]), parent_code,
+                            role=indicator, year=getattr(doc.fact_context, 'fiscal_year', None))],
+                    ))
                 if errors:
                     unresolved.extend(errors)
+                    diag = merge_diagnoses(select_diags)
+                    if diag:
+                        diagnostics.append(diag)
                     receipt(rule, doc, key, operands, status='insufficient_data',
-                            formula='parent = sum(complete children)', reason='；'.join(errors))
+                            formula='parent = sum(complete children)', reason='；'.join(errors),
+                            diagnosis=diag)
                     continue
                 found, missing = _compare(rule, doc, title, key, parent_code, indicator,
                                           operands[0], operands[1:], column_total=parent_code == 'total')
                 issues.extend(found)
                 unresolved.extend(missing)
-    return finish(rule, cluster_rounding(rule, issues), unresolved)
+    return finish(rule, cluster_rounding(rule, issues), unresolved, diagnostics)

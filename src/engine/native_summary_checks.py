@@ -6,7 +6,11 @@ from dataclasses import replace
 from decimal import Decimal
 
 from .amount_math import rounding_envelope
-from .fact_context import _canonical_budget_stage, operand_rejection_reason
+from .fact_context import (
+    _canonical_budget_stage, ambiguous_operand_diagnosis, missing_operand_diagnosis,
+    operand_rejection_diagnosis, operand_rejection_reason,
+)
+from .diagnostics import blocker, make_diagnosis, merge_diagnoses
 from .rule_policy import amount_difference_exceeds_policy
 from .native_table_arithmetic import table_facts, receipt, finish
 from .native_three_public_ratios import operand_ref
@@ -22,38 +26,93 @@ _NAMES = {'income': ('本年收入合计',), 'expense': ('本年支出合计',),
 
 
 def _pick(doc, facts, indicator, names, *, allow_native_blank=False):
+    facts = list(facts or ())
     candidates = [f for f in facts if f.indicator == indicator
                   and re.sub(r'\s+', '', f.subject_name or '') in names]
+    table_code = facts[0].table_code if facts else None
+    page = next(
+        (ref.get('physical_page') for fact in facts
+         for ref in (fact.extra_dims or {}).get('evidence_refs') or []
+         if isinstance(ref, dict) and type(ref.get('physical_page')) is int),
+        None,
+    )
+    year = getattr(doc.fact_context, 'fiscal_year', None)
     if len(candidates) != 1:
         if not candidates and allow_native_blank and facts:
             term = blank_term(doc, facts[0].table_code, indicator, names=names)
             if term is not None:
-                return term, None
-        return None, f'{indicator}/{"或".join(names)}原始操作数缺失或不唯一'
+                return term, None, None
+        reason = f'{indicator}/{"或".join(names)}原始操作数缺失或不唯一'
+        if len(candidates) > 1:
+            diagnosis = ambiguous_operand_diagnosis(
+                candidates, role=indicator, table_code=table_code,
+                stage='决算', year=year, fund_scope=None,
+            )
+        else:
+            diagnosis = missing_operand_diagnosis(
+                role=indicator, table_code=table_code, page=page,
+                row_key='或'.join(names), column=indicator, fund_scope=None,
+                stage='决算', year=year,
+            )
+        return None, reason, diagnosis
     fact = candidates[0]
     reason = operand_rejection_reason(fact, doc.fact_context.org_name)
     if (reason or fact.fiscal_year != doc.fact_context.fiscal_year
             or _canonical_budget_stage(fact.budget_stage) != '决算'
             or fact.unit not in ('元', '万元', '亿元')
             or not fact.extra_dims.get('evidence_refs')):
-        return None, reason or '操作数年度、单位、阶段或原始证据未确认'
-    return fact, None
+        reason = reason or '操作数年度、单位、阶段或原始证据未确认'
+        diagnosis = operand_rejection_diagnosis(
+            fact, doc.fact_context.org_name, role=indicator, table_code=table_code,
+            stage='决算', year=year, fund_scope=fact.fund_scope, column=indicator,
+        )
+        if fact.unit not in ('元', '万元', '亿元'):
+            ref = next((ref.get('source_cell_id') for ref in fact.extra_dims.get('evidence_refs') or []
+                        if isinstance(ref, dict) and ref.get('source_cell_id')), fact.fact_uid)
+            diagnosis = merge_diagnoses([diagnosis, make_diagnosis(
+                reason_codes=['cell_low_confidence'],
+                blocked_by=[blocker('cell', ref, 'cell_low_confidence')],
+            )])
+        if not fact.extra_dims.get('evidence_refs'):
+            diagnosis = merge_diagnoses([diagnosis, make_diagnosis(
+                reason_codes=['cell_unbound'],
+                blocked_by=[blocker('cell', fact.fact_uid, 'cell_unbound')],
+            )])
+        return None, reason, diagnosis
+    return fact, None, None
 
 
 def _relation(rule, doc, key, label, roles, coefficients, issues, unresolved):
-    facts = [fact for _, fact, _ in roles if fact is not None]
-    reason = '；'.join(error for _, _, error in roles if error)
+    facts = [fact for _, fact, _, _ in roles if fact is not None]
+    reason = '；'.join(error for _, _, error, _ in roles if error)
+    role_diags = [diag for _, _, _, diag in roles if diag]
     if reason:
         unresolved.append(f'{label}：{reason}')
-        receipt(rule, doc, key, facts, status='insufficient_data', formula=label, reason=reason)
+        diagnosis = merge_diagnoses(role_diags)
+        receipt(rule, doc, key, facts, status='insufficient_data',
+                formula=label, reason=reason, diagnosis=diagnosis)
         return
     lhs = roles[0][1].normalized_value
-    rhs = sum((fact.normalized_value * coefficient for (_, fact, _), coefficient
+    rhs = sum((fact.normalized_value * coefficient for (_, fact, _, _), coefficient
                in zip(roles[1:], coefficients, strict=True)), Decimal('0'))
     if isinstance(roles[0][1], NativeBlankTerm) and rhs != 0:
         reason = f'{label}合计格原件留空而组成项有金额，需核对合计披露'
         unresolved.append(reason)
-        receipt(rule, doc, key, facts, status='insufficient_data', formula=label, reason=reason)
+        observation = (roles[0][1].extra_dims or {}).get('native_blank_observation') or {}
+        diagnosis = make_diagnosis(
+            reason_codes=['cell_blank_semantics_unknown'],
+            blocked_by=[blocker('cell', observation.get('source_cell_id') or roles[0][1].fact_uid,
+                                'cell_blank_semantics_unknown')],
+            missing_operands=[{
+                'source': 'table', 'role': 'total_actual', 'table_code': roles[0][1].table_code,
+                'page': observation.get('physical_page'),
+                'row_key': roles[0][1].subject_code or 'total', 'column': 'total_actual',
+                'fund_scope': roles[0][1].fund_scope, 'stage': roles[0][1].budget_stage,
+                'year': roles[0][1].fiscal_year,
+            }],
+        )
+        receipt(rule, doc, key, facts, status='insufficient_data',
+                formula=label, reason=reason, diagnosis=diagnosis)
         return
     if all(isinstance(f, NativeBlankTerm) for f in facts):
         receipt(rule, doc, key, facts, status='not_applicable', formula=label,
@@ -64,7 +123,7 @@ def _relation(rule, doc, key, label, roles, coefficients, issues, unresolved):
     if not mismatch:
         return
     refs = []
-    for role, fact, _ in roles:
+    for role, fact, _, _diag in roles:
         if isinstance(fact, NativeBlankTerm):
             continue
         for ref in fact.extra_dims.get('evidence_refs', []):
@@ -76,7 +135,7 @@ def _relation(rule, doc, key, label, roles, coefficients, issues, unresolved):
                 'table_code': facts[0].table_code,
                 'section': '收入支出决算总表' if facts[0].table_code == 'FIN_01_income_expenditure_total' else '财政拨款收入支出决算总表',
                 'relation_type': key, 'fact_source_refs': refs,
-                'operand_refs': [operand_ref(fact, role) for role, fact, _ in roles
+                'operand_refs': [operand_ref(fact, role) for role, fact, _, _diag in roles
                                  if not isinstance(fact, NativeBlankTerm)],
                 'native_blank_sources': blank_observations(facts),
                 'expected': str(rhs), 'actual': str(lhs), 'difference_wan': str(lhs - rhs),
@@ -120,12 +179,12 @@ def check_grant_general_vs_function_total(rule, doc):
     functional, other_reason = table_facts(doc, T5)
     if reason or other_reason:
         return finish(rule, [], [error for error in (reason, other_reason) if error])
-    left, lerror = _pick(doc, facts, 'general_public_budget', _NAMES['expense'])
-    right, rerror = _pick(doc, functional, 'total_actual', ('合计', '总计'))
+    left, lerror, ldiag = _pick(doc, facts, 'general_public_budget', _NAMES['expense'])
+    right, rerror, rdiag = _pick(doc, functional, 'total_actual', ('合计', '总计'))
     issues, unresolved = [], []
     _relation(rule, doc, 'grant_general_vs_function_total', '财政拨款总表一般公共预算本年支出=功能分类表合计',
-              [('财政拨款总表一般公共预算本年支出', left, lerror),
-               ('功能分类表合计', right, rerror)], [1], issues, unresolved)
+              [('财政拨款总表一般公共预算本年支出', left, lerror, ldiag),
+               ('功能分类表合计', right, rerror, rdiag)], [1], issues, unresolved)
     return finish(rule, issues, unresolved)
 
 
@@ -136,7 +195,7 @@ def _equation_zero_child(doc, facts, values, labels):
     - 缺失项不得存在任何候选事实（候选被拒是身份/年度问题，不能补零）；
     - 残差必须在政策容差内为 0；非零残差保留取数不足，不拿它凑恒等式。
     """
-    errors = [index for index, (_, error) in enumerate(values) if error]
+    errors = [index for index, (_, error, _diag) in enumerate(values) if error]
     if len(errors) != 1:
         return None
     index = errors[0]
@@ -183,8 +242,8 @@ def check_total_expenditure_balance(rule, doc):
               for names in labels]
     zero_child = _equation_zero_child(doc, facts, values, labels)
     if zero_child is not None:
-        index = next(i for i, (_, error) in enumerate(values) if error)
-        values[index] = (zero_child, None)
+        index = next(i for i, (_, error, _diag) in enumerate(values) if error)
+        values[index] = (zero_child, None, None)
     roles = [(role, *value) for role, value in zip(('parent', 'child', 'child', 'child'), values, strict=True)]
     issues, unresolved = [], []
     _relation(rule, doc, 'total_expenditure_balance', '支出总计=本年支出合计+结余分配+年末结转和结余',

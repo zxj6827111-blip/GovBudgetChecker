@@ -665,6 +665,13 @@ def _build_check_scope_export(status_payload: Dict[str, Any]) -> Dict[str, Any]:
                     "detail": item.get("detail"),
                     "basis": item.get("basis"),
                     "gap_note": item.get("gap_note"),
+                    "reason_codes": item.get("reason_codes") or [],
+                    "blocked_by": item.get("blocked_by") or [],
+                    "missing_operands": item.get("missing_operands") or [],
+                    "candidates": item.get("candidates") or [],
+                    "next_action": item.get("next_action"),
+                    "root_cause_key": item.get("root_cause_key"),
+                    "legacy_coverage_terms": item.get("legacy_coverage_terms"),
                 }
                 for item in coverage.get("instances", [])
                 if isinstance(item, dict)
@@ -1825,6 +1832,12 @@ def _append_report_appendix_pages(
                 "status": item.get("status"),
                 "reason": item.get("reason_label") or item.get("status"),
                 "detail": item.get("detail") or item.get("gap_note"),
+                "reason_codes": item.get("reason_codes") or [],
+                "blocked_by": item.get("blocked_by") or [],
+                "missing_operands": item.get("missing_operands") or [],
+                "candidates": item.get("candidates") or [],
+                "next_action": item.get("next_action"),
+                "root_cause_key": item.get("root_cause_key"),
             }
             for item in conclusion["unfinished_items"]
         ]

@@ -14,9 +14,13 @@ from .native_narrative_checks import (
     _Text, _NUMBER, _UNIT, _wan, _metadata, _sections, _foreign_owner,
     _CALIBER_CHANGE,
 )
-from .native_table_arithmetic import table_facts, select, receipt, finish
+from .native_table_arithmetic import table_facts, select, select_diagnostic, receipt, finish
 from .native_table_text import is_general_expenditure_title, sections
 from .native_three_public_ratios import operand_ref
+from .diagnostics import (
+    blocker, fact_candidate, make_diagnosis, merge_diagnoses, missing_text_operand,
+    table_candidate, text_candidate,
+)
 from src.services.fiscal_code_hierarchy import hierarchy_paths
 
 
@@ -68,25 +72,30 @@ def _name(value):
     return re.sub(r'支出$', '', re.sub(r'\s+', '', str(value or '')))
 
 
-def _unresolved(rule, doc, key, reason, unresolved, facts=(), formula='text = table'):
+def _unresolved(rule, doc, key, reason, unresolved, facts=(), formula='text = table',
+                diagnosis=None, diagnostics=None):
     unresolved.append(reason)
-    codes = []
-    if facts:
-        from src.engine.fact_context import operand_rejection_code
+    if diagnosis is None:
+        from src.engine.fact_context import operand_rejection_diagnosis
         context = getattr(doc, 'fact_context', None)
-        codes = [code for code in (
-            operand_rejection_code(fact, getattr(context, 'org_name', None)) for fact in facts
-        ) if code]
-    if not codes:
-        text = str(reason or '')
-        if '缺失或不唯一' in text:
-            codes = ['operand_missing_or_ambiguous']
-        elif '身份' in text or '识别状态' in text:
-            codes = ['identity_unconfirmed']
-        elif '未识别到' in text or '未找到' in text:
-            codes = ['source_missing']
+        rejections = [
+            operand_rejection_diagnosis(
+                fact, getattr(context, 'org_name', None), role=key,
+                table_code=getattr(fact, 'table_code', None),
+                stage=getattr(fact, 'budget_stage', None),
+                year=getattr(fact, 'fiscal_year', None),
+                fund_scope=getattr(fact, 'fund_scope', None),
+            )
+            for fact in facts
+            if getattr(fact, 'extra_dims', None)
+        ]
+        diagnosis = merge_diagnoses(rejections) or make_diagnosis(
+            reason_codes=['rule_no_reason']
+        )
+    if diagnostics is not None:
+        diagnostics.append(diagnosis)
     receipt(rule, doc, key, list(facts), status='insufficient_data',
-            formula=formula, reason=reason, reason_codes=list(dict.fromkeys(codes)))
+            formula=formula, reason=reason, diagnosis=diagnosis)
 
 
 def _source_refs(facts):
@@ -216,11 +225,65 @@ def _truncated_name_source(doc, fact, item, siblings):
             'basis': 'unique_native_code_parent_and_narrative_prefix'}
 
 
+def _text_span(text, start, end):
+    """把紧凑文本偏移映射到单页原始区间 [start, end)。"""
+    if start >= end:
+        return None
+    raw_start, raw_end = text.positions[start], text.positions[end - 1] + 1
+    for page, (left, right) in enumerate(text.pages, 1):
+        if left <= raw_start < right:
+            return page, [max(0, raw_start - left), min(right, raw_end) - left]
+    return None
+
+
+def _sentence_diagnosis(text, start, end, *, section, role, code='text_statement_unparsed',
+                        year=None, fund_scope='一般公共预算', stage='决算'):
+    page_span = _text_span(text, start, end)
+    page, span = (page_span if page_span else (None, None))
+    candidates = []
+    if page and span:
+        candidates.append(text_candidate(
+            section=section, page=page, span=span, value=None,
+        ))
+    return make_diagnosis(
+        reason_codes=[code],
+        missing_operands=[missing_text_operand(
+            role=role, section=section, page=page, row_key=None, column=None,
+            fund_scope=fund_scope, stage=stage, year=year,
+        )],
+        candidates=candidates,
+    )
+
+
 def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
     paths = hierarchy_paths({str(f.subject_code) for f in facts
                              if str(f.subject_code or '').isdigit()})
+    source_text = _Text.from_pages(getattr(doc, 'page_texts', []) or [])
+    section = '一般公共预算财政拨款支出决算情况说明'
+    year = getattr(getattr(doc, 'fact_context', None), 'fiscal_year', None)
+
+    def text_diag(code, *, extra_candidates=(), role=None):
+        page_span = _text_span(source_text, item.start(), item.end())
+        page, span = (page_span if page_span else (None, None))
+        candidates = list(extra_candidates)
+        if page and span:
+            candidates.insert(0, text_candidate(
+                section=section, page=page, span=span,
+                value=item.get('xiang') or item.get('kuan') or item.get('klass'),
+            ))
+        return make_diagnosis(
+            reason_codes=[code],
+            missing_operands=[missing_text_operand(
+                role=role or item.get('xiang') or item.get('kuan') or item.get('klass') or '科目',
+                section=section, page=page,
+                row_key={key: item.get(key) for key in ('klass', 'kuan', 'xiang') if item.get(key)},
+                fund_scope='一般公共预算', stage='决算', year=year,
+            )],
+            candidates=candidates,
+        )
+
     if len(set(paths.values())) != len(paths):
-        return None, '功能分类编码的层级身份有冲突'
+        return None, '功能分类编码的层级身份有冲突', text_diag('row_identity_duplicate')
     parent = ''
     klass = ''
 
@@ -246,8 +309,9 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
             code = next(code for code, candidate in paths.items() if candidate == path)
             _, error = select(doc, facts, 'total_actual', code=code)
             if error:
-                return None, error
-        return select(doc, facts, 'total_actual', code=leaf_code)
+                return None, error, text_diag('text_binding_failed')
+        fact, error = select(doc, facts, 'total_actual', code=leaf_code)
+        return fact, error, (text_diag('text_binding_failed') if error else None)
 
     for group, width in [('klass', 3), ('kuan', 5), ('xiang', 7)]:
         candidates = {str(f.subject_code) for f in facts
@@ -268,11 +332,12 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
                     fact, error = select(doc, facts, 'total_actual', code=matches[0][0].subject_code)
                     if not error and aliases is not None:
                         aliases.append(matches[0][1])
-                    return fact, error
+                    return fact, error, (text_diag('text_binding_failed') if error else None)
             if group == 'xiang' and not candidates:
                 rebound = rebind_leaf_under_class()
                 if rebound is not None:
-                    return rebound
+                    fact, error, diagnosis = rebound
+                    return fact, error, diagnosis
             level = {'klass': '类', 'kuan': '款', 'xiang': '项'}[group]
             if not candidates:
                 # 仅解释原文差异，不把近似名称或相同金额升级为同一科目身份。
@@ -294,17 +359,38 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
                     pages = sorted({ref['physical_page'] for ref in refs if ref.get('physical_page')})
                     text = _Text.from_pages(doc.page_texts)
                     source = text.refs(item.start(), item.end(), '原文科目')
-                    return None, (f"科目名称差异候选：正文第{source[0]['page'] if source else '?'}页写“{item[group]}”；"
-                                  f"同款表格第{'、'.join(map(str,pages)) or '?'}页编码{candidate.subject_code}写“{candidate.subject_name}”。"
-                                  "名称不一致，尚未绑定金额；请核对科目名称后确认，不能仅凭金额相同认定一致。")
-                return None, (f'说明中的{level}“{item[group]}”在表内找不到同名科目'
-                              f'（可能使用了旧科目名称或写错），无法与表格金额对应')
-            return None, f'说明中的{level}“{item[group]}”在表内对应多个科目，无法唯一对应'
+                    table_candidate_row = fact_candidate(candidate)
+                    return None, (
+                        f"科目名称差异候选：正文第{source[0]['page'] if source else '?'}页写“{item[group]}”；"
+                        f"同款表格第{'、'.join(map(str,pages)) or '?'}页编码{candidate.subject_code}写“{candidate.subject_name}”。"
+                        "名称不一致，尚未绑定金额；请核对科目名称后确认，不能仅凭金额相同认定一致。"
+                    ), text_diag(
+                        'text_binding_failed',
+                        extra_candidates=[table_candidate_row] if table_candidate_row else [],
+                        role=item.get(group),
+                    )
+                return None, (
+                    f'说明中的{level}“{item[group]}”在表内找不到同名科目'
+                    f'（可能使用了旧科目名称或写错），无法与表格金额对应'
+                ), text_diag('subject_name_unlocated', role=item.get(group))
+            return None, (
+                f'说明中的{level}“{item[group]}”在表内对应多个科目，无法唯一对应'
+            ), text_diag(
+                'text_binding_failed',
+                extra_candidates=[
+                    candidate for candidate in (
+                        fact_candidate(fact) for fact in facts
+                        if str(fact.subject_code) in candidates
+                    ) if candidate
+                ],
+                role=item.get(group),
+            )
         parent = paths[next(iter(candidates))]
         if group == 'klass':
             klass = parent
     code = next(code for code, path in paths.items() if path == parent)
-    return select(doc, facts, 'total_actual', code=code)
+    fact, error = select(doc, facts, 'total_actual', code=code)
+    return fact, error, (text_diag('text_binding_failed') if error else None)
 
 
 def _general_ranges(doc):
@@ -373,17 +459,24 @@ def check_function_disclosures(rule, doc):
     if reason:
         return finish(rule, [], [reason])
     title, begin, end = ranges[0]
-    issues, unresolved = [], []
+    issues, unresolved, diagnostics = [], [], []
+    year = getattr(getattr(doc, 'fact_context', None), 'fiscal_year', None)
     totals = list(_GENERAL_AMOUNT.finditer(text.compact, begin, end))
     if not totals:
+        diagnosis = _sentence_diagnosis(
+            text, begin, end, section=title, role='一般公共预算支出合计决算金额',
+            year=year,
+        )
         _unresolved(rule, doc, 'general:text:total:missing',
-                    '一般公共预算说明未识别到显式本年支出合计及金额单位', unresolved)
+                    '一般公共预算说明未识别到显式本年支出合计及金额单位', unresolved,
+                    diagnosis=diagnosis, diagnostics=diagnostics)
     for claim in totals:
         key = f'general:text:total:{claim.start()}'
-        fact, error = select(doc, facts, 'total_actual', code='total')
+        fact, error, diagnosis = select_diagnostic(doc, facts, 'total_actual', code='total')
         error = error or _guard(doc, text, begin, claim.start(), claim.end())
         if error:
-            _unresolved(rule, doc, key, error, unresolved, [fact] if fact else [])
+            _unresolved(rule, doc, key, error, unresolved, [fact] if fact else [],
+                        diagnosis=diagnosis, diagnostics=diagnostics)
         else:
             issues.extend(_amount(rule, doc, text, claim.start(), claim.end(), claim['amount'],
                           claim['unit'], fact, key, '一般公共预算支出合计', title))
@@ -400,10 +493,11 @@ def check_function_disclosures(rule, doc):
                              rf'(?P<amount>{_NUMBER})(?P<unit>{_UNIT})')
         for claim in pattern.finditer(text.compact, begin, end):
             key = f'general:text:class:{code}:{claim.start()}'
-            fact, error = select(doc, facts, 'total_actual', code=code)
+            fact, error, diagnosis = select_diagnostic(doc, facts, 'total_actual', code=code)
             error = error or _guard(doc, text, begin, claim.start(), claim.end())
             if error:
-                _unresolved(rule, doc, key, error, unresolved, [fact] if fact else [])
+                _unresolved(rule, doc, key, error, unresolved, [fact] if fact else [],
+                            diagnosis=diagnosis, diagnostics=diagnostics)
             else:
                 issues.extend(_amount(rule, doc, text, claim.start(), claim.end(), claim['amount'],
                               claim['unit'], fact, key, label, title))
@@ -421,13 +515,24 @@ def check_function_disclosures(rule, doc):
         claims = list(_DECISION.finditer(text.compact, item.end(), stop))
         key = f'general:text:item:{item.start()}'
         aliases = []
-        fact, error = _hierarchy_fact(doc, facts, item, siblings=items, aliases=aliases)
+        fact, error, hierarchy_diagnosis = _hierarchy_fact(
+            doc, facts, item, siblings=items, aliases=aliases
+        )
         # 博物馆、图书馆等 are literal fiscal subjects, not publisher names.
         # Their hierarchy is already validated above; only the declaration
         # prefix can introduce a foreign owner or year for this item.
         error = error or _guard(doc, text, begin, item.start(), item.start())
+        claim_diagnosis = None
         if len(claims) != 1:
             error = error or f'{item["xiang"]}条目显式决算金额缺失或不唯一，不能用预算金额替代'
+            claim_diagnosis = _sentence_diagnosis(
+                text, item.start(), stop,
+                section=title,
+                role=item["xiang"],
+                code='text_statement_unparsed' if not claims else 'text_binding_failed',
+                year=year,
+            )
+        diagnosis = merge_diagnoses([hierarchy_diagnosis, claim_diagnosis])
         if error:
             # 零额项被表内省略：说明明确写 0，且父级款合计 = 表内已列项之和。
             # 这不是“找不到科目”的取数不足，而是零值行未列示；不弹补核。
@@ -447,12 +552,13 @@ def check_function_disclosures(rule, doc):
                     formula="说明列示决算为0且表内未列零值行；父级款合计=已列项之和",
                 )
                 continue
-            _unresolved(rule, doc, key, error, unresolved, [fact] if fact else [])
+            _unresolved(rule, doc, key, error, unresolved, [fact] if fact else [],
+                        diagnosis=diagnosis, diagnostics=diagnostics)
         else:
             claim = claims[0]
             issues.extend(_amount(rule, doc, text, item.start(), claim.end(), claim['amount'],
                           claim['unit'], fact, key, item['xiang'], title, identity_sources=aliases))
-    return finish(rule, issues, unresolved)
+    return finish(rule, issues, unresolved, diagnostics)
 
 
 def _fund_total_from_classes(doc, facts):

@@ -7,7 +7,14 @@ from dataclasses import replace
 from decimal import Decimal
 
 from .amount_math import classify_amount_diff
-from .fact_context import _canonical_budget_stage, operand_rejection_reason
+from .fact_context import (
+    _canonical_budget_stage,
+    ambiguous_operand_diagnosis,
+    missing_operand_diagnosis,
+    operand_rejection_diagnosis,
+    operand_rejection_reason,
+)
+from .diagnostics import blocker, make_diagnosis, merge_diagnoses
 from .native_three_public_ratios import operand_ref
 from .rule_outcome import RuleDeferred
 from .native_empty_operands import NativeBlankTerm, blank_term, blank_observations, money_facts
@@ -29,7 +36,18 @@ def table_facts(doc, code):
     return facts, None
 
 
-def select(doc, facts, indicator, *, code=None, name=None, stage='决算', allow_native_blank=False):
+def _facts_page(facts):
+    for fact in facts or ():
+        for ref in (getattr(fact, 'extra_dims', None) or {}).get('evidence_refs') or []:
+            page = ref.get('physical_page') if isinstance(ref, dict) else None
+            if type(page) is int and page > 0:
+                return page
+    return None
+
+
+def select_diagnostic(doc, facts, indicator, *, code=None, name=None, stage='决算',
+                      allow_native_blank=False):
+    """选择唯一操作数；失败时同时返回由真实候选/拒绝原因生成的诊断。"""
     context = doc.fact_context
     normalized_name = re.sub(r'\s+', '', str(name)) if name is not None else None
     candidates = [f for f in facts if f.indicator == indicator
@@ -58,19 +76,44 @@ def select(doc, facts, indicator, *, code=None, name=None, stage='决算', allow
                     (fact.subject_code, fact.indicator, str(fact.raw_value),
                      str(fact.normalized_value), fact.unit), fact)
             candidates = list(unique.values())
+    table_code = facts[0].table_code if facts else None
     if len(candidates) != 1:
         if not candidates and allow_native_blank and facts:
             term = blank_term(doc, facts[0].table_code, indicator, code=code,
                               names=(name,) if name else (), stage=stage)
             if term is not None:
-                return term, None
-        return None, f'{code or name or indicator}的{indicator}/{stage}操作数缺失或不唯一'
+                return term, None, None
+        error = f'{code or name or indicator}的{indicator}/{stage}操作数缺失或不唯一'
+        if len(candidates) > 1:
+            diagnosis = ambiguous_operand_diagnosis(
+                candidates, role=indicator, table_code=table_code, stage=stage,
+                year=getattr(context, 'fiscal_year', None), fund_scope=None,
+            )
+        else:
+            diagnosis = missing_operand_diagnosis(
+                role=indicator, table_code=table_code, page=_facts_page(facts),
+                row_key=code or name, column=indicator, fund_scope=None,
+                stage=stage, year=getattr(context, 'fiscal_year', None),
+            )
+        return None, error, diagnosis
     fact = candidates[0]
     reason = operand_rejection_reason(fact, context.org_name)
     if (reason or context.fiscal_year is None or fact.fiscal_year != context.fiscal_year
             or fact.period not in (None, '本年')):
-        return None, reason or '操作数年度或期间不一致'
-    return fact, None
+        return None, reason or '操作数年度或期间不一致', operand_rejection_diagnosis(
+            fact, context.org_name, role=indicator,
+            table_code=fact.table_code or table_code, stage=stage,
+            year=context.fiscal_year, fund_scope=fact.fund_scope, column=indicator,
+        )
+    return fact, None, None
+
+
+def select(doc, facts, indicator, *, code=None, name=None, stage='决算', allow_native_blank=False):
+    fact, error, _diagnosis = select_diagnostic(
+        doc, facts, indicator, code=code, name=name, stage=stage,
+        allow_native_blank=allow_native_blank,
+    )
+    return fact, error
 
 
 def journal(rule, doc, facts):
@@ -89,13 +132,13 @@ def journal(rule, doc, facts):
 
 
 def receipt(rule, doc, relation, facts, *, status, formula, reason=None, disclosure_sources=(),
-            reason_codes=()):
+            reason_codes=(), diagnosis=None):
     from .rules_v33 import _v33_relation_receipt
     ids, evidence = journal(rule, doc, facts)
     _v33_relation_receipt(doc, rule.code, relation, status=status,
                           operand_fact_ids=ids, formula=formula, incomplete_reason=reason,
                           cell_observations=blank_observations(facts), disclosure_sources=disclosure_sources,
-                          reason_codes=reason_codes)
+                          reason_codes=reason_codes, diagnosis=diagnosis)
     return ids, evidence
 
 
@@ -152,12 +195,21 @@ def _literal_fact_refs(facts, doc, relation_label):
     return refs
 
 
-def finish(rule, issues, unresolved):
+def finish(rule, issues, unresolved, diagnostics=()):
     issues = cluster_source_errors(rule, issues)
     if unresolved:
         reasons = list(dict.fromkeys(unresolved))
-        raise RuleDeferred(rule.code, detail='；'.join(reasons), partial_issues=issues,
-                           unresolved_reasons=reasons)
+        merged = merge_diagnoses(diagnostics)
+        raise RuleDeferred(
+            rule.code, detail='；'.join(reasons), partial_issues=issues,
+            unresolved_reasons=reasons,
+            reason_codes=list(merged["reason_codes"]) if merged else [],
+            blocked_by=list(merged["blocked_by"]) if merged else [],
+            missing_operands=list(merged["missing_operands"]) if merged else [],
+            candidates=list(merged["candidates"]) if merged else [],
+            next_action=merged["next_action"] if merged else None,
+            root_cause_key=merged["root_cause_key"] if merged else None,
+        )
     return issues
 
 
@@ -243,17 +295,21 @@ def check_fiscal_grant_arithmetic(rule, doc):
     if error:
         return finish(rule, [], [error])
     fund_columns_zero = both_fund_tables_disclosed_empty(doc)
-    issues, unresolved, checked = [], [], 0
+    issues, unresolved, checked, diagnostics = [], [], 0, []
     for row in sorted({fact.row_order for fact in facts if fact.indicator == "expenditure_actual"}, key=str):
         row_facts = [fact for fact in facts if fact.row_order == row]
-        parent, error = select(doc, row_facts, "expenditure_actual")
+        parent, error, parent_diag = select_diagnostic(doc, row_facts, "expenditure_actual")
         if error:
             unresolved.append(error)
+            if parent_diag:
+                diagnostics.append(parent_diag)
             continue
-        children = []
+        children, child_diags = [], []
         for indicator in ("general_public_budget", "government_fund_budget", "state_capital_budget"):
-            term, missing = select(doc, row_facts, indicator, code=parent.subject_code,
-                                   name=parent.subject_name, allow_native_blank=True)
+            term, missing, missing_diag = select_diagnostic(
+                doc, row_facts, indicator, code=parent.subject_code,
+                name=parent.subject_name, allow_native_blank=True,
+            )
             if (
                 missing
                 and fund_columns_zero
@@ -263,15 +319,22 @@ def check_fiscal_grant_arithmetic(rule, doc):
                 # 两张基金表都明确无数据，且该行该资金列没有任何候选事实。
                 term = _document_scoped_zero(parent, indicator)
                 missing = None
+                missing_diag = None
             if missing:
                 error = missing
                 unresolved.append(missing)
+                if missing_diag:
+                    child_diags.append(missing_diag)
             elif term is not None:
                 children.append(term)
         key = f"{code}:row:{row}"
         if error:
+            diag = merge_diagnoses(child_diags)
+            if diag:
+                diagnostics.append(diag)
             receipt(rule, doc, key, [parent, *children], status="insufficient_data",
-                    formula="expenditure = general + government_fund + state_capital", reason=error)
+                    formula="expenditure = general + government_fund + state_capital",
+                    reason=error, diagnosis=diag)
             continue
         checked += 1
         found, missing = relation(rule, doc, key, f"财政拨款收入支出决算总表第{row + 1}行", parent, children,
@@ -280,7 +343,7 @@ def check_fiscal_grant_arithmetic(rule, doc):
         unresolved.extend(missing)
     if not checked and not unresolved:
         unresolved.append("财政拨款总表没有可确认的同一行合计及三个资金分项")
-    return finish(rule, issues, unresolved)
+    return finish(rule, issues, unresolved, diagnostics)
 
 
 def _target_disclosed_empty(doc, code):
@@ -522,12 +585,38 @@ def relation(rule, doc, key, label, parent, children, *, hints=True, fund_compos
     if not funds_match or any((f.instance_uid, f.org_scope, f.budget_stage, f.fiscal_year)
            != (parent.instance_uid, parent.org_scope, parent.budget_stage, parent.fiscal_year) for f in children):
         reason = f'{label}操作数的表实例或口径不一致'
-        receipt(rule, doc, key, facts, status='insufficient_data', formula='total = sum(parts)', reason=reason)
+        diagnosis = make_diagnosis(
+            reason_codes=['scope_unconfirmed'],
+            blocked_by=[blocker('fund_scope', '资金口径', 'scope_unconfirmed')],
+            missing_operands=[{
+                'source': 'table', 'role': 'fund_scope', 'table_code': parent.table_code,
+                'page': _facts_page(facts), 'row_key': getattr(parent, 'subject_code', None),
+                'column': 'fund_scope', 'fund_scope': getattr(parent, 'fund_scope', None),
+                'stage': getattr(parent, 'budget_stage', None),
+                'year': getattr(parent, 'fiscal_year', None),
+            }],
+        )
+        receipt(rule, doc, key, facts, status='insufficient_data',
+                formula='total = sum(parts)', reason=reason, diagnosis=diagnosis)
         return [], [reason]
     total = sum((f.normalized_value for f in children), Decimal('0'))
     if isinstance(parent, NativeBlankTerm) and total != 0:
         reason = f'{label}合计格原件留空而分项有金额，需核对合计披露'
-        receipt(rule, doc, key, facts, status='insufficient_data', formula='total = sum(parts)', reason=reason)
+        observation = (parent.extra_dims or {}).get('native_blank_observation') or {}
+        diagnosis = make_diagnosis(
+            reason_codes=['cell_blank_semantics_unknown'],
+            blocked_by=[blocker('cell', observation.get('source_cell_id') or parent.fact_uid,
+                                'cell_blank_semantics_unknown')],
+            missing_operands=[{
+                'source': 'table', 'role': 'total_actual', 'table_code': parent.table_code,
+                'page': observation.get('physical_page'),
+                'row_key': parent.subject_code or parent.subject_name,
+                'column': 'total_actual', 'fund_scope': parent.fund_scope,
+                'stage': parent.budget_stage, 'year': parent.fiscal_year,
+            }],
+        )
+        receipt(rule, doc, key, facts, status='insufficient_data',
+                formula='total = sum(parts)', reason=reason, diagnosis=diagnosis)
         return [], [reason]
     if all(isinstance(f, NativeBlankTerm) for f in facts):
         receipt(rule, doc, key, facts, status='not_applicable', formula='原件完整网格各项均为空白，无发生额关系')
@@ -578,7 +667,7 @@ def check_basic_economics(rule, doc):
     facts, reason = table_facts(doc, 'FIN_06_basic_expenditure')
     if reason:
         return finish(rule, [], [reason])
-    issues, unresolved = [], []
+    issues, unresolved, diagnostics = [], [], []
     # V33-117 owns the summary-to-class comparison. V33-243 owns class-to-detail
     # arithmetic; running both levels in both rules duplicated the same finding.
     # An amount-bearing unidentified row may be a child or a class total.
@@ -587,29 +676,53 @@ def check_basic_economics(rule, doc):
                and not re.fullmatch(r'3\d{2}(?:\d{2})?', str(f.subject_code or ''))]
     if unknown:
         reason = '经济分类金额行的科目编码无法唯一识别，明细归集未完成'
+        unknown_diag = make_diagnosis(
+            reason_codes=['row_code_missing'],
+            blocked_by=[
+                blocker('row', fact.subject_code or fact.subject_name or fact.fact_uid,
+                        'row_code_missing')
+                for fact in unknown
+            ],
+            missing_operands=[
+                {'source': 'table', 'role': 'total_actual', 'table_code': 'FIN_06_basic_expenditure',
+                 'page': _facts_page(unknown), 'row_key': fact.subject_code or fact.subject_name,
+                 'column': 'total_actual', 'fund_scope': getattr(fact, 'fund_scope', None),
+                 'stage': '决算', 'year': getattr(doc.fact_context, 'fiscal_year', None)}
+                for fact in unknown
+            ],
+        )
+        diagnostics.append(unknown_diag)
         receipt(rule, doc, 'economic:identity', unknown, status='insufficient_data',
-                formula='class = sum(complete children)', reason=reason)
+                formula='class = sum(complete children)', reason=reason, diagnosis=unknown_diag)
         unresolved.append(reason)
     for name, codes in ([('人员经费合计', ('301', '303')), ('公用经费合计', ('302', '310'))]
                         if rule.code == 'V33-117' else []):
-        parent, error = select(doc, facts, 'total_actual', name=name)
-        children = []
+        parent, error, parent_diag = select_diagnostic(doc, facts, 'total_actual', name=name)
+        children, child_diags = [], []
+        if parent_diag:
+            child_diags.append(parent_diag)
         for code in codes:
-            child, cr = select(doc, facts, 'total_actual', code=code)
+            child, cr, child_diag = select_diagnostic(doc, facts, 'total_actual', code=code)
             error = error or cr
+            if child_diag:
+                child_diags.append(child_diag)
             if child is not None:
                 children.append(child)
         key = f'economic:summary:{name}'
         if error:
             unresolved.append(error)
+            diag = merge_diagnoses(child_diags)
+            if diag:
+                diagnostics.append(diag)
             receipt(rule, doc, key, [f for f in [parent] + children if f is not None],
-                    status='insufficient_data', formula='summary = classes', reason=error)
+                    status='insufficient_data', formula='summary = classes', reason=error,
+                    diagnosis=diag)
         else:
             found, missing = relation(rule, doc, key, name, parent, children, hints=rule.code == 'V33-117')
             issues.extend(found)
             unresolved.extend(missing)
     if rule.code == 'V33-117':
-        return finish(rule, cluster_rounding(rule, issues), unresolved)
+        return finish(rule, cluster_rounding(rule, issues), unresolved, diagnostics)
     if not unknown:
         for code in sorted({f.subject_code for f in facts if re.fullmatch(r'3\d{2}', str(f.subject_code or ''))}):
             parent, error = select(doc, facts, 'total_actual', code=code)
@@ -640,41 +753,79 @@ def check_three_public_arithmetic(rule, doc):
     facts, reason = table_facts(doc, 'FIN_07_three_public')
     if reason:
         return finish(rule, [], [reason])
-    issues, unresolved = [], []
+    issues, unresolved, diagnostics = [], [], []
     for stage in ('年初预算', '决算'):
         for parent_key, parts in [('total_actual', ('overseas', 'vehicle_purchase_operation', 'reception')),
                                   ('vehicle_purchase_operation', ('vehicle_purchase', 'vehicle_operation'))]:
-            operands, errors = [], []
+            operands, errors, relation_diags = [], [], []
             for key in (parent_key,) + parts:
-                fact, error = select(doc, facts, key, code='total', stage=stage, allow_native_blank=True)
+                fact, error, diag = select_diagnostic(
+                    doc, facts, key, code='total', stage=stage, allow_native_blank=True
+                )
                 if error:
                     errors.append(error)
+                if diag:
+                    relation_diags.append(diag)
                 if fact is not None:
                     operands.append(fact)
             key = f'three_public:{stage}:{parent_key}:sum'
             if errors:
                 reason = '；'.join(errors)
                 unresolved.extend(errors)
-                receipt(rule, doc, key, operands, status='insufficient_data', formula='total = sum(parts)', reason=reason)
+                diag = merge_diagnoses(relation_diags)
+                if diag:
+                    diagnostics.append(diag)
+                receipt(rule, doc, key, operands, status='insufficient_data',
+                        formula='total = sum(parts)', reason=reason, diagnosis=diag)
             else:
                 found, missing = relation(rule, doc, key, f'三公经费{stage}{parent_key}分项合计',
                                           operands[0], operands[1:])
                 issues.extend(found)
                 unresolved.extend(missing)
-    return finish(rule, cluster_rounding(rule, issues), unresolved)
+    return finish(rule, cluster_rounding(rule, issues), unresolved, diagnostics)
 
 
 def check_expenditure_arithmetic(rule, doc):
     facts, reason = table_facts(doc, 'FIN_03_expenditure')
     if reason:
         return finish(rule, [], [reason])
-    issues, unresolved = [], []
-    if any(f.subject_code != 'total' and not re.fullmatch(r'\d{3}(?:\d{2}){0,2}', str(f.subject_code or '')) for f in facts):
+    issues, unresolved, diagnostics = [], [], []
+    unknown_rows = [
+        f for f in facts
+        if f.subject_code != 'total'
+        and not re.fullmatch(r'\d{3}(?:\d{2}){0,2}', str(f.subject_code or ''))
+    ]
+    if unknown_rows:
         unresolved.append('支出金额行的科目编码无法唯一识别，层级归集未完成')
+        diagnostics.append(make_diagnosis(
+            reason_codes=['row_code_missing'],
+            blocked_by=[
+                blocker('row', fact.subject_code or fact.subject_name or fact.fact_uid,
+                        'row_code_missing')
+                for fact in unknown_rows
+            ],
+            missing_operands=[
+                {'source': 'table', 'role': 'total_actual', 'table_code': 'FIN_03_expenditure',
+                 'page': _facts_page(unknown_rows), 'row_key': fact.subject_code or fact.subject_name,
+                 'column': 'total_actual', 'fund_scope': getattr(fact, 'fund_scope', None),
+                 'stage': '决算', 'year': getattr(doc.fact_context, 'fiscal_year', None)}
+                for fact in unknown_rows
+            ],
+        ))
     codes = sorted({f.subject_code for f in facts if f.subject_code == 'total'
                     or re.fullmatch(r'\d{3}(?:\d{2}){0,2}', str(f.subject_code or ''))})
     if 'total' not in codes:
         unresolved.append('支出决算表未找到唯一合计行')
+        diagnostics.append(make_diagnosis(
+            reason_codes=['row_level_unresolved'],
+            blocked_by=[blocker('row', '合计行', 'row_level_unresolved')],
+            missing_operands=[{
+                'source': 'table', 'role': 'total_actual', 'table_code': 'FIN_03_expenditure',
+                'page': _facts_page(facts), 'row_key': 'total', 'column': 'total_actual',
+                'fund_scope': None, 'stage': '决算',
+                'year': getattr(doc.fact_context, 'fiscal_year', None),
+            }],
+        ))
     indicators = ('total_actual', 'basic_actual', 'project_actual', 'to_superior_actual',
                   'operational_actual', 'subsidiary_actual')
     from .native_column_shift import (
@@ -690,17 +841,25 @@ def check_expenditure_arithmetic(rule, doc):
         org_name=doc.fact_context.org_name,
     )
     for code in codes:
-        operands, errors = [], []
+        operands, errors, relation_diags = [], [], []
         for indicator in indicators:
-            fact, error = select(doc, facts, indicator, code=code, allow_native_blank=True)
+            fact, error, diag = select_diagnostic(
+                doc, facts, indicator, code=code, allow_native_blank=True
+            )
             if fact is not None:
                 operands.append(fact)
             if error:
                 errors.append(error)
+            if diag:
+                relation_diags.append(diag)
         key = f'expenditure:horizontal:{code}'
         if errors:
             unresolved.extend(errors)
-            receipt(rule, doc, key, operands, status='insufficient_data', formula='total = sum(5 parts)', reason='；'.join(errors))
+            diag = merge_diagnoses(relation_diags)
+            if diag:
+                diagnostics.append(diag)
+            receipt(rule, doc, key, operands, status='insufficient_data',
+                    formula='total = sum(5 parts)', reason='；'.join(errors), diagnosis=diag)
         else:
             found, missing = relation(rule, doc, key, f'支出决算表{code}横向合计', operands[0], operands[1:])
             issues.extend(found)
@@ -737,4 +896,4 @@ def check_expenditure_arithmetic(rule, doc):
         unresolved = other + [f'支出表{key}金额操作数未绑定：科目{",".join(codes[:8])}'
                               f'（共{len(codes)}行，逐行原因已保留在关系回执）'
                               for key, codes in grouped.items()]
-    return finish(rule, cluster_rounding(rule, issues), unresolved)
+    return finish(rule, cluster_rounding(rule, issues), unresolved, diagnostics)

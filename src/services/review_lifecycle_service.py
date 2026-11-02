@@ -800,6 +800,12 @@ def _obligation_review_block(state: ReviewState) -> "ObligationReviewBlock":
                 detail=item.detail,
                 basis=definition.basis if definition else item.basis,
                 checkers=list(item.checkers),
+                reason_codes=list(item.reason_codes),
+                blocked_by=[dict(value) for value in item.blocked_by],
+                missing_operands=[dict(value) for value in item.missing_operands],
+                candidates=[dict(value) for value in item.candidates],
+                next_action=item.next_action,
+                root_cause_key=item.root_cause_key,
                 locations=resolved_locations.get(item.obligation_id, []),
                 decision=(str(row.get("decision") or "") or None) if row else None,
                 decision_revision=(

@@ -26,6 +26,7 @@ if _ROOT not in _sys.path:
     _sys.path.insert(0, _ROOT)
 
 from src.engine.check_obligations import (
+    apply_obligation_diagnosis,
     attach_obligation_ids,
     build_check_receipts,
     build_obligation_ledger,
@@ -2421,17 +2422,20 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             ai_required=_ai_assist_required(),
             structured_ingest=structured_ingest_summary,
         )
-        result["meta"]["obligation_coverage"] = obligation_coverage
         result["meta"]["fact_receipts"] = fact_receipts
         result["meta"]["structured_consumption"] = structured_consumption
         result["meta"]["fact_projection_consumers"] = sorted({row["rule_id"] for row in structured_consumption if row.get("rule_id")})
-        result["meta"]["check_receipts"] = build_check_receipts(
+        check_receipts = build_check_receipts(
             result,
             report_kind=report_kind,
             rule_execution_summary=result["meta"].get("rule_execution_summary"),
             obligation_coverage=obligation_coverage,
             fact_receipts=fact_receipts,
         )
+        # 义务级卡点必须在回执生成后汇总：T13 要求义务与关联回执逐字段同源。
+        apply_obligation_diagnosis(obligation_coverage, check_receipts)
+        result["meta"]["obligation_coverage"] = obligation_coverage
+        result["meta"]["check_receipts"] = check_receipts
         result["meta"]["rule_registry_version"] = RULE_REGISTRY_VERSION
         result["meta"]["rule_policy_version"] = PORTABLE_RULE_POLICY_VERSION
         result["meta"]["document_profile"] = document_profile.to_dict()

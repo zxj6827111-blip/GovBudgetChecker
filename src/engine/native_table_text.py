@@ -6,8 +6,9 @@ from decimal import Decimal
 
 from .native_narrative_checks import _Text, _NUMBER, _UNIT, _wan, _foreign_owner
 from .rule_policy import amount_difference_exceeds_policy
-from .native_table_arithmetic import table_facts, select, receipt, finish
+from .native_table_arithmetic import table_facts, select_diagnostic, receipt, finish
 from .native_three_public_ratios import operand_ref, subject_before
+from .diagnostics import blocker, make_diagnosis, merge_diagnoses, missing_text_operand
 from .rule_outcome import RuleDeferred
 
 
@@ -34,6 +35,22 @@ def sections(doc, match):
               for title, begin, end in _nar_repeat_sections(merged, doc, offsets)
               if match(re.sub(r'\s+', '', title))]
     return text, ranges[-1:]
+
+
+def _text_page(text, start, end):
+    refs = text.refs(start, end, '原文范围')
+    return refs[0]['page'] if refs else None
+
+
+def _text_diagnosis(text, start, end, *, section, role, code='text_statement_unparsed',
+                    year=None, stage=None, fund_scope=None):
+    return make_diagnosis(
+        reason_codes=[code],
+        missing_operands=[missing_text_operand(
+            role=role, section=section, page=_text_page(text, start, end),
+            row_key=None, column=None, fund_scope=fund_scope, stage=stage, year=year,
+        )],
+    )
 
 
 def compare(rule, doc, text, start, end, value, fact, key, label, section):
@@ -96,15 +113,25 @@ def check_three_public_totals(rule, doc):
         phase = match.group('phase')
         stage = '决算' if '决算' in phase else phase
         claims.setdefault(stage, []).append(match)
-    issues, unresolved = [], []
+    issues, unresolved, diagnostics = [], [], []
     if '决算' not in claims:
         unresolved.append('三公总体说明缺少显式决算金额，不能用预算金额替代')
+        diagnostics.append(_text_diagnosis(
+            text, begin, end, section=title, role='三公经费合计决算金额',
+            code='text_statement_unparsed', stage='决算',
+            year=getattr(doc.fact_context, 'fiscal_year', None),
+        ))
     for stage, matches in claims.items():
-        fact, error = select(doc, facts, 'total_actual', code='total', stage=stage, allow_native_blank=True)
+        fact, error, diagnosis = select_diagnostic(
+            doc, facts, 'total_actual', code='total', stage=stage, allow_native_blank=True
+        )
         if error:
             unresolved.append(error)
+            if diagnosis:
+                diagnostics.append(diagnosis)
             receipt(rule, doc, f'three_public:text:{stage}', [], status='insufficient_data',
-                    formula='explicit narrative amount == table amount', reason=error)
+                    formula='explicit narrative amount == table amount', reason=error,
+                    diagnosis=diagnosis)
             continue
         for match in matches:
             key = f'three_public:text:{stage}:{match.start()}'
@@ -114,12 +141,24 @@ def check_three_public_totals(rule, doc):
             phase_error = phase_reason(doc, fact, stage, "total_actual")
             if phase_error:
                 unresolved.append(phase_error)
-                receipt(rule, doc, key, [fact], status="insufficient_data", formula="text = table", reason=phase_error)
+                diagnosis = make_diagnosis(
+                    reason_codes=['scope_unconfirmed'],
+                    blocked_by=[blocker('budget_stage', stage, 'scope_unconfirmed')],
+                    missing_operands=[missing_text_operand(
+                        role=f'三公经费合计{stage}', section=title,
+                        page=_text_page(text, begin + offset, match.end()),
+                        row_key=None, column=None, fund_scope='财政拨款', stage=stage,
+                        year=getattr(doc.fact_context, 'fiscal_year', None),
+                    )],
+                )
+                diagnostics.append(diagnosis)
+                receipt(rule, doc, key, [fact], status="insufficient_data",
+                        formula="text = table", reason=phase_error, diagnosis=diagnosis)
                 continue
             issues.extend(compare(rule, doc, text, begin + offset, match.end(),
                  _wan(match.group('amount'), match.group('unit')), fact, key,
                  f'三公经费合计{stage}', title))
-    return finish(rule, issues, unresolved)
+    return finish(rule, issues, unresolved, diagnostics)
 
 
 def check_fiscal_grant_total(rule, doc):
@@ -140,23 +179,39 @@ def check_fiscal_grant_total(rule, doc):
     pattern = re.compile(rf'(?:财政拨款)?(?:收入支出|收支)(?:总计|合计|总额)'
                          rf'(?:为|共计|是)?(?P<amount>{_NUMBER})(?P<unit>{_UNIT})')
     claims = list(pattern.finditer(text.compact, begin, end))
-    issues, unresolved = [], []
+    issues, unresolved, diagnostics = [], [], []
     if not claims:
-        return finish(rule, [], ['说明四未披露可绑定的财政拨款收支总计金额及单位'])
-    fact, error = _pick(doc, facts, 'expenditure_actual', _NAMES['total'])
+        diagnosis = _text_diagnosis(
+            text, begin, end, section=title, role='财政拨款收支总计决算金额',
+            code='text_statement_unparsed', stage='决算',
+            year=getattr(doc.fact_context, 'fiscal_year', None),
+        )
+        diagnostics.append(diagnosis)
+        return finish(rule, [], ['说明四未披露可绑定的财政拨款收支总计金额及单位'], diagnostics)
+    fact, error, pick_diag = _pick(doc, facts, 'expenditure_actual', _NAMES['total'])
     for claim in claims:
         key = f'grant:text:total:{claim.start()}'
-        invalid = error or ('说明四总计声明属于其他年度或主体' if context_guard(
-            doc, text.compact, claim.start(), claim.end()) else None)
+        foreign = context_guard(doc, text.compact, claim.start(), claim.end())
+        invalid = error or ('说明四总计声明属于其他年度或主体' if foreign else None)
         if invalid:
             unresolved.append(invalid)
+            diagnosis = pick_diag
+            if foreign:
+                diagnosis = _text_diagnosis(
+                    text, claim.start(), claim.end(), section=title,
+                    role='财政拨款收支总计决算金额', code='text_binding_failed',
+                    stage='决算', year=getattr(doc.fact_context, 'fiscal_year', None),
+                )
+            if diagnosis:
+                diagnostics.append(diagnosis)
             receipt(rule, doc, key, [fact] if fact else [], status='insufficient_data',
-                    formula='说明四财政拨款总计 = T4支出总计', reason=invalid)
+                    formula='说明四财政拨款总计 = T4支出总计', reason=invalid,
+                    diagnosis=diagnosis)
             continue
         issues.extend(compare(rule, doc, text, claim.start(), claim.end(),
                       _wan(claim['amount'], claim['unit']), fact, key,
                       '说明4↔T4财政拨款总计', title))
-    return finish(rule, issues, unresolved)
+    return finish(rule, issues, unresolved, diagnostics)
 
 
 def check_income_structure(rule, doc):
@@ -174,23 +229,31 @@ def check_income_structure(rule, doc):
               '其他收入': 'other_income'}
     pattern = re.compile(rf"(?P<label>{'|'.join(labels)})(?:为|共计|合计为|是)?"
                          rf'(?P<amount>{_NUMBER})(?P<unit>{_UNIT})')
-    issues, unresolved, seen = [], [], set()
+    issues, unresolved, seen, diagnostics = [], [], set(), []
     for match in pattern.finditer(text.compact, begin, end):
         if context_guard(doc, text.compact, match.start(), match.end()):
             continue
         label = match.group('label')
         seen.add(label)
-        fact, error = select(doc, facts, labels[label], code='total')
+        fact, error, diagnosis = select_diagnostic(doc, facts, labels[label], code='total')
         key = f'income:text:{labels[label]}:{match.start()}'
         if error:
             unresolved.append(error)
-            receipt(rule, doc, key, [], status='insufficient_data', formula='text = table', reason=error)
+            if diagnosis:
+                diagnostics.append(diagnosis)
+            receipt(rule, doc, key, [], status='insufficient_data',
+                    formula='text = table', reason=error, diagnosis=diagnosis)
             continue
         issues.extend(compare(rule, doc, text, match.start(), match.end(),
                        _wan(match.group('amount'), match.group('unit')), fact, key, label, title))
     if '本年收入合计' not in seen:
         unresolved.append('收入决算说明未识别到本年度收入合计金额')
-    return finish(rule, issues, unresolved)
+        diagnostics.append(_text_diagnosis(
+            text, begin, end, section=title, role='本年收入合计',
+            code='text_statement_unparsed', stage='决算',
+            year=getattr(doc.fact_context, 'fiscal_year', None),
+        ))
+    return finish(rule, issues, unresolved, diagnostics)
 
 
 def check_three_public_details(rule, doc, *, require_vehicle_details=True, check_percentages=False):
@@ -207,7 +270,7 @@ def check_three_public_details(rule, doc, *, require_vehicle_details=True, check
         return finish(rule, [], ['未定位到三公经费决算说明原文'])
     title, begin, end = ranges[0]
     pattern = re.compile(rf'(?:支出)?(?:决算|预算)?(?:数)?(?:为|是)?(?P<amount>{_NUMBER})(?P<unit>{_UNIT})')
-    issues, unresolved, seen = [], [], set()
+    issues, unresolved, seen, diagnostics = [], [], set(), []
     # The concrete-detail subsection takes precedence over its summary.
     detail = re.search(r'[（(]二[）)]具体情况说明', text.compact[begin:end])
     detail_begin = begin + detail.end() if detail else begin
@@ -228,12 +291,17 @@ def check_three_public_details(rule, doc, *, require_vehicle_details=True, check
         if (not match and not absent) or context_guard(doc, text.compact, subject.start(), statement_end):
             continue
         seen.add(indicator)
-        fact, error = select(doc, facts, indicator, code='total', stage='决算', allow_native_blank=True)
+        fact, error, diagnosis = select_diagnostic(
+            doc, facts, indicator, code='total', stage='决算', allow_native_blank=True
+        )
         key = f'three_public:detail:{indicator}:{subject.start()}'
         value = Decimal('0') if absent else _wan(match.group('amount'), match.group('unit'))
         if error:
             unresolved.append(f'{LABELS[indicator]}：{error}')
-            receipt(rule, doc, key, [], status='insufficient_data', formula='text = table', reason=error)
+            if diagnosis:
+                diagnostics.append(diagnosis)
+            receipt(rule, doc, key, [], status='insufficient_data',
+                    formula='text = table', reason=error, diagnosis=diagnosis)
             continue
         if indicator == 'vehicle_purchase_operation' and value == 0 and fact.normalized_value == 0:
             start = subject.start() - len(absence.group()) if absent else subject.start()
@@ -249,7 +317,22 @@ def check_three_public_details(rule, doc, *, require_vehicle_details=True, check
             else:
                 reason = f'{LABELS[indicator]}说明有金额而表内原件留空，需核对披露'
                 unresolved.append(reason)
-                receipt(rule, doc, key, [fact], status='insufficient_data', formula='text = table', reason=reason)
+                observation = (fact.extra_dims or {}).get('native_blank_observation') or {}
+                diagnosis = make_diagnosis(
+                    reason_codes=['cell_blank_semantics_unknown'],
+                    blocked_by=[blocker('cell', observation.get('source_cell_id') or fact.fact_uid,
+                                        'cell_blank_semantics_unknown')],
+                    missing_operands=[{
+                        'source': 'table', 'role': indicator, 'table_code': fact.table_code,
+                        'page': observation.get('physical_page'),
+                        'row_key': fact.subject_code or 'total', 'column': indicator,
+                        'fund_scope': fact.fund_scope, 'stage': fact.budget_stage,
+                        'year': fact.fiscal_year,
+                    }],
+                )
+                diagnostics.append(diagnosis)
+                receipt(rule, doc, key, [fact], status='insufficient_data',
+                        formula='text = table', reason=reason, diagnosis=diagnosis)
             continue
         statement_start = subject.start() - len(absence.group()) if absent else subject.start()
         stated.setdefault(indicator, (value, statement_start, statement_end))
@@ -281,7 +364,9 @@ def check_three_public_details(rule, doc, *, require_vehicle_details=True, check
             top = {'overseas', 'vehicle_purchase_operation', 'reception'}
             if indicator in top and indicator not in mentioned and stated_total is not None:
                 others = [stated_amount(other) for other in sorted(top - {indicator})]
-                term, error = select(doc, facts, indicator, code='total', stage='决算', allow_native_blank=True)
+                term, error, _term_diag = select_diagnostic(
+                    doc, facts, indicator, code='total', stage='决算', allow_native_blank=True
+                )
                 table_value = (Decimal('0') if isinstance(term, NativeBlankTerm)
                                else term.normalized_value if term is not None else None)
                 if (None not in others and not error and table_value is not None
@@ -295,7 +380,9 @@ def check_three_public_details(rule, doc, *, require_vehicle_details=True, check
                             disclosure_sources=sources)
                     continue
             if indicator in ('vehicle_purchase', 'vehicle_operation') and zero_vehicle_sources:
-                term, error = select(doc, facts, indicator, code='total', stage='决算', allow_native_blank=True)
+                term, error, _term_diag = select_diagnostic(
+                    doc, facts, indicator, code='total', stage='决算', allow_native_blank=True
+                )
                 if not error and term.normalized_value == 0:
                     receipt(rule, doc, f'three_public:detail:{indicator}:no_vehicle_activity', [term],
                             status='not_applicable', formula='explicit zero vehicle subtotal + source verified empty/zero child',
@@ -310,7 +397,9 @@ def check_three_public_details(rule, doc, *, require_vehicle_details=True, check
                 # 原文写了“购置及运行维护费 X 万元，其中：运行维护 Y 万元”而未写购置：
                 # 未写的一项由两句显式金额相减得出，与表内一致才算已披露，不按缺失补零。
                 (subtotal, *span), (other, *other_span) = stated['vehicle_purchase_operation'], stated[sibling]
-                term, error = select(doc, facts, indicator, code='total', stage='决算', allow_native_blank=True)
+                term, error, _term_diag = select_diagnostic(
+                    doc, facts, indicator, code='total', stage='决算', allow_native_blank=True
+                )
                 table_value = (Decimal('0') if isinstance(term, NativeBlankTerm)
                                else term.normalized_value if term is not None else None)
                 if not error and table_value is not None and not amount_difference_exceeds_policy(
@@ -326,16 +415,33 @@ def check_three_public_details(rule, doc, *, require_vehicle_details=True, check
                     continue
             reason = f'{LABELS[indicator]}具体说明未识别到显式金额'
             unresolved.append(reason)
-            receipt(rule, doc, f'three_public:detail:{indicator}:missing', [], status='insufficient_data', formula='text = table', reason=reason)
+            diagnosis = _text_diagnosis(
+                text, begin, end, section=title, role=LABELS[indicator],
+                code='text_statement_unparsed', stage='决算',
+                year=getattr(doc.fact_context, 'fiscal_year', None),
+            )
+            diagnostics.append(diagnosis)
+            receipt(rule, doc, f'three_public:detail:{indicator}:missing', [],
+                    status='insufficient_data', formula='text = table', reason=reason,
+                    diagnosis=diagnosis)
     try:
         issues.extend(check_three_public_totals(rule, doc))
     except RuleDeferred as signal:
         issues.extend(signal.partial_issues or [])
         unresolved.extend(signal.unresolved_reasons or [signal.detail])
+        if getattr(signal, 'reason_codes', None) or getattr(signal, 'blocked_by', None):
+            diagnostics.append(make_diagnosis(
+                reason_codes=list(getattr(signal, 'reason_codes', []) or []) or ['rule_no_reason'],
+                blocked_by=getattr(signal, 'blocked_by', []) or (),
+                missing_operands=getattr(signal, 'missing_operands', []) or (),
+                candidates=getattr(signal, 'candidates', []) or (),
+                next_action=getattr(signal, 'next_action', None),
+                root_cause_key=getattr(signal, 'root_cause_key', None),
+            ))
     if check_percentages:
         from .native_three_public_ratios import check_shares
         from .rules_v33 import _final_section_scope
         found, missing = check_shares(rule, doc, _final_section_scope(doc, ('三公',)), doc.fact_context.fiscal_year)
         issues.extend(found)
         unresolved.extend(missing)
-    return finish(rule, issues, unresolved)
+    return finish(rule, issues, unresolved, diagnostics)

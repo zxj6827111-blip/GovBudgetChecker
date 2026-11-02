@@ -340,6 +340,15 @@ class CoverageObligationItem(BaseModel):
     blocks_gate: bool = False
     requires_ai: bool = False
     input_gaps: List[str] = Field(default_factory=list)
+    #: DH-02 结构化卡点；旧结果没有这些键时为 None/空列表。
+    reason_codes: List[str] = Field(default_factory=list)
+    blocked_by: List[Dict[str, Any]] = Field(default_factory=list)
+    missing_operands: List[Dict[str, Any]] = Field(default_factory=list)
+    candidates: List[Dict[str, Any]] = Field(default_factory=list)
+    next_action: Optional[str] = None
+    root_cause_key: Optional[str] = None
+    #: DH-03a 同源判定依据；None = 旧结果，列表（含 []）= 新结果。
+    legacy_coverage_terms: Optional[List[str]] = None
 
 
 class CoverageSummaryBlock(BaseModel):

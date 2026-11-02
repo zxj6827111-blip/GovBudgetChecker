@@ -32,6 +32,14 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from src.schemas.parse_artifact import EvidenceRef, FiscalFact, ParseArtifact
 
+from .diagnostics import (
+    KNOWN_REASON_CODES,
+    bind_diagnosis_identity,
+    blocker,
+    fact_candidate,
+    make_diagnosis,
+    missing_table_operand,
+)
 from .rule_policy import AMOUNT_TOLERANCE_WAN
 
 #: 不能作为确定操作数的识别状态（AC-01：引用即转未完成）
@@ -180,6 +188,8 @@ class OperandResolution:
     fact: Optional[FiscalFact] = None
     reason: Optional[str] = None
     candidate_uids: Tuple[str, ...] = ()
+    #: DH-02：由本次取数过程确定性生成的卡点诊断；ok 时为 None。
+    diagnosis: Optional[Dict[str, Any]] = None
 
     @property
     def ok(self) -> bool:
@@ -231,6 +241,188 @@ def _canonical_budget_stage(value: Any) -> str:
     return aliases.get(text, text)
 
 
+def _first_fact_source_ref(fact: Any) -> Dict[str, Any]:
+    for ref in (getattr(fact, "extra_dims", None) or {}).get("evidence_refs") or []:
+        if isinstance(ref, dict) and ref.get("source_cell_id") and ref.get("physical_page"):
+            return ref
+    return {}
+
+
+def _fact_cell_ref(fact: Any) -> str:
+    ref = _first_fact_source_ref(fact)
+    return str(ref.get("source_cell_id") or getattr(fact, "fact_uid", "") or "未识别到")
+
+
+def _fact_page(fact: Any) -> Optional[int]:
+    page = _first_fact_source_ref(fact).get("physical_page")
+    return page if type(page) is int and page > 0 else None
+
+
+def missing_operand_diagnosis(
+    *,
+    role: str,
+    table_code: Optional[str],
+    page: Optional[int] = None,
+    row_key: Any = None,
+    column: Optional[str] = None,
+    fund_scope: Optional[str] = None,
+    stage: Optional[str] = None,
+    year: Optional[int] = None,
+) -> Dict[str, Any]:
+    if not table_code:
+        # 没有可指向的表身份时不伪造定位；以过渡原因码保留回执。
+        return make_diagnosis(reason_codes=["rule_no_reason"])
+    return make_diagnosis(
+        reason_codes=["operand_missing"],
+        missing_operands=[
+            missing_table_operand(
+                role=role,
+                table_code=table_code,
+                page=page,
+                row_key=row_key,
+                column=column or role,
+                fund_scope=fund_scope,
+                stage=stage,
+                year=year,
+            )
+        ],
+    )
+
+
+def operand_rejection_diagnosis(
+    fact: Any,
+    organization: Optional[str] = None,
+    *,
+    role: str,
+    table_code: Optional[str] = None,
+    stage: Optional[str] = None,
+    year: Optional[int] = None,
+    fund_scope: Optional[str] = None,
+    org_scope: Optional[str] = None,
+    instance_uid: Optional[str] = None,
+    column: Optional[str] = None,
+) -> Dict[str, Any]:
+    """把 ``operand_rejection_reason`` 的判定结果翻译成冻结原因码与阻断项。
+
+    只读取事实已带的身份/识别状态，不按中文原因文本猜测。上游原因同时给出
+    同码阻断项；操作数级 ``operand_missing`` 只补充“缺在哪里”，不冒充上游。
+    """
+    extra = getattr(fact, "extra_dims", None) or {}
+    codes: List[str] = []
+    blockers: List[Dict[str, Any]] = []
+
+    def add(dimension: str, ref: Any, code: str) -> None:
+        if code not in codes:
+            codes.append(code)
+        blockers.append(blocker(dimension, ref, code))
+
+    if extra.get("identity_incomplete") or extra.get("logical_identity_conflict"):
+        if extra.get("logical_identity_conflict"):
+            add("instance_uid", getattr(fact, "instance_uid", None) or table_code,
+                "table_mapping_incomplete")
+        else:
+            if not getattr(fact, "org_name", None):
+                add("organization", organization, "subject_unconfirmed")
+            if getattr(fact, "fiscal_year", None) is None:
+                add("year", year, "scope_unconfirmed")
+            if not getattr(fact, "fund_scope", None):
+                add("fund_scope", fund_scope, "scope_unconfirmed")
+            if not _canonical_budget_stage(getattr(fact, "budget_stage", None)):
+                add("budget_stage", stage, "scope_unconfirmed")
+            if not getattr(fact, "instance_uid", None):
+                add("instance_uid", table_code, "table_mapping_incomplete")
+            if not codes:
+                add("organization", getattr(fact, "org_name", None) or organization,
+                    "subject_unconfirmed")
+    if extra.get("row_identity_status") == "code_total_conflict":
+        add("row", getattr(fact, "subject_code", None) or getattr(fact, "subject_name", None),
+            "row_identity_duplicate")
+    if extra.get("org_scope_pending"):
+        add("org_scope", "org_scope", "scope_unconfirmed")
+    if org_scope is not None and getattr(fact, "org_scope", None) is None:
+        add("org_scope", org_scope, "scope_unconfirmed")
+    if instance_uid is not None and getattr(fact, "instance_uid", None) is None:
+        add("instance_uid", instance_uid, "table_mapping_incomplete")
+    if extra.get("table_reading_status") == "incomplete":
+        add("instance_uid", getattr(fact, "instance_uid", None) or table_code,
+            "table_mapping_incomplete")
+    if _owner_rejection_reason(fact, organization):
+        add("organization", getattr(fact, "org_name", None) or organization,
+            "subject_conflict")
+    if year is not None and getattr(fact, "fiscal_year", None) is not None \
+            and int(fact.fiscal_year) != int(year):
+        add("year", year, "scope_unconfirmed")
+    if getattr(fact, "period", None) not in (None, "本年"):
+        add("budget_stage", getattr(fact, "period", None) or stage, "scope_unconfirmed")
+    if not normalized_amount_is_usable(getattr(fact, "normalized_value", None)):
+        add("cell", _fact_cell_ref(fact), "cell_low_confidence")
+    elif getattr(fact, "recognition_status", None) not in OPERAND_STATUSES:
+        add("cell", _fact_cell_ref(fact), "cell_low_confidence")
+
+    missing: List[Dict[str, Any]] = []
+    if table_code:
+        missing = [
+            missing_table_operand(
+                role=role,
+                table_code=table_code,
+                page=_fact_page(fact),
+                row_key=getattr(fact, "subject_code", None) or getattr(fact, "subject_name", None),
+                column=column or role,
+                fund_scope=fund_scope or getattr(fact, "fund_scope", None),
+                stage=stage or getattr(fact, "budget_stage", None),
+                year=year if year is not None else getattr(fact, "fiscal_year", None),
+            )
+        ]
+        if "operand_missing" not in codes:
+            codes.append("operand_missing")
+    if not codes:
+        return missing_operand_diagnosis(
+            role=role, table_code=table_code, page=_fact_page(fact),
+            row_key=getattr(fact, "subject_code", None) or getattr(fact, "subject_name", None),
+            column=column or role, fund_scope=fund_scope, stage=stage, year=year,
+        )
+    return make_diagnosis(reason_codes=codes, blocked_by=blockers, missing_operands=missing)
+
+
+def ambiguous_operand_diagnosis(
+    facts: Sequence[Any],
+    *,
+    role: str,
+    table_code: Optional[str],
+    stage: Optional[str],
+    year: Optional[int],
+    fund_scope: Optional[str],
+) -> Dict[str, Any]:
+    candidates: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for fact in facts:
+        candidate = fact_candidate(fact)
+        if candidate is None:
+            continue
+        marker = json.dumps(candidate, ensure_ascii=False, sort_keys=True, default=str)
+        if marker not in seen:
+            seen.add(marker)
+            candidates.append(candidate)
+    if len(candidates) >= 2:
+        return make_diagnosis(reason_codes=["operand_ambiguous"], candidates=candidates)
+    first = facts[0] if facts else None
+    ref = _fact_cell_ref(first) if first is not None else (table_code or "未识别到")
+    missing = (
+        [missing_table_operand(
+            role=role, table_code=table_code, page=_fact_page(first) if first is not None else None,
+            row_key=(getattr(first, "subject_code", None) or getattr(first, "subject_name", None))
+            if first is not None else None,
+            column=role, fund_scope=fund_scope, stage=stage, year=year,
+        )]
+        if table_code else []
+    )
+    return make_diagnosis(
+        reason_codes=["cell_unbound"],
+        blocked_by=[blocker("cell", ref, "cell_unbound")],
+        missing_operands=missing,
+    )
+
+
 def resolve_operand(
     context: Optional["FactContext"],
     indicator: str,
@@ -255,8 +447,51 @@ def resolve_operand(
        （歧义）；无总计角色且多个可用候选值不同 → blocked；
     4. 同值但完整身份不同仍是歧义；相同身份的重复证据才可合并选择。
     """
+    stage_hint = budget_stages[0] if budget_stages else None
+
+    def finish(
+        resolution: OperandResolution,
+        *,
+        ambiguous: Optional[Sequence[FiscalFact]] = None,
+    ) -> OperandResolution:
+        if resolution.status == "ok":
+            return resolution
+        if ambiguous:
+            diagnosis = ambiguous_operand_diagnosis(
+                list(ambiguous),
+                role=indicator,
+                table_code=table_code,
+                stage=stage_hint,
+                year=report_year,
+                fund_scope=fund_scope,
+            )
+        elif resolution.fact is None:
+            diagnosis = missing_operand_diagnosis(
+                role=indicator,
+                table_code=table_code,
+                row_key=subject_code or (subject_names[0] if subject_names else None),
+                column=indicator,
+                fund_scope=fund_scope,
+                stage=stage_hint,
+                year=report_year,
+            )
+        else:
+            diagnosis = operand_rejection_diagnosis(
+                resolution.fact,
+                context.org_name if context is not None else None,
+                role=indicator,
+                table_code=table_code or getattr(resolution.fact, "table_code", None),
+                stage=stage_hint,
+                year=report_year,
+                fund_scope=fund_scope,
+                org_scope=org_scope,
+                instance_uid=instance_uid,
+                column=indicator,
+            )
+        return dataclasses.replace(resolution, diagnosis=diagnosis)
+
     if context is None:
-        return OperandResolution(status="missing", reason="fact context absent")
+        return finish(OperandResolution(status="missing", reason="fact context absent"))
     candidates: List[FiscalFact] = []
     unresolved_scope: List[FiscalFact] = []
     for fact in context.facts:
@@ -289,21 +524,21 @@ def resolve_operand(
             continue
         candidates.append(fact)
     if unresolved_scope:
-        return OperandResolution(status='blocked',fact=unresolved_scope[0],
+        return finish(OperandResolution(status='blocked',fact=unresolved_scope[0],
             reason='存在年度、阶段或业务范围未确认的候选事实，不能唯一绑定取数口径',
-            candidate_uids=tuple(f.fact_uid for f in candidates+unresolved_scope))
+            candidate_uids=tuple(f.fact_uid for f in candidates+unresolved_scope)))
     if not candidates:
-        return OperandResolution(status="missing", reason="no candidate fact")
+        return finish(OperandResolution(status="missing", reason="no candidate fact"))
 
     owned_candidates = [
         fact for fact in candidates if _owner_rejection_reason(fact, context.org_name) is None
     ]
     if not owned_candidates:
-        return OperandResolution(
+        return finish(OperandResolution(
             status="blocked", fact=candidates[0],
             reason=_owner_rejection_reason(candidates[0], context.org_name),
             candidate_uids=tuple(fact.fact_uid for fact in candidates),
-        )
+        ))
     candidates = owned_candidates
 
     # Decide the semantic role before filtering by recognition status. A blocked
@@ -313,20 +548,20 @@ def resolve_operand(
     blocked = [f for f in role_candidates if operand_rejection_reason(f, context.org_name)]
     usable = [f for f in role_candidates if not operand_rejection_reason(f, context.org_name)]
     if blocked and usable:
-        return OperandResolution(status='blocked',fact=blocked[0],
+        return finish(OperandResolution(status='blocked',fact=blocked[0],
             reason='同一取数范围内仍有未裁定候选，不能只选择可用候选宣称身份唯一',
-            candidate_uids=tuple(f.fact_uid for f in role_candidates))
+            candidate_uids=tuple(f.fact_uid for f in role_candidates)))
     if not usable:
         first = blocked[0]
         uids = ",".join(f.fact_uid for f in blocked[:4])
-        return OperandResolution(
+        return finish(OperandResolution(
             status="blocked",
             fact=first,
             reason=(
                 f"{operand_rejection_reason(first, context.org_name)}：{uids}"
             ),
             candidate_uids=tuple(f.fact_uid for f in candidates),
-        )
+        ))
 
     pool = usable
     distinct_values = {f.normalized_value for f in pool if f.normalized_value is not None}
@@ -335,13 +570,13 @@ def resolve_operand(
         detail = ", ".join(
             f"{f.fact_uid}={f.normalized_value}" for f in pool[:4]
         )
-        return OperandResolution(
+        return finish(OperandResolution(
             status="blocked",
             reason=(
                 "同指标多个候选身份或值不同，无法唯一确定操作数，须人工消歧：" + detail
             ),
             candidate_uids=tuple(f.fact_uid for f in candidates),
-        )
+        ), ambiguous=pool)
     pool.sort(
         key=lambda f: (
             f.recognition_status != "verified",
@@ -1367,6 +1602,11 @@ def make_fact_receipt(
     cell_observations: Sequence[Dict[str, Any]] = (),
     disclosure_sources: Sequence[Dict[str, Any]] = (),
     reason_codes: Sequence[str] = (),
+    blocked_by: Sequence[Dict[str, Any]] = (),
+    missing_operands: Sequence[Dict[str, Any]] = (),
+    candidates: Sequence[Dict[str, Any]] = (),
+    next_action: Optional[str] = None,
+    root_cause_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """构造一条关系级 CheckReceipt（dict 形态，规则直接写入 doc.fact_receipts）。
 
@@ -1376,6 +1616,33 @@ def make_fact_receipt(
     from src.schemas.parse_artifact import CheckReceipt
 
     operand_ids = list(dict.fromkeys(str(item) for item in operand_fact_ids if str(item)))
+    valid_codes = [str(item) for item in reason_codes if str(item) in KNOWN_REASON_CODES]
+    diagnosis: Optional[Dict[str, Any]] = None
+    if status in {"insufficient_data", "parse_error", "execution_error"}:
+        # 未完成回执必须至少有一个冻结词表内的原因码；调用点没有给出
+        # 结构化诊断时，用过渡码 rule_no_reason 如实保留缺口。
+        diagnosis = make_diagnosis(
+            reason_codes=valid_codes or ["rule_no_reason"],
+            blocked_by=blocked_by,
+            missing_operands=missing_operands,
+            candidates=candidates,
+            next_action=next_action,
+            root_cause_key=root_cause_key,
+        )
+    elif valid_codes or blocked_by or missing_operands or candidates or next_action or root_cause_key:
+        diagnosis = make_diagnosis(
+            reason_codes=valid_codes or ["rule_no_reason"],
+            blocked_by=blocked_by,
+            missing_operands=missing_operands,
+            candidates=candidates,
+            next_action=next_action,
+            root_cause_key=root_cause_key,
+        )
+    if diagnosis:
+        diagnosis = bind_diagnosis_identity(
+            diagnosis, rule_id=str(rule_id), sub_check_id=str(sub_check_id),
+            obligation_id=obligation_id,
+        )
     if evaluation_basis is None or fact_migration_status is None:
         if operand_ids:
             default_basis = "fiscal_fact"
@@ -1414,6 +1681,11 @@ def make_fact_receipt(
         obligation_id=obligation_id,
         evaluation_basis=evaluation_basis,
         fact_migration_status=fact_migration_status,
-        reason_codes=[str(item) for item in reason_codes if str(item)],
+        reason_codes=list(diagnosis["reason_codes"]) if diagnosis else [],
+        blocked_by=list(diagnosis["blocked_by"]) if diagnosis else [],
+        missing_operands=list(diagnosis["missing_operands"]) if diagnosis else [],
+        candidates=list(diagnosis["candidates"]) if diagnosis else [],
+        next_action=diagnosis["next_action"] if diagnosis else None,
+        root_cause_key=diagnosis["root_cause_key"] if diagnosis else None,
     )
     return receipt.to_dict()

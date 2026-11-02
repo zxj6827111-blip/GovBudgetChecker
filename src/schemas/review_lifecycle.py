@@ -36,7 +36,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -300,6 +300,13 @@ class ObligationReviewItem(BaseModel):
     basis: Optional[str] = None
     #: 支撑该义务的 checker 编号；展示层据此提示同源问题（如 V33-227）。
     checkers: List[str] = Field(default_factory=list)
+    #: DH-02 结构化卡点：原因码、上游阻断、缺失操作数、歧义候选、动作与根因键。
+    reason_codes: List[str] = Field(default_factory=list)
+    blocked_by: List[Dict[str, Any]] = Field(default_factory=list)
+    missing_operands: List[Dict[str, Any]] = Field(default_factory=list)
+    candidates: List[Dict[str, Any]] = Field(default_factory=list)
+    next_action: Optional[str] = None
+    root_cause_key: Optional[str] = None
     #: 原文可跳转位置（表起始页/问题证据页）。空列表 = 当前分析代际没有可确认位置，
     #: 页面显示"未识别到位置"，不编造页码。
     locations: List[ObligationLocation] = Field(default_factory=list)

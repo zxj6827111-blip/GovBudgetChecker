@@ -737,6 +737,7 @@ def _v33_relation_receipt(
     cell_observations: Sequence[Dict[str, Any]] = (),
     disclosure_sources: Sequence[Dict[str, Any]] = (),
     reason_codes: Sequence[str] = (),
+    diagnosis: Optional[Dict[str, Any]] = None,
 ) -> None:
     """RC-04：V33 族关系级回执——每条适用关系一条，携带真实操作数 ID。"""
     from src.engine.fact_context import make_fact_receipt
@@ -748,6 +749,8 @@ def _v33_relation_receipt(
             doc.fact_receipts = receipts
         except Exception:
             pass
+    receipt_kwargs = dict(diagnosis or {})
+    receipt_kwargs.setdefault("reason_codes", reason_codes)
     receipts.append(
         make_fact_receipt(
             rule_code,
@@ -758,7 +761,7 @@ def _v33_relation_receipt(
             incomplete_reason=incomplete_reason,
             cell_observations=cell_observations,
             disclosure_sources=disclosure_sources,
-            reason_codes=reason_codes,
+            **receipt_kwargs,
         )
     )
 

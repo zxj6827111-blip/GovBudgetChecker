@@ -1,6 +1,10 @@
 """收入表横向关系从有效事实取数，认证空白仅作为本关系的观察项。"""
-from .native_hierarchy_checks import _table_view, _compare, _cell_id, check_native_detail_tables
-from .native_table_arithmetic import select, receipt, finish, cluster_rounding
+from .native_hierarchy_checks import (
+    _table_view, _compare, _cell_id, _row_missing_operand, _table_page,
+    check_native_detail_tables,
+)
+from .native_table_arithmetic import select_diagnostic, receipt, finish, cluster_rounding
+from .diagnostics import blocker, make_diagnosis, merge_diagnoses
 from .fact_context import _column_mappings_for_instance
 from .rule_outcome import RuleDeferred
 
@@ -42,14 +46,21 @@ def missing_header_findings(rule, doc):
 
 def check_income_sources(rule, doc):
     header_issues = missing_header_findings(rule, doc)
-    view, error = _table_view(doc, CODE)
+    view, error, view_diagnosis = _table_view(doc, CODE)
     if error:
-        return finish(rule, header_issues, [error])
+        return finish(rule, header_issues, [error], [view_diagnosis] if view_diagnosis else [])
     instance, table, _, _, rows, facts = view
     mappings = _column_mappings_for_instance(instance, table)
     roles = [m['canonical_measure'] for m in mappings]
     if any(roles.count(role) != 1 for role in ('total_actual', *SOURCES)):
-        return finish(rule, header_issues, ['收入表来源列未绑定至唯一已确认模板'])
+        diagnosis = make_diagnosis(
+            reason_codes=['column_identity_unconfirmed'],
+            blocked_by=[blocker('column', '收入表来源列', 'column_identity_unconfirmed')],
+            missing_operands=[_row_missing_operand(
+                CODE, table.title, _table_page(table), 'income_sources',
+                role='column_identity', year=getattr(doc.fact_context, 'fiscal_year', None))],
+        )
+        return finish(rule, header_issues, ['收入表来源列未绑定至唯一已确认模板'], [diagnosis])
     from .native_column_shift import (
         INCOME_LABELS, column_shift_hint, column_shift_issue, detect_column_shift,
     )
@@ -64,16 +75,37 @@ def check_income_sources(rule, doc):
     shift = detect_column_shift(columns, facts, org_name=doc.fact_context.org_name)
     shift_note = ('经列合计比对，本表明细行疑似整体错位一列（各列明细之和逐列等于合计行相邻列），'
                   '请优先核对原件列位。' if shift else '')
-    issues, unresolved = [], []
+    issues, unresolved, diagnostics = [], [], []
     for code in rows:
-        terms, errors, unknown_cells = [], [], []
+        terms, errors, unknown_cells, relation_diags = [], [], [], []
         for role in ('total_actual', *SOURCES):
-            term, error = select(doc, facts, role, code=code, allow_native_blank=role in SOURCES)
+            term, error, diagnosis = select_diagnostic(
+                doc, facts, role, code=code, allow_native_blank=role in SOURCES
+            )
             if error:
                 errors.append(error)
                 mapping = next(item for item in mappings if item['canonical_measure'] == role)
                 cell = next((c for c in table.cells if c.row_idx == rows[code]
                              and c.col_idx == mapping['source_col_idx']), None)
+                if diagnosis and 'operand_ambiguous' not in (diagnosis.get('reason_codes') or []):
+                    if cell is None:
+                        cell_code, dimension, ref = (
+                            'column_identity_unconfirmed', 'column',
+                            mapping.get('source_col_name') or role,
+                        )
+                    elif not str(cell.raw_text or '').strip() and not cell.native_blank_verified:
+                        cell_code, dimension, ref = (
+                            'cell_blank_semantics_unknown', 'cell', _cell_id(table, cell),
+                        )
+                    else:
+                        cell_code, dimension, ref = ('cell_unbound', 'cell', _cell_id(table, cell))
+                    diagnosis = merge_diagnoses([diagnosis, make_diagnosis(
+                        reason_codes=[cell_code],
+                        blocked_by=[blocker(dimension, ref, cell_code)],
+                        missing_operands=(diagnosis or {}).get('missing_operands') or [],
+                    )])
+                if diagnosis:
+                    relation_diags.append(diagnosis)
                 unknown_cells.append({'indicator': role, 'column_name': mapping.get('source_col_name'),
                     'physical_page': cell.page_number if cell else None,
                     'bbox': list(cell.bbox) if cell and cell.bbox else None,
@@ -86,8 +118,11 @@ def check_income_sources(rule, doc):
         key = f'{CODE}:{code}:income_sources'
         if errors:
             unresolved.extend(errors)
+            diag = merge_diagnoses(relation_diags)
+            if diag:
+                diagnostics.append(diag)
             receipt(rule, doc, key, terms, status='insufficient_data',
-                    formula='income = sum(sources)', reason='；'.join(errors))
+                    formula='income = sum(sources)', reason='；'.join(errors), diagnosis=diag)
             parent = next((term for term in terms if term.indicator == 'total_actual'), None)
             known = [term for term in terms if term.indicator != 'total_actual']
             from .amount_math import classify_amount_diff
@@ -123,4 +158,13 @@ def check_income_sources(rule, doc):
     except RuleDeferred as signal:
         issues.extend(signal.partial_issues)
         unresolved.extend(signal.unresolved_reasons or [signal.detail])
-    return finish(rule, cluster_rounding(rule, issues), unresolved)
+        if getattr(signal, 'reason_codes', None) or getattr(signal, 'blocked_by', None):
+            diagnostics.append(make_diagnosis(
+                reason_codes=list(getattr(signal, 'reason_codes', []) or []) or ['rule_no_reason'],
+                blocked_by=getattr(signal, 'blocked_by', []) or (),
+                missing_operands=getattr(signal, 'missing_operands', []) or (),
+                candidates=getattr(signal, 'candidates', []) or (),
+                next_action=getattr(signal, 'next_action', None),
+                root_cause_key=getattr(signal, 'root_cause_key', None),
+            ))
+    return finish(rule, cluster_rounding(rule, issues), unresolved, diagnostics)

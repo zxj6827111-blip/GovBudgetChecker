@@ -11,8 +11,10 @@ from decimal import Decimal
 from typing import Any
 
 from .fact_context import (
-    _canonical_budget_stage, operand_rejection_reason, is_total_role_fact,
+    _canonical_budget_stage, ambiguous_operand_diagnosis, is_total_role_fact,
+    missing_operand_diagnosis, operand_rejection_diagnosis, operand_rejection_reason,
 )
+from .diagnostics import blocker, make_diagnosis, merge_diagnoses
 
 TABLE_CODE = "FIN_07_three_public"
 _SUBJECT = re.compile(
@@ -41,25 +43,56 @@ def subject_before(text: str) -> tuple[str | None, int]:
     return match.lastgroup, positions[match.start()]
 
 
-def select_fact(context: Any, indicator: str, stage: str, year: int) -> tuple[Any, str | None]:
+def select_fact_diagnostic(context: Any, indicator: str, stage: str, year: int):
     if context is None:
-        return None, "缺少当前版本财政事实"
+        return None, "缺少当前版本财政事实", make_diagnosis(reason_codes=['rule_no_reason'])
     candidates = [f for f in context.facts
                   if f.table_code == TABLE_CODE and f.indicator == indicator
                   and f.fiscal_year == year and _canonical_budget_stage(f.budget_stage) == stage
                   and is_total_role_fact(f)]
+    page = next(
+        (ref.get('physical_page') for fact in candidates
+         for ref in (fact.extra_dims or {}).get('evidence_refs') or []
+         if isinstance(ref, dict) and type(ref.get('physical_page')) is int),
+        None,
+    )
     if not candidates:
-        return None, f"未找到同年度、同口径的{LABELS[indicator]}{stage}事实"
+        return None, f"未找到同年度、同口径的{LABELS[indicator]}{stage}事实", missing_operand_diagnosis(
+            role=indicator, table_code=TABLE_CODE, page=page,
+            row_key=LABELS[indicator], column=indicator, fund_scope=None,
+            stage=stage, year=year,
+        )
     reasons = [operand_rejection_reason(f, context.org_name) for f in candidates]
     if any(reasons):
-        return None, next(reason for reason in reasons if reason)
+        rejected = candidates[next(i for i, reason in enumerate(reasons) if reason)]
+        return None, next(reason for reason in reasons if reason), operand_rejection_diagnosis(
+            rejected, context.org_name, role=indicator, table_code=TABLE_CODE,
+            stage=stage, year=year, fund_scope=rejected.fund_scope, column=indicator,
+        )
     instances = {f.instance_uid for f in candidates}
     identities = {f.fact_uid for f in candidates}
     if len(instances) != 1 or len(identities) != 1:
-        return None, "存在多个表实例或操作数身份，无法唯一绑定"
+        return None, "存在多个表实例或操作数身份，无法唯一绑定", ambiguous_operand_diagnosis(
+            candidates, role=indicator, table_code=TABLE_CODE,
+            stage=stage, year=year, fund_scope=None,
+        )
     if not candidates[0].instance_uid or candidates[0].period not in (None, "本年"):
-        return None, "缺少表实例身份或事实期间不是本年"
-    return candidates[0], None
+        diagnosis = make_diagnosis(
+            reason_codes=['table_mapping_incomplete'],
+            blocked_by=[blocker('instance_uid', TABLE_CODE, 'table_mapping_incomplete')],
+            missing_operands=[{
+                'source': 'table', 'role': indicator, 'table_code': TABLE_CODE,
+                'page': page, 'row_key': LABELS[indicator], 'column': indicator,
+                'fund_scope': candidates[0].fund_scope, 'stage': stage, 'year': year,
+            }],
+        )
+        return None, "缺少表实例身份或事实期间不是本年", diagnosis
+    return candidates[0], None, None
+
+
+def select_fact(context: Any, indicator: str, stage: str, year: int) -> tuple[Any, str | None]:
+    fact, reason, _diagnosis = select_fact_diagnostic(context, indicator, stage, year)
+    return fact, reason
 
 
 def _rounding_range(numerator: Any, denominator: Any):
@@ -88,11 +121,23 @@ def evaluate(rule: Any, doc: Any, claim: dict[str, Any], *, indicator: str,
     from .rules_v33 import _v33_relation_receipt, _v33_fact_identity
     context = getattr(doc, "fact_context", None)
     relation = f"three_public:{'share' if share else 'completion'}:{indicator}:{claim['start']}"
-    numerator, nr = select_fact(context, indicator, "决算", year)
-    denominator, dr = select_fact(context, "total_actual" if share else indicator,
-                                  denominator_stage, year)
+    numerator, nr, numerator_diag = select_fact_diagnostic(context, indicator, "决算", year)
+    denominator, dr, denominator_diag = select_fact_diagnostic(
+        context, "total_actual" if share else indicator, denominator_stage, year
+    )
     from .native_budget_phase import phase_reason
-    dr = dr or phase_reason(doc, denominator, denominator_stage, indicator)
+    phase_error = phase_reason(doc, denominator, denominator_stage, indicator)
+    if phase_error and not dr:
+        dr = phase_error
+        denominator_diag = make_diagnosis(
+            reason_codes=['scope_unconfirmed'],
+            blocked_by=[blocker('budget_stage', denominator_stage, 'scope_unconfirmed')],
+            missing_operands=[{
+                'source': 'table', 'role': indicator, 'table_code': TABLE_CODE,
+                'page': None, 'row_key': LABELS[indicator], 'column': indicator,
+                'fund_scope': None, 'stage': denominator_stage, 'year': year,
+            }],
+        )
     if share and nr and not dr and claim['pct'] == 0 and denominator.normalized_value > 0:
         # 分母已有当前金额；分项原格留空还必须有同句“决算0/无支出”证据。
         # 只登记无活动占比的适用性，不把未印出的分项金额物化为零事实。
@@ -121,15 +166,39 @@ def evaluate(rule: Any, doc: Any, claim: dict[str, Any], *, indicator: str,
     # A declared finite percentage with a confirmed zero denominator is
     # undefined even when the numerator is not disclosed; never invent zero.
     reason = dr or (nr if not denominator_zero else None)
+    diagnosis = merge_diagnoses([numerator_diag, denominator_diag])
     if (not reason and numerator is not None and numerator.instance_uid != denominator.instance_uid):
         reason = "分子分母不属于同一张三公表实例"
+        diagnosis = make_diagnosis(
+            reason_codes=['table_mapping_incomplete'],
+            blocked_by=[blocker('instance_uid', TABLE_CODE, 'table_mapping_incomplete')],
+            missing_operands=[{
+                'source': 'table', 'role': indicator, 'table_code': TABLE_CODE,
+                'page': None, 'row_key': LABELS[indicator], 'column': indicator,
+                'fund_scope': None, 'stage': denominator_stage, 'year': year,
+            }],
+        )
     if not reason and numerator is not None and any(getattr(numerator, key) != getattr(denominator, key)
                           for key in ("org_scope", "fund_scope")):
         reason = "分子分母合并范围或资金口径不一致"
+        diagnosis = make_diagnosis(
+            reason_codes=['scope_unconfirmed'],
+            blocked_by=[blocker('fund_scope', '资金口径', 'scope_unconfirmed')],
+            missing_operands=[{
+                'source': 'table', 'role': indicator, 'table_code': TABLE_CODE,
+                'page': None, 'row_key': LABELS[indicator], 'column': indicator,
+                'fund_scope': getattr(numerator, 'fund_scope', None),
+                'stage': denominator_stage, 'year': year,
+            }],
+        )
     artifact = getattr(doc, "parse_artifact", None)
     if not reason and (artifact.source_file_hash != context.file_hash
                        or artifact.parse_run_uid != context.parse_run_uid):
         reason = "财政事实与当前解析产物版本不一致"
+        diagnosis = make_diagnosis(
+            reason_codes=['table_mapping_incomplete'],
+            blocked_by=[blocker('instance_uid', TABLE_CODE, 'table_mapping_incomplete')],
+        )
     fact_ids, evidence_ids = _v33_fact_identity(numerator, denominator)
     if fact_ids:
         journal = getattr(doc, "structured_consumption", None)
@@ -143,7 +212,8 @@ def evaluate(rule: Any, doc: Any, claim: dict[str, Any], *, indicator: str,
     if reason:
         reason = f"{LABELS[indicator]}声明「{claim['phrase']}」：{reason}"
         _v33_relation_receipt(doc, rule.code, relation, status="insufficient_data",
-                              operand_fact_ids=fact_ids, formula=formula, incomplete_reason=reason)
+                              operand_fact_ids=fact_ids, formula=formula,
+                              incomplete_reason=reason, diagnosis=diagnosis)
         return [], [reason]
     top, bottom = (numerator.normalized_value if numerator is not None else None), denominator.normalized_value
     zero = bottom == 0
