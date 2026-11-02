@@ -192,10 +192,136 @@ const DEFAULT_GUIDANCE: Omit<KnownGuidance, "category"> = {
   evidenceExample: "页码 + 表名/章节 + 科目编码（越具体越好）",
 };
 
+const REASON_CODE_LABELS: Record<string, string> = {
+  operand_missing: "操作数缺失",
+  operand_ambiguous: "操作数不唯一",
+  row_code_missing: "缺科目编码",
+  row_identity_duplicate: "行身份重复",
+  row_level_unresolved: "层级未定",
+  column_identity_unconfirmed: "列身份未确认",
+  column_width_drift: "跨页列宽漂移",
+  cell_blank_semantics_unknown: "空白格语义未知",
+  cell_low_confidence: "单元格置信度不足",
+  cell_unbound: "单元格未绑定",
+  table_missing: "缺表",
+  table_mapping_incomplete: "表映射不完整",
+  scope_unconfirmed: "汇总/资金口径未确认",
+  subject_unconfirmed: "材料主体未确认",
+  subject_conflict: "主体冲突",
+  text_statement_unparsed: "说明表述未解析",
+  text_statement_absent: "原文未见表述",
+  text_binding_failed: "说明条目绑不到表内科目",
+  name_mismatch_confirmed: "名称不一致",
+  code_name_conflict: "编码与名称冲突",
+  subject_name_unlocated: "疑似旧科目名无法定位",
+  rule_no_reason: "规则未给出具体原因",
+  parse_error: "解析失败",
+  execution_error: "规则执行异常",
+  ai_not_requested: "未请求语义复核",
+};
+
+const ACTION_LABELS: Record<string, string> = {
+  system_recheck: "系统定向补取",
+  tech_fix: "技术修复解析/规则",
+  human_confirm: "人工核对原文",
+  rerun_ai: "补跑语义复核",
+};
+
+const DIMENSION_LABELS: Record<string, string> = {
+  organization: "主体",
+  year: "年度",
+  fund_scope: "资金口径",
+  budget_stage: "预算阶段",
+  org_scope: "汇总范围",
+  instance_uid: "表实例",
+  row: "行",
+  column: "列",
+  cell: "单元格",
+};
+
+const MATERIAL_REASON_CODES = new Set([
+  "name_mismatch_confirmed",
+  "text_statement_absent",
+  "table_missing",
+  "code_name_conflict",
+  "subject_name_unlocated",
+]);
+
+function rowKeyLabel(value: unknown): string | null {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (value && typeof value === "object") {
+    const text = Object.values(value as Record<string, unknown>)
+      .filter((part) => typeof part === "string" && part.trim())
+      .join(" / ");
+    return text || null;
+  }
+  return null;
+}
+
+/** 用结构化卡点回答“卡在哪、缺什么、下一步谁处理”；旧结果返回 null。 */
+export function describeObligationDiagnosis(
+  item: ObligationReviewItemRecord,
+): string | null {
+  const codes = item.reason_codes ?? [];
+  const blocked = item.blocked_by ?? [];
+  const missing = item.missing_operands ?? [];
+  const candidates = item.candidates ?? [];
+  const action = item.next_action ?? null;
+  if (!codes.length && !blocked.length && !missing.length && !candidates.length && !action) {
+    return null;
+  }
+  const parts: string[] = [];
+  if (blocked.length) {
+    parts.push(
+      `上游未确认：${blocked
+        .map((entry) => `${DIMENSION_LABELS[entry.dimension] ?? entry.dimension}（${entry.ref}）`)
+        .join("、")}`,
+    );
+  }
+  if (missing.length) {
+    parts.push(
+      `缺少：${missing
+        .map((entry) => {
+          const where = entry.source === "table"
+            ? entry.table_code || "表格"
+            : entry.section || "说明章节";
+          const row = rowKeyLabel(entry.row_key);
+          return [where, row, entry.column].filter(Boolean).join(" / ");
+        })
+        .join("、")}`,
+    );
+  }
+  if (candidates.length) {
+    parts.push(`候选：${candidates.length} 处`);
+  }
+  if (codes.length) {
+    parts.push(`原因码：${codes.map((code) => REASON_CODE_LABELS[code] ?? code).join("、")}`);
+  }
+  if (action) {
+    parts.push(`下一步：${ACTION_LABELS[action] ?? action}`);
+  }
+  return parts.join("；") || null;
+}
+
+function structuredCategory(item: ObligationReviewItemRecord): ObligationGuidanceCategory | null {
+  const codes = item.reason_codes ?? [];
+  const action = item.next_action;
+  if (!action && codes.length === 0) return null;
+  if (action === "human_confirm") {
+    return codes.some((code) => MATERIAL_REASON_CODES.has(code)) ? "material" : "review";
+  }
+  if (action === "tech_fix" || action === "system_recheck" || action === "rerun_ai") {
+    return "limitation";
+  }
+  return null;
+}
+
 function classify(
   item: ObligationReviewItemRecord,
   known: KnownGuidance | undefined,
 ): ObligationGuidanceCategory {
+  const structured = structuredCategory(item);
+  if (structured) return structured;
   const detail = String(item.detail ?? "");
   // 强材料信号优先：即使已知义务被登记为 review，也提示"疑似材料问题"。
   if (MATERIAL_PATTERNS.some((pattern) => pattern.test(detail))) {
@@ -313,7 +439,7 @@ export function obligationGuidance(
     categoryLabel: meta.label,
     categoryTone: meta.tone,
     requirement: item.basis?.trim() || null,
-    blocker: item.detail?.trim() || null,
+    blocker: (describeObligationDiagnosis(item) ?? item.detail?.trim()) || null,
     whatToConfirm: template.whatToConfirm,
     howToDecide: template.howToDecide,
     evidenceExample: template.evidenceExample,

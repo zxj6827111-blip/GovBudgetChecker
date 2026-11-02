@@ -5,6 +5,7 @@ import re
 import unicodedata
 from dataclasses import replace
 from decimal import Decimal
+from typing import Dict, List
 
 from .amount_math import classify_amount_diff
 from .fact_context import (
@@ -893,7 +894,21 @@ def check_expenditure_arithmetic(rule, doc):
                 grouped.setdefault(match.group(2), []).append(match.group(1))
             else:
                 other.append(reason)
+        # DH-03a：优先从结构化缺失规格归组；只有与冻结兼容文本的归组
+        # 完全一致时才采用（本阶段 detail 必须逐字不变），否则回退旧解析。
+        structured: Dict[str, List[str]] = {}
+        for diagnosis in diagnostics:
+            codes = set(diagnosis.get("reason_codes") or [])
+            if codes != {"operand_missing"} or diagnosis.get("blocked_by"):
+                continue
+            for spec in diagnosis.get("missing_operands") or []:
+                role = spec.get("column") or spec.get("role")
+                row = spec.get("row_key")
+                if role and isinstance(row, str):
+                    structured.setdefault(str(role), []).append(row)
+        if structured != grouped:
+            structured = grouped
         unresolved = other + [f'支出表{key}金额操作数未绑定：科目{",".join(codes[:8])}'
                               f'（共{len(codes)}行，逐行原因已保留在关系回执）'
-                              for key, codes in grouped.items()]
+                              for key, codes in structured.items()]
     return finish(rule, cluster_rounding(rule, issues), unresolved, diagnostics)

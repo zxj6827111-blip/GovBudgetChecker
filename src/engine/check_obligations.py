@@ -1189,6 +1189,8 @@ class ObligationInstance:
     candidates: Tuple[Dict[str, Any], ...] = ()
     next_action: Optional[str] = None
     root_cause_key: Optional[str] = None
+    #: DH-03a：旧同源判定算法从原 detail 提取的引号短语，冻结保存。
+    legacy_coverage_terms: Tuple[str, ...] = ()
     evidence_kind: str = EVIDENCE_LOCATABLE
     basis: str = ""
     gap_note: str = ""
@@ -1227,6 +1229,7 @@ class ObligationInstance:
             "candidates": [dict(item) for item in self.candidates],
             "next_action": self.next_action,
             "root_cause_key": self.root_cause_key,
+            "legacy_coverage_terms": list(self.legacy_coverage_terms),
             "evidence_kind": self.evidence_kind,
             "basis": self.basis,
             "gap_note": self.gap_note,
@@ -1729,6 +1732,15 @@ def build_obligation_ledger(
         instance.input_gaps = tuple(
             _input_gaps(instance.depends_on, structured_ingest)
         )
+
+    # DH-03a：同源判定依据按**旧算法**从兼容文本冻结，供消费方迁移使用。
+    # 这里不改变 detail，也不改变判定；新身份匹配留到第二阶段 U-7。
+    from src.services.obligation_finding_coverage import distinctive_terms
+    for instance in instances:
+        if instance.status == "insufficient_data":
+            instance.legacy_coverage_terms = tuple(
+                sorted(distinctive_terms(instance.detail))
+            )
 
     return _build_summary(instances, notes)
 

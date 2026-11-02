@@ -347,6 +347,8 @@ class CoverageObligationItem(BaseModel):
     candidates: List[Dict[str, Any]] = Field(default_factory=list)
     next_action: Optional[str] = None
     root_cause_key: Optional[str] = None
+    #: DH-03a 同源判定依据；None = 旧结果，列表（含 []）= 新结果。
+    legacy_coverage_terms: Optional[List[str]] = None
 
 
 class CoverageSummaryBlock(BaseModel):

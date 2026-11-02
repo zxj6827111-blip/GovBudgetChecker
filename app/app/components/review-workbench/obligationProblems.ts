@@ -11,7 +11,7 @@
 
 import type { Problem, ProblemEvidenceRef } from "@/lib/mock";
 
-import { obligationGuidance } from "./obligationGuidance";
+import { describeObligationDiagnosis, obligationGuidance } from "./obligationGuidance";
 import {
   isObligationHandled,
   type ObligationReviewBlockRecord,
@@ -52,6 +52,16 @@ export function readableObligationReason(text: string | null | undefined): strin
     .trim();
 }
 
+/** 优先用 DH-02 结构化字段说明卡点；旧结果回退到兼容文本。 */
+export function obligationReasonText(
+  item: Pick<ObligationReviewItemRecord, "detail" | "reason_codes" | "blocked_by"
+    | "missing_operands" | "candidates" | "next_action"> | null | undefined,
+): string {
+  if (!item) return "";
+  return describeObligationDiagnosis(item as ObligationReviewItemRecord)
+    ?? readableObligationReason(item.detail);
+}
+
 function locationText(page: number, label: string | null): string {
   return label ? `第 ${page} 页 · ${label}` : `第 ${page} 页`;
 }
@@ -84,7 +94,7 @@ export function toObligationProblem(
   const evidenceRefs = locationRefs(item, id);
   const first = evidenceRefs[0];
   const checkName = item.title?.trim() || item.obligation_id;
-  const reason = [item.reason_label || item.reason, readableObligationReason(item.detail)].filter(Boolean).join("：");
+  const reason = [item.reason_label || item.reason, obligationReasonText(item)].filter(Boolean).join("：");
   return {
     id,
     ruleId: item.obligation_id,

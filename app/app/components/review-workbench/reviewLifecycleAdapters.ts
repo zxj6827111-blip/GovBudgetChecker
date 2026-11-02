@@ -93,6 +93,35 @@ export interface ObligationLocationRecord {
   bbox: number[] | null;
 }
 
+export interface ObligationBlockedByRecord {
+  dimension: string;
+  ref: string;
+  reason_code: string;
+}
+
+export interface ObligationOperandSpecRecord {
+  source: "table" | "text";
+  role: string;
+  table_code?: string | null;
+  section?: string | null;
+  page?: number | null;
+  row_key?: unknown;
+  column?: string | null;
+  fund_scope?: string | null;
+  stage?: string | null;
+  year?: number | null;
+}
+
+export interface ObligationCandidateRecord {
+  source: "table" | "text";
+  table_code?: string | null;
+  section?: string | null;
+  page?: number | null;
+  cell_id?: string | null;
+  span?: [number, number] | null;
+  value?: unknown;
+}
+
 /** 人工补核（WP3-B）的一条义务：引擎判定的阻塞实例 + 当前会话的人工决定。 */
 export interface ObligationReviewItemRecord {
   obligation_id: string;
@@ -111,6 +140,15 @@ export interface ObligationReviewItemRecord {
   basis?: string | null;
   /** 支撑该义务的 checker 编号（如 V33-227）；旧后端可能没有。 */
   checkers?: string[];
+  /** DH-02 结构化卡点；旧后端没有这些字段。 */
+  reason_codes?: string[];
+  blocked_by?: ObligationBlockedByRecord[];
+  missing_operands?: ObligationOperandSpecRecord[];
+  candidates?: ObligationCandidateRecord[];
+  next_action?: string | null;
+  root_cause_key?: string | null;
+  /** DH-03a 同源判定依据；null/缺失 = 旧结果。 */
+  legacy_coverage_terms?: string[] | null;
   /** 原文可跳转位置；旧后端/没有可靠位置时为空数组或缺失。 */
   locations?: ObligationLocationRecord[];
   /** 当前有效会话上的人工决定；null = 尚无记录（待处理）。 */

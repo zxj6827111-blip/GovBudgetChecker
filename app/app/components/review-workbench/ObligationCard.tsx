@@ -11,7 +11,7 @@
 import type { Problem } from "../../../lib/mock";
 import { WorkflowStatusBadge } from "./IssueCard";
 import { obligationGuidance, type ObligationGuidanceTone } from "./obligationGuidance";
-import { OBLIGATION_DECISION_LABELS, readableObligationReason } from "./obligationProblems";
+import { OBLIGATION_DECISION_LABELS, obligationReasonText } from "./obligationProblems";
 import type { ObligationReviewItemRecord } from "./reviewLifecycleAdapters";
 
 const SECTION_TITLE = "mb-2 text-[0.8em] font-semibold text-slate-500";
@@ -47,7 +47,7 @@ export function ObligationCard({
   const guidance = obligationGuidance(item, allItems);
   const checkName = item.title?.trim() || item.obligation_id;
   const reasonLabel = item.reason_label || item.reason || "";
-  const reasonDetail = readableObligationReason(item.detail);
+  const reasonDetail = obligationReasonText(item);
   const decisionLabel = item.decision && item.decision in OBLIGATION_DECISION_LABELS
     ? OBLIGATION_DECISION_LABELS[item.decision as keyof typeof OBLIGATION_DECISION_LABELS]
     : null;

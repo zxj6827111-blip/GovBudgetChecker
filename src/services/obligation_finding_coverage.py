@@ -133,7 +133,13 @@ def obligation_covered_by_finding(
     if str(getattr(item, "status", "") or "") != "insufficient_data":
         return False
     checkers = {str(code).strip() for code in (getattr(item, "checkers", None) or [])}
-    terms = distinctive_terms(str(getattr(item, "detail", None) or ""))
+    raw_terms = getattr(item, "legacy_coverage_terms", None)
+    if raw_terms is None:
+        # 旧结果（字段缺失或 null）：沿用旧算法解析兼容文本。
+        terms = distinctive_terms(str(getattr(item, "detail", None) or ""))
+    else:
+        # 新结果：只使用冻结列表，任何情况下都不回读 detail（包括空列表）。
+        terms = {str(term).strip() for term in raw_terms if str(term).strip()}
     if not checkers or not terms:
         return False
 

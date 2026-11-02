@@ -9,6 +9,7 @@ import {
   obligationAutoEvidence,
   obligationItemsByProblemId,
   obligationProblemId,
+  obligationReasonText,
   obligationStatusEntries,
   readableObligationReason,
   toObligationProblems,
@@ -300,5 +301,36 @@ assert.equal(
 );
 assert.equal(readableObligationReason("PDF/表8 未识别到"), "PDF/表8 未识别到");
 assert.equal(readableObligationReason(null), "");
+assert.equal(
+  obligationReasonText({
+    detail: "PDF/表8 未识别到",
+    reason_codes: [],
+    blocked_by: [],
+    missing_operands: [],
+    candidates: [],
+    next_action: null,
+  }),
+  "PDF/表8 未识别到",
+);
+assert.match(
+  obligationReasonText({
+    detail: "",
+    reason_codes: ["operand_missing"],
+    blocked_by: [],
+    missing_operands: [{
+      source: "table",
+      role: "total_actual",
+      table_code: "FIN_03_expenditure",
+      page: 7,
+      row_key: "total",
+      column: "total_actual",
+      stage: "决算",
+      year: 2025,
+    }],
+    candidates: [],
+    next_action: "system_recheck",
+  }),
+  /缺少：FIN_03_expenditure.*下一步：系统定向补取/,
+);
 
 console.log("reviewObligationAdapters.test.ts passed");

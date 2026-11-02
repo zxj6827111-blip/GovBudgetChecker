@@ -755,3 +755,30 @@ async def test_analysis_start_hook_failure_does_not_block_analysis(tmp_path, mon
     payload = await runtime.start_analysis("job-analyze-hook-fail", {"mode": "legacy"})
 
     assert payload["status"] == "started", "钩子失败不能阻断分析"
+
+
+def test_review_block_projects_structured_diagnostic_fields():
+    item = _obligation_item("OBL-DIAG", status="insufficient_data")
+    item.reason_codes = ["operand_missing"]
+    item.blocked_by = [{"dimension": "cell", "ref": "cell-1", "reason_code": "cell_unbound"}]
+    item.missing_operands = [{
+        "source": "table", "role": "total_actual", "table_code": "FIN_03_expenditure",
+        "page": 7, "row_key": "208", "column": "project_actual",
+        "fund_scope": None, "stage": "决算", "year": 2025,
+    }]
+    item.candidates = []
+    item.next_action = "system_recheck"
+    item.root_cause_key = "rc:test"
+    item.legacy_coverage_terms = ["旧科目名称"]
+    state = _state(
+        active=_session(),
+        coverage_available=True,
+        coverage_blocking_total=1,
+        coverage_items=[item],
+    )
+    block = review_lifecycle_service._obligation_review_block(state)
+    assert block.items[0].missing_operands == item.missing_operands
+    assert block.items[0].reason_codes == ["operand_missing"]
+    assert block.items[0].next_action == "system_recheck"
+    assert block.items[0].root_cause_key == "rc:test"
+    assert block.items[0].legacy_coverage_terms == ["旧科目名称"]
