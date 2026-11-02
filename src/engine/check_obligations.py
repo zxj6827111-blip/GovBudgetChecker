@@ -2042,14 +2042,17 @@ def apply_obligation_diagnosis(
         if not obligation_id:
             continue
         # 未完成回执全部参与汇总；另有 10 条状态为 pass/fail、但底层规则未完成
-        # 的特殊回执（diagnostic_scope 审定）也携带结构化诊断，必须同样汇总。
-        has_diagnosis = any(
-            receipt.get(field)
-            for field in ("reason_codes", "blocked_by", "missing_operands",
-                          "candidates", "next_action", "root_cause_key")
-        )
-        if receipt.get("status") not in UNCOMPLETED_RECEIPT_STATUSES and not has_diagnosis:
-            continue
+        # 的特殊**义务×规则聚合**回执（diagnostic_scope 审定）也携带诊断，
+        # 必须同样汇总。普通 pass/fail 关系回执不在诊断范围，不能把它们的
+        # 原因码塞进父义务（T13）。
+        if receipt.get("status") not in UNCOMPLETED_RECEIPT_STATUSES:
+            is_special_aggregate = (
+                bool(receipt.get("incomplete_reason"))
+                and receipt.get("sub_check_id")
+                == f"{obligation_id}:{receipt.get('rule_id')}"
+            )
+            if not is_special_aggregate:
+                continue
         children_by_obligation.setdefault(str(obligation_id), []).append(receipt)
 
     for instance in instances:
