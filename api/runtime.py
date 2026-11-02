@@ -135,7 +135,8 @@ JOB_META_FILENAME = "job_meta.json"
 JOB_SUMMARY_FILENAME = "job_summary.json"
 # 摘要字段口径的版本：新增或改变摘要字段时递增，旧快照因键失配自动重建。
 # 2：增加审核台两个页签的条数（queue_*）；3：必须处理计入“未能自动核对”（queue_obligation_total）。
-JOB_SUMMARY_SCHEMA_VERSION = 3
+# 4：DH-03a 同源判定改读 legacy_coverage_terms，旧摘要按新判定重建。
+JOB_SUMMARY_SCHEMA_VERSION = 4
 JOB_META_KEYS = (
     "job_id",
     "checksum",

@@ -23,7 +23,7 @@ import { IssueCard, IssueDecisionFooter, IssueRow } from "./IssueCard";
 import { IgnoreReasonPanel } from "./IgnoreReasonPanel";
 import { ObligationCard } from "./ObligationCard";
 import { ObligationDecisionPanel, type ObligationPanelDecision } from "./ObligationDecisionPanel";
-import { isObligationProblem, obligationAutoEvidence, readableObligationReason, type ObligationDecision } from "./obligationProblems";
+import { isObligationProblem, obligationAutoEvidence, obligationReasonText, type ObligationDecision } from "./obligationProblems";
 import type { IgnoreReason } from "./reviewDecisionNotes";
 import type { ObligationReviewItemRecord } from "./reviewLifecycleAdapters";
 import type { Problem } from "../../../lib/mock";
@@ -730,7 +730,7 @@ export function IssuesTab({
             key={`${obligationPanelTarget.problem.id}:${obligationPanelTarget.decision}`}
             decision={obligationPanelTarget.decision}
             checkName={obligationItems[obligationPanelTarget.problem.id]?.title ?? obligationPanelTarget.problem.title}
-            defaultNote={readableObligationReason(obligationItems[obligationPanelTarget.problem.id]?.detail)}
+            defaultNote={obligationReasonText(obligationItems[obligationPanelTarget.problem.id])}
             isSubmitting={obligationSubmitting}
             onSubmit={(note) => void handleObligation(obligationPanelTarget.problem, obligationPanelTarget.decision, note)}
             onCancel={() => setObligationPanel(null)}

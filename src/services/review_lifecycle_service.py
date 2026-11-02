@@ -806,6 +806,7 @@ def _obligation_review_block(state: ReviewState) -> "ObligationReviewBlock":
                 candidates=[dict(value) for value in item.candidates],
                 next_action=item.next_action,
                 root_cause_key=item.root_cause_key,
+                legacy_coverage_terms=item.legacy_coverage_terms,
                 locations=resolved_locations.get(item.obligation_id, []),
                 decision=(str(row.get("decision") or "") or None) if row else None,
                 decision_revision=(

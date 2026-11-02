@@ -116,3 +116,44 @@ const legacyGuidance = obligationGuidance(legacy);
 assert.equal(legacyGuidance.requirement, null);
 assert.ok(legacyGuidance.whatToConfirm.length > 0);
 assert.ok(legacyGuidance.evidenceExample.length > 0);
+
+// ---- DH-03a：结构化字段优先于旧 detail 正则 -------------------------------
+
+const structured = item({
+  obligation_id: "OBL-INTERNAL-T3-TOTAL",
+  detail: "",
+  reason_codes: ["operand_missing", "cell_unbound"],
+  missing_operands: [{
+    source: "table",
+    role: "project_actual",
+    table_code: "FIN_03_expenditure",
+    page: 7,
+    row_key: "208",
+    column: "project_actual",
+    stage: "决算",
+    year: 2025,
+  }],
+  blocked_by: [],
+  candidates: [],
+  next_action: "system_recheck",
+});
+const structuredGuidance = obligationGuidance(structured);
+assert.equal(structuredGuidance.category, "limitation");
+assert.match(structuredGuidance.blocker ?? "", /缺少：FIN_03_expenditure/);
+assert.match(structuredGuidance.blocker ?? "", /208/);
+assert.match(structuredGuidance.blocker ?? "", /下一步：系统定向补取/);
+
+const materialByName = item({
+  obligation_id: "OBL-TXT-T5",
+  detail: "",
+  reason_codes: ["subject_name_unlocated"],
+  missing_operands: [{
+    source: "text",
+    role: "行政事业单位离退休",
+    section: "一般公共预算财政拨款支出决算情况说明",
+    page: 12,
+  }],
+  next_action: "human_confirm",
+});
+assert.equal(obligationGuidance(materialByName).category, "material");
+assert.match(obligationGuidance(materialByName).blocker ?? "", /说明章节|一般公共预算/);
