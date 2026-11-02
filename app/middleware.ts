@@ -91,6 +91,11 @@ function requestOriginUrl(request: NextRequest): URL {
   // Accept only an authority, never credentials, paths or a query string.
   if (host && /^(?:\[[0-9a-f:.]+\]|[a-z0-9.-]+)(?::\d{1,5})?$/i.test(host)) {
     url.host = host;
+    // 反向代理下 Host 不带端口，但 request.url 仍带着本机监听端口，
+    // 不清掉会跳成 https://域名:3000/login。
+    if (!/:\d{1,5}$/.test(host)) {
+      url.port = "";
+    }
   }
   return url;
 }

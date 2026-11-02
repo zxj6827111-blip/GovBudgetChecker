@@ -7,6 +7,7 @@
     "dev:frontend": "npm --prefix app run dev",
     "dev:backend": "node scripts/dev-backend.cjs",
     "dev:backend:noauth": "node scripts/dev-backend.cjs --noauth",
+    "test:dev-scripts": "node --test scripts/dev-services.test.cjs scripts/dev-backend-supervisor.test.cjs",
     "setup:python": "python scripts/setup_python_env.py",
     "install:all": "npm install && npm --prefix app install && npm run setup:python"
   },

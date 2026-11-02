@@ -20,15 +20,9 @@ const projectRoot = normalizeWindowsPath(
   packageJsonDir || process.env.INIT_CWD || process.cwd(),
 );
 const frontendCwd = path.join(projectRoot, 'app');
-const venvPython =
-  process.platform === 'win32'
-    ? path.join(projectRoot, '.venv', 'Scripts', 'python.exe')
-    : path.join(projectRoot, '.venv', 'bin', 'python');
-const pythonCommand = fs.existsSync(venvPython)
-  ? venvPython
-  : process.platform === 'win32'
-    ? 'python.exe'
-    : 'python3';
+// 后端统一交给 dev-backend.cjs 监督（健康探测、挂死重启、日志落盘），
+// 避免 npm run dev 与 npm run dev:backend 两条路径行为不一致。
+const backendScript = path.join(__dirname, 'dev-backend.cjs');
 const frontendCommand = process.platform === 'win32' ? 'cmd.exe' : 'npm';
 const frontendArgs =
   process.platform === 'win32'
@@ -64,10 +58,6 @@ function loadRootEnv(rootDir) {
 }
 
 const rootEnv = loadRootEnv(projectRoot);
-const backendPort =
-  process.env.GOVBUDGET_BACKEND_PORT ||
-  rootEnv.GOVBUDGET_BACKEND_PORT ||
-  '18743';
 
 const sharedEnv = {
   ...process.env,
@@ -168,7 +158,11 @@ function launch(name, command, args, options) {
 ensureDevServices(sharedEnv).then(() => {
   if (shuttingDown) return;
   launch('frontend', frontendCommand, frontendArgs, { cwd: frontendCwd });
-  launch('backend', pythonCommand, ['-m', 'uvicorn', 'api.main:app', '--reload', '--port', backendPort]);
+  // 依赖已由上面确认过，子进程内不再重复探测；后端挂死时由它自己重启，
+  // 不再触发这里的 fail-fast 把前端一起带走。
+  launch('backend', process.execPath, [backendScript], {
+    env: { ...sharedEnv, DEV_START_LOCAL_SERVICES: 'false' },
+  });
 }).catch((error) => {
   process.stderr.write(`[services] ${error.message}\n`);
   stopChildren(1);
