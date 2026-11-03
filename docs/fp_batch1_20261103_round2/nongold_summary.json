@@ -1,0 +1,560 @@
+{
+ "samples": 160,
+ "items_old": 2767,
+ "items_new": 2651,
+ "pairs": 2649,
+ "removed_formal": 118,
+ "removed_notice": 0,
+ "removed_by_tier": {
+  "F": 87,
+  "R": 31
+ },
+ "added_formal": 0,
+ "added_notice": 2,
+ "by_class": {
+  "R26-零比零": 61,
+  "R16-舍入区间": 7,
+  "D2-2022三公表名": 31,
+  "D2-正文第二部分": 16,
+  "R3-标题措辞": 2,
+  "R30-泛泛原因": 1
+ },
+ "unclassified": [],
+ "substantive_changed": [
+  {
+   "sample_id": "RB-2022-D01",
+   "old_id": "RB-2022-D01|R|CMM-021-14",
+   "new_id": "RB-2022-D01|R|CMM-021-14",
+   "fields": [
+    "message"
+   ]
+  }
+ ],
+ "expected_message_changes": [
+  {
+   "sample_id": "RB-2022-D01",
+   "old_id": "RB-2022-D01|R|CMM-021-14",
+   "new_id": "RB-2022-D01|R|CMM-021-14",
+   "fields": [
+    "message"
+   ],
+   "message_old": "十四、表名与规范表名不一致：“一般公共预算财政拨款三公经费及机关运行经费支出决算表”应为“财政拨款三公经费支出决算表”。",
+   "message_new": "十四、表名与规范表名不一致：“一般公共预算财政拨款三公经费及机关运行经费支出决算表”应为“一般公共预算财政拨款三公经费支出决算表”。"
+  }
+ ],
+ "other_substantive": [],
+ "ledger_detail_changes": [
+  {
+   "sample_id": "RA-001",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "old_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+   "new_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass"
+  },
+  {
+   "sample_id": "RA-005",
+   "obligation": "OBL-TREND-ZERO-BASE",
+   "old_detail": "规则已全部执行并到达终态：CMM-007=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-007=pass"
+  },
+  {
+   "sample_id": "RA-012",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RA-015",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "old_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+   "new_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass"
+  },
+  {
+   "sample_id": "RA-019",
+   "obligation": "OBL-STRUCT-TOC-ALIGN",
+   "old_detail": "规则已全部执行并到达终态：CMM-013=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-013=pass"
+  },
+  {
+   "sample_id": "RA-021",
+   "obligation": "OBL-STRUCT-TOC-ALIGN",
+   "old_detail": "规则已全部执行并到达终态：CMM-013=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-013=pass"
+  },
+  {
+   "sample_id": "RA-022",
+   "obligation": "OBL-STRUCT-TOC-ALIGN",
+   "old_detail": "规则已全部执行并到达终态：CMM-013=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-013=pass"
+  },
+  {
+   "sample_id": "RA-023",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RA-024",
+   "obligation": "OBL-TREND-ZERO-BASE",
+   "old_detail": "规则已全部执行并到达终态：CMM-007=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-007=pass"
+  },
+  {
+   "sample_id": "RA-025",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "old_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+   "new_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass"
+  },
+  {
+   "sample_id": "RA-030",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RA-038",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "old_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+   "new_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass"
+  },
+  {
+   "sample_id": "RB-2022-D02",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RB-2022-D03",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RB-2022-D04",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RB-2022-D05",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RB-2022-D06",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RB-2022-U01",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RB-2022-U02",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RB-2022-U03",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RB-2022-U04",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RB-2022-U05",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RB-2022-U06",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RB-2022-U06",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "old_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+   "new_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass"
+  },
+  {
+   "sample_id": "RB-2022-U06",
+   "obligation": "OBL-TREND-ZERO-BASE",
+   "old_detail": "规则已全部执行并到达终态：CMM-007=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-007=pass"
+  },
+  {
+   "sample_id": "RB-2022-U07",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RB-2022-U08",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RB-2022-U09",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RB-2022-U10",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RB-2022-U11",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RB-2022-U11",
+   "obligation": "OBL-TREND-ZERO-BASE",
+   "old_detail": "规则已全部执行并到达终态：CMM-007=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-007=pass"
+  },
+  {
+   "sample_id": "RB-2022-U12",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RB-2022-U13",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RB-2022-U14",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RB-2022-U14",
+   "obligation": "OBL-TREND-ZERO-BASE",
+   "old_detail": "规则已全部执行并到达终态：CMM-007=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-007=pass"
+  },
+  {
+   "sample_id": "RB-2022-U15",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RB-2022-U16",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RB-2022-U16",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "old_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+   "new_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass"
+  },
+  {
+   "sample_id": "RB-2022-U17",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RB-2022-U17",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "old_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+   "new_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass"
+  },
+  {
+   "sample_id": "RB-2022-U17",
+   "obligation": "OBL-TREND-ZERO-BASE",
+   "old_detail": "规则已全部执行并到达终态：CMM-007=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-007=pass"
+  },
+  {
+   "sample_id": "RB-2022-U18",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RB-2022-U19",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RB-2022-U19",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "old_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+   "new_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass"
+  },
+  {
+   "sample_id": "RB-2022-U20",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RB-2022-U20",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "old_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+   "new_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass"
+  },
+  {
+   "sample_id": "RB-2022-U22",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RB-2022-U23",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RB-2022-U24",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "old_detail": "规则已全部执行并到达终态：CMM-021=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-021=pass"
+  },
+  {
+   "sample_id": "RB-2023-D03",
+   "obligation": "OBL-STRUCT-TOC-ALIGN",
+   "old_detail": "规则已全部执行并到达终态：CMM-013=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-013=pass"
+  },
+  {
+   "sample_id": "RB-2023-D04",
+   "obligation": "OBL-STRUCT-TOC-ALIGN",
+   "old_detail": "规则已全部执行并到达终态：CMM-013=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-013=pass"
+  },
+  {
+   "sample_id": "RB-2023-D05",
+   "obligation": "OBL-STRUCT-TOC-ALIGN",
+   "old_detail": "规则已全部执行并到达终态：CMM-013=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-013=pass"
+  },
+  {
+   "sample_id": "RB-2023-D06",
+   "obligation": "OBL-STRUCT-TOC-ALIGN",
+   "old_detail": "规则已全部执行并到达终态：CMM-013=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-013=pass"
+  },
+  {
+   "sample_id": "RB-2023-U07",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "old_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+   "new_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass"
+  },
+  {
+   "sample_id": "RB-2023-U09",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "old_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+   "new_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass"
+  },
+  {
+   "sample_id": "RB-2023-U11",
+   "obligation": "OBL-TREND-ZERO-BASE",
+   "old_detail": "规则已全部执行并到达终态：CMM-007=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-007=pass"
+  },
+  {
+   "sample_id": "RB-2023-U12",
+   "obligation": "OBL-TREND-ZERO-BASE",
+   "old_detail": "规则已全部执行并到达终态：CMM-007=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-007=pass"
+  },
+  {
+   "sample_id": "RB-2023-U15",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "old_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+   "new_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass"
+  },
+  {
+   "sample_id": "RB-2023-U15",
+   "obligation": "OBL-TREND-ZERO-BASE",
+   "old_detail": "规则已全部执行并到达终态：CMM-007=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-007=pass"
+  },
+  {
+   "sample_id": "RB-2023-U23",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "old_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+   "new_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass"
+  },
+  {
+   "sample_id": "RB-2023-U24",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "old_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+   "new_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass"
+  },
+  {
+   "sample_id": "RB-2024-D01",
+   "obligation": "OBL-STRUCT-TOC-ALIGN",
+   "old_detail": "规则已全部执行并到达终态：CMM-013=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-013=pass"
+  },
+  {
+   "sample_id": "RB-2024-D02",
+   "obligation": "OBL-STRUCT-TOC-ALIGN",
+   "old_detail": "规则已全部执行并到达终态：CMM-013=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-013=pass"
+  },
+  {
+   "sample_id": "RB-2024-D03",
+   "obligation": "OBL-STRUCT-TOC-ALIGN",
+   "old_detail": "规则已全部执行并到达终态：CMM-013=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-013=pass"
+  },
+  {
+   "sample_id": "RB-2024-D04",
+   "obligation": "OBL-STRUCT-TOC-ALIGN",
+   "old_detail": "规则已全部执行并到达终态：CMM-013=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-013=pass"
+  },
+  {
+   "sample_id": "RB-2024-D05",
+   "obligation": "OBL-STRUCT-TOC-ALIGN",
+   "old_detail": "规则已全部执行并到达终态：CMM-013=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-013=pass"
+  },
+  {
+   "sample_id": "RB-2024-D06",
+   "obligation": "OBL-STRUCT-TOC-ALIGN",
+   "old_detail": "规则已全部执行并到达终态：CMM-013=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-013=pass"
+  },
+  {
+   "sample_id": "RB-2024-U06",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "old_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+   "new_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass"
+  },
+  {
+   "sample_id": "RB-2024-U12",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "old_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+   "new_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass"
+  },
+  {
+   "sample_id": "RB-2024-U14",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "old_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+   "new_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass"
+  },
+  {
+   "sample_id": "RB-2024-U24",
+   "obligation": "OBL-STRUCT-TOC-ALIGN",
+   "old_detail": "规则已全部执行并到达终态：CMM-013=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-013=pass"
+  },
+  {
+   "sample_id": "RB-2025-D01",
+   "obligation": "OBL-STRUCT-TOC-ALIGN",
+   "old_detail": "规则已全部执行并到达终态：CMM-013=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-013=pass"
+  },
+  {
+   "sample_id": "RB-2025-D02",
+   "obligation": "OBL-STRUCT-TOC-ALIGN",
+   "old_detail": "规则已全部执行并到达终态：CMM-013=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-013=pass"
+  },
+  {
+   "sample_id": "RB-2025-D03",
+   "obligation": "OBL-STRUCT-TOC-ALIGN",
+   "old_detail": "规则已全部执行并到达终态：CMM-013=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-013=pass"
+  },
+  {
+   "sample_id": "RB-2025-U04",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "old_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+   "new_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass"
+  },
+  {
+   "sample_id": "RB-2025-U06",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "old_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+   "new_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass"
+  },
+  {
+   "sample_id": "RB-2025-U06",
+   "obligation": "OBL-TREND-ZERO-BASE",
+   "old_detail": "规则已全部执行并到达终态：CMM-007=fail",
+   "new_detail": "规则已全部执行并到达终态：CMM-007=pass"
+  },
+  {
+   "sample_id": "RB-2025-U07",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "old_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+   "new_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass"
+  },
+  {
+   "sample_id": "RB-2025-U08",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "old_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+   "new_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass"
+  },
+  {
+   "sample_id": "RB-2025-U10",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "old_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+   "new_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass"
+  },
+  {
+   "sample_id": "RB-2025-U13",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "old_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+   "new_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass"
+  },
+  {
+   "sample_id": "RB-2025-U15",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "old_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+   "new_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass"
+  },
+  {
+   "sample_id": "RB-2025-U19",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "old_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+   "new_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass"
+  },
+  {
+   "sample_id": "RB-2025-U22",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "old_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+   "new_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass"
+  },
+  {
+   "sample_id": "RB-2025-U23",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "old_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+   "new_detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass"
+  }
+ ],
+ "ledger_other_changes": [],
+ "ok": true
+}

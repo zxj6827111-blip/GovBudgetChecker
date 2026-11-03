@@ -1,0 +1,77 @@
+{
+ "old": [
+  {
+   "id": "old|F|X-1",
+   "doc": "GS-PROBE",
+   "tier": "F",
+   "rule": "CMM-013",
+   "raw_id": "old|F|X-1",
+   "pages": [
+    2
+   ],
+   "sev": "warn",
+   "title": "目录与正文标题不一致",
+   "message": "一、同一处问题",
+   "quotes": [],
+   "text": "目录与正文标题不一致 一、同一处问题",
+   "bucket": "issues",
+   "checklist_item": "A-05",
+   "obligation_ids": []
+  }
+ ],
+ "new": [
+  {
+   "id": "new|F|X-1",
+   "doc": "GS-PROBE",
+   "tier": "F",
+   "rule": "CMM-013",
+   "raw_id": "new|F|X-1",
+   "pages": [
+    2
+   ],
+   "sev": "warn",
+   "title": "目录与正文标题不一致",
+   "message": "一、同一处问题",
+   "quotes": [],
+   "text": "目录与正文标题不一致 一、同一处问题",
+   "bucket": "issues",
+   "checklist_item": "A-05",
+   "obligation_ids": []
+  },
+  {
+   "id": "new|F|X-2",
+   "doc": "GS-PROBE",
+   "tier": "F",
+   "rule": "CMM-013",
+   "raw_id": "new|F|X-2",
+   "pages": [
+    2
+   ],
+   "sev": "warn",
+   "title": "目录与正文标题不一致",
+   "message": "一、同一处问题",
+   "quotes": [],
+   "text": "目录与正文标题不一致 一、同一处问题",
+   "bucket": "issues",
+   "checklist_item": "A-05",
+   "obligation_ids": []
+  }
+ ],
+ "pairs": 0,
+ "old_only": 0,
+ "new_only": 0,
+ "review_required": [
+  {
+   "old_ids": [
+    "old|F|X-1"
+   ],
+   "candidates": [
+    "new|F|X-1",
+    "new|F|X-2"
+   ],
+   "reason": "旧同指纹组与候选数量不一致，无法一一对应"
+  }
+ ],
+ "resolved_duplicates": [],
+ "ok": false
+}

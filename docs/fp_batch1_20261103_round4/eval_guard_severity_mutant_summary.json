@@ -1,0 +1,4847 @@
+{
+ "run": "/Volumes/workSSD/software development/GovBudgetChecker/outputs/fp_batch1_20261103/round4/eval_guard/severity_mutant_run",
+ "baseline_run": "/Volumes/workSSD/software development/GovBudgetChecker/outputs/fp_batch1_20261103/step0/run1",
+ "baseline_analysis": "/Volumes/workSSD/software development/GovBudgetChecker/outputs/gold_baseline_20261102/rev2/analysis",
+ "items_old": 545,
+ "items_new": 513,
+ "tiers_old": {
+  "F": 155,
+  "R": 166,
+  "N": 61,
+  "P": 73,
+  "O": 90
+ },
+ "tiers_new": {
+  "F": 130,
+  "R": 158,
+  "N": 62,
+  "P": 73,
+  "O": 90
+ },
+ "pairs": 512,
+ "removed": 33,
+ "added": 1,
+ "target_removed": 33,
+ "target_missing": [],
+ "unexpected_removed": [],
+ "added_formal": [],
+ "decisions_inherited": 77,
+ "decisions_unused_expected": [
+  "GS-2024-04|V33-234-10",
+  "GS-2025-06|V33-234-13",
+  "GS-2025-01|V33-234-9",
+  "GS-2025-09|CMM-013-1",
+  "GS-2023-01|CMM-013-1",
+  "GS-2023-02|CMM-013-2",
+  "GS-2023-03|CMM-013-1",
+  "GS-2024-01|CMM-013-1",
+  "GS-2024-02|CMM-013-1",
+  "GS-2024-03|CMM-013-1",
+  "GS-2025-02|CMM-013-1",
+  "GS-2025-03|CMM-013-1",
+  "GS-2025-06|CMM-013-2",
+  "GS-2023-02|CMM-013-3",
+  "GS-2024-06|CMM-013-3",
+  "GS-2023-03|CMM-007-6",
+  "GS-2024-08|CMM-007-3",
+  "GS-2022-07|V33-TREND-COMPLETION-RATE-2",
+  "GS-2022-07|V33-TREND-COMPLETION-RATE-3",
+  "GS-2023-04|V33-TREND-COMPLETION-RATE-8",
+  "GS-2023-08|V33-TREND-COMPLETION-RATE-6",
+  "GS-2025-01|V33-TREND-COMPLETION-RATE-10",
+  "GS-2025-07|V33-TREND-COMPLETION-RATE-2",
+  "GS-2022-06|CMM-007-14",
+  "GS-2023-01|CMM-007-19"
+ ],
+ "decisions_unused_unexpected": [],
+ "missing_decision": [],
+ "review_required": [],
+ "resolved_duplicates": [
+  {
+   "old_ids": [
+    "GS-2022-04|P|V33-246-5",
+    "GS-2022-04|P|V33-246-6"
+   ],
+   "new_ids": [
+    "GS-2022-04|P|V33-246-4",
+    "GS-2022-04|P|V33-246-5"
+   ],
+   "decision": [
+    "NOISE",
+    [],
+    "",
+    false
+   ],
+   "reason": "同指纹重复组；组内完整裁决签名一致（或该层无裁决），按组配对"
+  },
+  {
+   "old_ids": [
+    "GS-2023-01|P|V33-246-20",
+    "GS-2023-01|P|V33-246-21"
+   ],
+   "new_ids": [
+    "GS-2023-01|P|V33-246-18",
+    "GS-2023-01|P|V33-246-19"
+   ],
+   "decision": [
+    "NOISE",
+    [],
+    "",
+    false
+   ],
+   "reason": "同指纹重复组；组内完整裁决签名一致（或该层无裁决），按组配对"
+  }
+ ],
+ "fingerprint_drift": [
+  {
+   "old_id": "GS-2022-01|F|CMM-013-1",
+   "new_id": "GS-2022-01|F|CMM-013-1",
+   "how": "similar:1.000",
+   "fields": [
+    "sev"
+   ],
+   "old": {
+    "sev": "warn"
+   },
+   "new": {
+    "sev": "error"
+   }
+  }
+ ],
+ "decision_drift": [],
+ "raw_fingerprint_drift": [
+  {
+   "old_id": "GS-2022-01|F|CMM-013-1",
+   "new_id": "GS-2022-01|F|CMM-013-1",
+   "how": "similar:1.000",
+   "paths": [
+    "/severity"
+   ]
+  }
+ ],
+ "raw_missing": [],
+ "raw_reference_mappings": [
+  {
+   "old_id": "GS-2023-01|F|CMM-010-14",
+   "new_id": "GS-2023-01|F|CMM-010-13",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2023-01|F|CMM-010-17",
+   "new_id": "GS-2023-01|F|CMM-010-16",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2023-02|F|CMM-014-8",
+   "new_id": "GS-2023-02|F|CMM-014-6",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2023-04|F|V33-251-6",
+   "new_id": "GS-2023-04|F|V33-251-6",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2023-04|F|CMM-011-7",
+   "new_id": "GS-2023-04|F|CMM-011-7",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2023-08|F|V33-250-7",
+   "new_id": "GS-2023-08|F|V33-250-6",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2024-01|F|CMM-018-12",
+   "new_id": "GS-2024-01|F|CMM-018-11",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2024-02|F|CMM-013-2",
+   "new_id": "GS-2024-02|F|CMM-013-1",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2024-02|F|CMM-017-11",
+   "new_id": "GS-2024-02|F|CMM-017-10",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2024-02|F|CMM-017-13",
+   "new_id": "GS-2024-02|F|CMM-017-12",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2024-03|F|CMM-017-11",
+   "new_id": "GS-2024-03|F|CMM-017-10",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2024-04|F|V33-251-7",
+   "new_id": "GS-2024-04|F|V33-251-7",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2024-04|F|V33-251-8",
+   "new_id": "GS-2024-04|F|V33-251-8",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2024-04|F|V33-222-9",
+   "new_id": "GS-2024-04|F|V33-222-9",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2024-04|F|V33-222-11",
+   "new_id": "GS-2024-04|F|V33-222-10",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2024-04|F|V33-222-12",
+   "new_id": "GS-2024-04|F|V33-222-11",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2024-04|F|CMM-007-13",
+   "new_id": "GS-2024-04|F|CMM-007-12",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2024-04|F|CMM-007-14",
+   "new_id": "GS-2024-04|F|CMM-007-13",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2024-04|F|V33-234-15",
+   "new_id": "GS-2024-04|F|V33-234-14",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2024-04|P|CMM-004-1",
+   "new_id": "GS-2024-04|P|CMM-004-1",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2024-06|F|CMM-019-1",
+   "new_id": "GS-2024-06|F|CMM-019-1",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2024-06|F|CMM-018-34",
+   "new_id": "GS-2024-06|F|CMM-018-33",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2024-08|R|CMM-010-5",
+   "new_id": "GS-2024-08|R|CMM-010-4",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2025-01|F|CMM-014-1",
+   "new_id": "GS-2025-01|F|CMM-014-1",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2025-01|F|V33-234-4",
+   "new_id": "GS-2025-01|F|V33-234-4",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2025-01|F|CMM-010-8",
+   "new_id": "GS-2025-01|F|CMM-010-8",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2025-01|F|CMM-008-11",
+   "new_id": "GS-2025-01|F|CMM-008-9",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2025-01|F|CMM-002-13",
+   "new_id": "GS-2025-01|F|CMM-002-11",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2025-01|F|CMM-018-14",
+   "new_id": "GS-2025-01|F|CMM-018-12",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2025-06|F|CMM-013-1",
+   "new_id": "GS-2025-06|F|CMM-013-1",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2025-06|F|V33-234-10",
+   "new_id": "GS-2025-06|F|V33-234-9",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2025-06|F|V33-234-11",
+   "new_id": "GS-2025-06|F|V33-234-10",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2025-06|F|V33-234-12",
+   "new_id": "GS-2025-06|F|V33-234-11",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2025-06|P|CMM-004-6",
+   "new_id": "GS-2025-06|P|CMM-004-5",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2025-07|F|CMM-009-1",
+   "new_id": "GS-2025-07|F|CMM-009-1",
+   "mapped_reference_ids": true
+  },
+  {
+   "old_id": "GS-2025-09|F|CMM-013-2",
+   "new_id": "GS-2025-09|F|CMM-013-1",
+   "mapped_reference_ids": true
+  }
+ ],
+ "pre_group_reference_mappings": [
+  {
+   "doc": "GS-2022-01",
+   "rule": "CMM-017",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-01|F|CMM-017-2",
+     "new_id": "GS-2022-01|F|CMM-017-2",
+     "old_pre": "CMM-017-9",
+     "new_pre": "CMM-017-9"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-01",
+   "rule": "V33-240",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-01|R|V33-240-3",
+     "new_id": "GS-2022-01|R|V33-240-3",
+     "old_pre": "V33-240-7",
+     "new_pre": "V33-240-7"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-01",
+   "rule": "V33-005",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-01|R|V33-005-4",
+     "new_id": "GS-2022-01|R|V33-005-4",
+     "old_pre": "V33-005-1",
+     "new_pre": "V33-005-1"
+    },
+    {
+     "old_id": "GS-2022-01|R|V33-005-6",
+     "new_id": "GS-2022-01|R|V33-005-6",
+     "old_pre": "V33-005-2",
+     "new_pre": "V33-005-2"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-01",
+   "rule": "V33-120",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-01|R|V33-120-5",
+     "new_id": "GS-2022-01|R|V33-120-5",
+     "old_pre": "V33-120-3",
+     "new_pre": "V33-120-3"
+    },
+    {
+     "old_id": "GS-2022-01|R|V33-120-7",
+     "new_id": "GS-2022-01|R|V33-120-7",
+     "old_pre": "V33-120-4",
+     "new_pre": "V33-120-4"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-01",
+   "rule": "V33-243",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-01|R|V33-243-8",
+     "new_id": "GS-2022-01|R|V33-243-8",
+     "old_pre": "V33-243-5",
+     "new_pre": "V33-243-5"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-01",
+   "rule": "V33-246",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-01|P|V33-246-10",
+     "new_id": "GS-2022-01|P|V33-246-9",
+     "old_pre": "V33-246-6",
+     "new_pre": "V33-246-6"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-02",
+   "rule": "V33-234",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-02|F|V33-234-8",
+     "new_id": "GS-2022-02|F|V33-234-7",
+     "old_pre": "V33-234-12",
+     "new_pre": "V33-234-12"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-02",
+   "rule": "V33-251",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-02|F|V33-251-9",
+     "new_id": "GS-2022-02|F|V33-251-8",
+     "old_pre": "V33-251-13",
+     "new_pre": "V33-251-13"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-02",
+   "rule": "V33-110",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-02|F|V33-110-10",
+     "new_id": "GS-2022-02|F|V33-110-9",
+     "old_pre": "V33-110-2",
+     "new_pre": "V33-110-2"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-02",
+   "rule": "V33-222",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-02|F|V33-222-11",
+     "new_id": "GS-2022-02|F|V33-222-10",
+     "old_pre": "V33-222-8",
+     "new_pre": "V33-222-8"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-02",
+   "rule": "V33-NARRATIVE-INDICATOR-REPEAT",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-02|F|V33-NARRATIVE-INDICATOR-REPEAT-12",
+     "new_id": "GS-2022-02|F|V33-NARRATIVE-INDICATOR-REPEAT-11",
+     "old_pre": "V33-NARRATIVE-INDICATOR-REPEAT-10",
+     "new_pre": "V33-NARRATIVE-INDICATOR-REPEAT-10"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-02",
+   "rule": "V33-TREND-COMPLETION-RATE",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-02|F|V33-TREND-COMPLETION-RATE-13",
+     "new_id": "GS-2022-02|F|V33-TREND-COMPLETION-RATE-12",
+     "old_pre": "V33-TREND-COMPLETION-RATE-11",
+     "new_pre": "V33-TREND-COMPLETION-RATE-11"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-02",
+   "rule": "V33-224",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-02|F|V33-224-15",
+     "new_id": "GS-2022-02|F|V33-224-14",
+     "old_pre": "V33-224-9",
+     "new_pre": "V33-224-9"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-02",
+   "rule": "CMM-017",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-02|F|CMM-017-16",
+     "new_id": "GS-2022-02|F|CMM-017-15",
+     "old_pre": "CMM-017-17",
+     "new_pre": "CMM-017-17"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-02",
+   "rule": "V33-115",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-02|R|V33-115-1",
+     "new_id": "GS-2022-02|R|V33-115-1",
+     "old_pre": "V33-115-3",
+     "new_pre": "V33-115-3"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-02",
+   "rule": "V33-240",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-02|R|V33-240-2",
+     "new_id": "GS-2022-02|R|V33-240-2",
+     "old_pre": "V33-240-7",
+     "new_pre": "V33-240-7"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-02",
+   "rule": "V33-005",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-02|R|V33-005-4",
+     "new_id": "GS-2022-02|R|V33-005-4",
+     "old_pre": "V33-005-1",
+     "new_pre": "V33-005-1"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-02",
+   "rule": "CMM-015",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-02|R|CMM-015-5",
+     "new_id": "GS-2022-02|R|CMM-015-5",
+     "old_pre": "CMM-015-16",
+     "new_pre": "CMM-015-16"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-02",
+   "rule": "V33-243",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-02|R|V33-243-6",
+     "new_id": "GS-2022-02|R|V33-243-6",
+     "old_pre": "V33-243-5",
+     "new_pre": "V33-243-5"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-02",
+   "rule": "CMM-004",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-02|P|CMM-004-3",
+     "new_id": "GS-2022-02|P|CMM-004-3",
+     "old_pre": "CMM-004-14",
+     "new_pre": "CMM-004-14"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-02",
+   "rule": "V33-SG-COMPLETION",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-02|P|V33-SG-COMPLETION-14",
+     "new_id": "GS-2022-02|P|V33-SG-COMPLETION-13",
+     "old_pre": "V33-SG-COMPLETION-6",
+     "new_pre": "V33-SG-COMPLETION-6"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-03",
+   "rule": "V33-202",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-03|F|V33-202-16",
+     "new_id": "GS-2022-03|F|V33-202-16",
+     "old_pre": "V33-202-11",
+     "new_pre": "V33-202-11"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-03",
+   "rule": "V33-117",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-03|F|V33-117-18",
+     "new_id": "GS-2022-03|F|V33-117-18",
+     "old_pre": "V33-117-9",
+     "new_pre": "V33-117-9"
+    },
+    {
+     "old_id": "GS-2022-03|R|V33-117-19",
+     "new_id": "GS-2022-03|R|V33-117-19",
+     "old_pre": "V33-117-10",
+     "new_pre": "V33-117-10"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-03",
+   "rule": "V33-251",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-03|F|V33-251-21",
+     "new_id": "GS-2022-03|F|V33-251-20",
+     "old_pre": "V33-251-17",
+     "new_pre": "V33-251-17"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-03",
+   "rule": "V33-227",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-03|F|V33-227-22",
+     "new_id": "GS-2022-03|F|V33-227-21",
+     "old_pre": "V33-227-16",
+     "new_pre": "V33-227-16"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-03",
+   "rule": "V33-115",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-03|R|V33-115-1",
+     "new_id": "GS-2022-03|R|V33-115-1",
+     "old_pre": "V33-115-1",
+     "new_pre": "V33-115-1"
+    },
+    {
+     "old_id": "GS-2022-03|R|V33-115-2",
+     "new_id": "GS-2022-03|R|V33-115-2",
+     "old_pre": "V33-115-2",
+     "new_pre": "V33-115-2"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-03",
+   "rule": "V33-120",
+   "count": 4,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-03|R|V33-120-3",
+     "new_id": "GS-2022-03|R|V33-120-3",
+     "old_pre": "V33-120-5",
+     "new_pre": "V33-120-5"
+    },
+    {
+     "old_id": "GS-2022-03|R|V33-120-11",
+     "new_id": "GS-2022-03|R|V33-120-11",
+     "old_pre": "V33-120-6",
+     "new_pre": "V33-120-6"
+    },
+    {
+     "old_id": "GS-2022-03|R|V33-120-12",
+     "new_id": "GS-2022-03|R|V33-120-12",
+     "old_pre": "V33-120-7",
+     "new_pre": "V33-120-7"
+    },
+    {
+     "old_id": "GS-2022-03|R|V33-120-17",
+     "new_id": "GS-2022-03|R|V33-120-17",
+     "old_pre": "V33-120-8",
+     "new_pre": "V33-120-8"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-03",
+   "rule": "V33-240",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-03|R|V33-240-4",
+     "new_id": "GS-2022-03|R|V33-240-4",
+     "old_pre": "V33-240-12",
+     "new_pre": "V33-240-12"
+    },
+    {
+     "old_id": "GS-2022-03|R|V33-240-5",
+     "new_id": "GS-2022-03|R|V33-240-5",
+     "old_pre": "V33-240-13",
+     "new_pre": "V33-240-13"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-03",
+   "rule": "V33-241",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-03|R|V33-241-13",
+     "new_id": "GS-2022-03|R|V33-241-13",
+     "old_pre": "V33-241-14",
+     "new_pre": "V33-241-14"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-03",
+   "rule": "V33-119",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-03|R|V33-119-14",
+     "new_id": "GS-2022-03|R|V33-119-14",
+     "old_pre": "V33-119-3",
+     "new_pre": "V33-119-3"
+    },
+    {
+     "old_id": "GS-2022-03|R|V33-119-15",
+     "new_id": "GS-2022-03|R|V33-119-15",
+     "old_pre": "V33-119-4",
+     "new_pre": "V33-119-4"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-03",
+   "rule": "CMM-004",
+   "count": 5,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-03|P|CMM-004-6",
+     "new_id": "GS-2022-03|P|CMM-004-6",
+     "old_pre": "CMM-004-18",
+     "new_pre": "CMM-004-18"
+    },
+    {
+     "old_id": "GS-2022-03|P|CMM-004-7",
+     "new_id": "GS-2022-03|P|CMM-004-7",
+     "old_pre": "CMM-004-19",
+     "new_pre": "CMM-004-19"
+    },
+    {
+     "old_id": "GS-2022-03|P|CMM-004-8",
+     "new_id": "GS-2022-03|P|CMM-004-8",
+     "old_pre": "CMM-004-20",
+     "new_pre": "CMM-004-20"
+    },
+    {
+     "old_id": "GS-2022-03|P|CMM-004-9",
+     "new_id": "GS-2022-03|P|CMM-004-9",
+     "old_pre": "CMM-004-21",
+     "new_pre": "CMM-004-21"
+    },
+    {
+     "old_id": "GS-2022-03|P|CMM-004-10",
+     "new_id": "GS-2022-03|P|CMM-004-10",
+     "old_pre": "CMM-004-22",
+     "new_pre": "CMM-004-22"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-04",
+   "rule": "V33-251",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-04|F|V33-251-2",
+     "new_id": "GS-2022-04|F|V33-251-1",
+     "old_pre": "V33-251-4",
+     "new_pre": "V33-251-4"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-04",
+   "rule": "CMM-011",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-04|F|CMM-011-3",
+     "new_id": "GS-2022-04|F|CMM-011-2",
+     "old_pre": "CMM-011-6",
+     "new_pre": "CMM-011-6"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-04",
+   "rule": "CMM-002",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-04|F|CMM-002-4",
+     "new_id": "GS-2022-04|F|CMM-002-3",
+     "old_pre": "CMM-002-5",
+     "new_pre": "CMM-002-5"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-04",
+   "rule": "V33-246",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-04|P|V33-246-5",
+     "new_id": "GS-2022-04|P|V33-246-4",
+     "old_pre": "V33-246-1",
+     "new_pre": "V33-246-1"
+    },
+    {
+     "old_id": "GS-2022-04|P|V33-246-6",
+     "new_id": "GS-2022-04|P|V33-246-5",
+     "old_pre": "V33-246-2",
+     "new_pre": "V33-246-2"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-04",
+   "rule": "V33-227",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-04|P|V33-227-7",
+     "new_id": "GS-2022-04|P|V33-227-6",
+     "old_pre": "V33-227-3",
+     "new_pre": "V33-227-3"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-05",
+   "rule": "CMM-013",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-05|F|CMM-013-1",
+     "new_id": "GS-2022-05|F|CMM-013-1",
+     "old_pre": "CMM-013-13",
+     "new_pre": "CMM-013-13"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-05",
+   "rule": "V33-005",
+   "count": 3,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-05|R|V33-005-2",
+     "new_id": "GS-2022-05|R|V33-005-2",
+     "old_pre": "V33-005-1",
+     "new_pre": "V33-005-1"
+    },
+    {
+     "old_id": "GS-2022-05|R|V33-005-7",
+     "new_id": "GS-2022-05|R|V33-005-7",
+     "old_pre": "V33-005-2",
+     "new_pre": "V33-005-2"
+    },
+    {
+     "old_id": "GS-2022-05|R|V33-005-9",
+     "new_id": "GS-2022-05|R|V33-005-9",
+     "old_pre": "V33-005-3",
+     "new_pre": "V33-005-3"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-05",
+   "rule": "V33-120",
+   "count": 3,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-05|R|V33-120-3",
+     "new_id": "GS-2022-05|R|V33-120-3",
+     "old_pre": "V33-120-4",
+     "new_pre": "V33-120-4"
+    },
+    {
+     "old_id": "GS-2022-05|R|V33-120-8",
+     "new_id": "GS-2022-05|R|V33-120-8",
+     "old_pre": "V33-120-5",
+     "new_pre": "V33-120-5"
+    },
+    {
+     "old_id": "GS-2022-05|R|V33-120-10",
+     "new_id": "GS-2022-05|R|V33-120-10",
+     "old_pre": "V33-120-6",
+     "new_pre": "V33-120-6"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-05",
+   "rule": "V33-240",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-05|R|V33-240-4",
+     "new_id": "GS-2022-05|R|V33-240-4",
+     "old_pre": "V33-240-9",
+     "new_pre": "V33-240-9"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-05",
+   "rule": "V33-243",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-05|R|V33-243-11",
+     "new_id": "GS-2022-05|R|V33-243-11",
+     "old_pre": "V33-243-7",
+     "new_pre": "V33-243-7"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-05",
+   "rule": "V33-NARRATIVE-INDICATOR-REPEAT",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-05|R|V33-NARRATIVE-INDICATOR-REPEAT-13",
+     "new_id": "GS-2022-05|R|V33-NARRATIVE-INDICATOR-REPEAT-12",
+     "old_pre": "V33-NARRATIVE-INDICATOR-REPEAT-10",
+     "new_pre": "V33-NARRATIVE-INDICATOR-REPEAT-10"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-05",
+   "rule": "CMM-004",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-05|P|CMM-004-5",
+     "new_id": "GS-2022-05|P|CMM-004-5",
+     "old_pre": "CMM-004-11",
+     "new_pre": "CMM-004-11"
+    },
+    {
+     "old_id": "GS-2022-05|P|CMM-004-6",
+     "new_id": "GS-2022-05|P|CMM-004-6",
+     "old_pre": "CMM-004-12",
+     "new_pre": "CMM-004-12"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-05",
+   "rule": "V33-SG-COMPLETION",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-05|P|V33-SG-COMPLETION-14",
+     "new_id": "GS-2022-05|P|V33-SG-COMPLETION-13",
+     "old_pre": "V33-SG-COMPLETION-8",
+     "new_pre": "V33-SG-COMPLETION-8"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-06",
+   "rule": "V33-249",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-06|F|V33-249-9",
+     "new_id": "GS-2022-06|F|V33-249-8",
+     "old_pre": "V33-249-8",
+     "new_pre": "V33-249-8"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-06",
+   "rule": "V33-234",
+   "count": 3,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-06|F|V33-234-10",
+     "new_id": "GS-2022-06|F|V33-234-9",
+     "old_pre": "V33-234-5",
+     "new_pre": "V33-234-5"
+    },
+    {
+     "old_id": "GS-2022-06|P|V33-234-11",
+     "new_id": "GS-2022-06|P|V33-234-10",
+     "old_pre": "V33-234-6",
+     "new_pre": "V33-234-6"
+    },
+    {
+     "old_id": "GS-2022-06|P|V33-234-12",
+     "new_id": "GS-2022-06|P|V33-234-11",
+     "old_pre": "V33-234-7",
+     "new_pre": "V33-234-7"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-06",
+   "rule": "V33-240",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-06|R|V33-240-1",
+     "new_id": "GS-2022-06|R|V33-240-1",
+     "old_pre": "V33-240-4",
+     "new_pre": "V33-240-4"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-06",
+   "rule": "V33-243",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-06|R|V33-243-7",
+     "new_id": "GS-2022-06|R|V33-243-7",
+     "old_pre": "V33-243-1",
+     "new_pre": "V33-243-1"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-06",
+   "rule": "CMM-004",
+   "count": 5,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-06|P|CMM-004-2",
+     "new_id": "GS-2022-06|P|CMM-004-2",
+     "old_pre": "CMM-004-9",
+     "new_pre": "CMM-004-9"
+    },
+    {
+     "old_id": "GS-2022-06|P|CMM-004-3",
+     "new_id": "GS-2022-06|P|CMM-004-3",
+     "old_pre": "CMM-004-10",
+     "new_pre": "CMM-004-10"
+    },
+    {
+     "old_id": "GS-2022-06|P|CMM-004-4",
+     "new_id": "GS-2022-06|P|CMM-004-4",
+     "old_pre": "CMM-004-11",
+     "new_pre": "CMM-004-11"
+    },
+    {
+     "old_id": "GS-2022-06|P|CMM-004-5",
+     "new_id": "GS-2022-06|P|CMM-004-5",
+     "old_pre": "CMM-004-12",
+     "new_pre": "CMM-004-12"
+    },
+    {
+     "old_id": "GS-2022-06|P|CMM-004-6",
+     "new_id": "GS-2022-06|P|CMM-004-6",
+     "old_pre": "CMM-004-13",
+     "new_pre": "CMM-004-13"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-06",
+   "rule": "V33-245",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-06|P|V33-245-13",
+     "new_id": "GS-2022-06|P|V33-245-12",
+     "old_pre": "V33-245-2",
+     "new_pre": "V33-245-2"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-06",
+   "rule": "V33-246",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-06|P|V33-246-15",
+     "new_id": "GS-2022-06|P|V33-246-13",
+     "old_pre": "V33-246-3",
+     "new_pre": "V33-246-3"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-07",
+   "rule": "V33-246",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-07|P|V33-246-4",
+     "new_id": "GS-2022-07|P|V33-246-1",
+     "old_pre": "V33-246-1",
+     "new_pre": "V33-246-1"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-08",
+   "rule": "V33-251",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-08|F|V33-251-13",
+     "new_id": "GS-2022-08|F|V33-251-12",
+     "old_pre": "V33-251-12",
+     "new_pre": "V33-251-12"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-08",
+   "rule": "V33-110",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-08|F|V33-110-14",
+     "new_id": "GS-2022-08|F|V33-110-13",
+     "old_pre": "V33-110-3",
+     "new_pre": "V33-110-3"
+    },
+    {
+     "old_id": "GS-2022-08|F|V33-110-15",
+     "new_id": "GS-2022-08|F|V33-110-14",
+     "old_pre": "V33-110-4",
+     "new_pre": "V33-110-4"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-08",
+   "rule": "V33-222",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-08|F|V33-222-16",
+     "new_id": "GS-2022-08|F|V33-222-15",
+     "old_pre": "V33-222-11",
+     "new_pre": "V33-222-11"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-08",
+   "rule": "V33-005",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-08|R|V33-005-1",
+     "new_id": "GS-2022-08|R|V33-005-1",
+     "old_pre": "V33-005-1",
+     "new_pre": "V33-005-1"
+    },
+    {
+     "old_id": "GS-2022-08|R|V33-005-7",
+     "new_id": "GS-2022-08|R|V33-005-7",
+     "old_pre": "V33-005-2",
+     "new_pre": "V33-005-2"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-08",
+   "rule": "V33-120",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-08|R|V33-120-2",
+     "new_id": "GS-2022-08|R|V33-120-2",
+     "old_pre": "V33-120-5",
+     "new_pre": "V33-120-5"
+    },
+    {
+     "old_id": "GS-2022-08|R|V33-120-8",
+     "new_id": "GS-2022-08|R|V33-120-8",
+     "old_pre": "V33-120-6",
+     "new_pre": "V33-120-6"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-08",
+   "rule": "V33-240",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-08|R|V33-240-3",
+     "new_id": "GS-2022-08|R|V33-240-3",
+     "old_pre": "V33-240-9",
+     "new_pre": "V33-240-9"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-08",
+   "rule": "V33-241",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-08|R|V33-241-9",
+     "new_id": "GS-2022-08|R|V33-241-9",
+     "old_pre": "V33-241-10",
+     "new_pre": "V33-241-10"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-08",
+   "rule": "V33-117",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-08|R|V33-117-10",
+     "new_id": "GS-2022-08|R|V33-117-10",
+     "old_pre": "V33-117-7",
+     "new_pre": "V33-117-7"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-08",
+   "rule": "V33-243",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-08|R|V33-243-11",
+     "new_id": "GS-2022-08|R|V33-243-11",
+     "old_pre": "V33-243-8",
+     "new_pre": "V33-243-8"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-08",
+   "rule": "CMM-004",
+   "count": 3,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-08|P|CMM-004-4",
+     "new_id": "GS-2022-08|P|CMM-004-4",
+     "old_pre": "CMM-004-13",
+     "new_pre": "CMM-004-13"
+    },
+    {
+     "old_id": "GS-2022-08|P|CMM-004-5",
+     "new_id": "GS-2022-08|P|CMM-004-5",
+     "old_pre": "CMM-004-14",
+     "new_pre": "CMM-004-14"
+    },
+    {
+     "old_id": "GS-2022-08|P|CMM-004-6",
+     "new_id": "GS-2022-08|P|CMM-004-6",
+     "old_pre": "CMM-004-15",
+     "new_pre": "CMM-004-15"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-01",
+   "rule": "CMM-010",
+   "count": 2,
+   "verified": true,
+   "changed_count": 2,
+   "pairs": [
+    {
+     "old_id": "GS-2023-01|F|CMM-010-14",
+     "new_id": "GS-2023-01|F|CMM-010-13",
+     "old_pre": "CMM-010-20",
+     "new_pre": "CMM-010-19"
+    },
+    {
+     "old_id": "GS-2023-01|F|CMM-010-17",
+     "new_id": "GS-2023-01|F|CMM-010-16",
+     "old_pre": "CMM-010-21",
+     "new_pre": "CMM-010-20"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-01",
+   "rule": "V33-251",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-01|F|V33-251-15",
+     "new_id": "GS-2023-01|F|V33-251-14",
+     "old_pre": "V33-251-15",
+     "new_pre": "V33-251-15"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-01",
+   "rule": "V33-227",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-01|F|V33-227-16",
+     "new_id": "GS-2023-01|F|V33-227-15",
+     "old_pre": "V33-227-12",
+     "new_pre": "V33-227-12"
+    },
+    {
+     "old_id": "GS-2023-01|P|V33-227-22",
+     "new_id": "GS-2023-01|P|V33-227-20",
+     "old_pre": "V33-227-13",
+     "new_pre": "V33-227-13"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-01",
+   "rule": "V33-TREND-COMPLETION-RATE",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-01|F|V33-TREND-COMPLETION-RATE-18",
+     "new_id": "GS-2023-01|F|V33-TREND-COMPLETION-RATE-17",
+     "old_pre": "V33-TREND-COMPLETION-RATE-14",
+     "new_pre": "V33-TREND-COMPLETION-RATE-14"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-01",
+   "rule": "V33-005",
+   "count": 3,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-01|R|V33-005-2",
+     "new_id": "GS-2023-01|R|V33-005-1",
+     "old_pre": "V33-005-1",
+     "new_pre": "V33-005-1"
+    },
+    {
+     "old_id": "GS-2023-01|R|V33-005-8",
+     "new_id": "GS-2023-01|R|V33-005-7",
+     "old_pre": "V33-005-2",
+     "new_pre": "V33-005-2"
+    },
+    {
+     "old_id": "GS-2023-01|R|V33-005-9",
+     "new_id": "GS-2023-01|R|V33-005-8",
+     "old_pre": "V33-005-3",
+     "new_pre": "V33-005-3"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-01",
+   "rule": "V33-120",
+   "count": 3,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-01|R|V33-120-3",
+     "new_id": "GS-2023-01|R|V33-120-2",
+     "old_pre": "V33-120-4",
+     "new_pre": "V33-120-4"
+    },
+    {
+     "old_id": "GS-2023-01|R|V33-120-10",
+     "new_id": "GS-2023-01|R|V33-120-9",
+     "old_pre": "V33-120-5",
+     "new_pre": "V33-120-5"
+    },
+    {
+     "old_id": "GS-2023-01|R|V33-120-11",
+     "new_id": "GS-2023-01|R|V33-120-10",
+     "old_pre": "V33-120-6",
+     "new_pre": "V33-120-6"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-01",
+   "rule": "V33-240",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-01|R|V33-240-4",
+     "new_id": "GS-2023-01|R|V33-240-3",
+     "old_pre": "V33-240-9",
+     "new_pre": "V33-240-9"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-01",
+   "rule": "V33-241",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-01|R|V33-241-12",
+     "new_id": "GS-2023-01|R|V33-241-11",
+     "old_pre": "V33-241-10",
+     "new_pre": "V33-241-10"
+    },
+    {
+     "old_id": "GS-2023-01|R|V33-241-13",
+     "new_id": "GS-2023-01|R|V33-241-12",
+     "old_pre": "V33-241-11",
+     "new_pre": "V33-241-11"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-01",
+   "rule": "CMM-004",
+   "count": 3,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-01|P|CMM-004-5",
+     "new_id": "GS-2023-01|P|CMM-004-4",
+     "old_pre": "CMM-004-16",
+     "new_pre": "CMM-004-16"
+    },
+    {
+     "old_id": "GS-2023-01|P|CMM-004-6",
+     "new_id": "GS-2023-01|P|CMM-004-5",
+     "old_pre": "CMM-004-17",
+     "new_pre": "CMM-004-17"
+    },
+    {
+     "old_id": "GS-2023-01|P|CMM-004-7",
+     "new_id": "GS-2023-01|P|CMM-004-6",
+     "old_pre": "CMM-004-18",
+     "new_pre": "CMM-004-18"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-01",
+   "rule": "V33-246",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-01|P|V33-246-20",
+     "new_id": "GS-2023-01|P|V33-246-18",
+     "old_pre": "V33-246-7",
+     "new_pre": "V33-246-7"
+    },
+    {
+     "old_id": "GS-2023-01|P|V33-246-21",
+     "new_id": "GS-2023-01|P|V33-246-19",
+     "old_pre": "V33-246-8",
+     "new_pre": "V33-246-8"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-02",
+   "rule": "CMM-013",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-02|F|CMM-013-1",
+     "new_id": "GS-2023-02|F|CMM-013-1",
+     "old_pre": "CMM-013-5",
+     "new_pre": "CMM-013-5"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-02",
+   "rule": "CMM-014",
+   "count": 1,
+   "verified": true,
+   "changed_count": 1,
+   "pairs": [
+    {
+     "old_id": "GS-2023-02|F|CMM-014-8",
+     "new_id": "GS-2023-02|F|CMM-014-6",
+     "old_pre": "CMM-014-8",
+     "new_pre": "CMM-014-6"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-02",
+   "rule": "V33-005",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-02|R|V33-005-4",
+     "new_id": "GS-2023-02|R|V33-005-2",
+     "old_pre": "V33-005-1",
+     "new_pre": "V33-005-1"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-02",
+   "rule": "V33-120",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-02|R|V33-120-5",
+     "new_id": "GS-2023-02|R|V33-120-3",
+     "old_pre": "V33-120-2",
+     "new_pre": "V33-120-2"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-02",
+   "rule": "V33-240",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-02|R|V33-240-6",
+     "new_id": "GS-2023-02|R|V33-240-4",
+     "old_pre": "V33-240-4",
+     "new_pre": "V33-240-4"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-02",
+   "rule": "V33-243",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-02|R|V33-243-7",
+     "new_id": "GS-2023-02|R|V33-243-5",
+     "old_pre": "V33-243-3",
+     "new_pre": "V33-243-3"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-03",
+   "rule": "V33-115",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-03|R|V33-115-2",
+     "new_id": "GS-2023-03|R|V33-115-1",
+     "old_pre": "V33-115-1",
+     "new_pre": "V33-115-1"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-03",
+   "rule": "V33-117",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-03|R|V33-117-4",
+     "new_id": "GS-2023-03|R|V33-117-3",
+     "old_pre": "V33-117-2",
+     "new_pre": "V33-117-2"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-03",
+   "rule": "V33-243",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-03|R|V33-243-5",
+     "new_id": "GS-2023-03|R|V33-243-4",
+     "old_pre": "V33-243-3",
+     "new_pre": "V33-243-3"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-03",
+   "rule": "CMM-004",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-03|P|CMM-004-3",
+     "new_id": "GS-2023-03|P|CMM-004-2",
+     "old_pre": "CMM-004-4",
+     "new_pre": "CMM-004-4"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-04",
+   "rule": "V33-251",
+   "count": 1,
+   "verified": true,
+   "changed_count": 1,
+   "pairs": [
+    {
+     "old_id": "GS-2023-04|F|V33-251-6",
+     "new_id": "GS-2023-04|F|V33-251-6",
+     "old_pre": "V33-251-8",
+     "new_pre": "V33-251-7"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-04",
+   "rule": "CMM-011",
+   "count": 1,
+   "verified": true,
+   "changed_count": 1,
+   "pairs": [
+    {
+     "old_id": "GS-2023-04|F|CMM-011-7",
+     "new_id": "GS-2023-04|F|CMM-011-7",
+     "old_pre": "CMM-011-9",
+     "new_pre": "CMM-011-8"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-04",
+   "rule": "V33-115",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-04|R|V33-115-1",
+     "new_id": "GS-2023-04|R|V33-115-1",
+     "old_pre": "V33-115-2",
+     "new_pre": "V33-115-2"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-04",
+   "rule": "V33-240",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-04|R|V33-240-2",
+     "new_id": "GS-2023-04|R|V33-240-2",
+     "old_pre": "V33-240-5",
+     "new_pre": "V33-240-5"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-04",
+   "rule": "V33-005",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-04|R|V33-005-3",
+     "new_id": "GS-2023-04|R|V33-005-3",
+     "old_pre": "V33-005-1",
+     "new_pre": "V33-005-1"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-04",
+   "rule": "V33-120",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-04|R|V33-120-4",
+     "new_id": "GS-2023-04|R|V33-120-4",
+     "old_pre": "V33-120-3",
+     "new_pre": "V33-120-3"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-04",
+   "rule": "V33-241",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-04|R|V33-241-5",
+     "new_id": "GS-2023-04|R|V33-241-5",
+     "old_pre": "V33-241-6",
+     "new_pre": "V33-241-6"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-04",
+   "rule": "V33-246",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-04|P|V33-246-9",
+     "new_id": "GS-2023-04|P|V33-246-8",
+     "old_pre": "V33-246-4",
+     "new_pre": "V33-246-4"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-05",
+   "rule": "V33-249",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-05|F|V33-249-14",
+     "new_id": "GS-2023-05|F|V33-249-14",
+     "old_pre": "V33-249-20",
+     "new_pre": "V33-249-20"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-05",
+   "rule": "V33-251",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-05|F|V33-251-15",
+     "new_id": "GS-2023-05|F|V33-251-15",
+     "old_pre": "V33-251-21",
+     "new_pre": "V33-251-21"
+    },
+    {
+     "old_id": "GS-2023-05|F|V33-251-16",
+     "new_id": "GS-2023-05|F|V33-251-16",
+     "old_pre": "V33-251-22",
+     "new_pre": "V33-251-22"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-05",
+   "rule": "V33-234",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-05|F|V33-234-17",
+     "new_id": "GS-2023-05|F|V33-234-17",
+     "old_pre": "V33-234-19",
+     "new_pre": "V33-234-19"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-05",
+   "rule": "V33-110",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-05|F|V33-110-18",
+     "new_id": "GS-2023-05|F|V33-110-18",
+     "old_pre": "V33-110-6",
+     "new_pre": "V33-110-6"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-05",
+   "rule": "CMM-011",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-05|F|CMM-011-19",
+     "new_id": "GS-2023-05|F|CMM-011-19",
+     "old_pre": "CMM-011-25",
+     "new_pre": "CMM-011-25"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-05",
+   "rule": "V33-005",
+   "count": 3,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-05|R|V33-005-1",
+     "new_id": "GS-2023-05|R|V33-005-1",
+     "old_pre": "V33-005-1",
+     "new_pre": "V33-005-1"
+    },
+    {
+     "old_id": "GS-2023-05|R|V33-005-6",
+     "new_id": "GS-2023-05|R|V33-005-6",
+     "old_pre": "V33-005-2",
+     "new_pre": "V33-005-2"
+    },
+    {
+     "old_id": "GS-2023-05|R|V33-005-10",
+     "new_id": "GS-2023-05|R|V33-005-10",
+     "old_pre": "V33-005-3",
+     "new_pre": "V33-005-3"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-05",
+   "rule": "V33-120",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-05|R|V33-120-2",
+     "new_id": "GS-2023-05|R|V33-120-2",
+     "old_pre": "V33-120-8",
+     "new_pre": "V33-120-8"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-05",
+   "rule": "V33-240",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-05|R|V33-240-3",
+     "new_id": "GS-2023-05|R|V33-240-3",
+     "old_pre": "V33-240-14",
+     "new_pre": "V33-240-14"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-05",
+   "rule": "V33-119",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-05|R|V33-119-9",
+     "new_id": "GS-2023-05|R|V33-119-9",
+     "old_pre": "V33-119-7",
+     "new_pre": "V33-119-7"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-05",
+   "rule": "V33-117",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-05|R|V33-117-11",
+     "new_id": "GS-2023-05|R|V33-117-11",
+     "old_pre": "V33-117-11",
+     "new_pre": "V33-117-11"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-05",
+   "rule": "V33-243",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-05|R|V33-243-12",
+     "new_id": "GS-2023-05|R|V33-243-12",
+     "old_pre": "V33-243-12",
+     "new_pre": "V33-243-12"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-05",
+   "rule": "V33-244",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-05|R|V33-244-13",
+     "new_id": "GS-2023-05|R|V33-244-13",
+     "old_pre": "V33-244-13",
+     "new_pre": "V33-244-13"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-05",
+   "rule": "CMM-004",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-05|P|CMM-004-4",
+     "new_id": "GS-2023-05|P|CMM-004-4",
+     "old_pre": "CMM-004-23",
+     "new_pre": "CMM-004-23"
+    },
+    {
+     "old_id": "GS-2023-05|P|CMM-004-5",
+     "new_id": "GS-2023-05|P|CMM-004-5",
+     "old_pre": "CMM-004-24",
+     "new_pre": "CMM-004-24"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-05",
+   "rule": "V33-104",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-05|P|V33-104-7",
+     "new_id": "GS-2023-05|P|V33-104-7",
+     "old_pre": "V33-104-4",
+     "new_pre": "V33-104-4"
+    },
+    {
+     "old_id": "GS-2023-05|P|V33-104-8",
+     "new_id": "GS-2023-05|P|V33-104-8",
+     "old_pre": "V33-104-5",
+     "new_pre": "V33-104-5"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-05",
+   "rule": "V33-227",
+   "count": 3,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-05|P|V33-227-20",
+     "new_id": "GS-2023-05|P|V33-227-20",
+     "old_pre": "V33-227-16",
+     "new_pre": "V33-227-16"
+    },
+    {
+     "old_id": "GS-2023-05|P|V33-227-21",
+     "new_id": "GS-2023-05|P|V33-227-21",
+     "old_pre": "V33-227-17",
+     "new_pre": "V33-227-17"
+    },
+    {
+     "old_id": "GS-2023-05|P|V33-227-22",
+     "new_id": "GS-2023-05|P|V33-227-22",
+     "old_pre": "V33-227-18",
+     "new_pre": "V33-227-18"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-06",
+   "rule": "V33-227",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-06|F|V33-227-9",
+     "new_id": "GS-2023-06|F|V33-227-9",
+     "old_pre": "V33-227-12",
+     "new_pre": "V33-227-12"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-06",
+   "rule": "CMM-009",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-06|F|CMM-009-10",
+     "new_id": "GS-2023-06|F|CMM-009-10",
+     "old_pre": "CMM-009-14",
+     "new_pre": "CMM-009-14"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-06",
+   "rule": "V33-113",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-06|F|V33-113-11",
+     "new_id": "GS-2023-06|F|V33-113-11",
+     "old_pre": "V33-113-3",
+     "new_pre": "V33-113-3"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-06",
+   "rule": "V33-240",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-06|R|V33-240-1",
+     "new_id": "GS-2023-06|R|V33-240-1",
+     "old_pre": "V33-240-10",
+     "new_pre": "V33-240-10"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-06",
+   "rule": "V33-005",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-06|R|V33-005-3",
+     "new_id": "GS-2023-06|R|V33-005-3",
+     "old_pre": "V33-005-1",
+     "new_pre": "V33-005-1"
+    },
+    {
+     "old_id": "GS-2023-06|R|V33-005-4",
+     "new_id": "GS-2023-06|R|V33-005-4",
+     "old_pre": "V33-005-2",
+     "new_pre": "V33-005-2"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-06",
+   "rule": "V33-117",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-06|R|V33-117-5",
+     "new_id": "GS-2023-06|R|V33-117-5",
+     "old_pre": "V33-117-6",
+     "new_pre": "V33-117-6"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-06",
+   "rule": "V33-243",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-06|R|V33-243-6",
+     "new_id": "GS-2023-06|R|V33-243-6",
+     "old_pre": "V33-243-7",
+     "new_pre": "V33-243-7"
+    },
+    {
+     "old_id": "GS-2023-06|R|V33-243-7",
+     "new_id": "GS-2023-06|R|V33-243-7",
+     "old_pre": "V33-243-8",
+     "new_pre": "V33-243-8"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-06",
+   "rule": "V33-244",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-06|R|V33-244-8",
+     "new_id": "GS-2023-06|R|V33-244-8",
+     "old_pre": "V33-244-9",
+     "new_pre": "V33-244-9"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-06",
+   "rule": "CMM-004",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-06|P|CMM-004-2",
+     "new_id": "GS-2023-06|P|CMM-004-2",
+     "old_pre": "CMM-004-13",
+     "new_pre": "CMM-004-13"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-07",
+   "rule": "V33-227",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-07|F|V33-227-9",
+     "new_id": "GS-2023-07|F|V33-227-9",
+     "old_pre": "V33-227-6",
+     "new_pre": "V33-227-6"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-07",
+   "rule": "CMM-007",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-07|F|CMM-007-10",
+     "new_id": "GS-2023-07|F|CMM-007-10",
+     "old_pre": "CMM-007-10",
+     "new_pre": "CMM-007-10"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-07",
+   "rule": "V33-115",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-07|R|V33-115-1",
+     "new_id": "GS-2023-07|R|V33-115-1",
+     "old_pre": "V33-115-2",
+     "new_pre": "V33-115-2"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-07",
+   "rule": "V33-005",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-07|R|V33-005-2",
+     "new_id": "GS-2023-07|R|V33-005-2",
+     "old_pre": "V33-005-1",
+     "new_pre": "V33-005-1"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-07",
+   "rule": "V33-120",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-07|R|V33-120-3",
+     "new_id": "GS-2023-07|R|V33-120-3",
+     "old_pre": "V33-120-3",
+     "new_pre": "V33-120-3"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-07",
+   "rule": "V33-240",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-07|R|V33-240-4",
+     "new_id": "GS-2023-07|R|V33-240-4",
+     "old_pre": "V33-240-5",
+     "new_pre": "V33-240-5"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-07",
+   "rule": "V33-243",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-07|R|V33-243-8",
+     "new_id": "GS-2023-07|R|V33-243-8",
+     "old_pre": "V33-243-4",
+     "new_pre": "V33-243-4"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-07",
+   "rule": "CMM-004",
+   "count": 3,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-07|P|CMM-004-5",
+     "new_id": "GS-2023-07|P|CMM-004-5",
+     "old_pre": "CMM-004-7",
+     "new_pre": "CMM-004-7"
+    },
+    {
+     "old_id": "GS-2023-07|P|CMM-004-6",
+     "new_id": "GS-2023-07|P|CMM-004-6",
+     "old_pre": "CMM-004-8",
+     "new_pre": "CMM-004-8"
+    },
+    {
+     "old_id": "GS-2023-07|P|CMM-004-7",
+     "new_id": "GS-2023-07|P|CMM-004-7",
+     "old_pre": "CMM-004-9",
+     "new_pre": "CMM-004-9"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-08",
+   "rule": "V33-250",
+   "count": 1,
+   "verified": true,
+   "changed_count": 1,
+   "pairs": [
+    {
+     "old_id": "GS-2023-08|F|V33-250-7",
+     "new_id": "GS-2023-08|F|V33-250-6",
+     "old_pre": "V33-250-9",
+     "new_pre": "V33-250-8"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-08",
+   "rule": "V33-005",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-08|R|V33-005-1",
+     "new_id": "GS-2023-08|R|V33-005-1",
+     "old_pre": "V33-005-1",
+     "new_pre": "V33-005-1"
+    },
+    {
+     "old_id": "GS-2023-08|R|V33-005-4",
+     "new_id": "GS-2023-08|R|V33-005-4",
+     "old_pre": "V33-005-2",
+     "new_pre": "V33-005-2"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-08",
+   "rule": "V33-120",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-08|R|V33-120-2",
+     "new_id": "GS-2023-08|R|V33-120-2",
+     "old_pre": "V33-120-3",
+     "new_pre": "V33-120-3"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-08",
+   "rule": "V33-240",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-08|R|V33-240-3",
+     "new_id": "GS-2023-08|R|V33-240-3",
+     "old_pre": "V33-240-6",
+     "new_pre": "V33-240-6"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2023-08",
+   "rule": "V33-243",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2023-08|R|V33-243-5",
+     "new_id": "GS-2023-08|R|V33-243-5",
+     "old_pre": "V33-243-5",
+     "new_pre": "V33-243-5"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-01",
+   "rule": "V33-251",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-01|F|V33-251-9",
+     "new_id": "GS-2024-01|F|V33-251-8",
+     "old_pre": "V33-251-8",
+     "new_pre": "V33-251-8"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-01",
+   "rule": "V33-110",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-01|F|V33-110-10",
+     "new_id": "GS-2024-01|F|V33-110-9",
+     "old_pre": "V33-110-2",
+     "new_pre": "V33-110-2"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-01",
+   "rule": "CMM-011",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-01|F|CMM-011-11",
+     "new_id": "GS-2024-01|F|CMM-011-10",
+     "old_pre": "CMM-011-12",
+     "new_pre": "CMM-011-12"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-01",
+   "rule": "CMM-018",
+   "count": 1,
+   "verified": true,
+   "changed_count": 1,
+   "pairs": [
+    {
+     "old_id": "GS-2024-01|F|CMM-018-12",
+     "new_id": "GS-2024-01|F|CMM-018-11",
+     "old_pre": "CMM-018-14",
+     "new_pre": "CMM-018-13"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-01",
+   "rule": "V33-240",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-01|R|V33-240-2",
+     "new_id": "GS-2024-01|R|V33-240-1",
+     "old_pre": "V33-240-6",
+     "new_pre": "V33-240-6"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-01",
+   "rule": "V33-005",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-01|R|V33-005-6",
+     "new_id": "GS-2024-01|R|V33-005-5",
+     "old_pre": "V33-005-1",
+     "new_pre": "V33-005-1"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-01",
+   "rule": "V33-117",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-01|R|V33-117-7",
+     "new_id": "GS-2024-01|R|V33-117-6",
+     "old_pre": "V33-117-4",
+     "new_pre": "V33-117-4"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-01",
+   "rule": "V33-244",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-01|R|V33-244-8",
+     "new_id": "GS-2024-01|R|V33-244-7",
+     "old_pre": "V33-244-5",
+     "new_pre": "V33-244-5"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-01",
+   "rule": "CMM-004",
+   "count": 3,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-01|P|CMM-004-3",
+     "new_id": "GS-2024-01|P|CMM-004-2",
+     "old_pre": "CMM-004-9",
+     "new_pre": "CMM-004-9"
+    },
+    {
+     "old_id": "GS-2024-01|P|CMM-004-4",
+     "new_id": "GS-2024-01|P|CMM-004-3",
+     "old_pre": "CMM-004-10",
+     "new_pre": "CMM-004-10"
+    },
+    {
+     "old_id": "GS-2024-01|P|CMM-004-5",
+     "new_id": "GS-2024-01|P|CMM-004-4",
+     "old_pre": "CMM-004-11",
+     "new_pre": "CMM-004-11"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-02",
+   "rule": "CMM-013",
+   "count": 1,
+   "verified": true,
+   "changed_count": 1,
+   "pairs": [
+    {
+     "old_id": "GS-2024-02|F|CMM-013-2",
+     "new_id": "GS-2024-02|F|CMM-013-1",
+     "old_pre": "CMM-013-11",
+     "new_pre": "CMM-013-10"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-02",
+   "rule": "V33-202",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-02|F|V33-202-10",
+     "new_id": "GS-2024-02|F|V33-202-9",
+     "old_pre": "V33-202-1",
+     "new_pre": "V33-202-1"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-02",
+   "rule": "CMM-017",
+   "count": 2,
+   "verified": true,
+   "changed_count": 2,
+   "pairs": [
+    {
+     "old_id": "GS-2024-02|F|CMM-017-11",
+     "new_id": "GS-2024-02|F|CMM-017-10",
+     "old_pre": "CMM-017-12",
+     "new_pre": "CMM-017-11"
+    },
+    {
+     "old_id": "GS-2024-02|F|CMM-017-13",
+     "new_id": "GS-2024-02|F|CMM-017-12",
+     "old_pre": "CMM-017-13",
+     "new_pre": "CMM-017-12"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-02",
+   "rule": "V33-240",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-02|R|V33-240-3",
+     "new_id": "GS-2024-02|R|V33-240-2",
+     "old_pre": "V33-240-2",
+     "new_pre": "V33-240-2"
+    },
+    {
+     "old_id": "GS-2024-02|R|V33-240-4",
+     "new_id": "GS-2024-02|R|V33-240-3",
+     "old_pre": "V33-240-3",
+     "new_pre": "V33-240-3"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-02",
+   "rule": "CMM-002",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-02|R|CMM-002-12",
+     "new_id": "GS-2024-02|R|CMM-002-11",
+     "old_pre": "CMM-002-4",
+     "new_pre": "CMM-002-4"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-02",
+   "rule": "CMM-004",
+   "count": 5,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-02|P|CMM-004-5",
+     "new_id": "GS-2024-02|P|CMM-004-4",
+     "old_pre": "CMM-004-5",
+     "new_pre": "CMM-004-5"
+    },
+    {
+     "old_id": "GS-2024-02|P|CMM-004-6",
+     "new_id": "GS-2024-02|P|CMM-004-5",
+     "old_pre": "CMM-004-6",
+     "new_pre": "CMM-004-6"
+    },
+    {
+     "old_id": "GS-2024-02|P|CMM-004-7",
+     "new_id": "GS-2024-02|P|CMM-004-6",
+     "old_pre": "CMM-004-7",
+     "new_pre": "CMM-004-7"
+    },
+    {
+     "old_id": "GS-2024-02|P|CMM-004-8",
+     "new_id": "GS-2024-02|P|CMM-004-7",
+     "old_pre": "CMM-004-8",
+     "new_pre": "CMM-004-8"
+    },
+    {
+     "old_id": "GS-2024-02|P|CMM-004-9",
+     "new_id": "GS-2024-02|P|CMM-004-8",
+     "old_pre": "CMM-004-9",
+     "new_pre": "CMM-004-9"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-03",
+   "rule": "V33-227",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-03|F|V33-227-9",
+     "new_id": "GS-2024-03|F|V33-227-8",
+     "old_pre": "V33-227-9",
+     "new_pre": "V33-227-9"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-03",
+   "rule": "V33-SG-COMPLETION",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-03|F|V33-SG-COMPLETION-10",
+     "new_id": "GS-2024-03|F|V33-SG-COMPLETION-9",
+     "old_pre": "V33-SG-COMPLETION-7",
+     "new_pre": "V33-SG-COMPLETION-7"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-03",
+   "rule": "CMM-017",
+   "count": 1,
+   "verified": true,
+   "changed_count": 1,
+   "pairs": [
+    {
+     "old_id": "GS-2024-03|F|CMM-017-11",
+     "new_id": "GS-2024-03|F|CMM-017-10",
+     "old_pre": "CMM-017-13",
+     "new_pre": "CMM-017-12"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-03",
+   "rule": "CMM-008",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-03|F|CMM-008-12",
+     "new_id": "GS-2024-03|F|CMM-008-11",
+     "old_pre": "CMM-008-11",
+     "new_pre": "CMM-008-11"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-03",
+   "rule": "V33-005",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-03|R|V33-005-2",
+     "new_id": "GS-2024-03|R|V33-005-1",
+     "old_pre": "V33-005-1",
+     "new_pre": "V33-005-1"
+    },
+    {
+     "old_id": "GS-2024-03|R|V33-005-5",
+     "new_id": "GS-2024-03|R|V33-005-4",
+     "old_pre": "V33-005-2",
+     "new_pre": "V33-005-2"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-03",
+   "rule": "V33-120",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-03|R|V33-120-3",
+     "new_id": "GS-2024-03|R|V33-120-2",
+     "old_pre": "V33-120-3",
+     "new_pre": "V33-120-3"
+    },
+    {
+     "old_id": "GS-2024-03|R|V33-120-6",
+     "new_id": "GS-2024-03|R|V33-120-5",
+     "old_pre": "V33-120-4",
+     "new_pre": "V33-120-4"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-03",
+   "rule": "V33-117",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-03|R|V33-117-7",
+     "new_id": "GS-2024-03|R|V33-117-6",
+     "old_pre": "V33-117-5",
+     "new_pre": "V33-117-5"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-03",
+   "rule": "V33-243",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-03|R|V33-243-8",
+     "new_id": "GS-2024-03|R|V33-243-7",
+     "old_pre": "V33-243-6",
+     "new_pre": "V33-243-6"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-03",
+   "rule": "CMM-004",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-03|P|CMM-004-4",
+     "new_id": "GS-2024-03|P|CMM-004-3",
+     "old_pre": "CMM-004-10",
+     "new_pre": "CMM-004-10"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-04",
+   "rule": "V33-251",
+   "count": 2,
+   "verified": true,
+   "changed_count": 2,
+   "pairs": [
+    {
+     "old_id": "GS-2024-04|F|V33-251-7",
+     "new_id": "GS-2024-04|F|V33-251-7",
+     "old_pre": "V33-251-11",
+     "new_pre": "V33-251-10"
+    },
+    {
+     "old_id": "GS-2024-04|F|V33-251-8",
+     "new_id": "GS-2024-04|F|V33-251-8",
+     "old_pre": "V33-251-12",
+     "new_pre": "V33-251-11"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-04",
+   "rule": "V33-222",
+   "count": 3,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-04|F|V33-222-9",
+     "new_id": "GS-2024-04|F|V33-222-9",
+     "old_pre": "V33-222-6",
+     "new_pre": "V33-222-6"
+    },
+    {
+     "old_id": "GS-2024-04|F|V33-222-11",
+     "new_id": "GS-2024-04|F|V33-222-10",
+     "old_pre": "V33-222-7",
+     "new_pre": "V33-222-7"
+    },
+    {
+     "old_id": "GS-2024-04|F|V33-222-12",
+     "new_id": "GS-2024-04|F|V33-222-11",
+     "old_pre": "V33-222-8",
+     "new_pre": "V33-222-8"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-04",
+   "rule": "CMM-007",
+   "count": 2,
+   "verified": true,
+   "changed_count": 2,
+   "pairs": [
+    {
+     "old_id": "GS-2024-04|F|CMM-007-13",
+     "new_id": "GS-2024-04|F|CMM-007-12",
+     "old_pre": "CMM-007-14",
+     "new_pre": "CMM-007-13"
+    },
+    {
+     "old_id": "GS-2024-04|F|CMM-007-14",
+     "new_id": "GS-2024-04|F|CMM-007-13",
+     "old_pre": "CMM-007-15",
+     "new_pre": "CMM-007-14"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-04",
+   "rule": "V33-234",
+   "count": 1,
+   "verified": true,
+   "changed_count": 1,
+   "pairs": [
+    {
+     "old_id": "GS-2024-04|F|V33-234-15",
+     "new_id": "GS-2024-04|F|V33-234-14",
+     "old_pre": "V33-234-10",
+     "new_pre": "V33-234-9"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-04",
+   "rule": "V33-005",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-04|R|V33-005-2",
+     "new_id": "GS-2024-04|R|V33-005-2",
+     "old_pre": "V33-005-1",
+     "new_pre": "V33-005-1"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-04",
+   "rule": "V33-120",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-04|R|V33-120-3",
+     "new_id": "GS-2024-04|R|V33-120-3",
+     "old_pre": "V33-120-2",
+     "new_pre": "V33-120-2"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-04",
+   "rule": "V33-241",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-04|R|V33-241-4",
+     "new_id": "GS-2024-04|R|V33-241-4",
+     "old_pre": "V33-241-5",
+     "new_pre": "V33-241-5"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-04",
+   "rule": "V33-243",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-04|R|V33-243-5",
+     "new_id": "GS-2024-04|R|V33-243-5",
+     "old_pre": "V33-243-3",
+     "new_pre": "V33-243-3"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-04",
+   "rule": "V33-244",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-04|R|V33-244-6",
+     "new_id": "GS-2024-04|R|V33-244-6",
+     "old_pre": "V33-244-4",
+     "new_pre": "V33-244-4"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-04",
+   "rule": "CMM-004",
+   "count": 1,
+   "verified": true,
+   "changed_count": 1,
+   "pairs": [
+    {
+     "old_id": "GS-2024-04|P|CMM-004-1",
+     "new_id": "GS-2024-04|P|CMM-004-1",
+     "old_pre": "CMM-004-13",
+     "new_pre": "CMM-004-12"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-05",
+   "rule": "V33-243",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-05|R|V33-243-2",
+     "new_id": "GS-2024-05|R|V33-243-2",
+     "old_pre": "V33-243-1",
+     "new_pre": "V33-243-1"
+    },
+    {
+     "old_id": "GS-2024-05|R|V33-243-3",
+     "new_id": "GS-2024-05|R|V33-243-3",
+     "old_pre": "V33-243-2",
+     "new_pre": "V33-243-2"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-05",
+   "rule": "CMM-021",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-05|R|CMM-021-4",
+     "new_id": "GS-2024-05|R|CMM-021-4",
+     "old_pre": "CMM-021-4",
+     "new_pre": "CMM-021-4"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-05",
+   "rule": "CMM-004",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-05|P|CMM-004-1",
+     "new_id": "GS-2024-05|P|CMM-004-1",
+     "old_pre": "CMM-004-3",
+     "new_pre": "CMM-004-3"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-06",
+   "rule": "CMM-019",
+   "count": 1,
+   "verified": true,
+   "changed_count": 1,
+   "pairs": [
+    {
+     "old_id": "GS-2024-06|F|CMM-019-1",
+     "new_id": "GS-2024-06|F|CMM-019-1",
+     "old_pre": "CMM-019-36",
+     "new_pre": "CMM-019-35"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-06",
+   "rule": "CMM-013",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-06|F|CMM-013-2",
+     "new_id": "GS-2024-06|F|CMM-013-2",
+     "old_pre": "CMM-013-33",
+     "new_pre": "CMM-013-33"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-06",
+   "rule": "CMM-010",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-06|F|CMM-010-18",
+     "new_id": "GS-2024-06|F|CMM-010-17",
+     "old_pre": "CMM-010-32",
+     "new_pre": "CMM-010-32"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-06",
+   "rule": "V33-251",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-06|F|V33-251-19",
+     "new_id": "GS-2024-06|F|V33-251-18",
+     "old_pre": "V33-251-26",
+     "new_pre": "V33-251-26"
+    },
+    {
+     "old_id": "GS-2024-06|F|V33-251-20",
+     "new_id": "GS-2024-06|F|V33-251-19",
+     "old_pre": "V33-251-25",
+     "new_pre": "V33-251-25"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-06",
+   "rule": "V33-222",
+   "count": 12,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-06|F|V33-222-21",
+     "new_id": "GS-2024-06|F|V33-222-20",
+     "old_pre": "V33-222-12",
+     "new_pre": "V33-222-12"
+    },
+    {
+     "old_id": "GS-2024-06|F|V33-222-22",
+     "new_id": "GS-2024-06|F|V33-222-21",
+     "old_pre": "V33-222-13",
+     "new_pre": "V33-222-13"
+    },
+    {
+     "old_id": "GS-2024-06|F|V33-222-23",
+     "new_id": "GS-2024-06|F|V33-222-22",
+     "old_pre": "V33-222-14",
+     "new_pre": "V33-222-14"
+    },
+    {
+     "old_id": "GS-2024-06|F|V33-222-24",
+     "new_id": "GS-2024-06|F|V33-222-23",
+     "old_pre": "V33-222-15",
+     "new_pre": "V33-222-15"
+    },
+    {
+     "old_id": "GS-2024-06|F|V33-222-25",
+     "new_id": "GS-2024-06|F|V33-222-24",
+     "old_pre": "V33-222-16",
+     "new_pre": "V33-222-16"
+    },
+    {
+     "old_id": "GS-2024-06|F|V33-222-26",
+     "new_id": "GS-2024-06|F|V33-222-25",
+     "old_pre": "V33-222-17",
+     "new_pre": "V33-222-17"
+    },
+    {
+     "old_id": "GS-2024-06|F|V33-222-27",
+     "new_id": "GS-2024-06|F|V33-222-26",
+     "old_pre": "V33-222-18",
+     "new_pre": "V33-222-18"
+    },
+    {
+     "old_id": "GS-2024-06|F|V33-222-28",
+     "new_id": "GS-2024-06|F|V33-222-27",
+     "old_pre": "V33-222-19",
+     "new_pre": "V33-222-19"
+    },
+    {
+     "old_id": "GS-2024-06|F|V33-222-29",
+     "new_id": "GS-2024-06|F|V33-222-28",
+     "old_pre": "V33-222-20",
+     "new_pre": "V33-222-20"
+    },
+    {
+     "old_id": "GS-2024-06|F|V33-222-30",
+     "new_id": "GS-2024-06|F|V33-222-29",
+     "old_pre": "V33-222-21",
+     "new_pre": "V33-222-21"
+    },
+    {
+     "old_id": "GS-2024-06|F|V33-222-31",
+     "new_id": "GS-2024-06|F|V33-222-30",
+     "old_pre": "V33-222-22",
+     "new_pre": "V33-222-22"
+    },
+    {
+     "old_id": "GS-2024-06|F|V33-222-32",
+     "new_id": "GS-2024-06|F|V33-222-31",
+     "old_pre": "V33-222-23",
+     "new_pre": "V33-222-23"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-06",
+   "rule": "V33-TREND-COMPLETION-RATE",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-06|F|V33-TREND-COMPLETION-RATE-33",
+     "new_id": "GS-2024-06|F|V33-TREND-COMPLETION-RATE-32",
+     "old_pre": "V33-TREND-COMPLETION-RATE-24",
+     "new_pre": "V33-TREND-COMPLETION-RATE-24"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-06",
+   "rule": "CMM-018",
+   "count": 1,
+   "verified": true,
+   "changed_count": 1,
+   "pairs": [
+    {
+     "old_id": "GS-2024-06|F|CMM-018-34",
+     "new_id": "GS-2024-06|F|CMM-018-33",
+     "old_pre": "CMM-018-35",
+     "new_pre": "CMM-018-34"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-06",
+   "rule": "V33-240",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-06|R|V33-240-4",
+     "new_id": "GS-2024-06|R|V33-240-3",
+     "old_pre": "V33-240-7",
+     "new_pre": "V33-240-7"
+    },
+    {
+     "old_id": "GS-2024-06|R|V33-240-5",
+     "new_id": "GS-2024-06|R|V33-240-4",
+     "old_pre": "V33-240-8",
+     "new_pre": "V33-240-8"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-06",
+   "rule": "V33-005",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-06|R|V33-005-11",
+     "new_id": "GS-2024-06|R|V33-005-10",
+     "old_pre": "V33-005-1",
+     "new_pre": "V33-005-1"
+    },
+    {
+     "old_id": "GS-2024-06|R|V33-005-12",
+     "new_id": "GS-2024-06|R|V33-005-11",
+     "old_pre": "V33-005-2",
+     "new_pre": "V33-005-2"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-06",
+   "rule": "V33-120",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-06|R|V33-120-14",
+     "new_id": "GS-2024-06|R|V33-120-13",
+     "old_pre": "V33-120-4",
+     "new_pre": "V33-120-4"
+    },
+    {
+     "old_id": "GS-2024-06|R|V33-120-15",
+     "new_id": "GS-2024-06|R|V33-120-14",
+     "old_pre": "V33-120-5",
+     "new_pre": "V33-120-5"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-06",
+   "rule": "V33-241",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-06|R|V33-241-16",
+     "new_id": "GS-2024-06|R|V33-241-15",
+     "old_pre": "V33-241-9",
+     "new_pre": "V33-241-9"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-06",
+   "rule": "V33-243",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-06|R|V33-243-17",
+     "new_id": "GS-2024-06|R|V33-243-16",
+     "old_pre": "V33-243-6",
+     "new_pre": "V33-243-6"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-06",
+   "rule": "CMM-004",
+   "count": 5,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-06|P|CMM-004-6",
+     "new_id": "GS-2024-06|P|CMM-004-5",
+     "old_pre": "CMM-004-27",
+     "new_pre": "CMM-004-27"
+    },
+    {
+     "old_id": "GS-2024-06|P|CMM-004-7",
+     "new_id": "GS-2024-06|P|CMM-004-6",
+     "old_pre": "CMM-004-28",
+     "new_pre": "CMM-004-28"
+    },
+    {
+     "old_id": "GS-2024-06|P|CMM-004-8",
+     "new_id": "GS-2024-06|P|CMM-004-7",
+     "old_pre": "CMM-004-29",
+     "new_pre": "CMM-004-29"
+    },
+    {
+     "old_id": "GS-2024-06|P|CMM-004-9",
+     "new_id": "GS-2024-06|P|CMM-004-8",
+     "old_pre": "CMM-004-30",
+     "new_pre": "CMM-004-30"
+    },
+    {
+     "old_id": "GS-2024-06|P|CMM-004-10",
+     "new_id": "GS-2024-06|P|CMM-004-9",
+     "old_pre": "CMM-004-31",
+     "new_pre": "CMM-004-31"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-06",
+   "rule": "V33-104",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-06|P|V33-104-13",
+     "new_id": "GS-2024-06|P|V33-104-12",
+     "old_pre": "V33-104-3",
+     "new_pre": "V33-104-3"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-06",
+   "rule": "V33-220",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-06|P|V33-220-35",
+     "new_id": "GS-2024-06|P|V33-220-34",
+     "old_pre": "V33-220-11",
+     "new_pre": "V33-220-11"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-07",
+   "rule": "CMM-013",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-07|F|CMM-013-1",
+     "new_id": "GS-2024-07|F|CMM-013-1",
+     "old_pre": "CMM-013-18",
+     "new_pre": "CMM-013-18"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-07",
+   "rule": "V33-222",
+   "count": 3,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-07|F|V33-222-11",
+     "new_id": "GS-2024-07|F|V33-222-11",
+     "old_pre": "V33-222-9",
+     "new_pre": "V33-222-9"
+    },
+    {
+     "old_id": "GS-2024-07|F|V33-222-13",
+     "new_id": "GS-2024-07|F|V33-222-13",
+     "old_pre": "V33-222-10",
+     "new_pre": "V33-222-10"
+    },
+    {
+     "old_id": "GS-2024-07|F|V33-222-14",
+     "new_id": "GS-2024-07|F|V33-222-14",
+     "old_pre": "V33-222-11",
+     "new_pre": "V33-222-11"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-07",
+   "rule": "V33-NARRATIVE-INDICATOR-REPEAT",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-07|F|V33-NARRATIVE-INDICATOR-REPEAT-12",
+     "new_id": "GS-2024-07|F|V33-NARRATIVE-INDICATOR-REPEAT-12",
+     "old_pre": "V33-NARRATIVE-INDICATOR-REPEAT-13",
+     "new_pre": "V33-NARRATIVE-INDICATOR-REPEAT-13"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-07",
+   "rule": "V33-TREND-COMPLETION-RATE",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-07|F|V33-TREND-COMPLETION-RATE-15",
+     "new_id": "GS-2024-07|F|V33-TREND-COMPLETION-RATE-15",
+     "old_pre": "V33-TREND-COMPLETION-RATE-14",
+     "new_pre": "V33-TREND-COMPLETION-RATE-14"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-07",
+   "rule": "V33-251",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-07|F|V33-251-16",
+     "new_id": "GS-2024-07|F|V33-251-16",
+     "old_pre": "V33-251-15",
+     "new_pre": "V33-251-15"
+    },
+    {
+     "old_id": "GS-2024-07|F|V33-251-17",
+     "new_id": "GS-2024-07|F|V33-251-17",
+     "old_pre": "V33-251-16",
+     "new_pre": "V33-251-16"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-07",
+   "rule": "V33-115",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-07|R|V33-115-2",
+     "new_id": "GS-2024-07|R|V33-115-2",
+     "old_pre": "V33-115-4",
+     "new_pre": "V33-115-4"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-07",
+   "rule": "V33-005",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-07|R|V33-005-3",
+     "new_id": "GS-2024-07|R|V33-005-3",
+     "old_pre": "V33-005-1",
+     "new_pre": "V33-005-1"
+    },
+    {
+     "old_id": "GS-2024-07|R|V33-005-7",
+     "new_id": "GS-2024-07|R|V33-005-7",
+     "old_pre": "V33-005-2",
+     "new_pre": "V33-005-2"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-07",
+   "rule": "V33-120",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-07|R|V33-120-4",
+     "new_id": "GS-2024-07|R|V33-120-4",
+     "old_pre": "V33-120-5",
+     "new_pre": "V33-120-5"
+    },
+    {
+     "old_id": "GS-2024-07|R|V33-120-8",
+     "new_id": "GS-2024-07|R|V33-120-8",
+     "old_pre": "V33-120-6",
+     "new_pre": "V33-120-6"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-07",
+   "rule": "V33-240",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-07|R|V33-240-5",
+     "new_id": "GS-2024-07|R|V33-240-5",
+     "old_pre": "V33-240-7",
+     "new_pre": "V33-240-7"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-07",
+   "rule": "V33-241",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-07|R|V33-241-9",
+     "new_id": "GS-2024-07|R|V33-241-9",
+     "old_pre": "V33-241-8",
+     "new_pre": "V33-241-8"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-07",
+   "rule": "CMM-014",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-07|R|CMM-014-18",
+     "new_id": "GS-2024-07|R|CMM-014-18",
+     "old_pre": "CMM-014-19",
+     "new_pre": "CMM-014-19"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-07",
+   "rule": "CMM-004",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-07|P|CMM-004-6",
+     "new_id": "GS-2024-07|P|CMM-004-6",
+     "old_pre": "CMM-004-17",
+     "new_pre": "CMM-004-17"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-07",
+   "rule": "V33-106",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-07|P|V33-106-10",
+     "new_id": "GS-2024-07|P|V33-106-10",
+     "old_pre": "V33-106-3",
+     "new_pre": "V33-106-3"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-07",
+   "rule": "V33-223",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-07|P|V33-223-19",
+     "new_id": "GS-2024-07|P|V33-223-19",
+     "old_pre": "V33-223-12",
+     "new_pre": "V33-223-12"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-08",
+   "rule": "V33-251",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-08|F|V33-251-2",
+     "new_id": "GS-2024-08|F|V33-251-2",
+     "old_pre": "V33-251-2",
+     "new_pre": "V33-251-2"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-08",
+   "rule": "V33-243",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-08|R|V33-243-1",
+     "new_id": "GS-2024-08|R|V33-243-1",
+     "old_pre": "V33-243-1",
+     "new_pre": "V33-243-1"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-08",
+   "rule": "CMM-002",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2024-08|R|CMM-002-4",
+     "new_id": "GS-2024-08|R|CMM-002-3",
+     "old_pre": "CMM-002-3",
+     "new_pre": "CMM-002-3"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2024-08",
+   "rule": "CMM-010",
+   "count": 1,
+   "verified": true,
+   "changed_count": 1,
+   "pairs": [
+    {
+     "old_id": "GS-2024-08|R|CMM-010-5",
+     "new_id": "GS-2024-08|R|CMM-010-4",
+     "old_pre": "CMM-010-5",
+     "new_pre": "CMM-010-4"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-01",
+   "rule": "CMM-014",
+   "count": 1,
+   "verified": true,
+   "changed_count": 1,
+   "pairs": [
+    {
+     "old_id": "GS-2025-01|F|CMM-014-1",
+     "new_id": "GS-2025-01|F|CMM-014-1",
+     "old_pre": "CMM-014-14",
+     "new_pre": "CMM-014-12"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-01",
+   "rule": "V33-117",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-01|F|V33-117-2",
+     "new_id": "GS-2025-01|F|V33-117-2",
+     "old_pre": "V33-117-5",
+     "new_pre": "V33-117-5"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-01",
+   "rule": "V33-243",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-01|F|V33-243-3",
+     "new_id": "GS-2025-01|F|V33-243-3",
+     "old_pre": "V33-243-6",
+     "new_pre": "V33-243-6"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-01",
+   "rule": "V33-234",
+   "count": 1,
+   "verified": true,
+   "changed_count": 1,
+   "pairs": [
+    {
+     "old_id": "GS-2025-01|F|V33-234-4",
+     "new_id": "GS-2025-01|F|V33-234-4",
+     "old_pre": "V33-234-9",
+     "new_pre": "V33-234-8"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-01",
+   "rule": "V33-112",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-01|F|V33-112-5",
+     "new_id": "GS-2025-01|F|V33-112-5",
+     "old_pre": "V33-112-2",
+     "new_pre": "V33-112-2"
+    },
+    {
+     "old_id": "GS-2025-01|F|V33-112-6",
+     "new_id": "GS-2025-01|F|V33-112-6",
+     "old_pre": "V33-112-3",
+     "new_pre": "V33-112-3"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-01",
+   "rule": "V33-105",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-01|F|V33-105-7",
+     "new_id": "GS-2025-01|F|V33-105-7",
+     "old_pre": "V33-105-1",
+     "new_pre": "V33-105-1"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-01",
+   "rule": "CMM-010",
+   "count": 1,
+   "verified": true,
+   "changed_count": 1,
+   "pairs": [
+    {
+     "old_id": "GS-2025-01|F|CMM-010-8",
+     "new_id": "GS-2025-01|F|CMM-010-8",
+     "old_pre": "CMM-010-13",
+     "new_pre": "CMM-010-11"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-01",
+   "rule": "CMM-008",
+   "count": 1,
+   "verified": true,
+   "changed_count": 1,
+   "pairs": [
+    {
+     "old_id": "GS-2025-01|F|CMM-008-11",
+     "new_id": "GS-2025-01|F|CMM-008-9",
+     "old_pre": "CMM-008-12",
+     "new_pre": "CMM-008-10"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-01",
+   "rule": "V33-113",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-01|F|V33-113-12",
+     "new_id": "GS-2025-01|F|V33-113-10",
+     "old_pre": "V33-113-4",
+     "new_pre": "V33-113-4"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-01",
+   "rule": "CMM-002",
+   "count": 1,
+   "verified": true,
+   "changed_count": 1,
+   "pairs": [
+    {
+     "old_id": "GS-2025-01|F|CMM-002-13",
+     "new_id": "GS-2025-01|F|CMM-002-11",
+     "old_pre": "CMM-002-11",
+     "new_pre": "CMM-002-9"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-01",
+   "rule": "CMM-018",
+   "count": 1,
+   "verified": true,
+   "changed_count": 1,
+   "pairs": [
+    {
+     "old_id": "GS-2025-01|F|CMM-018-14",
+     "new_id": "GS-2025-01|F|CMM-018-12",
+     "old_pre": "CMM-018-15",
+     "new_pre": "CMM-018-13"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-02",
+   "rule": "V33-227",
+   "count": 4,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-02|F|V33-227-5",
+     "new_id": "GS-2025-02|F|V33-227-4",
+     "old_pre": "V33-227-3",
+     "new_pre": "V33-227-3"
+    },
+    {
+     "old_id": "GS-2025-02|F|V33-227-6",
+     "new_id": "GS-2025-02|F|V33-227-5",
+     "old_pre": "V33-227-4",
+     "new_pre": "V33-227-4"
+    },
+    {
+     "old_id": "GS-2025-02|F|V33-227-7",
+     "new_id": "GS-2025-02|F|V33-227-6",
+     "old_pre": "V33-227-5",
+     "new_pre": "V33-227-5"
+    },
+    {
+     "old_id": "GS-2025-02|F|V33-227-8",
+     "new_id": "GS-2025-02|F|V33-227-7",
+     "old_pre": "V33-227-6",
+     "new_pre": "V33-227-6"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-02",
+   "rule": "V33-243",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-02|R|V33-243-3",
+     "new_id": "GS-2025-02|R|V33-243-2",
+     "old_pre": "V33-243-1",
+     "new_pre": "V33-243-1"
+    },
+    {
+     "old_id": "GS-2025-02|R|V33-243-4",
+     "new_id": "GS-2025-02|R|V33-243-3",
+     "old_pre": "V33-243-2",
+     "new_pre": "V33-243-2"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-02",
+   "rule": "CMM-004",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-02|P|CMM-004-2",
+     "new_id": "GS-2025-02|P|CMM-004-1",
+     "old_pre": "CMM-004-7",
+     "new_pre": "CMM-004-7"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-03",
+   "rule": "V33-SG-COMPLETION",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-03|F|V33-SG-COMPLETION-9",
+     "new_id": "GS-2025-03|F|V33-SG-COMPLETION-8",
+     "old_pre": "V33-SG-COMPLETION-9",
+     "new_pre": "V33-SG-COMPLETION-9"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-03",
+   "rule": "V33-115",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-03|R|V33-115-2",
+     "new_id": "GS-2025-03|R|V33-115-1",
+     "old_pre": "V33-115-4",
+     "new_pre": "V33-115-4"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-03",
+   "rule": "V33-005",
+   "count": 3,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-03|R|V33-005-3",
+     "new_id": "GS-2025-03|R|V33-005-2",
+     "old_pre": "V33-005-1",
+     "new_pre": "V33-005-1"
+    },
+    {
+     "old_id": "GS-2025-03|R|V33-005-6",
+     "new_id": "GS-2025-03|R|V33-005-5",
+     "old_pre": "V33-005-2",
+     "new_pre": "V33-005-2"
+    },
+    {
+     "old_id": "GS-2025-03|R|V33-005-7",
+     "new_id": "GS-2025-03|R|V33-005-6",
+     "old_pre": "V33-005-3",
+     "new_pre": "V33-005-3"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-03",
+   "rule": "V33-120",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-03|R|V33-120-4",
+     "new_id": "GS-2025-03|R|V33-120-3",
+     "old_pre": "V33-120-5",
+     "new_pre": "V33-120-5"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-03",
+   "rule": "V33-240",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-03|R|V33-240-5",
+     "new_id": "GS-2025-03|R|V33-240-4",
+     "old_pre": "V33-240-10",
+     "new_pre": "V33-240-10"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-03",
+   "rule": "V33-244",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-03|R|V33-244-8",
+     "new_id": "GS-2025-03|R|V33-244-7",
+     "old_pre": "V33-244-8",
+     "new_pre": "V33-244-8"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-04",
+   "rule": "V33-251",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-04|F|V33-251-3",
+     "new_id": "GS-2025-04|F|V33-251-3",
+     "old_pre": "V33-251-3",
+     "new_pre": "V33-251-3"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-04",
+   "rule": "CMM-011",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-04|F|CMM-011-4",
+     "new_id": "GS-2025-04|F|CMM-011-4",
+     "old_pre": "CMM-011-5",
+     "new_pre": "CMM-011-5"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-04",
+   "rule": "CMM-007",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-04|F|CMM-007-5",
+     "new_id": "GS-2025-04|F|CMM-007-5",
+     "old_pre": "CMM-007-4",
+     "new_pre": "CMM-007-4"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-04",
+   "rule": "V33-243",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-04|R|V33-243-1",
+     "new_id": "GS-2025-04|R|V33-243-1",
+     "old_pre": "V33-243-1",
+     "new_pre": "V33-243-1"
+    },
+    {
+     "old_id": "GS-2025-04|R|V33-243-2",
+     "new_id": "GS-2025-04|R|V33-243-2",
+     "old_pre": "V33-243-2",
+     "new_pre": "V33-243-2"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-05",
+   "rule": "V33-251",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-05|F|V33-251-7",
+     "new_id": "GS-2025-05|F|V33-251-7",
+     "old_pre": "V33-251-9",
+     "new_pre": "V33-251-9"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-05",
+   "rule": "V33-005",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-05|R|V33-005-1",
+     "new_id": "GS-2025-05|R|V33-005-1",
+     "old_pre": "V33-005-1",
+     "new_pre": "V33-005-1"
+    },
+    {
+     "old_id": "GS-2025-05|R|V33-005-4",
+     "new_id": "GS-2025-05|R|V33-005-4",
+     "old_pre": "V33-005-2",
+     "new_pre": "V33-005-2"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-05",
+   "rule": "V33-120",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-05|R|V33-120-2",
+     "new_id": "GS-2025-05|R|V33-120-2",
+     "old_pre": "V33-120-4",
+     "new_pre": "V33-120-4"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-05",
+   "rule": "V33-240",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-05|R|V33-240-3",
+     "new_id": "GS-2025-05|R|V33-240-3",
+     "old_pre": "V33-240-7",
+     "new_pre": "V33-240-7"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-05",
+   "rule": "CMM-014",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-05|R|CMM-014-8",
+     "new_id": "GS-2025-05|R|CMM-014-8",
+     "old_pre": "CMM-014-10",
+     "new_pre": "CMM-014-10"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-05",
+   "rule": "V33-109",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-05|P|V33-109-5",
+     "new_id": "GS-2025-05|P|V33-109-5",
+     "old_pre": "V33-109-3",
+     "new_pre": "V33-109-3"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-05",
+   "rule": "V33-114",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-05|P|V33-114-6",
+     "new_id": "GS-2025-05|P|V33-114-6",
+     "old_pre": "V33-114-6",
+     "new_pre": "V33-114-6"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-06",
+   "rule": "CMM-013",
+   "count": 1,
+   "verified": true,
+   "changed_count": 1,
+   "pairs": [
+    {
+     "old_id": "GS-2025-06|F|CMM-013-1",
+     "new_id": "GS-2025-06|F|CMM-013-1",
+     "old_pre": "CMM-013-17",
+     "new_pre": "CMM-013-16"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-06",
+   "rule": "V33-234",
+   "count": 3,
+   "verified": true,
+   "changed_count": 3,
+   "pairs": [
+    {
+     "old_id": "GS-2025-06|F|V33-234-10",
+     "new_id": "GS-2025-06|F|V33-234-9",
+     "old_pre": "V33-234-13",
+     "new_pre": "V33-234-12"
+    },
+    {
+     "old_id": "GS-2025-06|F|V33-234-11",
+     "new_id": "GS-2025-06|F|V33-234-10",
+     "old_pre": "V33-234-14",
+     "new_pre": "V33-234-13"
+    },
+    {
+     "old_id": "GS-2025-06|F|V33-234-12",
+     "new_id": "GS-2025-06|F|V33-234-11",
+     "old_pre": "V33-234-15",
+     "new_pre": "V33-234-14"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-06",
+   "rule": "V33-224",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-06|F|V33-224-14",
+     "new_id": "GS-2025-06|F|V33-224-12",
+     "old_pre": "V33-224-9",
+     "new_pre": "V33-224-9"
+    },
+    {
+     "old_id": "GS-2025-06|F|V33-224-15",
+     "new_id": "GS-2025-06|F|V33-224-13",
+     "old_pre": "V33-224-10",
+     "new_pre": "V33-224-10"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-06",
+   "rule": "V33-TREND-COMPLETION-RATE",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-06|F|V33-TREND-COMPLETION-RATE-16",
+     "new_id": "GS-2025-06|F|V33-TREND-COMPLETION-RATE-14",
+     "old_pre": "V33-TREND-COMPLETION-RATE-11",
+     "new_pre": "V33-TREND-COMPLETION-RATE-11"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-06",
+   "rule": "V33-005",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-06|R|V33-005-3",
+     "new_id": "GS-2025-06|R|V33-005-2",
+     "old_pre": "V33-005-1",
+     "new_pre": "V33-005-1"
+    },
+    {
+     "old_id": "GS-2025-06|R|V33-005-7",
+     "new_id": "GS-2025-06|R|V33-005-6",
+     "old_pre": "V33-005-2",
+     "new_pre": "V33-005-2"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-06",
+   "rule": "V33-120",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-06|R|V33-120-4",
+     "new_id": "GS-2025-06|R|V33-120-3",
+     "old_pre": "V33-120-3",
+     "new_pre": "V33-120-3"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-06",
+   "rule": "V33-240",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-06|R|V33-240-5",
+     "new_id": "GS-2025-06|R|V33-240-4",
+     "old_pre": "V33-240-7",
+     "new_pre": "V33-240-7"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-06",
+   "rule": "V33-243",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-06|R|V33-243-8",
+     "new_id": "GS-2025-06|R|V33-243-7",
+     "old_pre": "V33-243-5",
+     "new_pre": "V33-243-5"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-06",
+   "rule": "V33-244",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-06|R|V33-244-9",
+     "new_id": "GS-2025-06|R|V33-244-8",
+     "old_pre": "V33-244-6",
+     "new_pre": "V33-244-6"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-06",
+   "rule": "CMM-004",
+   "count": 1,
+   "verified": true,
+   "changed_count": 1,
+   "pairs": [
+    {
+     "old_id": "GS-2025-06|P|CMM-004-6",
+     "new_id": "GS-2025-06|P|CMM-004-5",
+     "old_pre": "CMM-004-16",
+     "new_pre": "CMM-004-15"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-07",
+   "rule": "CMM-009",
+   "count": 1,
+   "verified": true,
+   "changed_count": 1,
+   "pairs": [
+    {
+     "old_id": "GS-2025-07|F|CMM-009-1",
+     "new_id": "GS-2025-07|F|CMM-009-1",
+     "old_pre": "CMM-009-2",
+     "new_pre": "CMM-009-1"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-08",
+   "rule": "V33-115",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-08|R|V33-115-1",
+     "new_id": "GS-2025-08|R|V33-115-1",
+     "old_pre": "V33-115-1",
+     "new_pre": "V33-115-1"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-08",
+   "rule": "V33-240",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-08|R|V33-240-2",
+     "new_id": "GS-2025-08|R|V33-240-2",
+     "old_pre": "V33-240-5",
+     "new_pre": "V33-240-5"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-08",
+   "rule": "V33-117",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-08|R|V33-117-5",
+     "new_id": "GS-2025-08|R|V33-117-5",
+     "old_pre": "V33-117-2",
+     "new_pre": "V33-117-2"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-08",
+   "rule": "V33-243",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-08|R|V33-243-6",
+     "new_id": "GS-2025-08|R|V33-243-6",
+     "old_pre": "V33-243-3",
+     "new_pre": "V33-243-3"
+    },
+    {
+     "old_id": "GS-2025-08|R|V33-243-7",
+     "new_id": "GS-2025-08|R|V33-243-7",
+     "old_pre": "V33-243-4",
+     "new_pre": "V33-243-4"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-08",
+   "rule": "CMM-004",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-08|P|CMM-004-3",
+     "new_id": "GS-2025-08|P|CMM-004-3",
+     "old_pre": "CMM-004-6",
+     "new_pre": "CMM-004-6"
+    },
+    {
+     "old_id": "GS-2025-08|P|CMM-004-4",
+     "new_id": "GS-2025-08|P|CMM-004-4",
+     "old_pre": "CMM-004-7",
+     "new_pre": "CMM-004-7"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-09",
+   "rule": "CMM-013",
+   "count": 1,
+   "verified": true,
+   "changed_count": 1,
+   "pairs": [
+    {
+     "old_id": "GS-2025-09|F|CMM-013-2",
+     "new_id": "GS-2025-09|F|CMM-013-1",
+     "old_pre": "CMM-013-13",
+     "new_pre": "CMM-013-12"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-09",
+   "rule": "V33-001",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-09|F|V33-001-3",
+     "new_id": "GS-2025-09|F|V33-001-2",
+     "old_pre": "V33-001-1",
+     "new_pre": "V33-001-1"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-09",
+   "rule": "CMM-012",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-09|F|CMM-012-4",
+     "new_id": "GS-2025-09|F|CMM-012-3",
+     "old_pre": "CMM-012-11",
+     "new_pre": "CMM-012-11"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-09",
+   "rule": "V33-105",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-09|F|V33-105-7",
+     "new_id": "GS-2025-09|F|V33-105-6",
+     "old_pre": "V33-105-2",
+     "new_pre": "V33-105-2"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-09",
+   "rule": "V33-251",
+   "count": 2,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-09|F|V33-251-8",
+     "new_id": "GS-2025-09|F|V33-251-7",
+     "old_pre": "V33-251-9",
+     "new_pre": "V33-251-9"
+    },
+    {
+     "old_id": "GS-2025-09|F|V33-251-9",
+     "new_id": "GS-2025-09|F|V33-251-8",
+     "old_pre": "V33-251-8",
+     "new_pre": "V33-251-8"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-09",
+   "rule": "V33-222",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-09|F|V33-222-10",
+     "new_id": "GS-2025-09|F|V33-222-9",
+     "old_pre": "V33-222-6",
+     "new_pre": "V33-222-6"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-09",
+   "rule": "V33-227",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-09|F|V33-227-11",
+     "new_id": "GS-2025-09|F|V33-227-10",
+     "old_pre": "V33-227-7",
+     "new_pre": "V33-227-7"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-09",
+   "rule": "V33-117",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-09|R|V33-117-5",
+     "new_id": "GS-2025-09|R|V33-117-4",
+     "old_pre": "V33-117-3",
+     "new_pre": "V33-117-3"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2025-09",
+   "rule": "V33-243",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2025-09|R|V33-243-6",
+     "new_id": "GS-2025-09|R|V33-243-5",
+     "old_pre": "V33-243-4",
+     "new_pre": "V33-243-4"
+    }
+   ]
+  },
+  {
+   "doc": "GS-2022-01",
+   "rule": "CMM-013",
+   "count": 1,
+   "verified": true,
+   "changed_count": 0,
+   "pairs": [
+    {
+     "old_id": "GS-2022-01|F|CMM-013-1",
+     "new_id": "GS-2022-01|F|CMM-013-1",
+     "old_pre": "CMM-013-8",
+     "new_pre": "CMM-013-8"
+    }
+   ]
+  }
+ ],
+ "reference_vote_conflicts": {},
+ "approved_ledger_detail_changes": [],
+ "approved_notice_count_changes": [
+  {
+   "old_id": "GS-2025-01|N|rules_insufficient_data",
+   "new_id": "GS-2025-01|N|rules_insufficient_data",
+   "changes": [
+    {
+     "rule_id": "V33-TREND-COMPLETION-RATE",
+     "path": "/unresolved_rules[1]/partial_findings_count"
+    }
+   ]
+  }
+ ],
+ "headline": {
+  "F_total": 130,
+  "F_final": {
+   "TP": 101,
+   "FP_GOLD": 19,
+   "ADJ_FALSE": 9,
+   "ADJ_TRUE": 1
+  },
+  "FPR_headline": {
+   "num": 28,
+   "den": 130,
+   "rate": 0.2154
+  },
+  "FPR_strict_gold": {
+   "num": 19,
+   "den": 120,
+   "rate": 0.1583
+  },
+  "MR_overall": {
+   "num": 86,
+   "den": 146,
+   "rate": 0.589
+  },
+  "MR_CU": {
+   "num": 25,
+   "den": 78,
+   "rate": 0.3205,
+   "silent_literal": 9,
+   "silent_rate": 0.1154
+  },
+  "MR_FU_exhaustive": {
+   "num": 61,
+   "den": 68,
+   "rate": 0.8971,
+   "silent_literal": 60,
+   "silent_rate": 0.8824
+  },
+  "PendingHit": {
+   "HIT": 10,
+   "of_in_scope": 0.3846,
+   "in_scope_den": 26,
+   "of_all_P": 0.137,
+   "all_P": 73,
+   "HIT_or_true_not_in_gold": 0.3846
+  },
+  "coverage": {
+   "with_verdict": 730,
+   "total": 792,
+   "rate": 0.9217
+  },
+  "workload": {
+   "mean": 8.88,
+   "median": 7,
+   "min": 1,
+   "max": 26,
+   "total": 293,
+   "F_total": 130,
+   "O_total": 90,
+   "P_total": 73,
+   "mean_F": 3.94,
+   "mean_O": 2.73,
+   "mean_P": 2.21,
+   "P_excl_CMM004_total": 26,
+   "mean_workload_excl_CMM004": 7.45,
+   "F_true_share": 0.7846
+  },
+  "tiers": {
+   "F": 130,
+   "R": 158,
+   "P": 73,
+   "O": 90
+  }
+ },
+ "ok": false
+}

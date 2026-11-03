@@ -1,0 +1,249 @@
+[
+ {
+  "probe": "gold_eval",
+  "run": "round2/gold/run1",
+  "exit_code": 0,
+  "ok": true,
+  "description": "正常采集：合法重编号/计数应通过",
+  "raw_drift": [],
+  "reference_exception_conflicts": [],
+  "reference_exceptions_applied": 45,
+  "count_exceptions_applied": 1,
+  "FPR": {
+   "num": 28,
+   "den": 130,
+   "rate": 0.2154
+  }
+ },
+ {
+  "probe": "eval_guard/pre999",
+  "run": "round6/eval_guard/pre999_run",
+  "exit_code": 1,
+  "ok": false,
+  "description": "pre_group 未知 ID CMM-013-999999",
+  "raw_drift": [
+   {
+    "old_id": "GS-2022-01|F|CMM-013-1",
+    "paths": [
+     "/__cross_representation__",
+     "/location/pre_group_issue_id"
+    ],
+    "reasons": [
+     "new review_report 与 result.issues 的引用不一致",
+     "/location/pre_group_issue_id 引用变化不在冻结例外清单"
+    ]
+   }
+  ],
+  "reference_exception_conflicts": [],
+  "reference_exceptions_applied": 45,
+  "count_exceptions_applied": 1,
+  "FPR": {
+   "num": 28,
+   "den": 130,
+   "rate": 0.2154
+  }
+ },
+ {
+  "probe": "eval_guard/member999",
+  "run": "round6/eval_guard/member999_run",
+  "exit_code": 1,
+  "ok": false,
+  "description": "member/merged 未知 ID CMM-011-999999",
+  "raw_drift": [
+   {
+    "old_id": "GS-2024-04|F|V33-222-11",
+    "paths": [
+     "/__cross_representation__",
+     "/__membership__",
+     "/location/member_issue_ids[1]",
+     "/location/merged_issue_ids[1]",
+     "/merged_issue_ids[1]"
+    ],
+    "reasons": [
+     "new review_report 与 result.issues 的引用不一致",
+     "new member/merged 与 related_findings 引用不一致",
+     "/location/member_issue_ids[1] 引用变化不在冻结例外清单",
+     "/location/merged_issue_ids[1] 引用变化不在冻结例外清单",
+     "/merged_issue_ids[1] 引用变化不在冻结例外清单"
+    ]
+   }
+  ],
+  "reference_exception_conflicts": [],
+  "reference_exceptions_applied": 42,
+  "count_exceptions_applied": 1,
+  "FPR": {
+   "num": 28,
+   "den": 130,
+   "rate": 0.2154
+  }
+ },
+ {
+  "probe": "eval_guard/count999",
+  "run": "round6/eval_guard/count999_run",
+  "exit_code": 1,
+  "ok": false,
+  "description": "partial_findings_count 1->999",
+  "raw_drift": [
+   {
+    "old_id": "GS-2025-01|N|rules_insufficient_data",
+    "paths": [],
+    "reasons": [
+     "/unresolved_rules[1]/partial_findings_count 计数 1->999 与冻结例外值不符"
+    ]
+   }
+  ],
+  "reference_exception_conflicts": [],
+  "reference_exceptions_applied": 45,
+  "count_exceptions_applied": 0,
+  "FPR": {
+   "num": 28,
+   "den": 130,
+   "rate": 0.2154
+  }
+ },
+ {
+  "probe": "eval_guard/member_wrong",
+  "run": "round6/eval_guard/member_wrong_run",
+  "exit_code": 1,
+  "ok": false,
+  "description": "错误现存成员 CMM-011-17->15",
+  "raw_drift": [
+   {
+    "old_id": "GS-2024-04|F|V33-222-11",
+    "paths": [
+     "/__cross_representation__",
+     "/__membership__",
+     "/location/member_issue_ids[1]",
+     "/location/merged_issue_ids[1]",
+     "/merged_issue_ids[1]"
+    ],
+    "reasons": [
+     "new review_report 与 result.issues 的引用不一致",
+     "new member/merged 与 related_findings 引用不一致",
+     "/location/member_issue_ids[1] 引用变化不在冻结例外清单",
+     "/location/merged_issue_ids[1] 引用变化不在冻结例外清单",
+     "/merged_issue_ids[1] 引用变化不在冻结例外清单"
+    ]
+   }
+  ],
+  "reference_exception_conflicts": [],
+  "reference_exceptions_applied": 42,
+  "count_exceptions_applied": 1,
+  "FPR": {
+   "num": 28,
+   "den": 130,
+   "rate": 0.2154
+  }
+ },
+ {
+  "probe": "eval_guard/cross_rule",
+  "run": "round6/eval_guard/cross_rule_run",
+  "exit_code": 1,
+  "ok": false,
+  "description": "跨规则引用 CMM-013-8->V33-222-6",
+  "raw_drift": [
+   {
+    "old_id": "GS-2022-01|F|CMM-013-1",
+    "paths": [
+     "/__cross_representation__",
+     "/location/pre_group_issue_id"
+    ],
+    "reasons": [
+     "new review_report 与 result.issues 的引用不一致",
+     "/location/pre_group_issue_id 引用变化不在冻结例外清单"
+    ]
+   }
+  ],
+  "reference_exception_conflicts": [],
+  "reference_exceptions_applied": 45,
+  "count_exceptions_applied": 1,
+  "FPR": {
+   "num": 28,
+   "den": 130,
+   "rate": 0.2154
+  }
+ },
+ {
+  "probe": "eval_guard/count_direction",
+  "run": "round6/eval_guard/count_direction_run",
+  "exit_code": 1,
+  "ok": false,
+  "description": "计数方向错误 1->2",
+  "raw_drift": [
+   {
+    "old_id": "GS-2025-01|N|rules_insufficient_data",
+    "paths": [],
+    "reasons": [
+     "/unresolved_rules[1]/partial_findings_count 计数 1->2 与冻结例外值不符"
+    ]
+   }
+  ],
+  "reference_exception_conflicts": [],
+  "reference_exceptions_applied": 45,
+  "count_exceptions_applied": 0,
+  "FPR": {
+   "num": 28,
+   "den": 130,
+   "rate": 0.2154
+  }
+ },
+ {
+  "probe": "eval_guard/multi_map",
+  "run": "round2/gold/run1",
+  "exit_code": 1,
+  "ok": false,
+  "description": "例外清单多新ID映射同一旧ID",
+  "raw_drift": [],
+  "reference_exception_conflicts": [
+   {
+    "doc": "GS-2023-01",
+    "family": "pre",
+    "pairs": [
+     {
+      "new": "CMM-010-19",
+      "old": "CMM-010-20"
+     },
+     {
+      "new": "CMM-010-20",
+      "old": "CMM-010-21"
+     },
+     {
+      "new": "CMM-010-18",
+      "old": "CMM-010-20"
+     }
+    ]
+   }
+  ],
+  "reference_exceptions_applied": 45,
+  "count_exceptions_applied": 1,
+  "FPR": {
+   "num": 28,
+   "den": 130,
+   "rate": 0.2154
+  }
+ },
+ {
+  "probe": "eval_guard/count_removed_mismatch",
+  "run": "round2/gold/run1",
+  "exit_code": 1,
+  "ok": false,
+  "description": "例外清单 removed_count=2 与目标移除数不符",
+  "raw_drift": [
+   {
+    "old_id": "GS-2025-01|N|rules_insufficient_data",
+    "paths": [],
+    "reasons": [
+     "/unresolved_rules[1]/partial_findings_count 规则或目标移除数量与冻结例外不符"
+    ]
+   }
+  ],
+  "reference_exception_conflicts": [],
+  "reference_exceptions_applied": 45,
+  "count_exceptions_applied": 0,
+  "FPR": {
+   "num": 28,
+   "den": 130,
+   "rate": 0.2154
+  }
+ }
+]
