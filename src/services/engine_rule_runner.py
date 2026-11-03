@@ -486,6 +486,12 @@ class EngineRuleRunner:
                         has_conversion_error=bool(conversion_errors),
                     )
 
+                    # DH-02：把规则执行期间登记的失败事实转成结构化卡点；文本保持不变。
+                    from src.engine.diagnostic_fields import diagnostics_for_texts
+
+                    diagnostics = diagnostics_for_texts(
+                        document, [detail_str, *unresolved], rule_id=str(rule_id)
+                    )
                     self._outcomes.append(
                         RuleOutcome(
                             rule_id=str(rule_id),
@@ -494,6 +500,7 @@ class EngineRuleRunner:
                             partial_findings_count=len(findings),
                             unresolved_reasons=unresolved,
                             reason_codes=list(getattr(signal, "reason_codes", []) or []),
+                            diagnostics=diagnostics,
                         )
                     )
                     logger.info(

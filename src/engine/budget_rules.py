@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 import re
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from rapidfuzz import fuzz
 
@@ -1270,6 +1270,17 @@ def _append_relation_receipt(
     """把一条关系级子检查回执写上 Document（AC-04）。"""
     from src.engine.fact_context import make_fact_receipt
 
+    # DH-02：结构化卡点在产生失败文本处登记，这里只做透传；兼容文本不变。
+    structured: Dict[str, Any] = {}
+    if status in {"insufficient_data", "parse_error", "execution_error"}:
+        from src.engine.diagnostic_fields import fields_for_text
+
+        try:
+            structured = fields_for_text(
+                doc, incomplete_reason, status=status, rule_id=rule_id, sub_check_id=sub_check_id
+            )
+        except ValueError:
+            structured = {}
     _doc_fact_receipts(doc).append(
         make_fact_receipt(
             rule_id,
@@ -1284,6 +1295,11 @@ def _append_relation_receipt(
             operand_sources=operand_sources,
             evaluation_basis=evaluation_basis,
             fact_migration_status=fact_migration_status,
+            reason_codes=tuple(structured.get("reason_codes") or ()),
+            blocked_by=structured.get("blocked_by") or (),
+            missing_operands=structured.get("missing_operands") or (),
+            candidates=structured.get("candidates") or (),
+            diagnostics=(structured,) if structured else (),
         )
     )
 

@@ -216,6 +216,29 @@ def _unresolved(rule, doc, text, start, relation, formula, reason, unresolved):
     page = refs[0]['page'] if refs else None
     message = f'第{page}页原文关系未完成：{reason}'
     unresolved.append(message)
+    # DH-02：按真实原因登记结构化卡点，文本保持不变。
+    from .diagnostic_fields import blocker, record_gap, text_missing_operand
+    year = getattr(getattr(doc, 'fact_context', None), 'fiscal_year', None)
+    codes, blockers = ['text_statement_unparsed'], []
+    if '其他年度' in reason or '材料年度' in reason:
+        codes = ['scope_unconfirmed']
+        blockers = [blocker(dimension='year', ref=f'第{page}页原文表述', reason_code='scope_unconfirmed')]
+    elif '其他或未确认主体' in reason:
+        codes = ['subject_conflict']
+        blockers = [blocker(dimension='organization', ref=f'第{page}页原文表述', reason_code='subject_conflict')]
+    elif '统计口径' in reason:
+        codes = ['scope_unconfirmed', 'sum_scope_not_comparable']
+        blockers = [blocker(dimension='fund_scope', ref=f'第{page}页原文表述', reason_code='scope_unconfirmed')]
+    elif '嵌套分项' in reason:
+        codes = ['scope_unconfirmed', 'sum_scope_not_comparable']
+        blockers = [blocker(dimension='fund_scope', ref=f'第{page}页采购分项', reason_code='scope_unconfirmed')]
+    if not blockers:
+        record_gap(doc, message, reason_codes=codes, missing_operands=[text_missing_operand(
+            section='政府采购情况说明', role='政府采购分项显式金额', page=page,
+            row_key=None, column='金额', stage='决算',
+            year=year if isinstance(year, int) and year >= 1900 else None)])
+    else:
+        record_gap(doc, message, reason_codes=codes, blocked_by=blockers)
     _receipt(rule, doc, relation, 'insufficient_data', formula, message)
 
 

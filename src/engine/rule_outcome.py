@@ -106,6 +106,7 @@ class RuleOutcomeSignal(BaseException):
         unresolved_reasons: Optional[List[str]] = None,
         status: Optional[str] = None,
         reason_codes: Optional[List[str]] = None,
+        diagnostics: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         super().__init__(detail or rule_id)
         self.rule_id = rule_id
@@ -115,6 +116,9 @@ class RuleOutcomeSignal(BaseException):
         self.partial_issues: List[Any] = list(partial_issues or [])
         self.unresolved_reasons: List[str] = list(unresolved_reasons or [])
         self.reason_codes: List[str] = list(reason_codes or [])
+        # DH-02：结构化卡点（原因码/阻断/缺数位置/候选/动作/根因键）。
+        self.diagnostics: List[Dict[str, Any]] = [dict(item) for item in (diagnostics or [])
+                                                  if isinstance(item, dict)]
 
 
 class RuleDeferred(RuleOutcomeSignal):
@@ -232,6 +236,8 @@ class RuleOutcome:
     unresolved_reasons: List[str] = field(default_factory=list)
     # 增量字段：结构化原因代码（identity_conflict / source_missing / ...）
     reason_codes: List[str] = field(default_factory=list)
+    # 增量字段：DH-02 结构化卡点（每条未完成回执一份）
+    diagnostics: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         data: Dict[str, Any] = {"rule_id": self.rule_id, "status": self.status}
@@ -243,6 +249,8 @@ class RuleOutcome:
             data["unresolved_reasons"] = self.unresolved_reasons
         if self.reason_codes:
             data["reason_codes"] = self.reason_codes
+        if self.diagnostics:
+            data["diagnostics"] = self.diagnostics
         return data
 
 

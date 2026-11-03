@@ -1378,6 +1378,12 @@ def run_structured_rules(
                 base_status=signal.status,
                 has_findings=bool(partial_list),
             )
+            # DH-02：结构化规则也必须把结构化卡点带进执行摘要。
+            from .diagnostic_fields import diagnostics_for_texts
+
+            diagnostics = diagnostics_for_texts(
+                doc, [detail_str, *unresolved], rule_id=str(getattr(rule, "code", ""))
+            )
             outcomes.append(
                 RuleOutcome(
                     rule_id=str(getattr(rule, "code", "")),
@@ -1385,6 +1391,7 @@ def run_structured_rules(
                     detail=detail_str,
                     partial_findings_count=len(partial_list),
                     unresolved_reasons=unresolved,
+                    diagnostics=diagnostics,
                 )
             )
             continue

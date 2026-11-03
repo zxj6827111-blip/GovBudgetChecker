@@ -2430,6 +2430,7 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             ai_execution=result["meta"].get("ai_execution"),
             ai_required=_ai_assist_required(),
             structured_ingest=structured_ingest_summary,
+            fact_receipts=fact_receipts,
         )
         result["meta"]["obligation_coverage"] = obligation_coverage
         result["meta"]["fact_receipts"] = fact_receipts

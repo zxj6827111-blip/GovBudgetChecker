@@ -28,7 +28,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from src.schemas.parse_artifact import EvidenceRef, FiscalFact, ParseArtifact
 
@@ -1365,6 +1365,10 @@ def make_fact_receipt(
     cell_observations: Sequence[Dict[str, Any]] = (),
     disclosure_sources: Sequence[Dict[str, Any]] = (),
     reason_codes: Sequence[str] = (),
+    blocked_by: Sequence[Dict[str, Any]] = (),
+    missing_operands: Sequence[Dict[str, Any]] = (),
+    candidates: Sequence[Dict[str, Any]] = (),
+    diagnostics: Sequence[Mapping[str, Any]] = (),
 ) -> Dict[str, Any]:
     """构造一条关系级 CheckReceipt（dict 形态，规则直接写入 doc.fact_receipts）。
 
@@ -1395,6 +1399,13 @@ def make_fact_receipt(
         operand_sources={str(key): str(value) for key, value in (operand_sources or {}).items()},
         cell_observations=[dict(item) for item in cell_observations],
         disclosure_sources=[dict(item) for item in disclosure_sources],
+        blocked_by=[dict(item) for item in blocked_by if isinstance(item, Mapping)],
+        missing_operands=[dict(item) for item in missing_operands if isinstance(item, Mapping)],
+        candidates=[dict(item) for item in candidates if isinstance(item, Mapping)],
+        next_action=next((str(item.get("next_action")) for item in diagnostics
+                          if isinstance(item, Mapping) and item.get("next_action")), None),
+        root_cause_key=next((str(item.get("root_cause_key")) for item in diagnostics
+                             if isinstance(item, Mapping) and item.get("root_cause_key")), None),
         formula=formula,
         tolerance=dict(
             tolerance

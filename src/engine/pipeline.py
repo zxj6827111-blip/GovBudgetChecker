@@ -182,6 +182,10 @@ def run_rules_with_outcomes(
                 base_status=signal.status,
                 has_findings=bool(partial_list),
             )
+            # DH-02：把规则执行期间登记的失败事实转成结构化卡点；文本保持不变。
+            from .diagnostic_fields import diagnostics_for_texts
+
+            diagnostics = diagnostics_for_texts(doc, [detail_str, *unresolved], rule_id=str(code))
             outcomes.append(
                 RuleOutcome(
                     rule_id=str(code),
@@ -190,6 +194,7 @@ def run_rules_with_outcomes(
                     partial_findings_count=len(partial_list),
                     unresolved_reasons=unresolved,
                     reason_codes=list(getattr(signal, "reason_codes", []) or []),
+                    diagnostics=diagnostics,
                 )
             )
             continue

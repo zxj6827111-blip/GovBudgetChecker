@@ -1201,6 +1201,12 @@ def build_coverage(raw: Any) -> CoverageBlock:
                 blocks_gate=bool(row.get("blocks_gate")),
                 requires_ai=bool(row.get("requires_ai")),
                 input_gaps=_string_list(row.get("input_gaps")),
+                reason_codes=_string_list(row.get("reason_codes")),
+                blocked_by=[dict(value) for value in _json_list(row.get("blocked_by")) if isinstance(value, dict)],
+                missing_operands=[dict(value) for value in _json_list(row.get("missing_operands")) if isinstance(value, dict)],
+                candidates=[dict(value) for value in _json_list(row.get("candidates")) if isinstance(value, dict)],
+                next_action=_text_or_none(row.get("next_action")),
+                root_cause_key=_text_or_none(row.get("root_cause_key")),
             )
         )
 

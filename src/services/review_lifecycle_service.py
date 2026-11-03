@@ -811,6 +811,13 @@ def _obligation_review_block(state: ReviewState) -> "ObligationReviewBlock":
                 evidence_reference=(
                     _opt_text(row.get("evidence_reference")) if row else None
                 ),
+                # DH-02：结构化卡点从账本覆盖条目原样透传，不在复核层重算。
+                reason_codes=list(getattr(item, "reason_codes", []) or []),
+                blocked_by=[dict(value) for value in getattr(item, "blocked_by", []) or []],
+                missing_operands=[dict(value) for value in getattr(item, "missing_operands", []) or []],
+                candidates=[dict(value) for value in getattr(item, "candidates", []) or []],
+                next_action=getattr(item, "next_action", None),
+                root_cause_key=getattr(item, "root_cause_key", None),
             )
         )
     return ObligationReviewBlock(

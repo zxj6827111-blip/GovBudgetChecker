@@ -36,7 +36,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -310,6 +310,13 @@ class ObligationReviewItem(BaseModel):
     decided_at: Optional[str] = None
     note: Optional[str] = None
     evidence_reference: Optional[str] = None
+    #: DH-02 结构化卡点：原样透传引擎字段，供前端与导出消费。
+    reason_codes: List[str] = Field(default_factory=list)
+    blocked_by: List[Dict[str, Any]] = Field(default_factory=list)
+    missing_operands: List[Dict[str, Any]] = Field(default_factory=list)
+    candidates: List[Dict[str, Any]] = Field(default_factory=list)
+    next_action: Optional[str] = None
+    root_cause_key: Optional[str] = None
 
 
 class ObligationReviewBlock(BaseModel):

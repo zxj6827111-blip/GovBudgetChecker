@@ -707,6 +707,15 @@ class R33251_FunctionalDetailCompleteness(Rule):
                         if withheld_items:
                             parts.append(withheld_summary)
                         message = "；".join(parts) + "。"
+                        # DH-02：回执创建前登记结构化卡点（分项范围不一致）。
+                        from .diagnostic_fields import blocker as _diag_blocker, record_gap as _diag_gap
+                        _scope_entry = dict(
+                            reason_codes=['scope_unconfirmed', 'item_amount_not_included',
+                                          'sum_scope_not_comparable'],
+                            blocked_by=[_diag_blocker(dimension='fund_scope',
+                                                      ref=f'V33-251:{kind}:{label}:分项范围',
+                                                      reason_code='scope_unconfirmed')])
+                        _diag_gap(doc, message, **_scope_entry)
                         page, text, s, e = _locate(total.start())
                         issues.append(issue_at(
                             self, message, page, text, s, e, severity="warn",
@@ -735,9 +744,18 @@ class R33251_FunctionalDetailCompleteness(Rule):
                             disclosure_sources=exception_evidence,
                         )
                         if not_included_items:
-                            unresolved.append(
+                            from .diagnostic_fields import blocker, record_gap
+                            scope_entry = dict(
+                                reason_codes=['scope_unconfirmed', 'item_amount_not_included',
+                                              'sum_scope_not_comparable'],
+                                blocked_by=[blocker(dimension='fund_scope',
+                                                    ref=f'V33-251:{kind}:{label}:分项范围',
+                                                    reason_code='scope_unconfirmed')])
+                            unresolved_text = (
                                 f"{label}有{len(not_included_items)}处金额未纳入合计：{gap_summary}"
                             )
+                            record_gap(doc, unresolved_text, **scope_entry)
+                            unresolved.append(unresolved_text)
                             unresolved_codes.extend(gap_codes or ["item_amount_not_included"])
                             if withheld_items:
                                 unresolved_codes.extend(
@@ -757,6 +775,15 @@ class R33251_FunctionalDetailCompleteness(Rule):
                             "不能视为完整分项加总"
                         )
                         message = "；".join(parts) + "。"
+                        # DH-02：回执创建前登记结构化卡点（分项范围不一致）。
+                        from .diagnostic_fields import blocker as _diag_blocker, record_gap as _diag_gap
+                        _scope_entry = dict(
+                            reason_codes=['scope_unconfirmed', 'item_amount_not_included',
+                                          'sum_scope_not_comparable'],
+                            blocked_by=[_diag_blocker(dimension='fund_scope',
+                                                      ref=f'V33-251:{kind}:{label}:分项范围',
+                                                      reason_code='scope_unconfirmed')])
+                        _diag_gap(doc, message, **_scope_entry)
                         page, text, s, e = _locate(total.start())
                         issues.append(issue_at(
                             self, message, page, text, s, e, severity="warn",
@@ -783,9 +810,18 @@ class R33251_FunctionalDetailCompleteness(Rule):
                             reason_codes=codes,
                             disclosure_sources=exception_evidence,
                         )
-                        unresolved.append(
+                        from .diagnostic_fields import blocker, record_gap
+                        scope_entry = dict(
+                            reason_codes=['scope_unconfirmed', 'item_amount_not_included',
+                                          'sum_scope_not_comparable'],
+                            blocked_by=[blocker(dimension='fund_scope',
+                                                ref=f'V33-251:{kind}:{label}:分项范围',
+                                                reason_code='scope_unconfirmed')])
+                        unresolved_text = (
                             f"{label}有{len(not_included_items)}处金额未纳入合计：{gap_summary}"
                         )
+                        record_gap(doc, unresolved_text, **scope_entry)
+                        unresolved.append(unresolved_text)
                         unresolved_codes.extend(gap_codes or ["item_amount_not_included"])
                         if withheld_items:
                             unresolved_codes.extend(

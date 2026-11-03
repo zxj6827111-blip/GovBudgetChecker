@@ -45,6 +45,13 @@ class CheckReceipt:
     disclosure_sources: List[Dict[str, Any]] = field(default_factory=list)
     # 结构化未完成原因：身份冲突、来源缺失、候选不唯一、口径待确认、主体不匹配、几何不支持等。
     reason_codes: List[str] = field(default_factory=list)
+    # DH-02 结构化卡点：上游阻断、缺数位置、多候选位置、下一步动作与根因键。
+    # 只增字段，不改写 incomplete_reason 兼容文本。
+    blocked_by: List[Dict[str, Any]] = field(default_factory=list)
+    missing_operands: List[Dict[str, Any]] = field(default_factory=list)
+    candidates: List[Dict[str, Any]] = field(default_factory=list)
+    next_action: Optional[str] = None
+    root_cause_key: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.status not in SUB_CHECK_STATUSES:
@@ -53,6 +60,13 @@ class CheckReceipt:
             raise ValueError(f"invalid evaluation_basis: {self.evaluation_basis}")
         if self.fact_migration_status not in {"complete", "pending", "not_applicable"}:
             raise ValueError(f"invalid fact_migration_status: {self.fact_migration_status}")
+        if self.next_action is not None and self.next_action not in {
+            "system_recheck",
+            "tech_fix",
+            "human_confirm",
+            "rerun_ai",
+        }:
+            raise ValueError(f"invalid next_action: {self.next_action}")
 
     def to_dict(self) -> Dict[str, Any]:
         return dataclasses.asdict(self)
@@ -68,6 +82,12 @@ class CheckReceipt:
             operand_sources={str(k): str(v) for k, v in (data.get("operand_sources") or {}).items()},
             cell_observations=[dict(item) for item in data.get("cell_observations") or [] if isinstance(item, dict)],
             disclosure_sources=[dict(item) for item in data.get("disclosure_sources") or [] if isinstance(item, dict)],
+            reason_codes=[str(item) for item in data.get("reason_codes") or [] if str(item)],
+            blocked_by=[dict(item) for item in data.get("blocked_by") or [] if isinstance(item, dict)],
+            missing_operands=[dict(item) for item in data.get("missing_operands") or [] if isinstance(item, dict)],
+            candidates=[dict(item) for item in data.get("candidates") or [] if isinstance(item, dict)],
+            next_action=_opt_str(data.get("next_action")),
+            root_cause_key=_opt_str(data.get("root_cause_key")),
             formula=_opt_str(data.get("formula")),
             tolerance=dict(data.get("tolerance") or {}),
             status=str(data.get("status") or "insufficient_data"),

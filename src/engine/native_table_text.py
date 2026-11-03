@@ -326,6 +326,14 @@ def check_three_public_details(rule, doc, *, require_vehicle_details=True, check
                     continue
             reason = f'{LABELS[indicator]}具体说明未识别到显式金额'
             unresolved.append(reason)
+            from .diagnostic_fields import record_gap, text_missing_operand
+            refs = text.refs(begin, min(begin + 1, end), '三公经费说明')
+            year = getattr(getattr(doc, 'fact_context', None), 'fiscal_year', None)
+            record_gap(doc, reason, reason_codes=['text_statement_unparsed'], missing_operands=[
+                text_missing_operand(section='三公经费决算说明', role=f'{LABELS[indicator]}显式决算金额',
+                                     page=refs[0]['page'] if refs else None,
+                                     row_key=LABELS[indicator], column='决算数', stage='决算',
+                                     year=year if isinstance(year, int) and year >= 1900 else None)])
             receipt(rule, doc, f'three_public:detail:{indicator}:missing', [], status='insufficient_data', formula='text = table', reason=reason)
     try:
         issues.extend(check_three_public_totals(rule, doc))

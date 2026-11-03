@@ -216,6 +216,27 @@ def _truncated_name_source(doc, fact, item, siblings):
             'basis': 'unique_native_code_parent_and_narrative_prefix'}
 
 
+def _record_text_gap(doc, text, item, *, codes, role):
+    """DH-02：说明条目绑不到表内科目时登记文字侧缺数位置（页码来自原页引用）。"""
+    from .diagnostic_fields import record_gap, text_missing_operand
+
+    texts = [text] if isinstance(text, str) else list(text)
+    source = _Text.from_pages(doc.page_texts).refs(item.start(), item.end(), '原文科目')
+    page = source[0]['page'] if source else None
+    year = getattr(getattr(doc, 'fact_context', None), 'fiscal_year', None)
+
+    def level_value(key):
+        # _ITEM / _DASH_ITEM 是 re.Match，命名组用下标取；普通映射用 get。
+        try:
+            return item[key]
+        except Exception:  # noqa: BLE001 - 两种取值口径都取不到就是空
+            return None
+
+    record_gap(doc, texts, reason_codes=codes, missing_operands=[text_missing_operand(
+        section='支出决算具体情况说明', role=role, page=page,
+        row_key=str(level_value('xiang') or level_value('kuan') or level_value('klass') or ''),
+        column='决算金额', stage='决算', year=year if isinstance(year, int) and year >= 1900 else None)])
+
 def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
     paths = hierarchy_paths({str(f.subject_code) for f in facts
                              if str(f.subject_code or '').isdigit()})
@@ -294,12 +315,18 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
                     pages = sorted({ref['physical_page'] for ref in refs if ref.get('physical_page')})
                     text = _Text.from_pages(doc.page_texts)
                     source = text.refs(item.start(), item.end(), '原文科目')
-                    return None, (f"科目名称差异候选：正文第{source[0]['page'] if source else '?'}页写“{item[group]}”；"
+                    reason = (f"科目名称差异候选：正文第{source[0]['page'] if source else '?'}页写“{item[group]}”；"
                                   f"同款表格第{'、'.join(map(str,pages)) or '?'}页编码{candidate.subject_code}写“{candidate.subject_name}”。"
                                   "名称不一致，尚未绑定金额；请核对科目名称后确认，不能仅凭金额相同认定一致。")
-                return None, (f'说明中的{level}“{item[group]}”在表内找不到同名科目'
-                              f'（可能使用了旧科目名称或写错），无法与表格金额对应')
-            return None, f'说明中的{level}“{item[group]}”在表内对应多个科目，无法唯一对应'
+                    _record_text_gap(doc, reason, item, codes=['name_mismatch_confirmed'], role='说明科目对应金额')
+                    return None, reason
+                reason = (f'说明中的{level}“{item[group]}”在表内找不到同名科目'
+                          f'（可能使用了旧科目名称或写错），无法与表格金额对应')
+                _record_text_gap(doc, reason, item, codes=['text_binding_failed'], role='说明科目对应金额')
+                return None, reason
+            reason = f'说明中的{level}“{item[group]}”在表内对应多个科目，无法唯一对应'
+            _record_text_gap(doc, reason, item, codes=['text_binding_failed'], role='说明科目对应金额')
+            return None, reason
         parent = paths[next(iter(candidates))]
         if group == 'klass':
             klass = parent
@@ -427,7 +454,12 @@ def check_function_disclosures(rule, doc):
         # prefix can introduce a foreign owner or year for this item.
         error = error or _guard(doc, text, begin, item.start(), item.start())
         if len(claims) != 1:
-            error = error or f'{item["xiang"]}条目显式决算金额缺失或不唯一，不能用预算金额替代'
+            decision_error = f'{item["xiang"]}条目显式决算金额缺失或不唯一，不能用预算金额替代'
+            error = error or decision_error
+            # DH-02：说明条目内无法唯一确定显式决算金额；位置落在条目原文页。
+            _record_text_gap(doc, [decision_error, error], item,
+                             codes=['operand_missing'],
+                             role=f'{item["xiang"]}条目显式决算金额')
         if error:
             # 零额项被表内省略：说明明确写 0，且父级款合计 = 表内已列项之和。
             # 这不是“找不到科目”的取数不足，而是零值行未列示；不弹补核。

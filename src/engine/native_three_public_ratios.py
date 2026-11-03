@@ -62,6 +62,73 @@ def select_fact(context: Any, indicator: str, stage: str, year: int) -> tuple[An
     return candidates[0], None
 
 
+def _claim_page(doc, claim):
+    from .native_narrative_checks import _Text
+
+    text = _Text.from_pages(getattr(doc, "page_texts", []) or [])
+    refs = text.refs(int(claim.get("start") or 0), int(claim.get("start") or 0) + 1, "三公占比/完成率声明")
+    return refs[0]["page"] if refs else None
+
+
+def _record_ratio_gap(doc, reason, *, indicator, stage, year, claim):
+    """三公占比/完成率取数卡点：缺事实按表侧位置，多候选给出原格，口径问题挂年度。"""
+    from .diagnostic_fields import blocker, record_gap, table_candidate, table_missing_operand
+
+    text = str(reason or "")
+    context = getattr(doc, "fact_context", None)
+    facts = [f for f in getattr(context, "facts", []) or [] if getattr(f, "table_code", None) == TABLE_CODE]
+    page = None
+    for fact in facts:
+        for ref in (getattr(fact, "extra_dims", None) or {}).get("evidence_refs", []) or []:
+            value = ref.get("physical_page")
+            if isinstance(value, int) and value > 0:
+                page = value
+                break
+        if page:
+            break
+    if page is None:
+        page = _claim_page(doc, claim)
+    if "存在多个表实例或操作数身份" in text:
+        pool = [f for f in facts if getattr(f, "indicator", None) == indicator
+                and getattr(f, "fiscal_year", None) == year]
+        locations, seen = [], set()
+        for fact in pool:
+            for ref in (getattr(fact, "extra_dims", None) or {}).get("evidence_refs", []) or []:
+                cell_id, cell_page = ref.get("source_cell_id"), ref.get("physical_page")
+                if not cell_id or not isinstance(cell_page, int) or cell_page < 1:
+                    continue
+                key = (cell_page, cell_id)
+                if key in seen:
+                    continue
+                seen.add(key)
+                locations.append(table_candidate(table_code=TABLE_CODE, page=cell_page,
+                                                 cell_id=str(cell_id), value=str(fact.normalized_value)))
+        if len(locations) >= 2:
+            record_gap(doc, text, reason_codes=["operand_ambiguous", "cell_unbound"], candidates=locations,
+                       blocked_by=[blocker(dimension="cell", ref=f"{TABLE_CODE}:{indicator}:多候选",
+                                           reason_code="cell_unbound")])
+            return
+        record_gap(doc, text, reason_codes=["row_level_unresolved"], blocked_by=[
+            blocker(dimension="row", ref=f"{TABLE_CODE}:{indicator}", reason_code="row_level_unresolved")])
+        return
+    if "缺少表实例身份或事实期间不是本年" in text:
+        record_gap(doc, text, reason_codes=["scope_unconfirmed"], blocked_by=[
+            blocker(dimension="year", ref=f"{TABLE_CODE}:{indicator}:{stage}", reason_code="scope_unconfirmed")])
+        return
+    if "主体不一致" in text:
+        record_gap(doc, text, reason_codes=["subject_conflict"], blocked_by=[
+            blocker(dimension="organization", ref=f"{TABLE_CODE}:{indicator}", reason_code="subject_conflict")])
+        return
+    if "材料汇总口径待确认" in text or "口径" in text:
+        record_gap(doc, text, reason_codes=["scope_unconfirmed"], blocked_by=[
+            blocker(dimension="fund_scope", ref=f"{TABLE_CODE}:{indicator}:{stage}", reason_code="scope_unconfirmed")])
+        return
+    if "未找到同年度、同口径" in text or "没有可用金额事实" in text:
+        record_gap(doc, text, reason_codes=["operand_missing"], missing_operands=[table_missing_operand(
+            table_code=TABLE_CODE, role=f"{LABELS.get(indicator, indicator)}/{stage}事实",
+            page=page, row_key="total", column=LABELS.get(indicator, indicator), stage=stage,
+            year=year if isinstance(year, int) and year >= 1900 else None)])
+
 def _rounding_range(numerator: Any, denominator: Any):
     """按两数原件末位的一半推算比例可能范围；单位或精度不明时返回 None。"""
     from src.services.fact_column_arithmetic import _half_display_unit
@@ -89,8 +156,13 @@ def evaluate(rule: Any, doc: Any, claim: dict[str, Any], *, indicator: str,
     context = getattr(doc, "fact_context", None)
     relation = f"three_public:{'share' if share else 'completion'}:{indicator}:{claim['start']}"
     numerator, nr = select_fact(context, indicator, "决算", year)
+    if nr:
+        _record_ratio_gap(doc, nr, indicator=indicator, stage="决算", year=year, claim=claim)
     denominator, dr = select_fact(context, "total_actual" if share else indicator,
                                   denominator_stage, year)
+    if dr:
+        _record_ratio_gap(doc, dr, indicator="total_actual" if share else indicator,
+                          stage=denominator_stage, year=year, claim=claim)
     from .native_budget_phase import phase_reason
     dr = dr or phase_reason(doc, denominator, denominator_stage, indicator)
     if share and nr and not dr and claim['pct'] == 0 and denominator.normalized_value > 0:

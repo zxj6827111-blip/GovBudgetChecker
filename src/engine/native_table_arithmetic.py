@@ -17,16 +17,156 @@ def table_facts(doc, code):
     context = getattr(doc, 'fact_context', None)
     artifact = getattr(doc, 'parse_artifact', None)
     if context is None or artifact is None:
-        return [], '缺少当前版本财政事实'
+        reason = '缺少当前版本财政事实'
+        _record_table_failure(doc, code, reason)
+        return [], reason
     if (context.file_hash != artifact.source_file_hash
             or context.parse_run_uid != artifact.parse_run_uid):
-        return [], '财政事实与当前解析产物版本不一致'
+        reason = '财政事实与当前解析产物版本不一致'
+        _record_table_failure(doc, code, reason)
+        return [], reason
     facts = [f for f in context.facts if f.table_code == code]
     if not facts:
-        return [], f'{code}没有可用金额事实'
+        reason = f'{code}没有可用金额事实'
+        _record_table_failure(doc, code, reason)
+        return [], reason
     if len({f.instance_uid for f in facts}) != 1 or not facts[0].instance_uid:
-        return [], f'{code}存在多个或未识别的表实例'
+        reason = f'{code}存在多个或未识别的表实例'
+        _record_table_failure(doc, code, reason)
+        return [], reason
     return facts, None
+
+
+# ---------------------------------------------------------------------------
+# DH-02：在产生失败的地方登记结构化卡点（文本不变）
+# ---------------------------------------------------------------------------
+#: 表级失败 → 冻结原因（instance_uid 由全部规则声明，阻断维度合法）。
+_TABLE_FAILURE_CODES = {
+    '缺少当前版本财政事实': 'table_missing',
+    '财政事实与当前解析产物版本不一致': 'table_mapping_incomplete',
+}
+_TABLE_FAILURE_SUFFIX_CODES = (
+    ('没有可用金额事实', 'table_missing'),
+    ('存在多个或未识别的表实例', 'table_mapping_incomplete'),
+)
+
+
+def _record_table_failure(doc, code, reason):
+    from .diagnostic_fields import blocker, record_gap
+
+    if reason in _TABLE_FAILURE_CODES:
+        reason_code = _TABLE_FAILURE_CODES[reason]
+    else:
+        reason_code = next((value for token, value in _TABLE_FAILURE_SUFFIX_CODES
+                            if token in str(reason)), None)
+    if reason_code is None:
+        return
+    record_gap(doc, reason, reason_codes=[reason_code],
+               blocked_by=[blocker(dimension='instance_uid', ref=str(code), reason_code=reason_code)])
+
+
+def _cell_locations(fact):
+    """事实绑定的原页原格 (cell_id, page)，只取已确认的位置。"""
+    locations = []
+    for ref in (getattr(fact, 'extra_dims', None) or {}).get('evidence_refs', []) or []:
+        cell_id = ref.get('source_cell_id')
+        page = ref.get('physical_page')
+        if cell_id and isinstance(page, int) and page > 0:
+            locations.append((str(cell_id), page))
+    return locations
+
+
+def _operand_year(doc):
+    value = getattr(getattr(doc, 'fact_context', None), 'fiscal_year', None)
+    return value if isinstance(value, int) and value >= 1900 else None
+
+
+def _record_operand_gap(doc, facts, candidates, reason, *, indicator, code, name, stage):
+    """缺数/多候选：位置来自事实自身的原格；取不到位置时不编造。"""
+    from .diagnostic_fields import blocker, record_gap, table_candidate, table_missing_operand
+
+    table_code = getattr(facts[0], 'table_code', None) if facts else None
+    if not table_code:
+        return
+    year = _operand_year(doc)
+    page = next((page for fact in facts for _, page in _cell_locations(fact)), None)
+    if page is None:
+        from .diagnostic_fields import table_page
+
+        page = table_page(doc, table_code)
+    if len(candidates) > 1:
+        locations, seen = [], set()
+        for fact in candidates:
+            for cell_id, cell_page in _cell_locations(fact):
+                key = (fact.table_code, cell_page, cell_id)
+                if key in seen:
+                    continue
+                seen.add(key)
+                locations.append(table_candidate(table_code=fact.table_code, page=cell_page,
+                                                 cell_id=cell_id, value=str(fact.normalized_value)))
+        if len(locations) >= 2:
+            record_gap(
+                doc, reason, reason_codes=['operand_ambiguous', 'cell_unbound'], candidates=locations,
+                blocked_by=[blocker(dimension='cell',
+                                    ref=f'{table_code}:{indicator}:{len(locations)}个候选原格',
+                                    reason_code='cell_unbound')],
+            )
+            return
+    record_gap(
+        doc, reason, reason_codes=['operand_missing'],
+        missing_operands=[table_missing_operand(
+            table_code=table_code, role=f'{indicator}/{stage}操作数', page=page,
+            row_key=code or name, column=indicator,
+            fund_scope=getattr(facts[0], 'fund_scope', None), stage=stage, year=year)],
+    )
+
+
+def _record_operand_rejection(doc, fact, reason, *, indicator, stage):
+    """事实存在但不可作操作数：按拒绝原因挂上游阻断，同时保留缺数位置。"""
+    from .diagnostic_fields import blocker, record_gap, table_missing_operand
+
+    table_code = getattr(fact, 'table_code', None)
+    if not table_code:
+        return
+    locations = _cell_locations(fact)
+    page = locations[0][1] if locations else None
+    if page is None:
+        from .diagnostic_fields import table_page
+
+        page = table_page(doc, table_code)
+    reason_code, dimension = None, None
+    if '材料汇总口径待确认' in reason or '取数口径' in reason:
+        reason_code, dimension = 'scope_unconfirmed', 'fund_scope'
+    elif '主体不一致' in reason:
+        reason_code, dimension = 'subject_conflict', 'organization'
+    elif '未完成读取' in reason:
+        reason_code, dimension = 'table_mapping_incomplete', 'instance_uid'
+    elif '识别状态不可作操作数' in reason:
+        reason_code, dimension = 'cell_low_confidence', 'cell'
+    elif '身份未确认' in reason or '身份冲突' in reason:
+        reason_code, dimension = 'row_level_unresolved', 'row'
+    elif '万元归一金额' in reason:
+        reason_code, dimension = 'scope_unconfirmed', 'fund_scope'
+    codes = ['operand_missing'] + ([reason_code] if reason_code else [])
+    blockers = ([blocker(dimension=dimension,
+                         ref=f'{table_code}:{indicator}:{locations[0][0] if locations else " operand"}',
+                         reason_code=reason_code)] if reason_code else [])
+    if dimension == 'cell':
+        blockers = [blocker(dimension='cell',
+                            ref=locations[0][0] if locations else f'{table_code}:{indicator}:candidate',
+                            reason_code=reason_code)]
+    record_gap(
+        doc, reason, reason_codes=codes, blocked_by=blockers,
+        missing_operands=[table_missing_operand(
+            table_code=table_code, role=f'{indicator}/{stage}操作数', page=page,
+            row_key=getattr(fact, 'subject_code', None), column=indicator,
+            fund_scope=getattr(fact, 'fund_scope', None), stage=stage, year=_operand_year(doc))],
+    )
+
+
+#: 供同包其它规则模块复用的登记入口（文本不变，只登记结构化事实）。
+record_operand_gap = _record_operand_gap
+record_operand_rejection = _record_operand_rejection
 
 
 def select(doc, facts, indicator, *, code=None, name=None, stage='决算', allow_native_blank=False):
@@ -64,12 +204,17 @@ def select(doc, facts, indicator, *, code=None, name=None, stage='决算', allow
                               names=(name,) if name else (), stage=stage)
             if term is not None:
                 return term, None
-        return None, f'{code or name or indicator}的{indicator}/{stage}操作数缺失或不唯一'
+        reason = f'{code or name or indicator}的{indicator}/{stage}操作数缺失或不唯一'
+        _record_operand_gap(doc, facts, candidates, reason, indicator=indicator,
+                            code=code, name=name, stage=stage)
+        return None, reason
     fact = candidates[0]
     reason = operand_rejection_reason(fact, context.org_name)
     if (reason or context.fiscal_year is None or fact.fiscal_year != context.fiscal_year
             or fact.period not in (None, '本年')):
-        return None, reason or '操作数年度或期间不一致'
+        reason = reason or '操作数年度或期间不一致'
+        _record_operand_rejection(doc, fact, reason, indicator=indicator, stage=stage)
+        return None, reason
     return fact, None
 
 
@@ -587,6 +732,11 @@ def check_basic_economics(rule, doc):
                and not re.fullmatch(r'3\d{2}(?:\d{2})?', str(f.subject_code or ''))]
     if unknown:
         reason = '经济分类金额行的科目编码无法唯一识别，明细归集未完成'
+        from .diagnostic_fields import blocker as _blocker, record_gap as _record_gap
+        _record_gap(doc, reason, reason_codes=['row_level_unresolved'],
+                    blocked_by=[_blocker(dimension='row',
+                                         ref='FIN_06_basic_expenditure:非3位/5位编码金额行',
+                                         reason_code='row_level_unresolved')])
         receipt(rule, doc, 'economic:identity', unknown, status='insufficient_data',
                 formula='class = sum(complete children)', reason=reason)
         unresolved.append(reason)
@@ -670,11 +820,22 @@ def check_expenditure_arithmetic(rule, doc):
         return finish(rule, [], [reason])
     issues, unresolved = [], []
     if any(f.subject_code != 'total' and not re.fullmatch(r'\d{3}(?:\d{2}){0,2}', str(f.subject_code or '')) for f in facts):
-        unresolved.append('支出金额行的科目编码无法唯一识别，层级归集未完成')
+        reason = '支出金额行的科目编码无法唯一识别，层级归集未完成'
+        unresolved.append(reason)
+        from .diagnostic_fields import blocker as _blocker, record_gap as _record_gap
+        _record_gap(doc, reason, reason_codes=['row_level_unresolved'],
+                    blocked_by=[_blocker(dimension='row',
+                                         ref='FIN_03_expenditure:非3位/5位编码金额行',
+                                         reason_code='row_level_unresolved')])
     codes = sorted({f.subject_code for f in facts if f.subject_code == 'total'
                     or re.fullmatch(r'\d{3}(?:\d{2}){0,2}', str(f.subject_code or ''))})
     if 'total' not in codes:
-        unresolved.append('支出决算表未找到唯一合计行')
+        reason = '支出决算表未找到唯一合计行'
+        unresolved.append(reason)
+        from .diagnostic_fields import blocker as _blocker, record_gap as _record_gap
+        _record_gap(doc, reason, reason_codes=['row_code_missing'],
+                    blocked_by=[_blocker(dimension='row', ref='FIN_03_expenditure:合计行',
+                                         reason_code='row_code_missing')])
     indicators = ('total_actual', 'basic_actual', 'project_actual', 'to_superior_actual',
                   'operational_actual', 'subsidiary_actual')
     from .native_column_shift import (

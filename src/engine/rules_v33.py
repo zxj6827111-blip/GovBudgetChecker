@@ -748,6 +748,21 @@ def _v33_relation_receipt(
             doc.fact_receipts = receipts
         except Exception:
             pass
+    # DH-02：结构化卡点在产生失败文本处登记，这里只做透传；兼容文本不变。
+    structured: Dict[str, Any] = {}
+    if status in {"insufficient_data", "parse_error", "execution_error"}:
+        from src.engine.diagnostic_fields import fields_for_text
+
+        try:
+            structured = fields_for_text(
+                doc, incomplete_reason, status=status, rule_id=rule_code, sub_check_id=sub_check_id,
+                explicit_codes=tuple(str(code) for code in reason_codes),
+                disclosure_sources=disclosure_sources,
+            )
+        except ValueError:
+            structured = {}
+        if structured:
+            reason_codes = tuple(structured.get("reason_codes") or ())
     receipts.append(
         make_fact_receipt(
             rule_code,
@@ -759,6 +774,10 @@ def _v33_relation_receipt(
             cell_observations=cell_observations,
             disclosure_sources=disclosure_sources,
             reason_codes=reason_codes,
+            blocked_by=structured.get("blocked_by") or (),
+            missing_operands=structured.get("missing_operands") or (),
+            candidates=structured.get("candidates") or (),
+            diagnostics=(structured,) if structured else (),
         )
     )
 
@@ -2947,12 +2966,29 @@ class R33103_Income_vs_Text(Rule):
                 unresolved.append(fact_total_block or "收入决算表缺少关键行: 收入合计")
             if tt is None:
                 unresolved.append("说明文本中未提取到本年收入合计")
+            _reason = "收入合计表侧或说明侧取数失败"
+            if fact_total_block:
+                # 表侧取数失败的具体原因已在 select 处登记，这里补充说明侧位置。
+                from .diagnostic_fields import record_gap, text_missing_operand
+                if tt is None:
+                    record_gap(doc, _reason, reason_codes=['operand_missing'], missing_operands=[
+                        text_missing_operand(section='收入决算情况说明', role='本年收入合计',
+                                             page=p, row_key='本年收入合计', column='决算数',
+                                             stage='决算',
+                                             year=getattr(getattr(doc, 'fact_context', None), 'fiscal_year', None))])
+            else:
+                from .diagnostic_fields import record_gap, text_missing_operand
+                record_gap(doc, _reason, reason_codes=['operand_missing'], missing_operands=[
+                    text_missing_operand(section='收入决算情况说明', role='本年收入合计',
+                                         page=p, row_key='本年收入合计', column='决算数',
+                                         stage='决算',
+                                         year=getattr(getattr(doc, 'fact_context', None), 'fiscal_year', None))])
             _v33_relation_receipt(
                 doc, self.code, "T2:income_total:text_vs_table",
                 status="insufficient_data",
                 operand_fact_ids=[fact_total_ref.fact_uid] if fact_total_ref is not None else [],
                 formula="text.本年收入合计 == table.FIN_02.total_actual (万元)",
-                incomplete_reason="收入合计表侧或说明侧取数失败"
+                incomplete_reason=_reason
                 + (f"（{fact_total_block}）" if fact_total_block else ""),
             )
 
@@ -8440,6 +8476,20 @@ class R33224_Narrative7_T7(Rule):
             if claim is None or value is None:
                 detail = f"{label}：{reason or ('说明未披露决算金额' if claim is None else '表内没有唯一当前决算事实')}"
                 unresolved.append(detail)
+                from .diagnostic_fields import record_gap, table_missing_operand, text_missing_operand
+                if reason is None and claim is None:
+                    _refs = three_public_narrative_refs(doc, scope, key)
+                    record_gap(doc, detail, reason_codes=['text_statement_absent'], missing_operands=[
+                        text_missing_operand(section='三公经费决算说明', role=f'{label}决算金额',
+                                             page=_refs[0]['page'] if _refs else None, row_key=label,
+                                             column='决算数', stage='决算',
+                                             year=getattr(doc.fact_context, 'fiscal_year', None))])
+                elif reason is None and fact is not None:
+                    record_gap(doc, detail, reason_codes=['operand_missing'], missing_operands=[
+                        table_missing_operand(table_code='FIN_07_three_public', role=f'{label}决算金额',
+                                              page=getattr(fact, 'page_number', None), row_key=label,
+                                              column='决算数', stage='决算',
+                                              year=getattr(doc.fact_context, 'fiscal_year', None))])
                 _v33_relation_receipt(doc, self.code, sub_id, status="insufficient_data",
                                       operand_fact_ids=fact_ids, formula="narrative.actual == table.actual (万元)",
                                       incomplete_reason=detail)
@@ -12318,6 +12368,33 @@ def _wp4e_amount(text: str) -> Optional[Decimal]:
         return None
 
 
+
+def _record_trend_gaps(doc, texts, claim, merged, offsets):
+    """完成率检查的结构化卡点：分母缺失/多披露/单位或年度未确认。"""
+    from .diagnostic_fields import blocker, record_gap, text_missing_operand
+
+    if not texts:
+        return
+    page = _txt_fund_page_for(offsets, int(claim.get("start") or 0))
+    year = getattr(getattr(doc, "fact_context", None), "fiscal_year", None)
+    indicator = str(claim.get("indicator") or "未定位条目")
+    for text in texts:
+        if "parse_ambiguity" in str(text):
+            record_gap(doc, text, reason_codes=["row_level_unresolved"], blocked_by=[
+                blocker(dimension="row", ref=f"完成率声明:{indicator}", reason_code="row_level_unresolved")])
+        elif "未显式金额单位" in str(text):
+            record_gap(doc, text, reason_codes=["scope_unconfirmed"], blocked_by=[
+                blocker(dimension="fund_scope", ref=f"完成率披露:{indicator}", reason_code="scope_unconfirmed")])
+        elif "年度" in str(text):
+            record_gap(doc, text, reason_codes=["scope_unconfirmed"], blocked_by=[
+                blocker(dimension="year", ref=f"完成率声明:{indicator}", reason_code="scope_unconfirmed")])
+        else:
+            record_gap(doc, text, reason_codes=["operand_missing"], missing_operands=[
+                text_missing_operand(section="预算完成率说明", role="预算分母/本年决算分子",
+                                     page=page, row_key=indicator, column="完成率声明",
+                                     stage="决算", year=year if isinstance(year, int) and year >= 1900 else None)])
+
+
 class R33TrendCompletionRate(Rule):
     """预算完成率分母口径与确定性复算（OBL-TREND-COMPLETION-RATE）。
 
@@ -12375,14 +12452,17 @@ class R33TrendCompletionRate(Rule):
 
         for claim in claims:
             self._bind_entry(claim, boundaries, merged)
+            before = len(unresolved)
             from .native_three_public_ratios import completion_claim
             native_result = completion_claim(self, doc, claim, merged, year)
             if native_result is not None:
                 findings, missing = native_result
                 issues.extend(findings)
                 unresolved.extend(missing)
-                continue
-            self._check_claim(claim, budgets, actuals, openings, year, issues, unresolved)
+            else:
+                self._check_claim(claim, budgets, actuals, openings, year, issues, unresolved)
+            # DH-02：完成率卡点在产生处登记；页码由原文偏移映射，不编造。
+            _record_trend_gaps(doc, unresolved[before:], claim, merged, offsets)
 
         if unresolved:
             reasons = list(dict.fromkeys(unresolved))

@@ -142,6 +142,17 @@ UNRESOLVED_OBLIGATION_STATUSES: FrozenSet[str] = frozenset(
     }
 )
 
+#: 方案 DH-02 第 1 条要求逐条诊断的义务状态（范围外状态只在报告里列出）。
+DH02_OBLIGATION_SCOPE_STATUSES: FrozenSet[str] = frozenset(
+    {
+        OBLIGATION_INSUFFICIENT_DATA,
+        OBLIGATION_PARSE_AMBIGUITY,
+        OBLIGATION_EXECUTION_ERROR,
+        OBLIGATION_AI_NOT_RUN,
+        OBLIGATION_AI_FAILED,
+    }
+)
+
 #: 未完成原因的中文标签。展示与导出统一消费这里，避免各处各写一套措辞。
 OBLIGATION_REASON_LABELS: Dict[str, str] = {
     OBLIGATION_NOT_IMPLEMENTED: "尚未实现",
@@ -1179,6 +1190,12 @@ class ObligationInstance:
     gap_note: str = ""
     requires_ai: bool = False
     blocks_gate: bool = True
+    # DH-02 结构化卡点（义务级汇总；只增字段，不改写 detail）
+    blocked_by: Tuple[Dict[str, Any], ...] = ()
+    missing_operands: Tuple[Dict[str, Any], ...] = ()
+    candidates: Tuple[Dict[str, Any], ...] = ()
+    next_action: Optional[str] = None
+    root_cause_key: Optional[str] = None
 
     @property
     def is_completed(self) -> bool:
@@ -1212,6 +1229,11 @@ class ObligationInstance:
             "gap_note": self.gap_note,
             "requires_ai": self.requires_ai,
             "blocks_gate": self.blocks_gate,
+            "blocked_by": [dict(item) for item in self.blocked_by],
+            "missing_operands": [dict(item) for item in self.missing_operands],
+            "candidates": [dict(item) for item in self.candidates],
+            "next_action": self.next_action,
+            "root_cause_key": self.root_cause_key,
         }
 
 
@@ -1625,6 +1647,97 @@ def _build_summary(
     }
 
 
+def _ai_root_key(instance: ObligationInstance) -> str:
+    from src.engine.diagnostic_fields import root_cause_key
+
+    return root_cause_key(
+        {
+            "obligation_id": instance.obligation_id,
+            "reason_codes": list(instance.reason_codes),
+            "blocked_by": list(instance.blocked_by),
+            "missing_operands": list(instance.missing_operands),
+            "candidates": list(instance.candidates),
+        }
+    )
+
+
+def _attach_structured_diagnostics(
+    instances: Sequence[ObligationInstance],
+    *,
+    rule_execution_summary: Optional[Mapping[str, Any]],
+    fact_receipts: Optional[Sequence[Mapping[str, Any]]],
+    selected_ids: FrozenSet[str],
+) -> None:
+    """DH-02：把回执/规则级结构化卡点汇总到义务实例。
+
+    - 只汇总**未完成**关系回执与规则摘要里的结构化卡点；
+    - 位置未知的缺数不编造页码，沿用回执里登记的事实；
+    - 义务 detail 不变，这里只填诊断字段。
+    """
+    from src.engine.diagnostic_fields import aggregate, default_entry
+
+    rule_diagnostics: Dict[str, List[Dict[str, Any]]] = {}
+    if isinstance(rule_execution_summary, Mapping):
+        for entry in rule_execution_summary.get("unresolved_rules") or []:
+            if not isinstance(entry, Mapping):
+                continue
+            rule_id = str(entry.get("rule_id") or "").strip()
+            diagnostics = [dict(item) for item in entry.get("diagnostics") or [] if isinstance(item, dict)]
+            if rule_id and diagnostics:
+                rule_diagnostics.setdefault(rule_id, []).extend(diagnostics)
+
+    relation_diagnostics: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+    for raw in fact_receipts or []:
+        if not isinstance(raw, Mapping):
+            continue
+        if str(raw.get("status") or "") not in {
+            "insufficient_data", "parse_error", "execution_error"
+        }:
+            continue
+        rule_id = str(raw.get("rule_id") or "").strip()
+        if not rule_id or not raw.get("reason_codes"):
+            continue
+        diagnostic = {key: raw.get(key) for key in (
+            "reason_codes", "blocked_by", "missing_operands", "candidates",
+        )}
+        targets = ([str(raw.get("obligation_id"))] if raw.get("obligation_id")
+                   else [key for key in obligation_ids_for_rule(rule_id) if key in selected_ids])
+        for obligation_id in targets:
+            relation_diagnostics.setdefault((str(obligation_id), rule_id), []).append(diagnostic)
+
+    for instance in instances:
+        if instance.requires_ai:
+            if instance.status == OBLIGATION_AI_NOT_RUN:
+                instance.reason_codes = tuple(dict.fromkeys((*instance.reason_codes, "ai_not_requested")))
+                instance.next_action = "rerun_ai"
+                instance.root_cause_key = _ai_root_key(instance)
+            elif instance.status == OBLIGATION_AI_FAILED:
+                instance.reason_codes = tuple(dict.fromkeys((*instance.reason_codes, "ai_timeout")))
+                instance.next_action = "rerun_ai"
+                instance.root_cause_key = _ai_root_key(instance)
+            else:
+                continue
+            continue
+        diagnostics: List[Dict[str, Any]] = []
+        for rule_id in dict.fromkeys((*instance.checkers, *instance.missing_checkers)):
+            diagnostics.extend(relation_diagnostics.get((instance.obligation_id, str(rule_id)), []))
+            diagnostics.extend(rule_diagnostics.get(str(rule_id), []))
+        if not diagnostics:
+            if instance.status not in DH02_OBLIGATION_SCOPE_STATUSES:
+                continue
+            diagnostics = [default_entry(instance.status)]
+        summary = aggregate(diagnostics, obligation_id=instance.obligation_id)
+        if summary is None:
+            continue
+        codes = list(dict.fromkeys((*instance.reason_codes, *summary["reason_codes"])))
+        instance.reason_codes = tuple(codes)
+        instance.blocked_by = tuple(summary["blocked_by"])
+        instance.missing_operands = tuple(summary["missing_operands"])
+        instance.candidates = tuple(summary["candidates"])
+        instance.next_action = summary["next_action"]
+        instance.root_cause_key = summary["root_cause_key"]
+
+
 def build_obligation_ledger(
     profile: Optional[DocumentProfile],
     *,
@@ -1633,6 +1746,7 @@ def build_obligation_ledger(
     ai_execution: Optional[Mapping[str, Any]] = None,
     ai_required: bool = False,
     structured_ingest: Optional[Mapping[str, Any]] = None,
+    fact_receipts: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """构建检查义务账本（应检查事项的逐项状态 + 覆盖摘要）。
 
@@ -1678,6 +1792,12 @@ def build_obligation_ledger(
             _input_gaps(instance.depends_on, structured_ingest)
         )
 
+    _attach_structured_diagnostics(
+        instances,
+        rule_execution_summary=rule_execution_summary,
+        fact_receipts=fact_receipts,
+        selected_ids=frozenset(item.obligation_id for item in instances),
+    )
     return _build_summary(instances, notes)
 
 
@@ -1849,6 +1969,32 @@ def build_check_receipts(
                         "relation_tolerances": per_relation_tolerance,
                     }
 
+            # DH-02：汇总回执承载义务级结构化卡点，关系回执各自保留本关系卡点。
+            # 只有未完成回执需要诊断；通过的汇总回执仅在义务级确有诊断时携带，
+            # 以便规则摘要未完成但子关系全通过的汇总回执仍可解释。
+            structured: Dict[str, Any] = {}
+            if status in {"insufficient_data", "parse_error", "execution_error"} or instance.get("next_action"):
+                structured = {
+                    "reason_codes": list(instance.get("reason_codes") or []),
+                    "blocked_by": [dict(value) for value in instance.get("blocked_by") or []
+                                   if isinstance(value, Mapping)],
+                    "missing_operands": [dict(value) for value in instance.get("missing_operands") or []
+                                         if isinstance(value, Mapping)],
+                    "candidates": [dict(value) for value in instance.get("candidates") or []
+                                   if isinstance(value, Mapping)],
+                    "next_action": instance.get("next_action"),
+                    "root_cause_key": instance.get("root_cause_key"),
+                }
+                if not structured["reason_codes"]:
+                    from src.engine.diagnostic_fields import default_entry, finalize
+
+                    fallback = finalize(
+                        default_entry(status),
+                        rule_id=raw_rule_id,
+                        sub_check_id=f"{obligation_id}:{raw_rule_id}",
+                        obligation_id=obligation_id,
+                    )
+                    structured.update(fallback)
             receipt = CheckReceipt(
                 rule_id=raw_rule_id,
                 sub_check_id=f"{obligation_id}:{raw_rule_id}",
@@ -1862,6 +2008,12 @@ def build_check_receipts(
                 obligation_id=obligation_id or None,
                 evaluation_basis="fiscal_fact" if is_fact_based else "legacy_document",
                 fact_migration_status="complete" if is_fact_based else "pending",
+                reason_codes=structured.get("reason_codes") or [],
+                blocked_by=structured.get("blocked_by") or [],
+                missing_operands=structured.get("missing_operands") or [],
+                candidates=structured.get("candidates") or [],
+                next_action=structured.get("next_action"),
+                root_cause_key=structured.get("root_cause_key"),
             )
             receipt_items.append(receipt.to_dict())
 

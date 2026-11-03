@@ -340,6 +340,13 @@ class CoverageObligationItem(BaseModel):
     blocks_gate: bool = False
     requires_ai: bool = False
     input_gaps: List[str] = Field(default_factory=list)
+    #: DH-02 结构化卡点（原样透传，不在查询层翻译或推断）。
+    reason_codes: List[str] = Field(default_factory=list)
+    blocked_by: List[Dict[str, Any]] = Field(default_factory=list)
+    missing_operands: List[Dict[str, Any]] = Field(default_factory=list)
+    candidates: List[Dict[str, Any]] = Field(default_factory=list)
+    next_action: Optional[str] = None
+    root_cause_key: Optional[str] = None
 
 
 class CoverageSummaryBlock(BaseModel):
