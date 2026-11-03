@@ -370,10 +370,23 @@ def build_review_report(payload: Mapping[str, Any]) -> Dict[str, Any]:
             {
                 "record_type": "unfinished_check",
                 "obligation_id": item.get("obligation_id"),
+                "group_title": item.get("group_title"),
                 "title": item.get("title"),
                 "status": item.get("status"),
                 "reason": item.get("reason_label") or item.get("reason"),
+                "reason_label": item.get("reason_label") or item.get("reason"),
                 "detail": item.get("detail") or item.get("gap_note"),
+                "basis": item.get("basis"),
+                "gap_note": item.get("gap_note"),
+                # DH-02/03a/03b：版本水合后的导出仍须保留结构化卡点与
+                # legacy 冻结依据；旧任务没有这些字段时按 None/[] 透出。
+                "reason_codes": item.get("reason_codes") or [],
+                "blocked_by": item.get("blocked_by") or [],
+                "missing_operands": item.get("missing_operands") or [],
+                "candidates": item.get("candidates") or [],
+                "next_action": item.get("next_action"),
+                "root_cause_key": item.get("root_cause_key"),
+                "legacy_coverage_terms": item.get("legacy_coverage_terms"),
             }
         )
 

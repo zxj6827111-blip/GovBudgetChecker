@@ -264,6 +264,61 @@ async def _persist_job(conn, *, job_uuid: str, version_id: int) -> None:
     assert await analysis_result_store.persist_analysis_job_snapshot(
         payload, include_results=True
     )
+    return payload
+
+
+async def _publish_revision(
+    conn, *, job_uuid: str, version_id: int, payload: Dict[str, Any]
+) -> Dict[str, Any]:
+    """构造一个真实的已发布修订（快照 + 不可变结果 + 当前指针）。
+
+    这里不调用 ``publish_snapshot``：它要求完整的解析事实快照；本测试只验证
+    ``read_database_result`` 的读取与哈希校验路径，因此按真实表结构写入
+    发布后的快照/结果行，并由被测函数自己读回。
+    """
+    snapshot_hash = "a" * 64
+    parse_run_id = await conn.fetchval(
+        "INSERT INTO parse_runs"
+        " (parse_run_uid, document_version_id, source_file_hash, status)"
+        " VALUES ($1, $2, $3, 'completed') RETURNING id",
+        f"parse-{uuid.uuid4().hex}",
+        version_id,
+        "b" * 64,
+    )
+    await conn.execute(
+        "INSERT INTO analysis_fact_snapshots"
+        " (job_uuid, revision_id, parse_run_id, source_file_hash, snapshot_hash,"
+        "  raw_facts_hash, effective_facts_hash, payload, publication_state, mirror_pending)"
+        " VALUES ($1, '1', $2, $3, $4, $5, $6, '{}'::jsonb, 'published', FALSE)",
+        job_uuid,
+        parse_run_id,
+        "b" * 64,
+        snapshot_hash,
+        "c" * 64,
+        "d" * 64,
+    )
+    published = {
+        **payload,
+        "analysis_revision": "1",
+        "structured_ingest": {
+            **(payload.get("structured_ingest") or {}),
+            "fact_snapshot": {"snapshot_hash": snapshot_hash},
+        },
+    }
+    core_hash = analysis_result_store.compute_analysis_result_fingerprint(published)
+    await conn.execute(
+        "INSERT INTO analysis_revision_results"
+        " (job_uuid, revision_id, core_hash, payload)"
+        " VALUES ($1, '1', $2, $3::jsonb)",
+        job_uuid,
+        core_hash,
+        json.dumps(published, ensure_ascii=False),
+    )
+    await conn.execute(
+        "UPDATE analysis_jobs SET current_fact_revision_id = '1' WHERE job_uuid = $1",
+        job_uuid,
+    )
+    return published
 
 
 async def test_save_read_review_and_export_keep_diagnostic_fields(
@@ -276,7 +331,10 @@ async def test_save_read_review_and_export_keep_diagnostic_fields(
             conn, slot_id=slot_id, file_hash="b" * 64
         )
         job_uuid = f"job-{uuid.uuid4().hex[:12]}"
-        await _persist_job(conn, job_uuid=job_uuid, version_id=version_id)
+        payload = await _persist_job(conn, job_uuid=job_uuid, version_id=version_id)
+        await _publish_revision(
+            conn, job_uuid=job_uuid, version_id=version_id, payload=payload,
+        )
         await conn.execute(
             "UPDATE material_slots SET current_document_version_id = $1,"
             " status = 'review_required' WHERE id = $2::uuid",
@@ -361,46 +419,76 @@ async def test_save_read_review_and_export_keep_diagnostic_fields(
         assert reloaded_item.reason_codes == ["subject_name_unlocated"]
         assert reloaded_item.missing_operands == [_text_operand()]
 
-    # 3) 导出端点 JSON 分支：走真实 download_report 函数与 DB 读回结果。
-    async with _conn(schema, pool) as conn:
-        revision = await conn.fetchval(
-            "SELECT analysis_revision FROM analysis_jobs WHERE job_uuid = $1",
-            job_uuid,
-        )
-    published = {
-        "job_id": job_uuid,
-        "analysis_revision": revision,
-        "result": {
-            "ai_findings": [],
-            "rule_findings": [],
-            "merged": {},
-            "meta": stored,
-        },
-        "structured_ingest": {"document_version_id": version_id},
-        "status": "done",
-    }
+    # 3) 真实发布版本：read_database_result → 版本水合 → 复核/导出 HTTP 处理器。
+    from starlette.requests import Request
 
     from api.routes import reports as reports_routes
+    from api.routes import reviews as reviews_routes
+    from src.services.analysis_fact_snapshot import read_database_result
 
+    published_from_db = await read_database_result(job_uuid)
+    assert published_from_db is not None
+    assert published_from_db["analysis_revision"] == "1"
+    published_items = {
+        item["obligation_id"]: item
+        for item in published_from_db["result"]["meta"]["obligation_coverage"]["instances"]
+    }
+    assert published_items["OBL-TXT-T5"]["missing_operands"] == [_text_operand()]
+    assert published_items["OBL-TXT-T5"]["legacy_coverage_terms"] == []
+
+    # 真实水合函数：不允许用 identity lambda 替换。
+    hydrated = reports_routes._hydrate_version_bound_decisions(
+        job_uuid, published_from_db,
+    )
+    assert isinstance(hydrated.get("review_report"), dict)
+    hydrated_unfinished = [
+        item for item in hydrated["review_report"]["manual_review"]
+        if item.get("record_type") == "unfinished_check"
+    ]
+    hydrated_by_id = {item["obligation_id"]: item for item in hydrated_unfinished}
+    assert hydrated_by_id["OBL-TXT-T5"]["reason_codes"] == ["subject_name_unlocated"]
+    assert hydrated_by_id["OBL-TXT-T5"]["missing_operands"] == [_text_operand()]
+    assert hydrated_by_id["OBL-TXT-T5"]["legacy_coverage_terms"] == []
+    assert hydrated_by_id["OBL-OLD-LEGACY"]["legacy_coverage_terms"] is None
+
+    # 真实复核 HTTP 处理器（仅隔离任务文件访问；登录在 TESTING 下是测试管理员）。
+    monkeypatch.setattr(reviews_routes, "_job_access_ok", lambda user, job: True)
+    request = Request({
+        "type": "http",
+        "method": "GET",
+        "path": f"/api/reviews/{slot_id}",
+        "headers": [],
+        "query_string": b"",
+    })
+    review_response = await reviews_routes.get_review(
+        slot_id, request, job_uuid=job_uuid,
+    )
+    review_data = review_response.model_dump()
+    json.dumps(review_data, ensure_ascii=False)  # 响应模型必须可 JSON 序列化
+    review_items = {
+        item["obligation_id"]: item
+        for item in review_data["data"]["obligation_review"]["items"]
+    }
+    assert review_items["OBL-TXT-T5"]["reason_codes"] == ["subject_name_unlocated"]
+    assert review_items["OBL-TXT-T5"]["missing_operands"] == [_text_operand()]
+    assert review_items["OBL-TXT-T5"]["candidates"][0]["value"] == "-住房公积金"
+    assert review_items["OBL-TXT-T5"]["next_action"] == "human_confirm"
+    assert review_items["OBL-TXT-T5"]["root_cause_key"] == "rc:dh02-persistence-test"
+    assert review_items["OBL-TXT-T5"]["legacy_coverage_terms"] == []
+    assert review_items["OBL-OLD-LEGACY"]["reason_codes"] == []
+    assert review_items["OBL-OLD-LEGACY"]["legacy_coverage_terms"] is None
+
+    # 真实导出 HTTP 处理器：只隔离任务文件访问；read_database_result 与
+    # _hydrate_version_bound_decisions 都走真实实现。
     def fake_access(request, requested_job_id):
         assert requested_job_id == job_uuid
-        return None, None, None, published
-
-    async def fake_read(job_id, revision):
-        assert job_id == job_uuid
-        return published
+        return None, None, None, {}
 
     monkeypatch.setattr(reports_routes, "require_job_access", fake_access)
-    monkeypatch.setattr(
-        "src.services.analysis_fact_snapshot.read_database_result", fake_read
-    )
-    monkeypatch.setattr(
-        reports_routes, "_hydrate_version_bound_decisions",
-        lambda job_id, payload: payload,
-    )
     exported = await reports_routes.download_report(
-        request=None, job_id=job_uuid, format="json", analysis_revision=None,
+        request=request, job_id=job_uuid, format="json", analysis_revision=None,
     )
+    json.dumps(exported, ensure_ascii=False)
     unfinished = {
         item["obligation_id"]: item for item in exported["unfinished_checks"]
     }
