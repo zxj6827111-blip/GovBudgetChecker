@@ -1836,8 +1836,6 @@ def build_obligation_ledger(
     "调度出去的规则跑成什么样"。
     """
     instances, notes = expand_obligations(profile, report_kind=report_kind)
-    # DH-03a：旧兼容字段在实例展开后立即冻结，后续 detail/诊断变化不回写它们。
-    _fill_legacy_fields(instances)
     kind = str(report_kind or (profile.kind if profile else "") or "unknown").strip().lower()
     # 只在该次预算分析实际采用新链路时增加义务，默认预算回执要求不变。
     if kind=='budget' and (getattr(profile,'writing_scope',{}) or {}).get('domain')=='budget':
@@ -1874,6 +1872,9 @@ def build_obligation_ledger(
         instance.input_gaps = tuple(
             _input_gaps(instance.depends_on, structured_ingest)
         )
+
+    # DH-03a：旧兼容字段在 detail 落定后、任何原因文案改写前冻结。
+    _fill_legacy_fields(instances)
 
     _attach_structured_diagnostics(
         instances,

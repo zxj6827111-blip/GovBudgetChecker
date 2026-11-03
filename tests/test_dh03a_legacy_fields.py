@@ -36,6 +36,29 @@ def _instance(obligation_id: str, *, title: str = "", detail: str = "") -> Oblig
     )
 
 
+def test_fields_frozen_after_detail_is_filled():
+    """detail 由规则摘要落定后再冻结：不能因为实例刚展开时 detail 为空而写 []。"""
+    summary = {
+        "rule_statuses": {
+            "V33-114": "insufficient_data", "V33-109": "insufficient_data",
+            "V33-122": "insufficient_data", "CMM-026": "insufficient_data",
+        },
+        "unresolved_rules": [{
+            "rule_id": "V33-109",
+            "detail": "“财政拨款收入支出决算总表”读取未完成",
+            "reason_codes": [],
+        }],
+    }
+    ledger = build_obligation_ledger(_profile(), report_kind="final",
+                                     rule_execution_summary=summary)
+    item = next(entry for entry in ledger["instances"]
+                if entry["obligation_id"] == "OBL-STRUCT-EMPTY-STATEMENT")
+    assert item["status"] == "insufficient_data"
+    assert "财政拨款收入支出决算总表" in item["detail"]
+    assert item["legacy_same_source_keys"] == [LEGACY_SAME_SOURCE_KEY]
+    assert item["legacy_coverage_terms"] == ["财政拨款收入支出决算总表"]
+
+
 def test_same_source_key_algorithm_is_frozen():
     key = [LEGACY_SAME_SOURCE_KEY]
     assert legacy_same_source_keys(_instance(
