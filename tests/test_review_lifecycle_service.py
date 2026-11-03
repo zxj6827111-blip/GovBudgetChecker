@@ -546,15 +546,16 @@ def test_obligation_covered_by_same_finding_is_not_a_duplicate_todo():
         coverage_blocking_total=1,
         coverage_items=[item],
     )
-    assert review_lifecycle_service._blocking_obligations(state) == []
-    assert review_lifecycle_service._unhandled_obligations(state) == []
+    # U-7：名称问题只合并展示，金额子检查未完成 → 义务仍阻塞、仍进待办。
+    assert review_lifecycle_service._blocking_obligations(state) == [item]
+    assert review_lifecycle_service._unhandled_obligations(state) == [item]
     block = review_lifecycle_service._obligation_review_block(state)
-    assert block.items == []
-    assert block.pending_total == 0
-    assert block.covered_total == 1
-    # 去重只去掉补核副本，不替人处理问题本身：pending_findings 仍然存在。
+    assert [entry.obligation_id for entry in block.items] == [item.obligation_id]
+    assert block.pending_total == 1
+    assert block.covered_total == 0
+    # 问题本身仍按问题流程处理：pending_findings 与 blocking_obligations 同时存在。
     codes = [blocker.code for blocker in review_lifecycle_service.evaluate_completion_gate(state).blockers]
-    assert "blocking_obligations" not in codes
+    assert "blocking_obligations" in codes
     assert "pending_findings" in codes
 
 

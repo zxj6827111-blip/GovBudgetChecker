@@ -56,6 +56,32 @@ _GENERIC_TERMS: Set[str] = {
 #: 至少 4 个字的短语才当作可辨识科目/说明名。
 _MIN_TERM_LENGTH = 4
 
+#: U-7：金额/数值类子检查的 checker。义务含这些 checker 时，只有同属金额族的问题
+#: 才可能覆盖“金额检查做不下去”的副本；名称/单位类问题只合并展示，不得关闭、
+#: 覆盖或隐藏未完成的金额子检查。
+_AMOUNT_CHECKERS: Set[str] = {
+    "V33-005",
+    "V33-106",
+    "V33-110",
+    "V33-117",
+    "V33-202",
+    "V33-222",
+    "V33-224",
+    "V33-234",
+    "V33-240",
+    "V33-241",
+    "V33-243",
+    "V33-244",
+    "V33-246",
+    "V33-249",
+    "V33-251",
+    "V33-TREND-COMPLETION-RATE",
+    "V33-SG-COMPLETION",
+    "OBL-TREND-COMPLETION-RATE",
+    "CMM-007",
+    "CMM-020",
+}
+
 
 def _json_value(raw: Any) -> Any:
     if isinstance(raw, (dict, list)):
@@ -133,6 +159,9 @@ def obligation_covered_by_finding(
     if str(getattr(item, "status", "") or "") != "insufficient_data":
         return False
     checkers = {str(code).strip() for code in (getattr(item, "checkers", None) or [])}
+    # U-7：义务含金额子检查时，只有金额族问题才可能覆盖；名称/单位类问题
+    # 只合并展示，不得关闭、覆盖或隐藏未完成的金额检查。
+    amount_checkers = checkers & _AMOUNT_CHECKERS
     # DH-03a：新结果读冻结短语列表；只有历史结果没有该字段时才回退解析 detail。
     frozen_terms = getattr(item, "legacy_coverage_terms", None)
     if frozen_terms is None:
@@ -152,7 +181,11 @@ def obligation_covered_by_finding(
             continue
         tags = {str(tag).strip() for tag in _json_list(finding.get("tags"))}
         rule_id = str(finding.get("rule_id") or finding.get("check") or "").strip()
-        if not (checkers & tags or rule_id in checkers):
+        matched = (checkers & tags) | ({rule_id} if rule_id in checkers else set())
+        if not matched:
+            continue
+        if amount_checkers and not (matched & _AMOUNT_CHECKERS):
+            # 名称/单位/结构类问题不覆盖金额子检查。
             continue
         text = _finding_text(finding)
         if any(term in text for term in terms):

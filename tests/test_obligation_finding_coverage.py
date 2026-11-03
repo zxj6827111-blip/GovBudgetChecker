@@ -52,8 +52,17 @@ def _result(*findings: dict) -> dict:
 
 
 def test_same_finding_covers_obligation():
+    """U-7：义务含金额子检查（V33-222）时，名称问题（V33-227）不得关闭整条义务。"""
     assert obligation_covered_by_finding(
         _item(), _result(_finding()), visible_issue_ids={"finding-1"}
+    ) is False
+
+
+def test_amount_finding_still_covers_amount_obligation():
+    """金额族问题命中同一短语时仍可覆盖同一金额检查。"""
+    assert obligation_covered_by_finding(
+        _item(), _result(_finding(rule_id="V33-222", tags=["V33-222"])),
+        visible_issue_ids={"finding-1"},
     ) is True
 
 
