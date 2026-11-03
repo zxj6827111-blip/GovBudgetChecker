@@ -109,10 +109,20 @@ def _stable_fragment_uid(*parts: Any, rows: Optional[Sequence[Sequence[str]]] = 
         payload += "|" + hashlib.sha1(rows_json.encode("utf-8")).hexdigest()
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
 
-#: 解析器指纹：表抽取策略组合变化时必须更新（缓存按指纹失效）
-from src.services.input_processing_identity import processing_manifest, processing_config_fingerprint, SCHEMA_VERSION
+#: 解析器指纹：表抽取策略组合变化时必须更新（缓存按指纹失效）。
+#: 只取解析实现清单；规则/诊断/展示代码变化不得让解析缓存失效。
+from src.services.input_processing_identity import (
+    parse_implementation_manifest,
+    processing_config_fingerprint,
+    processing_manifest,
+    refresh_parse_identity,
+    SCHEMA_VERSION,
+)
 
-PARSER_FINGERPRINT = "pdfplumber-cells-v29-label-visibility-" + processing_manifest()["sha256"][:16]
+PARSER_FINGERPRINT = (
+    "pdfplumber-cells-v30-parse-identity-"
+    + parse_implementation_manifest()["sha256"][:16]
+)
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +327,7 @@ class PDFParser:
 
         merged = self._coalesce_tables(fragments)
         manifest = processing_manifest()
+        parse_manifest = parse_implementation_manifest()
         from src.services.native_label_visibility import POLICY_VERSION, recovery_enabled
         visibility_stats = list(getattr(self, "_label_visibility_stats", []) or [])
         visibility_available = visibility.available
@@ -329,7 +340,7 @@ class PDFParser:
             processing_manifest=manifest,
             parser_name="pdfplumber",
             parser_fingerprint=PARSER_FINGERPRINT,
-            config_fingerprint=processing_config_fingerprint(config_fingerprint, manifest),
+            config_fingerprint=processing_config_fingerprint(config_fingerprint, parse_manifest),
             ocr_model_fingerprint=ocr_model_fingerprint,
             page_count=page_count,
             page_states=page_states,
@@ -359,8 +370,7 @@ class PDFParser:
         from src.services.source_reconstruction import attach_reconstruction
         attach_reconstruction(artifact, self._cell_candidate_tables + fragments)
         artifact.reconstruction_decisions = list(self._reconstruction_decisions)
-        from src.services.input_processing_identity import artifact_content_hash
-        artifact.parse_run_uid = artifact_content_hash(artifact)[:32]
+        refresh_parse_identity(artifact)
         return artifact
 
     async def persist_artifact_to_legacy_tables(

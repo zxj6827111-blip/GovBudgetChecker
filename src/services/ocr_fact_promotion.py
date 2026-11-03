@@ -545,6 +545,6 @@ def promote_ocr_candidates(
         summary['candidate_materialized']=True
         summary['usable_for_rules']=True
     if promoted_uids or summary['fused_cells'] or summary['native_conflicts']:
-        from src.services.input_processing_identity import artifact_content_hash
-        artifact.parse_run_uid=artifact_content_hash(artifact)[:32]
+        from src.services.input_processing_identity import refresh_parse_identity
+        refresh_parse_identity(artifact)
     return summary

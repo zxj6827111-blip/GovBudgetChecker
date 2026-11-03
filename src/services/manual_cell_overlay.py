@@ -370,10 +370,8 @@ def apply_table_cell_overlays(artifact: Any, records: Iterable[Dict[str, Any]]) 
                                            separators=(",", ":"), default=str).encode()).hexdigest()
         # 补录值属于解析输入：同样的补录可复用缓存，改动补录必须产生新的解析运行身份。
         artifact.config_fingerprint = _SUFFIX.sub("", artifact.config_fingerprint or "") + f":{_MANUAL_SUFFIX}:{digest}"
-        artifact.parse_run_uid = hashlib.sha256("|".join((
-            artifact.source_file_hash, artifact.parser_fingerprint,
-            artifact.config_fingerprint, artifact.ocr_model_fingerprint or "",
-        )).encode()).hexdigest()[:32]
+        from src.services.input_processing_identity import refresh_parse_identity
+        refresh_parse_identity(artifact)
     # 按校正字段分组：主链路要分别呈现“格/行补录”和“表种确认”的结果，
     # 否则只提交表种确认时，回执会错误地写成 not_requested。
     report["by_field"] = {

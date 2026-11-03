@@ -1164,10 +1164,8 @@ def apply_table_column_mapping_overlays(
             json.dumps(mappings, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
         artifact.config_fingerprint = f"{base_config}:column-mapping-v1:{mapping_digest}"
-        artifact.parse_run_uid = hashlib.sha256("|".join((
-            artifact.source_file_hash, artifact.parser_fingerprint,
-            artifact.config_fingerprint, artifact.ocr_model_fingerprint or "",
-        )).encode()).hexdigest()[:32]
+        from src.services.input_processing_identity import refresh_parse_identity
+        refresh_parse_identity(artifact)
     return report
 
 

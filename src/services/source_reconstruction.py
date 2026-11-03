@@ -87,7 +87,7 @@ def resolve_empty_table_shadows(tables, page_text):
 
 def attach_reconstruction(artifact, candidates):
     from src.services.fiscal_column_identity import canonical_column_mappings,code_dimension_columns,header_paths
-    from src.services.table_import_receipt import source_cell_id
+    from src.services.cell_identity import source_cell_id
     tokens=[]
     for b in artifact.text_blocks:
         tokens.append(SourceToken(b.block_uid,b.text,b.page_number,list(b.bbox)if b.bbox else None,
