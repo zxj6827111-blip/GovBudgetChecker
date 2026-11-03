@@ -27,6 +27,26 @@ _FLAGS = ('GBC_TEMPLATE_SCOPE', 'GBC_BUDGET_TEMPLATE_SCOPE', 'GBC_TEMPLATE_EXPOR
           'OCR_ENABLED', 'OCR_IMAGE_GATE', 'OCR_CPU_THREADS', 'PDF_PARSE_MAX_PAGES', 'MAX_UPLOAD_PAGES',
           'PDF_PARSE_MAX_TEXT_CHARS', 'PDF_PARSE_MAX_TABLE_CELLS')
 
+#: 分析运行实际执行的本地代码根。执行清单要覆盖规则使用的辅助模块
+#: （如 src/utils）、配置/规则加载和 OCR 服务代码，而不只扫解析目录。
+_EXECUTION_CODE_ROOTS = ('src', 'api', 'config', 'rules', 'ocr_service', 'gbc_yaml')
+_EXECUTION_CONFIG_PATTERNS = (
+    'config/*.yaml',
+    'config/*.yml',
+    'rules/*.yaml',
+    'rules/*.yml',
+    'rules/**/*.yaml',
+    'rules/**/*.yml',
+    'requirements.txt',
+    'requirements-dev.txt',
+    'pyproject.toml',
+)
+_EXECUTION_DEPENDENCIES = (
+    'fastapi', 'pydantic', 'PyYAML', 'httpx', 'asyncpg', 'openai', 'cryptography',
+    'rapidfuzz', 'pdfminer.six', 'pdfplumber', 'pymupdf', 'numpy',
+    'paddleocr', 'paddlepaddle', 'Pillow', 'opencv-python',
+)
+
 #: 真正决定解析产物内容的实现文件。规则、诊断、复核、展示和导出代码不在此列：
 #: 这些模块的变化只能改变完整运行指纹，不能改变可复用的解析身份。
 #: 新增解析模块必须同时登记在这里，并递增 PARSE_IMPLEMENTATION_VERSION。
@@ -142,24 +162,29 @@ def local_import_dependencies(relative_file: str, root: Path | None = None) -> s
 
 @lru_cache(maxsize=1)
 def runtime_code_manifest() -> dict:
+    """冻结进程启动时的完整分析执行代码与配置。
+
+    范围覆盖实际本地运行面：src（含 utils/security/providers/db 等）、api、
+    config、rules、ocr_service、gbc_yaml；规则辅助模块的变化必须进入执行
+    指纹，不能只扫解析目录。
+    """
     # 在进程首次加载时冻结。运行中改磁盘文件不能把未重载的进程冒充新实现。
-    paths = [p for d in ('src/services', 'src/engine', 'src/schemas', 'src/qc', 'ocr_service')
-             for p in (ROOT / d).rglob('*.py')]
-    paths.extend(ROOT / name for name in ('api/main.py', 'api/runtime.py', 'src/db/migrations.py'))
+    paths = {
+        p
+        for root in _EXECUTION_CODE_ROOTS
+        for p in (ROOT / root).rglob('*.py')
+    }
     code = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
             for p in sorted(paths)}
-    packages = {}
-    for name in ('pdfplumber', 'pymupdf', 'paddleocr', 'paddlepaddle', 'Pillow', 'numpy', 'opencv-python'):
-        try:
-            packages[name] = importlib.metadata.version(name)
-        except importlib.metadata.PackageNotFoundError:
-            packages[name] = None
+    packages = {name: _package_version(name) for name in _EXECUTION_DEPENDENCIES}
     # 仅记录摘要，不把可能含服务信息的配置内容写入分析产物。
-    configuration_files = {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
-        if (ROOT / name).is_file() else None
-        for name in ('config/app.yaml', 'config/providers.yaml', 'rules/v3_3.yaml',
-                     'rules/budget_v3_3_draft.yaml')}
-    return {'version': 'gbc.input-processing.v2', 'code': code, 'packages': packages,
+    configuration_files = {}
+    for pattern in _EXECUTION_CONFIG_PATTERNS:
+        for path in sorted(ROOT.glob(pattern)):
+            if path.is_file():
+                configuration_files[path.relative_to(ROOT).as_posix()] = hashlib.sha256(
+                    path.read_bytes()).hexdigest()
+    return {'version': 'gbc.input-processing.v3', 'code': code, 'packages': packages,
             'configuration_files': configuration_files}
 
 
