@@ -112,11 +112,25 @@ def _quote_matches(item: Dict[str, Any], quotes: Sequence[str], eval_lib) -> boo
 
 
 def match_addition(item: Dict[str, Any], targets: Sequence[Dict[str, Any]],
-                   contract: Dict[str, Any], eval_lib) -> List[Dict[str, Any]]:
-    """把新增正式条目匹配到 MISS 目标：样本+页码+规则族+（可选）原文。"""
+                   contract: Dict[str, Any], eval_lib, gm=None, docs=None) -> List[Dict[str, Any]]:
+    """把新增正式条目匹配到 MISS 目标。
+
+    首选金标匹配器的 unit 链接（与 r2 命中口径一致）；契约提供 ``check_rules`` 时
+    作为补充路径，仍要求样本+页码+原文同时满足。
+    """
+    linked = set()
+    if gm is not None and docs is not None and item["doc"] in docs:
+        try:
+            match = gm.match_item(item, docs[item["doc"]])
+        except Exception:  # noqa: BLE001 - 匹配器不认识的结构退回契约路径
+            match = {}
+        linked = {str(link.get("unit")) for link in match.get("links") or [] if isinstance(link, dict)}
     hits = []
     for target in targets:
         if item["doc"] != target["sample_id"]:
+            continue
+        if target.get("gold_unit") and target["gold_unit"] in linked:
+            hits.append(target)
             continue
         if target["pages"] and not (set(_pages(item)) & set(target["pages"])):
             continue
@@ -178,7 +192,7 @@ def run(args: argparse.Namespace) -> int:
     satisfied: Dict[str, List[str]] = defaultdict(list)
     unexpected_additions = []
     for item in formal_additions:
-        hits = match_addition(item, miss_targets, contract, eval_lib)
+        hits = match_addition(item, miss_targets, contract, eval_lib, gm=gm, docs=docs)
         if len(hits) > 1:
             review.append({"new_id": item["id"], "reason": "新增条目同时匹配多个 MISS 目标",
                            "targets": [h["target_id"] for h in hits]})
@@ -222,7 +236,8 @@ def run(args: argparse.Namespace) -> int:
         exceptions_sha = eval_lib.hashlib.sha256(ref_path.read_bytes()).hexdigest()
     exception_conflicts = eval_lib.exception_bidirectional_conflicts(list(ref_exceptions.values()))
 
-    raw_drift, raw_missing = [], []
+    raw_drift, raw_expected, raw_missing = [], [], []
+    allow_prefixes = tuple(contract.get("raw_path_allowlist") or ())
     for old, new, how in pairs:
         if item_key(old) in target_fp_keys:
             continue
@@ -235,8 +250,13 @@ def run(args: argparse.Namespace) -> int:
             continue
         a, b = eval_lib.canonical_raw(raw_old), eval_lib.canonical_raw(raw_new)
         if a != b:
-            raw_drift.append({"sample_id": old["doc"], "old_raw_id": old.get("raw_id"),
-                              "new_raw_id": new.get("raw_id")})
+            paths = sorted(set(eval_lib.diff_paths(a, b)))
+            record = {"sample_id": old["doc"], "old_raw_id": old.get("raw_id"),
+                      "new_raw_id": new.get("raw_id"), "paths": paths[:30]}
+            if allow_prefixes and all(path.startswith(allow_prefixes) for path in paths):
+                raw_expected.append(record)
+            else:
+                raw_drift.append(record)
 
     # ---- TP 保持 ----
     def finals(rows_items):
@@ -326,6 +346,7 @@ def run(args: argparse.Namespace) -> int:
         "satisfied_miss_targets": {k: v for k, v in satisfied.items()},
         "missing_additions": missing_additions, "unexpected_additions": unexpected_additions,
         "fingerprint_drift": fingerprint_drift, "raw_fingerprint_drift": raw_drift,
+        "raw_fingerprint_expected": raw_expected,
         "raw_missing": raw_missing, "decision_drift": decision_drift,
         "review_required": review, "resolved_duplicates": resolved_duplicates,
         "tp_before": tp_before, "tp_after": tp_after,
