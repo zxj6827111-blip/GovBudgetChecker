@@ -49,7 +49,7 @@
 
 ### 3.1 两个代码清单
 
-1. `runtime_code_manifest()`：全量代码 + 全部配置文件摘要；只服务分析运行指纹与审计。
+1. `runtime_code_manifest()`：冻结完整分析执行代码与配置。范围覆盖实际本地运行面：`src`（含 `utils`、`security`、`providers`、`db` 等）、`api`、`config`、`rules`、`ocr_service`、`gbc_yaml` 下的全部 `*.py`；配置摘要覆盖 `config/*.yaml`、`rules/**/*.yaml`、`requirements*.txt` 与 `pyproject.toml`。只服务分析运行指纹与审计。
 2. `parse_code_manifest()`：只哈希 `PARSE_IMPLEMENTATION_FILES`；记录 `PARSE_DEPENDENCIES` 和 Python 版本；进程启动后冻结。
 3. `parse_implementation_manifest()`：解析实现 + 解析环境变量；输出 `sha256`。
 4. `processing_manifest()`：全量代码/配置 + `parse_implementation_manifest()`；输出完整执行清单。
@@ -90,7 +90,7 @@ PARSER_FINGERPRINT =
 
 ## 4. 解析实现清单与导入守卫
 
-`PARSE_IMPLEMENTATION_FILES` 当前 27 个文件：
+`PARSE_IMPLEMENTATION_FILES` 当前 33 个文件（含导入时实际执行的父包初始化与 `api/config.py`）：
 
 - 解析入口与表结构：`pdf_parser.py`、`fiscal_table_rules.py`、`fiscal_row_roles.py`、`fiscal_column_identity.py`、`input_geometry.py`、`source_reconstruction.py`、`table_reading_assessment.py`、`raster_grid_candidates.py`。
 - 原生恢复：`native_dimension_recovery.py`、`native_label_visibility.py`、`native_structure_recovery.py`、`native_ocr_fusion.py`。
@@ -108,10 +108,12 @@ PARSER_FINGERPRINT =
 
 - 解析 `ast.Import`、`ast.ImportFrom`，含函数内延迟导入。
 - 支持 `src.*`、`ocr_service.*` 绝对导入，以及按模块所在包解析的 `from .` / `from ..` 相对导入。
-- 只返回项目内真实存在的文件；新增未登记解析模块会使守卫测试失败。
-- 回归覆盖：`ocr_service` 绝对导入、相对导入、`import ocr_service.x`、函数内延迟导入四种绕过方式均被拒绝。
+- 按 CPython 规则解析同名文件/包：`foo.py` 优先于 `foo/__init__.py`。
+- 返回目标包 `__init__.py` 和必要父包链初始化文件；不再整体跳过包。
+- 非解析例外在 `NON_PARSE_LOCAL_IMPORTS` 显式登记并说明边界：`check_receipt.py`（回执 schema 拆分）、`job_orchestrator.py`（`src.services.__getattr__` 惰性属性）、`ai_model_settings.py`（`AppConfig.load()` 内惰性导入）。
+- 回归覆盖：单文件与包形式的绝对/相对/延迟导入、`from package import symbol`、父包变化、同名文件/包优先级。
 
-新增解析模块必须同时登记并递增 `PARSE_IMPLEMENTATION_VERSION`。
+新增解析模块必须同时登记并递增 `PARSE_IMPLEMENTATION_VERSION`；影响解析的包初始化变化会改变解析实现指纹。
 
 ## 5. 缓存与不可变存储
 
@@ -197,9 +199,10 @@ WHERE status = 'completed'
 本地结果：
 
 ```text
-tests/remediation/test_parse_run_identity_foundation.py  29 passed
-全量 pytest  4951 passed, 195 skipped
+tests/remediation/test_parse_run_identity_foundation.py  39 passed
+全量 pytest  4961 passed, 195 skipped
 验收方复现脚本（新目录）  ID-01～ID-04 反例全部按预期翻转
+残余反例复跑（新目录）  src/utils 辅助模块进入执行清单；包绝对/相对导入均被守卫拒绝
 ```
 
 ## 8. 审核整改对照
@@ -208,8 +211,8 @@ tests/remediation/test_parse_run_identity_foundation.py  29 passed
 | --- | --- |
 | ID-01 身份失去内容/资格约束 | 新增 `semantic_artifact_hash`，纳入原文、单元格、几何/映射、主体、`reading_assessment` 与资格证据；`parse_run_uid` 绑定该哈希；旧上下文因 UID 改变被拒绝 |
 | ID-02 诊断代码变化仍导致缓存冲突 | artifact 不再写全量 `processing_manifest`；缓存冲突/读回/持久化改用语义身份，审计清单差异不冲突，真实语义变化仍拒绝 |
-| ID-03 完整运行指纹不能证明历史版本 | 冻结 `execution_manifest` 到 v2 分析快照，保存 `execution_fingerprint`；历史读取只返回快照内清单，禁止当前代码重算；主链与入库共用同一份冻结清单 |
-| ID-04 依赖与守卫不完整 | 补 `rapidfuzz`、`pdfminer.six`；守卫支持 `src`/`ocr_service` 绝对导入、相对导入与延迟导入；加入四类绕过反例 |
+| ID-03 完整运行指纹不能证明历史版本 | 冻结 `execution_manifest` 到 v2 分析快照，保存 `execution_fingerprint`；历史读取只返回快照内清单，禁止当前代码重算；主链与入库共用同一份冻结清单。复审后执行清单扩到 `src`（含 `src/utils/narration.py` 等规则辅助）、`api`、`config`、`rules`、`ocr_service`、`gbc_yaml` 及动态规则/依赖配置 |
+| ID-04 依赖与守卫不完整 | 补 `rapidfuzz`、`pdfminer.six`；守卫支持 `src`/`ocr_service` 绝对导入、相对导入与延迟导入。复审后补齐目标包 `__init__.py`、必要父包链、同名文件/包优先级与 `from package import symbol`；非解析惰性导入显式登记 |
 
 ## 9. 合并与基线注意
 
