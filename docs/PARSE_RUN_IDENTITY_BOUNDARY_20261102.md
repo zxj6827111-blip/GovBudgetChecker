@@ -1,4 +1,4 @@
-# parse_run_uid 身份基础：调用链与边界（2026-11-02）
+# parse_run_uid 身份基础：调用链与边界（2026-11-02，ID-01～ID-04 整改版）
 
 **候选基线与分支**
 
@@ -7,133 +7,117 @@
 - 独立工作区：`gbc-worktrees/parse-run-identity-20261102`
 - 范围：只修 `parse_run_uid` 身份基础，不包含 DH-02/DH-03、不修改 r4、不实施方案 B、不采正式基线、不运行正式抽样。
 
-## 1. 目标与结论
+## 1. 三层身份
 
-原先 `parse_run_uid` 由整份 `ParseArtifact` 内容哈希生成，`PARSER_FINGERPRINT` 又嵌入全仓代码清单。结果是：
-
-- 只改诊断、展示或规则代码，解析身份也会变；
-- 只改 `reading_assessment`、`label_visibility` 等展示字段，解析身份也会变；
-- 新旧代码之间同一份 PDF 的 `parse_run_uid` 改变，被 I3 当作回执字段漂移判出。
-
-本次把两类身份分开：
+验收方 ID-01～ID-04 整改后，身份拆成三个职责，不再用同一个哈希兼任：
 
 | 身份 | 用途 | 变化条件 |
 | --- | --- | --- |
-| `parse_run_uid`（解析身份） | 解析缓存复用、事实与证据绑定、旧运行隔离 | 原件、解析实现、解析配置、解析依赖、OCR 模型、schema/身份方案版本、文档绑定/列映射/人工补录证据变化 |
-| `full_run_fingerprint`（完整运行指纹） | 审计、快照完整性、跨运行比对 | 上述任一变化，或诊断/展示/规则代码、展示字段、完整代码清单变化 |
+| 输入/缓存查找键 | 查 `parse_runs` 解析缓存 | 原件、解析实现、解析配置、解析依赖、OCR 模型、schema |
+| `parse_run_uid`（语义产物身份） | 事实/证据/回执绑定、旧运行隔离 | 输入键变化，或原文、单元格、几何/映射、主体身份、资格证据变化 |
+| 分析运行指纹 | 审计、历史执行版本证明 | 本次实际执行的完整代码/配置清单或产物来源变化 |
 
-`parse_run_uid` 不再读取 artifact 内容。内容差异由缓存边界的 `artifact_content_hash` 冲突检查兜底，不由身份冒充。
+`parse_run_uid` 的 basis：
 
-完整运行指纹不新增数据库列：分析快照已保存 `artifact_content_hash` 与 `processing_manifest`，`full_run_fingerprint()` 由这两项加当前完整实现清单重算，既可用于审计，也可用于跨运行比较。
+```text
+{
+  version: "gbc.parse-run-identity.v2",
+  source_file_hash, parser_name, parser_fingerprint, config_fingerprint,
+  ocr_model_fingerprint, schema_version,
+  semantic_artifact_hash
+}
+```
 
-## 2. 身份生成调用链
+`semantic_artifact_hash` 覆盖解析产物中会改变结论或事实资格的内容；不再由 `artifact_content_hash` 兼任语义身份。
 
-### 2.1 两个代码清单
+## 2. 语义产物身份
 
-`src/services/input_processing_identity.py`：
+`src/services/input_processing_identity.py:semantic_artifact_payload()` 保留：
 
-1. `runtime_code_manifest()`
-   - 冻结进程启动时的全量代码：`src/services`、`src/engine`、`src/schemas`、`src/qc`、`ocr_service` 下所有 `*.py`，加 `api/main.py`、`api/runtime.py`、`src/db/migrations.py`。
-   - 同时记录 `config/app.yaml`、`config/providers.yaml`、`rules/v3_3.yaml`、`rules/budget_v3_3_draft.yaml` 的摘要。
-   - 只服务完整运行指纹与审计，不进入解析身份。
+- 原文：`text_blocks`、`source_fragments`、`source_tokens`。
+- 单元格与物理/逻辑表：`table_fragments`、`physical_fragments`、`source_grids`、`logical_tables`。
+- 几何与映射：`page_count`、`coordinate_space`、`coordinate_transforms`、列映射、实例/片段 UID。
+- 主体身份：逻辑表 `org_name`、`fiscal_year`、`fund_scope`、表种与标题。
+- 资格证据：`page_states`（含 OCR 状态/错误）、`ocr_table_candidates`、`cell_candidates`、`resolved_cells`、单元格 `confidence/presence/native_blank_verified/ocr_provenance/label_recovery`、`reading_assessment`。
+- 证据清单：`processing_manifest` 中的 `document_binding`、`manual_cells`、`manual_rows`、`manual_table_identity`、`raw_interpretation`。
 
-2. `parse_code_manifest()`
-   - 只哈希 `PARSE_IMPLEMENTATION_FILES` 中登记的文件。
-   - 记录 `PARSE_DEPENDENCIES`（`pdfplumber`、`pymupdf`、`paddleocr`、`paddlepaddle`、`Pillow`、`numpy`、`opencv-python`）和 Python 版本。
-   - 进程首次调用后 `lru_cache` 冻结；运行中改盘不能把未重载进程冒充新实现。
+明确排除：`reconstruction_decisions`、`label_visibility` 汇总、`parse_run_uid`、完整运行代码清单、输入身份字段。`reading_assessment` **不再整体归为展示字段**：它参与 `assess_table_reading()` 与 `constrain_reading_facts()`，读取缺口会把事实降为 `low_confidence`，必须进入语义身份。
 
-3. `parse_implementation_manifest()`
-   - 在 `parse_code_manifest()` 上加入解析相关环境变量（`_FLAGS`）。
-   - 输出 `sha256`，是解析实现指纹的唯一来源。
+数值在语义投影中统一规范化（`0`、`0.0`、`"0.00"` 等价），避免序列化往返造成同一内容不同哈希。
 
-4. `processing_manifest()`
-   - 全量代码 + 全部环境变量 + `parse_implementation_manifest()`。
-   - 输出 `sha256`，是完整运行清单。
+## 3. 身份生成调用链
 
-### 2.2 解析器指纹与配置指纹
+### 3.1 两个代码清单
 
-`src/services/pdf_parser.py`：
+1. `runtime_code_manifest()`：全量代码 + 全部配置文件摘要；只服务分析运行指纹与审计。
+2. `parse_code_manifest()`：只哈希 `PARSE_IMPLEMENTATION_FILES`；记录 `PARSE_DEPENDENCIES` 和 Python 版本；进程启动后冻结。
+3. `parse_implementation_manifest()`：解析实现 + 解析环境变量；输出 `sha256`。
+4. `processing_manifest()`：全量代码/配置 + `parse_implementation_manifest()`；输出完整执行清单。
+
+`PARSE_DEPENDENCIES` 现包含 `pdfplumber`、`pdfminer.six`、`pymupdf`、`rapidfuzz`、`paddleocr`、`paddlepaddle`、`Pillow`、`numpy`、`opencv-python`。`rapidfuzz` 参与表题/表头匹配，`pdfminer.six` 是 pdfplumber 的底层版面解析。
+
+### 3.2 解析器指纹与配置指纹
 
 ```text
 PARSER_FINGERPRINT =
-  "pdfplumber-cells-v30-parse-identity-" + parse_implementation_manifest()["sha256"][:16]
+  "pdfplumber-cells-v31-parse-identity-" + parse_implementation_manifest()["sha256"][:16]
 ```
 
-- 版本前缀从 `v29` 升到 `v30`，显式标记身份方案边界。
-- 只有解析实现清单变化才会改变该指纹；规则、诊断、展示代码变化不会。
+- v31 标记整改后的身份方案，隔离整改前的 v30 运行。
+- 只有解析实现/依赖/解析配置变化才会改变该指纹。
 
-`processing_config_fingerprint(value)`：
+`processing_config_fingerprint()` 只拼接 `parse_implementation_manifest()["sha256"]`；`document-binding-v1`、`column-mapping-v1`、`manual-overlay-v2` 等证据后缀照旧追加。
 
-- 只拼接 `parse_implementation_manifest()["sha256"]`，默认不再读取完整 `processing_manifest()`。
-- 调用方传入的配置前缀保留，`document-binding-v1`、`column-mapping-v1`、`manual-overlay-v2` 等证据后缀按原有规则追加。
-
-### 2.3 解析完成时的身份签发
+### 3.3 解析完成与后续证据变化
 
 `pdf_parser.build_parse_artifact_from_handle()`：
 
-1. `processing_manifest()` 写入 artifact，用于完整运行指纹与审计。
-2. `parse_implementation_manifest()` 只用于本次 `config_fingerprint`。
-3. artifact 字段齐备后调用 `refresh_parse_identity(artifact)`，不再使用 `artifact_content_hash(artifact)[:32]`。
+1. artifact 的 `processing_manifest` 只写 **解析来源清单**（`parse_implementation_manifest()`），不再写全量运行清单。
+2. `config_fingerprint` 使用解析实现清单。
+3. artifact 字段齐备后调用 `refresh_parse_identity(artifact)`。
 
-`refresh_parse_identity()` 的实现：
+统一重算点：
 
-```text
-sha256(canonical_json({
-  version: "gbc.parse-run-identity.v1",
-  source_file_hash,
-  parser_name,
-  parser_fingerprint,
-  config_fingerprint,
-  ocr_model_fingerprint,
-  schema_version,
-}))[:32]
-```
+| 触发点 | 进入身份的内容 |
+| --- | --- |
+| 文档归属绑定 | `config_fingerprint` 追加 `document-binding-v1:<binding hash>`；语义清单含 `document_binding` |
+| 人工列映射 | `config_fingerprint` 追加 `column-mapping-v1:<mapping digest>`；`logical_tables.column_mappings` 进入语义哈希 |
+| 人工格/行/表种补录 | `config_fingerprint` 追加 `manual-overlay-v2:<manual digest>`；单元格与 `manual_*` 证据进入语义哈希 |
+| 原始解释保存 | `raw_interpretation` 进入语义哈希，保存后立即重算身份 |
+| OCR 候选提升 / 分块管线 | 单元格、候选与资格证据进入语义哈希，管线结束重算 |
 
-### 2.4 后续证据变化的统一重算点
+`bind_artifact_document_identity()` 保持早退：同一绑定重复调用不改变身份。同样的列映射/补录重复应用不改变身份。
 
-以下位置全部改为调用 `refresh_parse_identity()`，不再各自拼接：
+## 4. 解析实现清单与导入守卫
 
-| 触发点 | 位置 | 进入身份的字段 |
-| --- | --- | --- |
-| 文档归属绑定 | `input_processing_identity.bind_artifact_document_identity()` | `config_fingerprint` 追加 `document-binding-v1:<binding hash>` |
-| 人工列映射 | `engine/fact_context.py:apply_table_column_mapping_overlays()` | `config_fingerprint` 追加 `column-mapping-v1:<mapping digest>` |
-| 人工格/行/表种补录 | `services/manual_cell_overlay.py:apply_table_cell_overlays()` | `config_fingerprint` 追加 `manual-overlay-v2:<manual digest>` |
-| OCR 候选提升 | `services/ocr_fact_promotion.py` | 提升后重算；`parser_fingerprint` 可能已带 OCR 后缀 |
-| OCR 分块管线 | `services/ocr_tiled_pipeline.py` | 管线结束统一重算 |
-
-`bind_artifact_document_identity()` 的早退语义保留：同一绑定重复调用不改变身份。
-
-## 3. 解析实现清单边界
-
-`PARSE_IMPLEMENTATION_FILES` 当前包含 27 个文件：
+`PARSE_IMPLEMENTATION_FILES` 当前 27 个文件：
 
 - 解析入口与表结构：`pdf_parser.py`、`fiscal_table_rules.py`、`fiscal_row_roles.py`、`fiscal_column_identity.py`、`input_geometry.py`、`source_reconstruction.py`、`table_reading_assessment.py`、`raster_grid_candidates.py`。
 - 原生恢复：`native_dimension_recovery.py`、`native_label_visibility.py`、`native_structure_recovery.py`、`native_ocr_fusion.py`。
 - OCR：`ocr_client.py`、`ocr_pipeline.py`、`ocr_preprocessing.py`、`ocr_tiles.py`、`ocr_grid_reconstruction.py`、`ocr_qualification.py`、`ocr_fact_promotion.py`、`ocr_tiled_pipeline.py`，以及 `ocr_service/app.py`、`ocr_service/protocol.py`。
 - schema 与纯函数：`parse_artifact.py`、`source_reconstruction.py`（schema）、`engine/fiscal_lexeme.py`、`cell_identity.py`、`input_processing_identity.py`。
 
-明确排除：
+明确排除：规则/诊断（`rules_v33.py`、`check_obligations.py`、`rule_identity.py`、`common_rules.py`）、回执/展示（`check_receipt.py`、`table_import_receipt.py`、复核/导出/AI）、入库旧表（`table_recognizer.py`、`parse_artifact_store.py`）。
 
-- 规则与诊断：`src/engine/rules_v33.py`、`check_obligations.py`、`rule_identity.py`、`common_rules.py` 等。
-- 回执与展示：`src/schemas/check_receipt.py`、`table_import_receipt.py`、复核工作台、导出和 AI 链路。
-- 仅影响入库/旧表的 `table_recognizer.py`、`parse_artifact_store.py`。
+结构拆分保持：
 
-结构拆分：
+- `CheckReceipt`、`SUB_CHECK_STATUSES` 在 `src/schemas/check_receipt.py`，`parse_artifact.py` 兼容导出。DH-02 新字段应落到 `check_receipt.py`。
+- `source_cell_id()` 在 `src/services/cell_identity.py`，`table_import_receipt.py` 兼容导出。
 
-- `CheckReceipt`、`SUB_CHECK_STATUSES` 移到 `src/schemas/check_receipt.py`；`parse_artifact.py` 保留同名导出，既有导入路径不变。DH-02 后续给回执加字段只改 `check_receipt.py`，不再碰解析 schema。
-- `source_cell_id()` 移到 `src/services/cell_identity.py`；`table_import_receipt.py` 保留兼容导出。解析只用稳定的格 ID 拼法，不再把整份回执模块带进解析指纹。
+导入守卫 `local_import_dependencies()`：
 
-守卫测试 `test_parse_manifest_covers_parse_module_import_edges()` 扫描清单内文件的全部本地导入（含函数内延迟导入），只允许一个非解析消费方：
+- 解析 `ast.Import`、`ast.ImportFrom`，含函数内延迟导入。
+- 支持 `src.*`、`ocr_service.*` 绝对导入，以及按模块所在包解析的 `from .` / `from ..` 相对导入。
+- 只返回项目内真实存在的文件；新增未登记解析模块会使守卫测试失败。
+- 回归覆盖：`ocr_service` 绝对导入、相对导入、`import ocr_service.x`、函数内延迟导入四种绕过方式均被拒绝。
 
-- `src/schemas/check_receipt.py`（回执/诊断 schema，已显式拆分）
+新增解析模块必须同时登记并递增 `PARSE_IMPLEMENTATION_VERSION`。
 
-新增解析模块未登记时，该测试会失败；登记时必须同时递增 `PARSE_IMPLEMENTATION_VERSION`。
+## 5. 缓存与不可变存储
 
-## 4. 缓存与不可变存储边界
+### 5.1 缓存键与冲突判定
 
-### 4.1 缓存键
-
-`parse_runs` 唯一索引：
+`parse_runs` 唯一索引仍是：
 
 ```text
 (document_version_id, source_file_hash, parser_fingerprint,
@@ -141,36 +125,50 @@ sha256(canonical_json({
 WHERE status = 'completed'
 ```
 
-`structured_ingest_runner.run_structured_ingest()`：
+`run_structured_ingest()` 命中缓存后：
 
-1. 调用方已带 artifact 时，以其自身 `parser_fingerprint/config_fingerprint/ocr_model_fingerprint` 查询；否则用当前进程指纹。
-2. `find_cached_parse_run()` 只命中已完成运行。
-3. 命中后完整读回 artifact，并比较 `artifact_content_hash(parse_artifact)` 与缓存对象：
-   - 不同：写入 `uploads/<job>/cache_conflicts/` 冲突日志，抛 `cache_key_conflict`；
-   - 相同：复用运行，不重开 PDF。
-4. 未命中：真正解析一次，`refresh_parse_identity()` 后写入 `parse_runs`。
+- 用 `artifacts_share_semantic_identity()` 比较原件、解析实现、配置、OCR 与 `semantic_artifact_hash`。
+- 仅审计/诊断清单差异：接受缓存运行，不产生 `cache_key_conflict`。
+- 语义内容/资格证据不同：写 `cache_conflicts` 日志并拒绝。
+- 解析完成读回时同样按语义身份校验，不再要求完整 `to_dict()` 逐字相等。
 
-### 4.2 不可变存储
+`persist_parse_artifact()`：
 
-- `parse_runs.parse_run_uid` 唯一；`ON CONFLICT` 只允许同一 `document_version_id` 的空更新，不覆盖其他版本。
-- 写入后校验 `artifact_snapshot_hash`；同一 UID 绑定不同快照直接拒绝。
-- `_restore_snapshot()` 校验快照哈希、完整字段和身份字段（`source_file_hash`、`parse_run_uid`、`parser_fingerprint`、`config_fingerprint`、`ocr_model_fingerprint`、`page_count`）。
-- 旧运行不删除、不改写；新身份方案通过 `PARSE_IDENTITY_VERSION` 和 v30 解析器前缀与旧运行隔离。
+- 同一 `parse_run_uid` 的快照哈希不同时，读回已有快照并比较语义身份。
+- 语义相同：保留原不可变快照与审计字段，不覆盖。
+- 语义/输入不同：拒绝，防止同一 UID 绑定两个不同产物。
 
-### 4.3 旧身份不会被重新签发
+### 5.2 分析执行指纹
 
-身份 basis 增加 `version`、`parser_name`、`schema_version`，因此：
+`src/services/analysis_fact_snapshot.py`：
 
-- 旧 `artifact_content_hash(artifact)[:32]` 身份；
-- 旧四字段 `sha256(source|parser|config|ocr)[:32]` 身份；
+- `freeze_execution_manifest()`：分析开始时冻结 `{schema_version, processing_manifest()}`。
+- `compute_execution_fingerprint()`：完整执行清单 + 原件 + `parse_run_uid` + 完整/语义产物哈希。
+- `make_snapshot(..., execution_manifest=...)` 写入 `execution_manifest`、`execution_fingerprint`、`semantic_artifact_hash`；`SNAPSHOT_VERSION` 升到 v2，v1 旧快照仍可校验读取。
+- `snapshot_execution_provenance()` 只返回快照中保存的清单与指纹，**绝不调用当前 `processing_manifest()` 重算**。
+- `validate_snapshot()` 对 v2 校验执行指纹内部一致；篡改清单或指纹即使重算快照哈希也会被拒绝。
+- `verify_consumed_snapshot()` 使用快照内保存的执行清单重建，v1 快照显式拒绝，不偷偷使用当前代码。
 
-都不会被新实现对同一份 artifact 重新签发。测试 `test_legacy_identity_schemes_are_not_reissued()` 与 `test_old_immutable_run_cannot_be_overwritten_by_new_identity()` 固定这两条。
+生产接线：
 
-## 5. 变化影响矩阵
+- `api/main.py` 在分析开始冻结一次 `execution_manifest`，主链快照与 `run_structured_ingest()` 使用同一份。
+- `structured_ingest_runner` 将其传给 `make_snapshot`，入库回执带 `execution_fingerprint` / `semantic_artifact_hash`。
+- `GET /api/jobs/{job_id}/fact-snapshot` 返回 `execution_provenance`；`include_execution=true` 时返回完整冻结清单。
 
-| 变化 | `parse_run_uid` | 解析缓存键 | `full_run_fingerprint` |
+### 5.3 旧历史
+
+- `parse_runs.parse_run_uid` 唯一；`ON CONFLICT` 不允许跨文档版本覆盖。
+- `_restore_snapshot()` 校验快照哈希、完整字段和身份字段。
+- 旧运行不删除、不改写；v31 与 `PARSE_IDENTITY_VERSION v2` 隔离旧缓存。
+- 旧 `artifact_content_hash[:32]` 与旧四字段身份不会被重新签发；旧 v1 分析快照仍可读取，但明确没有冻结执行清单。
+
+## 6. 变化影响矩阵
+
+| 变化 | 语义产物身份 / `parse_run_uid` | 解析缓存键 | 分析运行指纹 |
 | --- | --- | --- | --- |
-| 诊断/展示字段（`reading_assessment`、`label_visibility`、`reconstruction_decisions`） | 不变 | 不变 | 改变 |
+| 单元格金额/原文/资格证据 | 改变 | 不变（冲突检查拒绝） | 改变 |
+| `reading_assessment` 读取缺口 | 改变 | 不变（冲突检查拒绝） | 改变 |
+| `label_visibility` 汇总、`reconstruction_decisions` | 不变 | 不变 | 完整内容哈希改变 |
 | 规则/诊断/回执代码 | 不变 | 不变 | 改变 |
 | 解析实现文件 | 改变 | 改变 | 改变 |
 | 解析环境配置 | 改变 | 改变 | 改变 |
@@ -180,32 +178,42 @@ WHERE status = 'completed'
 | 文档归属绑定 | 改变 | 改变 | 改变 |
 | 人工列映射 / 格行补录 | 改变 | 改变 | 改变 |
 
-## 6. 验证
+## 7. 验证
 
-新增 `tests/remediation/test_parse_run_identity_foundation.py`，覆盖：
+`tests/remediation/test_parse_run_identity_foundation.py` 覆盖：
 
 1. 相同输入与条件重复运行身份一致，重算幂等。
-2. 仅诊断/展示字段变化：解析身份稳定，完整运行指纹改变。
-3. 仅诊断代码变化：解析身份稳定，完整运行指纹改变。
-4. 回执 schema 变化：解析身份稳定，完整运行指纹改变。
-5. 解析实现、配置、依赖、原件、parser/OCR/schema 版本变化均被身份发现。
-6. 文档绑定、列映射、人工补录证据变化均被身份发现；同样证据重复应用幂等。
-7. 旧内容哈希身份、旧四字段身份不会被重新签发。
-8. 旧不可变解析快照不能被新身份覆盖或冒充。
-9. 解析清单导入边界守卫。
-10. 真实 PDF 连续解析两次，`parse_run_uid` 一致。
+2. 单元格内容 100.00→999.00：身份改变，旧上下文被拒绝。
+3. `reading_assessment` 读取缺口：身份改变，事实从 `unverified` 降为 `low_confidence`。
+4. 仅审计/展示字段变化：身份稳定，完整内容哈希改变。
+5. 诊断代码变化：解析身份稳定，执行指纹改变且随快照冻结。
+6. 真实重复入库：审计清单差异不冲突，语义变化仍报 `cache_key_conflict`。
+7. 解析实现、配置、`rapidfuzz`/`pdfminer.six` 依赖、原件、parser/OCR/schema 版本变化均被发现。
+8. 文档绑定、列映射、人工补录证据变化被发现；同样证据重复应用幂等。
+9. 旧内容哈希/四字段身份不重发；旧不可变快照不被冒充。
+10. 导入守卫拒绝 `ocr_service` 绝对、相对、`import` 与延迟导入四种未登记模块。
+11. 真实 PDF 连续解析两次身份一致，artifact 只保存解析来源清单。
 
 本地结果：
 
 ```text
-tests/remediation/test_parse_run_identity_foundation.py  14 passed
-受影响回归集合（身份/回执/入库/人工补录/OCR 空白格）  211 passed, 1 skipped
-ruff check src/ 与新增测试  通过
+tests/remediation/test_parse_run_identity_foundation.py  29 passed
+全量 pytest  4951 passed, 195 skipped
+验收方复现脚本（新目录）  ID-01～ID-04 反例全部按预期翻转
 ```
 
-## 7. 合并与基线注意
+## 8. 审核整改对照
 
-1. DH-02 当前在 `src/schemas/parse_artifact.py` 给 `CheckReceipt` 加字段；合并本候选时，应把这些字段落到 `src/schemas/check_receipt.py`，不要把回执 schema 重新放回 `parse_artifact.py`。
-2. 本候选把解析器指纹升到 `v30`，旧 `v29` 缓存不会被新实现命中；旧运行和旧快照保留。
+| 审核项 | 整改 |
+| --- | --- |
+| ID-01 身份失去内容/资格约束 | 新增 `semantic_artifact_hash`，纳入原文、单元格、几何/映射、主体、`reading_assessment` 与资格证据；`parse_run_uid` 绑定该哈希；旧上下文因 UID 改变被拒绝 |
+| ID-02 诊断代码变化仍导致缓存冲突 | artifact 不再写全量 `processing_manifest`；缓存冲突/读回/持久化改用语义身份，审计清单差异不冲突，真实语义变化仍拒绝 |
+| ID-03 完整运行指纹不能证明历史版本 | 冻结 `execution_manifest` 到 v2 分析快照，保存 `execution_fingerprint`；历史读取只返回快照内清单，禁止当前代码重算；主链与入库共用同一份冻结清单 |
+| ID-04 依赖与守卫不完整 | 补 `rapidfuzz`、`pdfminer.six`；守卫支持 `src`/`ocr_service` 绝对导入、相对导入与延迟导入；加入四类绕过反例 |
+
+## 9. 合并与基线注意
+
+1. DH-02 给 `CheckReceipt` 加字段时落到 `src/schemas/check_receipt.py`，不要放回 `parse_artifact.py`；`from_dict` 的读回处理一并迁移。
+2. 解析器指纹升到 `v31`，旧 v30/v29 缓存不会被新实现命中；旧运行和旧快照保留。
 3. 本候选不采正式基线。审核通过、r5 冻结后，再在同一份最终代码和运行条件上重建两次基线，并重采三个阶段证据。
 4. 旧基线、最新 HEAD 和旧采集不能混作一个基线；身份方案变化本身就会使新旧 `parse_run_uid` 不可逐字比较。
