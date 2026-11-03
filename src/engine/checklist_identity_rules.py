@@ -153,6 +153,27 @@ class CMM017_OrgNameConsistency(Rule):
                 return issues
             raise RuleNotApplicable(self.code, detail="未识别到编制单位名称，名称一致性无法比对")
         reported: set = set()
+        # S04：部门决算单位构成表中的“（本级）”行必须与规范全称一致。
+        for page, text in iter_pages(doc, skip_toc=True):
+            flat = re.sub(r"\s+", "", text or "")
+            for match in re.finditer(r"([\u4e00-\u9fa5（）()]{4,40})[（(]本级[）)]", flat):
+                name = re.sub(r"^第[一二三四五六七八九十]+部分", "", match.group(1))
+                if name in reported or "部分" in name:
+                    continue
+                # 只处理“和/与”连词多写造成的本单位名称变体；不同单位名不在此规则范围。
+                if name.replace("和", "").replace("与", "") != canonical.replace("和", "").replace("与", ""):
+                    continue
+                kind = _variant_kind(name, canonical)
+                if not kind:
+                    continue
+                reported.add(name)
+                start = text.find(name)
+                issues.append(issue_at(
+                    self, f"单位名称与规范全称不一致（{kind}）：此处写作“{name}”，全文规范全称为“{canonical}”。",
+                    page, text, start if start >= 0 else 0,
+                    (start + len(name)) if start >= 0 else len(name),
+                    severity="warn", checklist_item="B-01", expected=canonical, actual=name,
+                ))
         for name, page, text, start, end in mentions:
             kind = _variant_kind(name, canonical)
             if not kind or name in reported:
@@ -254,6 +275,21 @@ def _contrast_label(scope: Optional[str]) -> str:
     return "单位" if scope == "unit" else "部门"
 
 
+def _cover_scope(doc: Document) -> Optional[str]:
+    """封面文种口径：只认封面页明确的“部门决算/单位决算”。"""
+    text = str((doc.page_texts or [""])[0] or "")
+    has_unit = "单位决算" in text
+    has_department = "部门决算" in text
+    if has_department and not has_unit:
+        return "department"
+    if has_unit and not has_department:
+        return "unit"
+    if not has_department and re.search(r"20\d{2}\s*年度?\s*决算", text):
+        # 单位模板封面只写“年度决算”，不带“部门”。
+        return "unit"
+    return None
+
+
 class CMM018_ScopeTerminology(Rule):
     code, severity = "CMM-018", "warn"
     desc = "部门/单位主体口径与层级口径一致（预/决算通用，清单 B-02）"
@@ -261,6 +297,8 @@ class CMM018_ScopeTerminology(Rule):
     def apply(self, doc: Document) -> List[Issue]:
         doc = prepare_identity_document(doc) if _uses_writing_resolution(doc) else doc
         scope = body_scope(doc) if _uses_writing_resolution(doc) else (body_scope(doc) or subject_scope(doc))
+        # R2：部门/单位口径以封面为准；封面只写“年度决算”按单位口径。
+        scope = _cover_scope(doc) or scope
         issues: List[Issue] = []
         contrast = _archive_writing_contrast(doc)
         contrast_hits: List[Tuple[int, str, int, int]] = []
@@ -303,6 +341,30 @@ class CMM018_ScopeTerminology(Rule):
                         locations=[{'page':p,'text':unique_quote(t,a,b),'start':a,'end':b} for p,t,a,b in hits],
                         table_refs=[{'page':p,'span':unique_quote(t,a,b),'role':'反向主体用语'} for p,t,a,b in hits],
                     ))
+        # R21：表注/构成段的部门-单位口径必须与封面/选定层级一致。
+        caption_scope = _cover_scope(doc) or scope
+        caption_re = {
+            "department": re.compile(r"本表反映单位(?:本年度|年度)|单位本年度没有|纳入[^，。；]{0,40}单位决算"),
+            "unit": re.compile(r"本表反映部门(?:本年度|年度)|部门本年度没有|纳入[^，。；]{0,40}部门决算|部门决算单位构成"),
+        }
+        if caption_scope in caption_re:
+            hits: List[Tuple[int, str, int, int]] = []
+            for page, text in iter_pages(doc, skip_toc=True):
+                if page == 1:
+                    continue
+                flat, positions = page_flat(doc, page, text)
+                for match in caption_re[caption_scope].finditer(flat):
+                    hits.append((page, text, *flat_span(positions, match.start(), match.end())))
+            if len(hits) >= 4:
+                page, text, start, end = hits[0]
+                expected_label = "本部门/部门" if caption_scope == "department" else "本单位/单位"
+                issues.append(issue_at(
+                    self, f"材料口径与封面不一致：正文出现相反口径表述（共{len(hits)}处），"
+                    f"当前封面为{'部门' if caption_scope == 'department' else '单位'}口径，应统一为“{expected_label}”。",
+                    page, text, start, end, severity="warn", checklist_item="B-02", occurrences=len(hits),
+                    locations=[{'page':p,'text':unique_quote(t,a,b),'start':a,'end':b} for p,t,a,b in hits],
+                ))
+
         if contrast_hits and contrast and contrast.get("comprehensive_contrast"):
             summary = _contrast_summary(contrast)
             pages_text = "、".join(str(p) for p in summary["opposite_pages"]) or "未定位"
@@ -423,6 +485,7 @@ class CMM019_CoverElements(Rule):
         # 文种（部门/单位）
         resolution = getattr(getattr(doc, "document_profile", None), "writing_scope", {}) or {}
         scope = resolution.get("cover_independent_scope") if _uses_writing_resolution(doc) else body_scope(doc)
+        scope = _cover_scope(doc) or scope
         contrast = _archive_writing_contrast(doc)
         noun = "预算" if kind == "budget" else "决算"
         if contrast and contrast.get("comprehensive_contrast"):

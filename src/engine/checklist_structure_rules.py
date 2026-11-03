@@ -335,6 +335,16 @@ class CMM013_TocHeadingAlignment(Rule):
             body_relaxed = _norm(body_title) if num.startswith("第") else _relaxed(body_title, org)
             if num.startswith("第") and _template_wording_equal(relaxed, body_relaxed):
                 return
+            if not num.startswith("第"):
+                plain_toc = _norm(relaxed).replace("一般公共预算", "")
+                plain_body = _norm(body_relaxed).replace("一般公共预算", "")
+                if plain_toc == plain_body and _norm(relaxed) != _norm(body_relaxed):
+                    issues.append(issue_at(
+                        self, f"目录与正文标题不一致：“一般公共预算”字样在目录与正文中不一致"
+                        f"（目录为“{entry['num']}{entry['title']}”，正文第{page}页为“{body_num}{body_title}”）。",
+                        *quote_args, severity="warn", checklist_item="A-05", body_page=page,
+                    ))
+                    return
             if relaxed and (relaxed == body_relaxed or (
                     not num.startswith("第") and (relaxed in body_relaxed or body_relaxed in relaxed))):
                 return

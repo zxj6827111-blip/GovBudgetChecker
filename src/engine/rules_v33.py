@@ -738,8 +738,8 @@ def _unit_error_explains_direction(budget_val: float, budget_unit: str, final_va
     """2A：一侧“元”、另一侧“万元”时，按万元名义值重算后原文方向是否成立。"""
     if {budget_unit, final_unit} != {"元", "万元"}:
         return False
-    nominal_budget = budget_val * 10000 if budget_unit == "元" else budget_val
-    nominal_final = final_val * 10000 if final_unit == "元" else final_val
+    nominal_budget = Decimal(str(budget_val)) * (10000 if budget_unit == "元" else 1)
+    nominal_final = Decimal(str(final_val)) * (10000 if final_unit == "元" else 1)
     nominal_actual = ("大于" if nominal_final > nominal_budget
                       else "小于" if nominal_final < nominal_budget else "等于")
     return nominal_actual == direction
@@ -3882,7 +3882,8 @@ class R33110_BudgetVsFinal_TextConsistency(Rule):
         paragraphs: List[Tuple[str, int]] = []
         for pi, page_text in enumerate(doc.page_texts):
             for para in merge_soft_wrapped_lines(str(page_text or "")):
-                paragraphs.append((para, pi + 1))
+                if para.strip():
+                    paragraphs.append((para, pi + 1))
         merged = "\n".join(para for para, _ in paragraphs)
         para_starts: List[Tuple[int, int]] = []
         _cursor = 0
@@ -3931,11 +3932,28 @@ class R33110_BudgetVsFinal_TextConsistency(Rule):
             # 年份 token 已被 extract_amounts 排除；保留原文单位供单位错判定。
             return amounts[0]
 
+        def bare_amount(clause: str) -> Optional[Tuple[float, str]]:
+            """分句只有一个金额且不含预算/决算标记（分页切断后的金额续行）。"""
+            if any(mark in clause for mark in (*_BUDGET_MARKS, *_FINAL_MARKS)):
+                return None
+            amounts = extract_amounts(clause)
+            return amounts[0] if len(amounts) == 1 else None
+
         matched_comparisons = 0
         i = 0
         while i < len(clauses):
             clause = clauses[i]
+            budget_idx = i
             budget_info = clause_amount(clause, _BUDGET_MARKS)
+            if budget_info is None and any(mark in clause for mark in _BUDGET_MARKS):
+                # 分页可能把金额切到下一分句：预算标记单独成句时向后取一个裸金额。
+                for k in range(i + 1, min(i + 3, len(clauses))):
+                    candidate = bare_amount(clauses[k])
+                    if candidate is not None:
+                        budget_info, budget_idx = candidate, k
+                        break
+                    if any(mark in clauses[k] for mark in (*_BUDGET_MARKS, *_FINAL_MARKS)):
+                        break
             if budget_info is None:
                 i += 1
                 continue
@@ -3996,15 +4014,15 @@ class R33110_BudgetVsFinal_TextConsistency(Rule):
                     # on the same page. Include its own amounts so the source
                     # binder can distinguish this claim from adjacent items.
                     claim_start = final_clause_idx
-                    if _page_of(clause_positions[i]) == page:
-                        claim_start = i
+                    if _page_of(clause_positions[budget_idx]) == page:
+                        claim_start = budget_idx
                     clip = merged[
                         clause_positions[claim_start]:
                         clause_positions[direction_clause_idx] + len(clauses[direction_clause_idx])
                     ].strip()
                     refs = [{"role": "比较表述", "page": page, "span": clip}] + [
                         {"role": role, "page": _page_of(clause_positions[index]), "span": clauses[index]}
-                        for role, index in [("年初预算", i), ("支出决算", final_clause_idx)]
+                        for role, index in [("年初预算", budget_idx), ("支出决算", final_clause_idx)]
                         if index >= 0
                     ]
                     # 2A：一侧“元”、另一侧“万元”时，按万元名义值重算；
@@ -8503,10 +8521,45 @@ class R33224_Narrative7_T7(Rule):
     code, severity = "V33-224", "warn"
     desc = "说明7↔T7三公经费预决算及分项校验"
 
+    def _no_statement_conflicts(self, doc: Document) -> List[Issue]:
+        """N07：声明“无三公经费财政拨款支出”但同文/表内披露正数三公支出。"""
+        no_re = re.compile(r"无[“\"']?三公[”\"']?经费(?:财政拨款)?支出")
+        hits: List[Tuple[int, str, int, int]] = []
+        for page, text in enumerate(doc.page_texts or [], start=1):
+            flat = re.sub(r"\s+", "", str(text or ""))
+            for match in no_re.finditer(flat):
+                hits.append((page, str(text or ""), match.start(), match.end()))
+        if not hits:
+            return []
+        positive = None
+        value, fact, _reason = _fact_operand_for_v33(
+            getattr(doc, "fact_context", None), "total_actual", table_code="FIN_07_three_public",
+            budget_stages=("决算",))
+        if value is None:
+            value, fact, _reason = _fact_operand_for_v33(
+                getattr(doc, "fact_context", None), "actual", table_code="FIN_07_three_public",
+                subject_tokens=("合计", "总计"), budget_stages=("决算",))
+        if value is not None and value > 0:
+            positive = (getattr(fact, "page_number", 0) or 0, float(value))
+        if positive is None:
+            return []
+        # 优先取最后一处“无三公”声明（模板段落通常在三公表与说明之后）。
+        page, text, start, end = hits[-1]
+        where = f"（第{positive[0]}页）" if positive[0] else "（表内）"
+        return [self._issue(
+            f"说明声明“无三公经费财政拨款支出”，但同文披露三公支出{positive[1]:.2f}万元{where}，"
+            "模板段落未删除。",
+            {"page": page},
+            severity="warn",
+            evidence_text=text[max(0, start - 40): end + 60].replace("\n", " "),
+        )]
+
     def _apply_current_facts(self, doc: Document) -> List[Issue]:
         if getattr(doc, 'parse_artifact', None) is not None:
             from .native_table_text import check_three_public_details
-            return check_three_public_details(self, doc, require_vehicle_details=False, check_percentages=True)
+            issues = check_three_public_details(self, doc, require_vehicle_details=False, check_percentages=True)
+            issues.extend(self._no_statement_conflicts(doc))
+            return issues
         from .common_rules import _extract_three_public_narrative_v2, three_public_narrative_refs
 
         scope = _final_section_scope(doc, ("三公",))

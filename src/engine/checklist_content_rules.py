@@ -60,9 +60,56 @@ _SHARE_RE = re.compile(r"占[^，,；;。%％\d]{0,14}?(\d+(?:\.\d+)?)\s*[%％]"
 _SHARE_NO_PERCENT_RE = re.compile(r"占[^，,；;。%％\d]{0,14}?\d+(?:\.\d+)?(?![\d.]|\s*[%％])")
 
 
+#: 分项金额 + 占比（“基本支出3,962.80万元，占5.28%”）。
+_AMOUNT_SHARE_RE = re.compile(
+    r"([\u4e00-\u9fa5（）()]{2,24}?)(\d[\d,]*(?:\.\d+)?)\s*万元[，,]?\s*占\s*(\d+(?:\.\d+)?)\s*[%％]")
+_BAD_GROUPING_RE = re.compile(r"\d{1,3}(?:,\d{3})*,\d{4,}")
+
+
 class CMM020_ShareSum(Rule):
     code, severity = "CMM-020", "warn"
     desc = "并列列示的各项占比合计应为100%（预/决算通用，清单 C-08 / A-10 / C-16）"
+
+    def _amount_share_issues(self, doc: Document) -> List[Issue]:
+        """N03：支出分项金额与占比复算（只看“本年支出合计”所在句）。"""
+        issues: List[Issue] = []
+        total_re = re.compile(r"本年支出合计\s*(\d[\d,]*(?:\.\d+)?)\s*万元")
+        for page, text in iter_pages(doc):
+            flat, positions = page_flat(doc, page, text)
+            for total_match in total_re.finditer(flat):
+                total = _dec(total_match.group(1))
+                if total is None or total <= 0:
+                    continue
+                stop = flat.find("。", total_match.end())
+                segment_end = stop if stop >= 0 else min(len(flat), total_match.end() + 600)
+                segment = flat[total_match.end():segment_end]
+                for match in _AMOUNT_SHARE_RE.finditer(segment):
+                    raw_amount, raw_share = match.group(2), match.group(3)
+                    share = _dec(raw_share)
+                    amount = _dec(raw_amount)
+                    if share is None or amount is None:
+                        continue
+                    label = match.group(1)[-12:]
+                    start = flat_span(positions, total_match.end() + match.start(),
+                                      total_match.end() + match.end())[0]
+                    end = flat_span(positions, total_match.end() + match.start(),
+                                    total_match.end() + match.end())[1]
+                    if _BAD_GROUPING_RE.search(raw_amount.replace("，", ",")):
+                        issues.append(issue_at(
+                            self, f"{label}金额“{raw_amount}万元”千分位错位，与占比{raw_share}%无法对应。",
+                            page, text, start, end, severity="warn", checklist_item="C-08",
+                            actual_share=raw_share,
+                        ))
+                        continue
+                    expected = amount * Decimal(100) / total
+                    if abs(expected - share) > Decimal("0.1"):
+                        issues.append(issue_at(
+                            self, f"{label}占比与金额不符：{raw_amount}万元 ÷ {total}万元 = "
+                            f"{expected.quantize(Decimal('0.01'))}%，正文写{raw_share}%。",
+                            page, text, start, end, severity="warn", checklist_item="C-08",
+                            expected_share=str(expected.quantize(Decimal("0.01"))), actual_share=raw_share,
+                        ))
+        return issues
 
     def apply(self, doc: Document) -> List[Issue]:
         kind = report_kind(doc)
@@ -98,6 +145,7 @@ class CMM020_ShareSum(Rule):
                     page, text, start, end, severity="warn", checklist_item="C-08",
                     share_total=str(total), share_count=len(shares),
                 ))
+        issues.extend(self._amount_share_issues(doc))
         return issues
 
 
@@ -211,7 +259,7 @@ class CMM021_TableTitleNormative(Rule):
         more = f"等 {len(mismatches)} 张" if len(mismatches) > 4 else ""
         combined = [*extra, issue_at(
             self, f"表名与规范表名不一致：{detail}{more}。",
-            page, text, start, end, severity="info", checklist_item="E-06", occurrences=len(mismatches),
+            page, text, start, end, severity="warn", checklist_item="E-06", occurrences=len(mismatches),
         )]
         if pending: raise RuleDeferred(self.code, detail="；".join(pending), partial_issues=combined)
         return combined
