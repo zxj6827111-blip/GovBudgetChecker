@@ -125,9 +125,9 @@ def _package_version(name: str) -> str | None:
 
 
 def _local_module_path(root: Path, dotted: str) -> str | None:
-    """按 CPython 文件优先、同名包次之的顺序解析本地模块。"""
+    """按 CPython 3.11 解析顺序：同名包 ``__init__.py`` 优先于 ``.py``。"""
     relative = Path(*dotted.split('.'))
-    for candidate in (root / relative.with_suffix('.py'), root / relative / '__init__.py'):
+    for candidate in (root / relative / '__init__.py', root / relative.with_suffix('.py')):
         if candidate.is_file():
             return candidate.relative_to(root).as_posix()
     return None
@@ -152,7 +152,7 @@ def local_import_dependencies(relative_file: str, root: Path | None = None) -> s
 
     只返回项目内真实存在的文件；外部包不返回。相对导入按模块所在包解析；
     目标包和必要父包的 ``__init__.py`` 都会返回，不能靠包形式逃过守卫。
-    同名 ``.py`` 与包目录并存时按 CPython 文件优先解析。
+    同名 ``.py`` 与包目录并存时按 CPython 解析顺序选择包的 ``__init__.py``。
     """
     root = Path(root or ROOT)
     path = root / relative_file

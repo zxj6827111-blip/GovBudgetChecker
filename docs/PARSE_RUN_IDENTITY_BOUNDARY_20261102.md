@@ -108,7 +108,7 @@ PARSER_FINGERPRINT =
 
 - 解析 `ast.Import`、`ast.ImportFrom`，含函数内延迟导入。
 - 支持 `src.*`、`ocr_service.*` 绝对导入，以及按模块所在包解析的 `from .` / `from ..` 相对导入。
-- 按 CPython 规则解析同名文件/包：`foo.py` 优先于 `foo/__init__.py`。
+- 按 CPython 3.11 实际解析顺序：同名包 `foo/__init__.py` 优先于 `foo.py`；测试用 `PathFinder.find_spec` 独立核对。
 - 返回目标包 `__init__.py` 和必要父包链初始化文件；不再整体跳过包。
 - 非解析例外在 `NON_PARSE_LOCAL_IMPORTS` 显式登记并说明边界：`check_receipt.py`（回执 schema 拆分）、`job_orchestrator.py`（`src.services.__getattr__` 惰性属性）、`ai_model_settings.py`（`AppConfig.load()` 内惰性导入）。
 - 回归覆盖：单文件与包形式的绝对/相对/延迟导入、`from package import symbol`、父包变化、同名文件/包优先级。
@@ -199,9 +199,9 @@ WHERE status = 'completed'
 本地结果：
 
 ```text
-tests/remediation/test_parse_run_identity_foundation.py  39 passed
+tests/remediation/test_parse_run_identity_foundation.py  41 passed
 tests/remediation/test_parse_execution_manifest_scope.py  2 passed
-全量 pytest  4963 passed, 195 skipped
+全量 pytest  4965 passed, 195 skipped
 验收方复现脚本（新目录）  ID-01～ID-04 反例全部按预期翻转
 残余反例复跑（新目录）  src/utils 辅助模块进入执行清单；包绝对/相对导入均被守卫拒绝
 ```
@@ -213,7 +213,7 @@ tests/remediation/test_parse_execution_manifest_scope.py  2 passed
 | ID-01 身份失去内容/资格约束 | 新增 `semantic_artifact_hash`，纳入原文、单元格、几何/映射、主体、`reading_assessment` 与资格证据；`parse_run_uid` 绑定该哈希；旧上下文因 UID 改变被拒绝 |
 | ID-02 诊断代码变化仍导致缓存冲突 | artifact 不再写全量 `processing_manifest`；缓存冲突/读回/持久化改用语义身份，审计清单差异不冲突，真实语义变化仍拒绝 |
 | ID-03 完整运行指纹不能证明历史版本 | 冻结 `execution_manifest` 到 v2 分析快照，保存 `execution_fingerprint`；历史读取只返回快照内清单，禁止当前代码重算；主链与入库共用同一份冻结清单。复审后执行清单扩到 `src`（含 `src/utils/narration.py` 等规则辅助）、`api`、`config`、`rules`、`ocr_service`、`gbc_yaml` 及动态规则/依赖配置 |
-| ID-04 依赖与守卫不完整 | 补 `rapidfuzz`、`pdfminer.six`；守卫支持 `src`/`ocr_service` 绝对导入、相对导入与延迟导入。复审后补齐目标包 `__init__.py`、必要父包链、同名文件/包优先级与 `from package import symbol`；非解析惰性导入显式登记 |
+| ID-04 依赖与守卫不完整 | 补 `rapidfuzz`、`pdfminer.six`；守卫支持 `src`/`ocr_service` 绝对导入、相对导入与延迟导入。复审后补齐目标包 `__init__.py`、必要父包链、`from package import symbol`；同名文件/包按 CPython 实际顺序选择包 `__init__.py`，测试用 `PathFinder.find_spec` 独立核对；非解析惰性导入显式登记 |
 
 ## 9. 合并与基线注意
 

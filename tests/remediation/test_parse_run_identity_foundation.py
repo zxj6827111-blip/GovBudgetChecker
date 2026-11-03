@@ -424,7 +424,17 @@ def test_local_import_dependencies_include_target_package_and_parents(tmp_path: 
     assert {"src/__init__.py", "src/services/__init__.py"} <= dependencies
 
 
-def test_local_import_prefers_module_file_over_same_name_package(tmp_path: Path):
+def _actual_import_origin(root: Path, dotted: str) -> str:
+    """用 CPython PathFinder 取得独立预期，不复用候选解析算法。"""
+    from importlib.machinery import PathFinder
+
+    parent = root / Path(*dotted.split('.')[:-1])
+    spec = PathFinder.find_spec(dotted, [str(parent)])
+    assert spec and spec.origin
+    return Path(spec.origin).relative_to(root).as_posix()
+
+
+def test_local_import_prefers_package_over_same_name_module(tmp_path: Path):
     (tmp_path / "src").mkdir()
     (tmp_path / "src/__init__.py").write_text("")
     (tmp_path / "src/foo.py").write_text("VALUE = 'module'\n")
@@ -432,9 +442,77 @@ def test_local_import_prefers_module_file_over_same_name_package(tmp_path: Path)
     package.mkdir()
     (package / "__init__.py").write_text("VALUE = 'package'\n")
     (tmp_path / "src/consumer.py").write_text("from src.foo import VALUE\n")
+
+    assert _actual_import_origin(tmp_path, "src.foo") == "src/foo/__init__.py"
     dependencies = identity.local_import_dependencies("src/consumer.py", tmp_path)
-    assert "src/foo.py" in dependencies
-    assert "src/foo/__init__.py" not in dependencies
+    assert "src/foo/__init__.py" in dependencies
+    assert "src/foo.py" not in dependencies
+
+
+def _shadowed_package_root(tmp_path: Path) -> Path:
+    service = tmp_path / "ocr_service"
+    package = service / "shadowed_parser"
+    package.mkdir(parents=True)
+    (service / "__init__.py").write_text("")
+    (service / "app.py").write_text("from ocr_service.shadowed_parser import transform\n")
+    (service / "shadowed_parser.py").write_text("def transform(value): return value\n")
+    (package / "__init__.py").write_text("def transform(value): return value * 10\n")
+    return tmp_path
+
+
+def test_import_guard_rejects_unregistered_active_package_shadowing_registered_module(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    root = _shadowed_package_root(tmp_path)
+    # 独立预期：实际生效的是包初始化文件，不是同名 .py。
+    assert _actual_import_origin(root, "ocr_service.shadowed_parser") \
+        == "ocr_service/shadowed_parser/__init__.py"
+    dependencies = identity.local_import_dependencies("ocr_service/app.py", root)
+    assert "ocr_service/shadowed_parser/__init__.py" in dependencies
+    assert "ocr_service/shadowed_parser.py" not in dependencies
+
+    monkeypatch.setattr(identity, "ROOT", root)
+    monkeypatch.setattr(identity, "PARSE_IMPLEMENTATION_FILES", (
+        "ocr_service/app.py",
+        "ocr_service/__init__.py",
+        "ocr_service/shadowed_parser.py",  # 已登记但未被实际导入
+    ))
+    monkeypatch.setattr(identity, "PARSE_DEPENDENCIES", ())
+    with pytest.raises(AssertionError):
+        test_parse_manifest_covers_parse_module_import_edges()
+
+
+def test_registered_active_package_change_moves_parse_fingerprint_but_shadow_module_does_not(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    root = _shadowed_package_root(tmp_path)
+    assert _actual_import_origin(root, "ocr_service.shadowed_parser") \
+        == "ocr_service/shadowed_parser/__init__.py"
+    monkeypatch.setattr(identity, "ROOT", root)
+    monkeypatch.setattr(identity, "PARSE_IMPLEMENTATION_FILES", (
+        "ocr_service/app.py",
+        "ocr_service/__init__.py",
+        "ocr_service/shadowed_parser/__init__.py",
+    ))
+    monkeypatch.setattr(identity, "PARSE_DEPENDENCIES", ())
+    identity.parse_code_manifest.cache_clear()
+    before = identity.parse_implementation_manifest()
+
+    # 未被采用的同名 .py 变化不能冒充当前导入版本。
+    (root / "ocr_service/shadowed_parser.py").write_text(
+        "def transform(value): return value * 999\n")
+    identity.parse_code_manifest.cache_clear()
+    shadowed = identity.parse_implementation_manifest()
+    assert shadowed["sha256"] == before["sha256"]
+
+    # 实际生效的包初始化变化必须改变解析实现指纹。
+    (root / "ocr_service/shadowed_parser/__init__.py").write_text(
+        "def transform(value): return value * 99\n")
+    identity.parse_code_manifest.cache_clear()
+    after = identity.parse_implementation_manifest()
+    assert after["sha256"] != before["sha256"]
+    assert after["code"]["ocr_service/shadowed_parser/__init__.py"] \
+        != before["code"]["ocr_service/shadowed_parser/__init__.py"]
 
 
 @pytest.mark.parametrize("source", [
