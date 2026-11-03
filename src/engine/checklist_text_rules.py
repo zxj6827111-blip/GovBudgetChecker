@@ -21,6 +21,7 @@ from .checklist_support import (
     CJK,
     flat_span,
     issue_at,
+    unique_quote,
     iter_pages,
     page_flat,
     page_narrative,
@@ -187,10 +188,64 @@ def _paren_balance_issues(rule: Rule, doc: Document) -> List[Issue]:
     return issues
 
 
+def _primary_hit(hits: List[Tuple[int, str, int, int]], pad: int = 24):
+    """取第一条能生成唯一引文的命中，保证证据守卫可验证。"""
+    for page, text, start, end in hits:
+        left, right = max(0, start - pad), min(len(text), end + pad)
+        if unique_quote(text, left, right):
+            return page, text, left, right
+    return hits[0]
+
+
+def _format_punctuation_issues(rule: Rule, doc: Document) -> List[Issue]:
+    """R22 / R9-半角冒号 / R28：中文语境半角标点与文号括号，按类聚合。"""
+    colon = re.compile(r"(?<=[一-鿿）)]):(?!//)")
+    half_comma = re.compile(r"(?<=[一-鿿])[,;]|[,;](?=[一-鿿])")
+    doc_number = re.compile(r"[一-鿿]{1,12}[\[【（(]\s*(?:19|20)\d{2}\s*[\]】）)]\s*\d+号")
+    issues: List[Issue] = []
+    classes = {
+        "half_colon": (colon, "中文语境使用半角冒号“:”，应使用全角“：”。"),
+        "half_comma": (half_comma, "中文语境使用半角逗号/分号，应使用全角“，”/“；”。"),
+        "doc_number": (doc_number, "文号年份应使用六角括号“〔〕”，当前使用方括号/尖括号。"),
+    }
+    # 定义/释义段（名词解释、第四部分）与目录不参与标点格式检查：
+    # 这些页面的大段释义性文字允许半角符号，且不属于“说明正文”。
+    page_texts = list(doc.page_texts or [])
+    part4_candidates = [index for index, text in enumerate(page_texts, start=1)
+                        if "第四部分" in str(text or "") or "名词解释" in str(text or "")]
+    part4_start = max(part4_candidates) if part4_candidates else None
+    colon_prefix = re.compile(r"(?:主要用于|主要原因|如下|说明|情况|完成预算|原因)$")
+    for key, (pattern, message) in classes.items():
+        hits: List[Tuple[int, str, int, int]] = []
+        for page, text in iter_pages(doc):
+            if key == "half_colon" and part4_start is not None and page >= part4_start:
+                continue
+            if "目录" in str(text or "")[:80]:
+                continue
+            flat, positions = page_flat(doc, page, text)
+            for match in pattern.finditer(flat):
+                if key == "half_colon":
+                    before = flat[max(0, match.start() - 10):match.start()]
+                    if not colon_prefix.search(before):
+                        continue
+                hits.append((page, text, *flat_span(positions, match.start(), match.end())))
+        if not hits:
+            continue
+        page, text, start, end = _primary_hit(hits)
+        sample = text[start:end].strip()
+        issues.append(issue_at(
+            rule, f"{message}全文共 {len(hits)} 处（如“{sample}”）。",
+            page, text, start, end, severity="low", checklist_item="D-04", occurrences=len(hits),
+            table_refs=[{"page": p, "span": t[a:b], "role": "occurrence"} for p, t, a, b in hits],
+        ))
+    return issues
+
+
 def checklist_text_anomaly_issues(rule: Rule, doc: Document) -> List[Issue]:
     """CMM-002 的清单扩展入口（重复与标点）。"""
     kind = report_kind(doc)
-    return _doubled_word_issues(rule, doc, kind) + _punctuation_issues(rule, doc, kind)
+    return (_doubled_word_issues(rule, doc, kind) + _punctuation_issues(rule, doc, kind)
+            + _format_punctuation_issues(rule, doc))
 
 
 # ---------------------------------------------------------------------------
@@ -385,7 +440,55 @@ class CMM010_AmountFormat(Rule):
                 page, text, start, end, severity="info", checklist_item="C-15",
                 occurrences=len(decimals),
             ))
+        issues.extend(self._zero_one_decimal_issues(doc))
+        issues.extend(self._missing_thousands_issues(doc))
         return issues
+
+    def _zero_one_decimal_issues(self, doc: Document) -> List[Issue]:
+        """R9-小数位：0/1 位小数的金额与百分比也属“未保留两位”。"""
+        one_dec_amount = re.compile(r"(?<![\d.,，])(\d[\d,]*)\.(\d)\s*(万元|元)(?![/／每])")
+        int_amount = re.compile(r"(?<![\d.,，])(\d{1,3}(?:,\d{3})+|\d+)\s*万元(?![/／每])")
+        one_dec_pct = re.compile(r"(?<![\d.,，])(\d+)\.(\d)\s*[%％]")
+        int_pct = re.compile(r"(?<![\d.,，])(\d+)\s*[%％]")
+        hits: List[Tuple[int, str, int, int]] = []
+        rate_ctx = re.compile(r"(?:单价|标准|每人|每天|每月|每年|人均|每次|每台|每平方米)\S{0,6}$")
+        for page, text in iter_pages(doc):
+            flat, positions = page_flat(doc, page, text)
+            for pattern in (one_dec_amount, int_amount, one_dec_pct, int_pct):
+                for match in pattern.finditer(flat):
+                    before = flat[max(0, match.start() - 14):match.start()]
+                    if pattern is not one_dec_pct and rate_ctx.search(before):
+                        continue
+                    hits.append((page, text, *flat_span(positions, match.start(), match.end())))
+        if not hits:
+            return []
+        page, text, start, end = _primary_hit(hits)
+        sample = text[start:end].strip()
+        return [issue_at(
+            self, f"金额或百分比小数位不统一：全文共 {len(hits)} 处未保留两位小数（如“{sample}”），"
+            "金额与百分比均应统一保留两位小数。",
+            page, text, start, end, severity="low", checklist_item="C-15", occurrences=len(hits),
+            table_refs=[{"page": p, "span": t[a:b], "role": "occurrence"} for p, t, a, b in hits],
+        )]
+
+    def _missing_thousands_issues(self, doc: Document) -> List[Issue]:
+        """R9-千分位：金额 ≥1000 未按半角逗号分千分位。"""
+        pattern = re.compile(r"(?<![\d.,，])(\d{4,})(?:\.\d+)?\s*万元(?![/／每])")
+        hits: List[Tuple[int, str, int, int]] = []
+        for page, text in iter_pages(doc):
+            flat, positions = page_flat(doc, page, text)
+            for match in pattern.finditer(flat):
+                hits.append((page, text, *flat_span(positions, match.start(), match.end())))
+        if not hits:
+            return []
+        page, text, start, end = _primary_hit(hits)
+        sample = text[start:end].strip()
+        return [issue_at(
+            self, f"金额未按半角逗号分千分位：全文共 {len(hits)} 处（如“{sample}”），"
+            "应写作 1,234.56 万元。",
+            page, text, start, end, severity="low", checklist_item="C-15", occurrences=len(hits),
+            table_refs=[{"page": p, "span": t[a:b], "role": "occurrence"} for p, t, a, b in hits],
+        )]
 
 
 # ---------------------------------------------------------------------------

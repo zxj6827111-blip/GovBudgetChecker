@@ -488,7 +488,7 @@ class CMM014_HeadingNumbering(Rule):
                             issues.append(issue_at(
                                 self, f"同级序号体例不统一：同一列表中既有“{bucket[other]}{other}”又有“{number}{style}”，"
                                 "应统一为一种写法。",
-                                page, text, start, end + 12, severity="info", checklist_item="E-05",
+                                page, text, start, end + 12, severity="low", checklist_item="E-05",
                             ))
                     last[level] = (number, len(stream))
                     break

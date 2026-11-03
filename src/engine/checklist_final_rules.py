@@ -730,7 +730,7 @@ class R33251_FunctionalDetailCompleteness(Rule):
                         _diag_gap(doc, message, **_scope_entry)
                         page, text, s, e = _locate(total.start())
                         issues.append(issue_at(
-                            self, message, page, text, s, e, severity="warn",
+                            self, message, page, text, s, e, severity="info",
                             checklist_item=checklist,
                             included_items=[_operand_evidence(record) for record in included],
                             not_included_items=[_operand_evidence(record) for record in not_included_items],
@@ -798,7 +798,7 @@ class R33251_FunctionalDetailCompleteness(Rule):
                         _diag_gap(doc, message, **_scope_entry)
                         page, text, s, e = _locate(total.start())
                         issues.append(issue_at(
-                            self, message, page, text, s, e, severity="warn",
+                            self, message, page, text, s, e, severity="info",
                             checklist_item=checklist,
                             included_items=[_operand_evidence(record) for record in included],
                             not_included_items=[_operand_evidence(record) for record in not_included_items],
