@@ -200,7 +200,8 @@ WHERE status = 'completed'
 
 ```text
 tests/remediation/test_parse_run_identity_foundation.py  39 passed
-全量 pytest  4961 passed, 195 skipped
+tests/remediation/test_parse_execution_manifest_scope.py  2 passed
+全量 pytest  4963 passed, 195 skipped
 验收方复现脚本（新目录）  ID-01～ID-04 反例全部按预期翻转
 残余反例复跑（新目录）  src/utils 辅助模块进入执行清单；包绝对/相对导入均被守卫拒绝
 ```
