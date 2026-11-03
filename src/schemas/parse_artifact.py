@@ -559,6 +559,8 @@ class ParseArtifact:
     ocr_model_fingerprint: Optional[str] = None
     parse_run_uid: str = field(default_factory=lambda: uuid.uuid4().hex)
     schema_version: str = ""
+    #: 解析来源清单（解析实现/配置/依赖、归属绑定、人工补录证据）。
+    #: 完整运行代码清单随分析版本冻结，不写入可复用的解析快照。
     processing_manifest: Dict[str, Any] = field(default_factory=dict)
     source_tokens: List[SourceToken] = field(default_factory=list)
     cell_candidates: List[CellCandidate] = field(default_factory=list)

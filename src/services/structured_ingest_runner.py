@@ -29,7 +29,11 @@ from src.services.parse_artifact_store import (
 )
 from src.services.pdf_parser import PARSER_FINGERPRINT, PDFParser
 from src.schemas.parse_artifact import ParseArtifact, ParsedTable
-from src.services.input_processing_identity import artifact_content_hash, journal_cache_conflict, processing_config_fingerprint
+from src.services.input_processing_identity import (
+    artifacts_share_semantic_identity,
+    journal_cache_conflict,
+    processing_config_fingerprint,
+)
 from src.services.analysis_fact_snapshot import (verify_persisted_facts, make_snapshot, persist_snapshot)
 from src.services.ps_schema_sync import PSSharedSchemaSync
 from src.services.table_recognizer import TableRecognizer
@@ -217,6 +221,7 @@ async def run_structured_ingest(
     raw_fact_context: Any = None,
     effective_fact_context: Any = None,
     analysis_revision: str = "",
+    execution_manifest: Optional[Dict[str, Any]] = None,
     candidate_only: bool = False,
 ) -> Dict[str, Any]:
     """结构化入库主链路。
@@ -350,7 +355,9 @@ async def run_structured_ingest(
             ingest_stage = "unified_cache_readback"
             cached_artifact = await load_parse_artifact(conn, cached_run_id)
             if parse_artifact is not None:
-                if artifact_content_hash(parse_artifact) != artifact_content_hash(cached_artifact):
+                # 只以语义产物+解析输入判定冲突；诊断代码/审计清单差异不能
+                # 让同一语义产物在两个 v31 运行之间互相拒绝。
+                if not artifacts_share_semantic_identity(parse_artifact, cached_artifact):
                     journal = journal_cache_conflict(job_id, parse_artifact, cached_artifact)
                     raise ValueError("cache_key_conflict: cached artifact differs from supplied current artifact; evidence=" + journal)
                 # 主链已执行规则的产物不能被旧run替换；同内容的新尝试有独立run身份。
@@ -384,8 +391,9 @@ async def run_structured_ingest(
 
         ingest_stage = "unified_artifact_readback"
         stored_artifact = await load_parse_artifact(conn, parse_run_id)
-        if stored_artifact.to_dict() != parse_artifact.to_dict():
-            raise RuntimeError("unified artifact readback differs from complete parser output")
+        if (stored_artifact.parse_run_uid != parse_artifact.parse_run_uid
+                or not artifacts_share_semantic_identity(stored_artifact, parse_artifact)):
+            raise RuntimeError("unified artifact readback differs from parser semantic output")
 
         # 旧表兼容写入：由统一解析对象适配产出，不再重开 PDF（ZC-01 / SYS-01）
         ingest_stage = "legacy_table_write"
@@ -440,7 +448,8 @@ async def run_structured_ingest(
             ingest_stage = "analysis_fact_snapshot"
             snapshot = make_snapshot(job_uuid=job_id, revision_id=analysis_revision,
                 artifact=parse_artifact, raw_context=raw_fact_context,
-                effective_context=effective_fact_context)
+                effective_context=effective_fact_context,
+                execution_manifest=execution_manifest)
             snapshot_summary = await persist_snapshot(conn, snapshot=snapshot, parse_run_id=parse_run_id)
         if storage_tx is not None:
             await storage_tx.commit()

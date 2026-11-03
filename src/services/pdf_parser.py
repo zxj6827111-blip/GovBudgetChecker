@@ -114,13 +114,12 @@ def _stable_fragment_uid(*parts: Any, rows: Optional[Sequence[Sequence[str]]] = 
 from src.services.input_processing_identity import (
     parse_implementation_manifest,
     processing_config_fingerprint,
-    processing_manifest,
     refresh_parse_identity,
     SCHEMA_VERSION,
 )
 
 PARSER_FINGERPRINT = (
-    "pdfplumber-cells-v30-parse-identity-"
+    "pdfplumber-cells-v31-parse-identity-"
     + parse_implementation_manifest()["sha256"][:16]
 )
 
@@ -326,7 +325,8 @@ class PDFParser:
             fragments.extend(current)
 
         merged = self._coalesce_tables(fragments)
-        manifest = processing_manifest()
+        # 解析产物只保存解析来源清单；完整运行清单随分析版本冻结，不能写进
+        # 可复用的解析快照，否则诊断代码变化会让同一语义产物无法命中缓存。
         parse_manifest = parse_implementation_manifest()
         from src.services.native_label_visibility import POLICY_VERSION, recovery_enabled
         visibility_stats = list(getattr(self, "_label_visibility_stats", []) or [])
@@ -337,7 +337,7 @@ class PDFParser:
         artifact = ParseArtifact(
             source_file_hash=file_hash,
             schema_version=SCHEMA_VERSION,
-            processing_manifest=manifest,
+            processing_manifest=parse_manifest,
             parser_name="pdfplumber",
             parser_fingerprint=PARSER_FINGERPRINT,
             config_fingerprint=processing_config_fingerprint(config_fingerprint, parse_manifest),

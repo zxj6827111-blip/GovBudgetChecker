@@ -1,12 +1,14 @@
 """输入处理语义身份；代码、配置变化不能继续命中旧的财政事实。"""
 from __future__ import annotations
 
+import ast
 import hashlib
 import importlib.metadata
 import json
 import os
 import platform
 import re
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from functools import lru_cache
 from typing import Any
@@ -14,8 +16,8 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_VERSION = 'gbc.parse-artifact.v3'
 #: 解析身份方案版本。改变身份定义时必须递增，旧运行不能被新实现冒充。
-PARSE_IDENTITY_VERSION = 'gbc.parse-run-identity.v1'
-PARSE_IMPLEMENTATION_VERSION = 'gbc.parse-implementation.v1'
+PARSE_IDENTITY_VERSION = 'gbc.parse-run-identity.v2'
+PARSE_IMPLEMENTATION_VERSION = 'gbc.parse-implementation.v2'
 _FLAGS = ('GBC_TEMPLATE_SCOPE', 'GBC_BUDGET_TEMPLATE_SCOPE', 'GBC_TEMPLATE_EXPORT_SHA256', 'FACT_DISABLE_CELL_CONF_FLOOR', 'INTAKE_DISABLE_ZERO_GAP_PASS', 'PDF_DISABLE_TOC_GUARD',
           'INTAKE_DISABLE_TOC_HINT_GUARD', 'PDF_DISABLE_TITLE_MARKER',
           'PDF_DISABLE_PLACEHOLDER_ON_TABLE_PAGE', 'GOVBUDGET_PDF_DISABLE_LABEL_VISIBILITY_RECOVERY',
@@ -59,8 +61,19 @@ PARSE_IMPLEMENTATION_FILES = (
 )
 
 #: 解析依赖。版本变化会改变解析产物，不能继续复用旧缓存。
-PARSE_DEPENDENCIES = ('pdfplumber', 'pymupdf', 'paddleocr', 'paddlepaddle',
-                      'Pillow', 'numpy', 'opencv-python')
+#: rapidfuzz 参与表题/表头匹配；pdfminer.six 是 pdfplumber 的底层版面解析。
+PARSE_DEPENDENCIES = ('pdfplumber', 'pdfminer.six', 'pymupdf', 'rapidfuzz',
+                      'paddleocr', 'paddlepaddle', 'Pillow', 'numpy', 'opencv-python')
+
+#: 语义产物身份保留的解析证据清单字段。这些字段记录人工映射/补录与原始解释，
+#: 会改变事实资格；完整代码清单和诊断字段不在此列。
+SEMANTIC_EVIDENCE_MANIFEST_KEYS = (
+    'document_binding',
+    'manual_cells',
+    'manual_rows',
+    'manual_table_identity',
+    'raw_interpretation',
+)
 
 
 def content_hash(value: Any) -> str:
@@ -73,6 +86,58 @@ def _package_version(name: str) -> str | None:
         return importlib.metadata.version(name)
     except importlib.metadata.PackageNotFoundError:
         return None
+
+
+def _local_module_path(root: Path, dotted: str) -> str | None:
+    relative = Path(*dotted.split('.'))
+    for candidate in (root / relative.with_suffix('.py'), root / relative / '__init__.py'):
+        if candidate.is_file():
+            return candidate.relative_to(root).as_posix()
+    return None
+
+
+def local_import_dependencies(relative_file: str, root: Path | None = None) -> set[str]:
+    """解析模块的全部本地导入（含延迟导入、ocr_service 与相对导入）。
+
+    只返回项目内真实存在的文件；外部包不返回。相对导入按模块所在包解析，
+    因此新增未登记的解析模块不能再靠命名空间或相对路径逃过守卫。
+    """
+    root = Path(root or ROOT)
+    path = root / relative_file
+    if not path.is_file():
+        return set()
+    package = Path(relative_file).parent.parts
+    result: set[str] = set()
+
+    def add(dotted: str, *, include_package: bool = True) -> None:
+        resolved = _local_module_path(root, dotted)
+        if resolved and (include_package or not resolved.endswith('/__init__.py')):
+            result.add(resolved)
+
+    tree = ast.parse(path.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                add(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                trim = node.level - 1
+                if trim > len(package):
+                    continue
+                base = list(package[:len(package) - trim] if trim else package)
+            else:
+                base = []
+            if node.module:
+                module = [*base, *node.module.split('.')]
+                add('.'.join(module), include_package=False)
+                for alias in node.names:
+                    if alias.name != '*':
+                        add('.'.join((*module, alias.name)), include_package=False)
+            else:
+                for alias in node.names:
+                    if alias.name != '*':
+                        add('.'.join((*base, alias.name)), include_package=False)
+    return result
 
 
 @lru_cache(maxsize=1)
@@ -131,13 +196,54 @@ def processing_config_fingerprint(value: str, manifest: dict | None = None) -> s
     return basis + ':processing-v2:' + (manifest or parse_implementation_manifest())['sha256']
 
 
-def parse_run_identity(artifact) -> str:
-    """可复用解析身份：原件、解析实现、配置、OCR、schema 与身份方案版本。
+def _canonical_semantic_value(value: Any) -> Any:
+    """数值规范化：0、0.0、Decimal('0.00') 在几何与金额语义上等价。"""
+    if isinstance(value, bool) or value is None or isinstance(value, str):
+        return value
+    if isinstance(value, (int, float, Decimal)):
+        try:
+            number = Decimal(str(value))
+        except (InvalidOperation, ValueError, TypeError):
+            return str(value)
+        if not number.is_finite():
+            return str(value)
+        if number == 0:
+            number = Decimal(0)  # -0.0 与 0.0 在几何/金额语义上等价
+        return {'__number__': format(number.normalize(), 'f')}
+    if isinstance(value, dict):
+        return {str(key): _canonical_semantic_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_canonical_semantic_value(item) for item in value]
+    return value
 
-    诊断/展示字段不参与；它们属于完整运行指纹。身份方案版本参与，
-    保证旧运行不会被新实现按同一输入冒充。
+
+def semantic_artifact_payload(artifact) -> dict:
+    """语义产物投影：原文、单元格、几何/映射、主体身份与资格证据。
+
+    排除诊断/展示字段（``reconstruction_decisions``、``label_visibility`` 汇总）、
+    运行身份字段和完整代码清单。人工补录/列映射/原始解释等证据清单字段保留，
+    因为它们会改变事实资格。
     """
-    basis = {
+    payload = artifact.to_dict() if hasattr(artifact, 'to_dict') else dict(artifact)
+    manifest = payload.pop('processing_manifest', {}) or {}
+    for key in ('parse_run_uid', 'schema_version', 'parser_name', 'parser_fingerprint',
+                'config_fingerprint', 'ocr_model_fingerprint', 'source_file_hash',
+                'reconstruction_decisions', 'label_visibility'):
+        payload.pop(key, None)
+    payload['evidence_manifest'] = {
+        key: manifest[key] for key in SEMANTIC_EVIDENCE_MANIFEST_KEYS if key in manifest
+    }
+    return _canonical_semantic_value(payload)
+
+
+def semantic_artifact_hash(artifact) -> str:
+    """解析产物语义/资格内容指纹；只随内容和证据变化。"""
+    return content_hash(semantic_artifact_payload(artifact))
+
+
+def parse_run_identity_basis(artifact) -> dict:
+    """输入身份 + 语义产物身份；缓存/上下文/回执共同绑定的运行身份。"""
+    return {
         'version': PARSE_IDENTITY_VERSION,
         'source_file_hash': str(getattr(artifact, 'source_file_hash', '') or ''),
         'parser_name': str(getattr(artifact, 'parser_name', '') or ''),
@@ -145,9 +251,16 @@ def parse_run_identity(artifact) -> str:
         'config_fingerprint': str(getattr(artifact, 'config_fingerprint', '') or ''),
         'ocr_model_fingerprint': str(getattr(artifact, 'ocr_model_fingerprint', '') or ''),
         'schema_version': str(getattr(artifact, 'schema_version', '') or ''),
+        'semantic_artifact_hash': semantic_artifact_hash(artifact),
     }
-    return hashlib.sha256(json.dumps(basis, ensure_ascii=False, sort_keys=True,
-                                     separators=(',', ':')).encode()).hexdigest()[:32]
+
+
+def parse_run_identity(artifact) -> str:
+    """可复用解析身份：输入/缓存键 + 语义产物身份。
+
+    诊断/展示字段不参与；内容、映射或资格证据变化必须改变身份。
+    """
+    return content_hash(parse_run_identity_basis(artifact))[:32]
 
 
 def refresh_parse_identity(artifact) -> str:
@@ -156,14 +269,13 @@ def refresh_parse_identity(artifact) -> str:
     return artifact.parse_run_uid
 
 
-def full_run_fingerprint(artifact) -> str:
-    """完整运行指纹：artifact 全字段 + 当前完整实现清单。
-
-    诊断、展示、规则代码或展示字段变化必须改变该指纹；它不能用于复用
-    解析缓存或冒充可复用的解析身份。
-    """
-    return content_hash({'artifact_content_hash': artifact_content_hash(artifact),
-                         'implementation': processing_manifest()})
+def artifacts_share_semantic_identity(left, right) -> bool:
+    """同一原件、解析实现、配置与语义产物；审计字段可以不同。"""
+    return all(
+        str(getattr(left, key, '') or '') == str(getattr(right, key, '') or '')
+        for key in ('source_file_hash', 'parser_name', 'parser_fingerprint',
+                    'config_fingerprint', 'ocr_model_fingerprint')
+    ) and semantic_artifact_hash(left) == semantic_artifact_hash(right)
 
 
 def artifact_content_hash(artifact) -> str:
@@ -200,8 +312,12 @@ def journal_cache_conflict(job_id, supplied, cached):
         raise ValueError('invalid job identifier for cache conflict journal')
     root = Path(os.getenv('UPLOAD_DIR', 'uploads')).resolve() / job_id / 'cache_conflicts'
     root.mkdir(parents=True, exist_ok=True)
-    data = {'schema_version': 'gbc.parse-cache-conflict.v1',
+    data = {'schema_version': 'gbc.parse-cache-conflict.v2',
             'supplied_hash': artifact_content_hash(supplied), 'cached_hash': artifact_content_hash(cached),
+            'supplied_semantic_hash': semantic_artifact_hash(supplied),
+            'cached_semantic_hash': semantic_artifact_hash(cached),
+            'supplied_identity': parse_run_identity_basis(supplied),
+            'cached_identity': parse_run_identity_basis(cached),
             'supplied': supplied.to_dict(), 'cached': cached.to_dict()}
     target = root / (content_hash(data) + '.json.gz')
     if not target.exists():

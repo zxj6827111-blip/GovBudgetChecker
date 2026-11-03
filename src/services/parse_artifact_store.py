@@ -174,7 +174,7 @@ async def persist_parse_artifact(
             ON CONFLICT (parse_run_uid) DO UPDATE
                 SET parse_run_uid = EXCLUDED.parse_run_uid
                 WHERE parse_runs.document_version_id = EXCLUDED.document_version_id
-            RETURNING id, artifact_snapshot_hash
+            RETURNING id, artifact_snapshot_hash, artifact_snapshot
             """,
             artifact.parse_run_uid,
             document_version_id,
@@ -196,7 +196,15 @@ async def persist_parse_artifact(
             raise ValueError("parse_run_uid already belongs to another document version")
         parse_run_id = int(row["id"])
         if row["artifact_snapshot_hash"] != snapshot_hash:
-            raise ValueError("parse_run_uid already binds a different or legacy artifact")
+            # 同一解析身份允许审计/诊断清单差异（它们不进入 parse_run_uid），
+            # 但语义内容、资格证据或解析输入不同仍必须拒绝。
+            from src.services.input_processing_identity import artifacts_share_semantic_identity
+
+            existing = ParseArtifact.from_dict(
+                _decode_jsonb(row["artifact_snapshot"], dict, field="artifact_snapshot")
+            )
+            if not artifacts_share_semantic_identity(existing, artifact):
+                raise ValueError("parse_run_uid already binds a different semantic artifact")
 
         for instance in artifact.logical_tables:
             await conn.execute(

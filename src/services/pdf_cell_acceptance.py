@@ -71,8 +71,8 @@ def evaluate_cells(truth,snapshot,artifact=None):
     if truth.get('source_file_hash')!=snapshot['source_file_hash']:
         raise ValueError('truth original hash differs from snapshot original')
     if artifact is not None:
-        from src.services.input_processing_identity import artifact_content_hash
-        if artifact_content_hash(artifact)!=snapshot['artifact_content_hash']:
+        from src.services.analysis_fact_snapshot import artifact_matches_snapshot
+        if not artifact_matches_snapshot(artifact, snapshot):
             raise ValueError('cell evidence artifact differs from accepted snapshot')
     entries=truth.get('cells')or[]
     if len({c['occurrence_id']for c in entries})!=len(entries):raise ValueError('duplicate truth occurrence ID')

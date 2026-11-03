@@ -1268,7 +1268,11 @@ async def _run_pipeline_inner(job_dir: Path) -> None:
 async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> None:
     """真正的流水线主体。"""
     from copy import deepcopy
-    from src.services.analysis_fact_snapshot import make_snapshot, write_snapshot
+    from src.services.analysis_fact_snapshot import (
+        freeze_execution_manifest,
+        make_snapshot,
+        write_snapshot,
+    )
     from src.services.analysis_result_store import persist_analysis_job_snapshot as commit_result
     async def persist_analysis_job_snapshot(payload, *, include_results=False):
         if not candidate_only:
@@ -1280,6 +1284,9 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             return await stage_candidate_result(payload)
         return True
     analysis_revision = "rev-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:8]
+    # 本次分析实际执行的代码/配置在分析开始时冻结；规则、入库和导出都使用
+    # 同一份清单，历史读取不得按之后加载的代码重算。
+    execution_manifest = freeze_execution_manifest()
     raw_fact_context_obj = None
     # 提前初始化 provider_stats，确保处理中/失败态也能返回该字段
     provider_stats: List[Dict[str, Any]] = []
@@ -1799,7 +1806,8 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
         if parse_artifact_obj is not None:
             immutable_fact_snapshot = make_snapshot(job_uuid=job_dir.name,
                 revision_id=analysis_revision, artifact=parse_artifact_obj,
-                raw_context=raw_fact_context_obj, effective_context=fact_context_obj)
+                raw_context=raw_fact_context_obj, effective_context=fact_context_obj,
+                execution_manifest=execution_manifest)
             write_snapshot(job_dir / "fact_snapshots" / (analysis_revision + ".json"), immutable_fact_snapshot)
         if page_assessment["low_text_page_count"]:
             logger.warning(
@@ -2293,6 +2301,7 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                     raw_fact_context=raw_fact_context_obj,
                     effective_fact_context=fact_context_obj,
                     analysis_revision=analysis_revision,
+                    execution_manifest=execution_manifest,
                     candidate_only=candidate_only,
                 )
             else:
@@ -2314,6 +2323,7 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                 raw_fact_context=raw_fact_context_obj,
                 effective_fact_context=fact_context_obj,
                 analysis_revision=analysis_revision,
+                execution_manifest=execution_manifest,
                 candidate_only=candidate_only,
             )
         runtime.write_structured_ingest_payload(job_dir, structured_ingest_summary)

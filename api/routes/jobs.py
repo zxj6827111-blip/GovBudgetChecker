@@ -511,6 +511,7 @@ async def get_job_fact_snapshot(
     revision_id: Optional[str] = Query(default=None, pattern=r"^[A-Za-z0-9_-]{1,128}$"),
     view: str = Query(default="effective", pattern="^(raw|effective)$"),
     offset: int = Query(default=0, ge=0), limit: int = Query(default=200, ge=1, le=1000),
+    include_execution: bool = Query(default=False),
 ):
     import json
     from src.services.analysis_fact_snapshot import validate_snapshot, canonical_facts
@@ -539,8 +540,13 @@ async def get_job_fact_snapshot(
         if snapshot["job_uuid"] != job_id or snapshot["revision_id"] != revision:
             raise HTTPException(status_code=409, detail="fact snapshot identity mismatch")
         facts = canonical_facts(snapshot[view + "_context"].get("facts", []))
-        return {k: snapshot[k] for k in ("schema_version", "job_uuid", "revision_id", "snapshot_hash",
-                "source_file_hash", "parse_run_uid", "raw_facts_hash", "effective_facts_hash")} | {
+        identity_fields = ("schema_version", "job_uuid", "revision_id", "snapshot_hash",
+                           "source_file_hash", "parse_run_uid", "raw_facts_hash", "effective_facts_hash",
+                           "semantic_artifact_hash", "execution_fingerprint")
+        provenance_fields = (("execution_manifest",) if include_execution else ()) + (
+            "execution_fingerprint", "semantic_artifact_hash")
+        return {k: snapshot[k] for k in identity_fields if k in snapshot} | {
+                "execution_provenance": {k: snapshot[k] for k in provenance_fields if k in snapshot},
                 "view": view, "total": len(facts), "offset": offset, "limit": limit,
                 "facts": facts[offset:offset + limit]}
     try:
