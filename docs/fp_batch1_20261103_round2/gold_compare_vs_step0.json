@@ -1,0 +1,3966 @@
+{
+ "old_run": "/Volumes/workSSD/software development/GovBudgetChecker/outputs/fp_batch1_20261103/step0/run1",
+ "new_run": "/Volumes/workSSD/software development/GovBudgetChecker/outputs/fp_batch1_20261103/round2/gold/run1",
+ "items_old": 545,
+ "items_new": 513,
+ "tiers_old": {
+  "F": 155,
+  "R": 166,
+  "N": 61,
+  "P": 73,
+  "O": 90
+ },
+ "tiers_new": {
+  "F": 130,
+  "R": 158,
+  "N": 62,
+  "P": 73,
+  "O": 90
+ },
+ "pairs": 512,
+ "changed": [
+  {
+   "old_id": "GS-2022-01|P|V33-246-10",
+   "new_id": "GS-2022-01|P|V33-246-9",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2022-02|F|V33-234-8",
+   "new_id": "GS-2022-02|F|V33-234-7",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2022-02|F|V33-251-9",
+   "new_id": "GS-2022-02|F|V33-251-8",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2022-02|F|V33-110-10",
+   "new_id": "GS-2022-02|F|V33-110-9",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2022-02|F|V33-222-11",
+   "new_id": "GS-2022-02|F|V33-222-10",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2022-02|F|V33-NARRATIVE-INDICATOR-REPEAT-12",
+   "new_id": "GS-2022-02|F|V33-NARRATIVE-INDICATOR-REPEAT-11",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2022-02|F|V33-TREND-COMPLETION-RATE-13",
+   "new_id": "GS-2022-02|F|V33-TREND-COMPLETION-RATE-12",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2022-02|F|V33-224-15",
+   "new_id": "GS-2022-02|F|V33-224-14",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2022-02|F|CMM-017-16",
+   "new_id": "GS-2022-02|F|CMM-017-15",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2022-02|P|V33-SG-COMPLETION-14",
+   "new_id": "GS-2022-02|P|V33-SG-COMPLETION-13",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2022-03|F|V33-251-21",
+   "new_id": "GS-2022-03|F|V33-251-20",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2022-03|F|V33-227-22",
+   "new_id": "GS-2022-03|F|V33-227-21",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2022-04|F|V33-251-2",
+   "new_id": "GS-2022-04|F|V33-251-1",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2022-04|F|CMM-011-3",
+   "new_id": "GS-2022-04|F|CMM-011-2",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2022-04|F|CMM-002-4",
+   "new_id": "GS-2022-04|F|CMM-002-3",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2022-04|P|V33-246-6",
+   "new_id": "GS-2022-04|P|V33-246-4",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2022-04|P|V33-227-7",
+   "new_id": "GS-2022-04|P|V33-227-6",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2022-05|R|V33-NARRATIVE-INDICATOR-REPEAT-13",
+   "new_id": "GS-2022-05|R|V33-NARRATIVE-INDICATOR-REPEAT-12",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2022-05|P|V33-SG-COMPLETION-14",
+   "new_id": "GS-2022-05|P|V33-SG-COMPLETION-13",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2022-06|F|V33-249-9",
+   "new_id": "GS-2022-06|F|V33-249-8",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2022-06|F|V33-234-10",
+   "new_id": "GS-2022-06|F|V33-234-9",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2022-06|P|V33-234-11",
+   "new_id": "GS-2022-06|P|V33-234-10",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2022-06|P|V33-234-12",
+   "new_id": "GS-2022-06|P|V33-234-11",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2022-06|P|V33-245-13",
+   "new_id": "GS-2022-06|P|V33-245-12",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2022-06|P|V33-246-15",
+   "new_id": "GS-2022-06|P|V33-246-13",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2022-07|P|V33-246-4",
+   "new_id": "GS-2022-07|P|V33-246-1",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2022-08|F|V33-251-13",
+   "new_id": "GS-2022-08|F|V33-251-12",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2022-08|F|V33-110-14",
+   "new_id": "GS-2022-08|F|V33-110-13",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2022-08|F|V33-110-15",
+   "new_id": "GS-2022-08|F|V33-110-14",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2022-08|F|V33-222-16",
+   "new_id": "GS-2022-08|F|V33-222-15",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-01|F|CMM-010-14",
+   "new_id": "GS-2023-01|F|CMM-010-13",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-01|F|V33-251-15",
+   "new_id": "GS-2023-01|F|V33-251-14",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-01|F|V33-227-16",
+   "new_id": "GS-2023-01|F|V33-227-15",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-01|F|CMM-010-17",
+   "new_id": "GS-2023-01|F|CMM-010-16",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-01|F|V33-TREND-COMPLETION-RATE-18",
+   "new_id": "GS-2023-01|F|V33-TREND-COMPLETION-RATE-17",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-01|R|V33-005-2",
+   "new_id": "GS-2023-01|R|V33-005-1",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-01|R|V33-120-3",
+   "new_id": "GS-2023-01|R|V33-120-2",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-01|R|V33-240-4",
+   "new_id": "GS-2023-01|R|V33-240-3",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-01|R|V33-005-8",
+   "new_id": "GS-2023-01|R|V33-005-7",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-01|R|V33-005-9",
+   "new_id": "GS-2023-01|R|V33-005-8",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-01|R|V33-120-10",
+   "new_id": "GS-2023-01|R|V33-120-9",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-01|R|V33-120-11",
+   "new_id": "GS-2023-01|R|V33-120-10",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-01|R|V33-241-12",
+   "new_id": "GS-2023-01|R|V33-241-11",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-01|R|V33-241-13",
+   "new_id": "GS-2023-01|R|V33-241-12",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-01|P|CMM-004-5",
+   "new_id": "GS-2023-01|P|CMM-004-4",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-01|P|CMM-004-6",
+   "new_id": "GS-2023-01|P|CMM-004-5",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-01|P|CMM-004-7",
+   "new_id": "GS-2023-01|P|CMM-004-6",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-01|P|V33-227-22",
+   "new_id": "GS-2023-01|P|V33-227-20",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-02|F|CMM-014-8",
+   "new_id": "GS-2023-02|F|CMM-014-6",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-02|R|V33-005-4",
+   "new_id": "GS-2023-02|R|V33-005-2",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-02|R|V33-120-5",
+   "new_id": "GS-2023-02|R|V33-120-3",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-02|R|V33-240-6",
+   "new_id": "GS-2023-02|R|V33-240-4",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-02|R|V33-243-7",
+   "new_id": "GS-2023-02|R|V33-243-5",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-03|R|V33-115-2",
+   "new_id": "GS-2023-03|R|V33-115-1",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-03|R|V33-117-4",
+   "new_id": "GS-2023-03|R|V33-117-3",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-03|R|V33-243-5",
+   "new_id": "GS-2023-03|R|V33-243-4",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-03|P|CMM-004-3",
+   "new_id": "GS-2023-03|P|CMM-004-2",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-04|P|V33-246-9",
+   "new_id": "GS-2023-04|P|V33-246-8",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-08|F|V33-250-7",
+   "new_id": "GS-2023-08|F|V33-250-6",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-01|F|V33-251-9",
+   "new_id": "GS-2024-01|F|V33-251-8",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-01|F|V33-110-10",
+   "new_id": "GS-2024-01|F|V33-110-9",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-01|F|CMM-011-11",
+   "new_id": "GS-2024-01|F|CMM-011-10",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-01|F|CMM-018-12",
+   "new_id": "GS-2024-01|F|CMM-018-11",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-01|R|V33-240-2",
+   "new_id": "GS-2024-01|R|V33-240-1",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-01|R|V33-005-6",
+   "new_id": "GS-2024-01|R|V33-005-5",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-01|R|V33-117-7",
+   "new_id": "GS-2024-01|R|V33-117-6",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-01|R|V33-244-8",
+   "new_id": "GS-2024-01|R|V33-244-7",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-01|P|CMM-004-3",
+   "new_id": "GS-2024-01|P|CMM-004-2",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-01|P|CMM-004-4",
+   "new_id": "GS-2024-01|P|CMM-004-3",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-01|P|CMM-004-5",
+   "new_id": "GS-2024-01|P|CMM-004-4",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-02|F|CMM-013-2",
+   "new_id": "GS-2024-02|F|CMM-013-1",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-02|F|V33-202-10",
+   "new_id": "GS-2024-02|F|V33-202-9",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-02|F|CMM-017-11",
+   "new_id": "GS-2024-02|F|CMM-017-10",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-02|F|CMM-017-13",
+   "new_id": "GS-2024-02|F|CMM-017-12",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-02|R|V33-240-3",
+   "new_id": "GS-2024-02|R|V33-240-2",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-02|R|V33-240-4",
+   "new_id": "GS-2024-02|R|V33-240-3",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-02|R|CMM-002-12",
+   "new_id": "GS-2024-02|R|CMM-002-11",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-02|P|CMM-004-5",
+   "new_id": "GS-2024-02|P|CMM-004-4",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-02|P|CMM-004-6",
+   "new_id": "GS-2024-02|P|CMM-004-5",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-02|P|CMM-004-7",
+   "new_id": "GS-2024-02|P|CMM-004-6",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-02|P|CMM-004-8",
+   "new_id": "GS-2024-02|P|CMM-004-7",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-02|P|CMM-004-9",
+   "new_id": "GS-2024-02|P|CMM-004-8",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-03|F|V33-227-9",
+   "new_id": "GS-2024-03|F|V33-227-8",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-03|F|V33-SG-COMPLETION-10",
+   "new_id": "GS-2024-03|F|V33-SG-COMPLETION-9",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-03|F|CMM-017-11",
+   "new_id": "GS-2024-03|F|CMM-017-10",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-03|F|CMM-008-12",
+   "new_id": "GS-2024-03|F|CMM-008-11",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-03|R|V33-005-2",
+   "new_id": "GS-2024-03|R|V33-005-1",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-03|R|V33-120-3",
+   "new_id": "GS-2024-03|R|V33-120-2",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-03|R|V33-005-5",
+   "new_id": "GS-2024-03|R|V33-005-4",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-03|R|V33-120-6",
+   "new_id": "GS-2024-03|R|V33-120-5",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-03|R|V33-117-7",
+   "new_id": "GS-2024-03|R|V33-117-6",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-03|R|V33-243-8",
+   "new_id": "GS-2024-03|R|V33-243-7",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-03|P|CMM-004-4",
+   "new_id": "GS-2024-03|P|CMM-004-3",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-04|F|V33-222-11",
+   "new_id": "GS-2024-04|F|V33-222-10",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-04|F|V33-222-12",
+   "new_id": "GS-2024-04|F|V33-222-11",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-04|F|CMM-007-13",
+   "new_id": "GS-2024-04|F|CMM-007-12",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-04|F|CMM-007-14",
+   "new_id": "GS-2024-04|F|CMM-007-13",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-04|F|V33-234-15",
+   "new_id": "GS-2024-04|F|V33-234-14",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|F|CMM-010-18",
+   "new_id": "GS-2024-06|F|CMM-010-17",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|F|V33-251-19",
+   "new_id": "GS-2024-06|F|V33-251-18",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|F|V33-251-20",
+   "new_id": "GS-2024-06|F|V33-251-19",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|F|V33-222-21",
+   "new_id": "GS-2024-06|F|V33-222-20",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|F|V33-222-22",
+   "new_id": "GS-2024-06|F|V33-222-21",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|F|V33-222-23",
+   "new_id": "GS-2024-06|F|V33-222-22",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|F|V33-222-24",
+   "new_id": "GS-2024-06|F|V33-222-23",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|F|V33-222-25",
+   "new_id": "GS-2024-06|F|V33-222-24",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|F|V33-222-26",
+   "new_id": "GS-2024-06|F|V33-222-25",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|F|V33-222-27",
+   "new_id": "GS-2024-06|F|V33-222-26",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|F|V33-222-28",
+   "new_id": "GS-2024-06|F|V33-222-27",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|F|V33-222-29",
+   "new_id": "GS-2024-06|F|V33-222-28",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|F|V33-222-30",
+   "new_id": "GS-2024-06|F|V33-222-29",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|F|V33-222-31",
+   "new_id": "GS-2024-06|F|V33-222-30",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|F|V33-222-32",
+   "new_id": "GS-2024-06|F|V33-222-31",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|F|V33-TREND-COMPLETION-RATE-33",
+   "new_id": "GS-2024-06|F|V33-TREND-COMPLETION-RATE-32",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|F|CMM-018-34",
+   "new_id": "GS-2024-06|F|CMM-018-33",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|R|V33-240-4",
+   "new_id": "GS-2024-06|R|V33-240-3",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|R|V33-240-5",
+   "new_id": "GS-2024-06|R|V33-240-4",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|R|V33-005-11",
+   "new_id": "GS-2024-06|R|V33-005-10",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|R|V33-005-12",
+   "new_id": "GS-2024-06|R|V33-005-11",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|R|V33-120-14",
+   "new_id": "GS-2024-06|R|V33-120-13",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|R|V33-120-15",
+   "new_id": "GS-2024-06|R|V33-120-14",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|R|V33-241-16",
+   "new_id": "GS-2024-06|R|V33-241-15",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|R|V33-243-17",
+   "new_id": "GS-2024-06|R|V33-243-16",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|P|CMM-004-6",
+   "new_id": "GS-2024-06|P|CMM-004-5",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|P|CMM-004-7",
+   "new_id": "GS-2024-06|P|CMM-004-6",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|P|CMM-004-8",
+   "new_id": "GS-2024-06|P|CMM-004-7",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|P|CMM-004-9",
+   "new_id": "GS-2024-06|P|CMM-004-8",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|P|CMM-004-10",
+   "new_id": "GS-2024-06|P|CMM-004-9",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|P|V33-104-13",
+   "new_id": "GS-2024-06|P|V33-104-12",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-06|P|V33-220-35",
+   "new_id": "GS-2024-06|P|V33-220-34",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-08|R|CMM-002-4",
+   "new_id": "GS-2024-08|R|CMM-002-3",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2024-08|R|CMM-010-5",
+   "new_id": "GS-2024-08|R|CMM-010-4",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-01|F|CMM-008-11",
+   "new_id": "GS-2025-01|F|CMM-008-9",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-01|F|V33-113-12",
+   "new_id": "GS-2025-01|F|V33-113-10",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-01|F|CMM-002-13",
+   "new_id": "GS-2025-01|F|CMM-002-11",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-01|F|CMM-018-14",
+   "new_id": "GS-2025-01|F|CMM-018-12",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-02|F|V33-227-5",
+   "new_id": "GS-2025-02|F|V33-227-4",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-02|F|V33-227-6",
+   "new_id": "GS-2025-02|F|V33-227-5",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-02|F|V33-227-7",
+   "new_id": "GS-2025-02|F|V33-227-6",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-02|F|V33-227-8",
+   "new_id": "GS-2025-02|F|V33-227-7",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-02|R|V33-243-3",
+   "new_id": "GS-2025-02|R|V33-243-2",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-02|R|V33-243-4",
+   "new_id": "GS-2025-02|R|V33-243-3",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-02|P|CMM-004-2",
+   "new_id": "GS-2025-02|P|CMM-004-1",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-03|F|V33-SG-COMPLETION-9",
+   "new_id": "GS-2025-03|F|V33-SG-COMPLETION-8",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-03|R|V33-115-2",
+   "new_id": "GS-2025-03|R|V33-115-1",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-03|R|V33-005-3",
+   "new_id": "GS-2025-03|R|V33-005-2",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-03|R|V33-120-4",
+   "new_id": "GS-2025-03|R|V33-120-3",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-03|R|V33-240-5",
+   "new_id": "GS-2025-03|R|V33-240-4",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-03|R|V33-005-6",
+   "new_id": "GS-2025-03|R|V33-005-5",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-03|R|V33-005-7",
+   "new_id": "GS-2025-03|R|V33-005-6",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-03|R|V33-244-8",
+   "new_id": "GS-2025-03|R|V33-244-7",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-06|F|V33-234-10",
+   "new_id": "GS-2025-06|F|V33-234-9",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-06|F|V33-234-11",
+   "new_id": "GS-2025-06|F|V33-234-10",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-06|F|V33-234-12",
+   "new_id": "GS-2025-06|F|V33-234-11",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-06|F|V33-224-14",
+   "new_id": "GS-2025-06|F|V33-224-12",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-06|F|V33-224-15",
+   "new_id": "GS-2025-06|F|V33-224-13",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-06|F|V33-TREND-COMPLETION-RATE-16",
+   "new_id": "GS-2025-06|F|V33-TREND-COMPLETION-RATE-14",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-06|R|V33-005-3",
+   "new_id": "GS-2025-06|R|V33-005-2",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-06|R|V33-120-4",
+   "new_id": "GS-2025-06|R|V33-120-3",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-06|R|V33-240-5",
+   "new_id": "GS-2025-06|R|V33-240-4",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-06|R|V33-005-7",
+   "new_id": "GS-2025-06|R|V33-005-6",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-06|R|V33-243-8",
+   "new_id": "GS-2025-06|R|V33-243-7",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-06|R|V33-244-9",
+   "new_id": "GS-2025-06|R|V33-244-8",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-06|P|CMM-004-6",
+   "new_id": "GS-2025-06|P|CMM-004-5",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-09|F|CMM-013-2",
+   "new_id": "GS-2025-09|F|CMM-013-1",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-09|F|V33-001-3",
+   "new_id": "GS-2025-09|F|V33-001-2",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-09|F|CMM-012-4",
+   "new_id": "GS-2025-09|F|CMM-012-3",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-09|F|V33-105-7",
+   "new_id": "GS-2025-09|F|V33-105-6",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-09|F|V33-251-8",
+   "new_id": "GS-2025-09|F|V33-251-7",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-09|F|V33-251-9",
+   "new_id": "GS-2025-09|F|V33-251-8",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-09|F|V33-222-10",
+   "new_id": "GS-2025-09|F|V33-222-9",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-09|F|V33-227-11",
+   "new_id": "GS-2025-09|F|V33-227-10",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-09|R|V33-117-5",
+   "new_id": "GS-2025-09|R|V33-117-4",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2025-09|R|V33-243-6",
+   "new_id": "GS-2025-09|R|V33-243-5",
+   "how": "exact",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-01|P|V33-246-20",
+   "new_id": "GS-2023-01|P|V33-246-18",
+   "how": "similar:1.00",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  },
+  {
+   "old_id": "GS-2023-01|P|V33-246-21",
+   "new_id": "GS-2023-01|P|V33-246-19",
+   "how": "similar:1.00",
+   "fields": [
+    "raw_id"
+   ],
+   "substantive": [],
+   "old": {},
+   "new": {}
+  }
+ ],
+ "substantive_changed": [],
+ "old_only": [
+  {
+   "sample_id": "GS-2022-01",
+   "tier": "R",
+   "rule": "CMM-021",
+   "raw_id": "CMM-021-9",
+   "pages": [
+    14
+   ],
+   "message": "九、表名与规范表名不一致：“一般公共预算财政拨款三公经费支出决算表”应为“财政拨款三公经费支出决算表”。",
+   "in_targets": true,
+   "target_class": "D2-2022三公表名",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2022-02",
+   "tier": "R",
+   "rule": "CMM-021",
+   "raw_id": "CMM-021-7",
+   "pages": [
+    17
+   ],
+   "message": "七、表名与规范表名不一致：“一般公共预算财政拨款三公经费支出决算表”应为“财政拨款三公经费支出决算表”。",
+   "in_targets": true,
+   "target_class": "D2-2022三公表名",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2022-03",
+   "tier": "R",
+   "rule": "CMM-021",
+   "raw_id": "CMM-021-20",
+   "pages": [
+    23
+   ],
+   "message": "二十、表名与规范表名不一致：“一般公共预算财政拨款三公经费支出决算表”应为“财政拨款三公经费支出决算表”。",
+   "in_targets": true,
+   "target_class": "D2-2022三公表名",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2022-04",
+   "tier": "R",
+   "rule": "CMM-021",
+   "raw_id": "CMM-021-1",
+   "pages": [
+    16
+   ],
+   "message": "一、表名与规范表名不一致：“一般公共预算财政拨款三公经费支出决算表”应为“财政拨款三公经费支出决算表”。",
+   "in_targets": true,
+   "target_class": "D2-2022三公表名",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2022-05",
+   "tier": "R",
+   "rule": "CMM-021",
+   "raw_id": "CMM-021-12",
+   "pages": [
+    12
+   ],
+   "message": "十二、表名与规范表名不一致：“一般公共预算财政拨款三公经费支出决算表”应为“财政拨款三公经费支出决算表”。",
+   "in_targets": true,
+   "target_class": "D2-2022三公表名",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2022-06",
+   "tier": "F",
+   "rule": "CMM-007",
+   "raw_id": "CMM-007-14",
+   "pages": [
+    21
+   ],
+   "message": "十四、同比零基数百分比无定义（因公出国(境)费）：本期 0 万元，减少 0 万元，复算基期为 0，却声明「下降0%」——分母为 0，同比百分比不存在有限定义。本期金额、增减额与增长百分比三者不能同时成立，需人工复核底稿。",
+   "in_targets": true,
+   "target_class": "R26-零比零",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2022-06",
+   "tier": "R",
+   "rule": "CMM-021",
+   "raw_id": "CMM-021-8",
+   "pages": [
+    15
+   ],
+   "message": "八、表名与规范表名不一致：“一般公共预算财政拨款三公经费支出决算表”应为“财政拨款三公经费支出决算表”。",
+   "in_targets": true,
+   "target_class": "D2-2022三公表名",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2022-07",
+   "tier": "F",
+   "rule": "V33-TREND-COMPLETION-RATE",
+   "raw_id": "V33-TREND-COMPLETION-RATE-2",
+   "pages": [
+    12,
+    18
+   ],
+   "message": "二、因公出国（境）费年初预算完成率不成立：说明0.00%，表内分母为0，有限完成率没有数学定义。",
+   "in_targets": true,
+   "target_class": "R26-零比零",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2022-07",
+   "tier": "F",
+   "rule": "V33-TREND-COMPLETION-RATE",
+   "raw_id": "V33-TREND-COMPLETION-RATE-3",
+   "pages": [
+    12,
+    18
+   ],
+   "message": "三、公务接待费年初预算完成率不成立：说明0.00%，表内分母为0，有限完成率没有数学定义。",
+   "in_targets": true,
+   "target_class": "R26-零比零",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2022-07",
+   "tier": "R",
+   "rule": "CMM-021",
+   "raw_id": "CMM-021-1",
+   "pages": [
+    12
+   ],
+   "message": "一、表名与规范表名不一致：“一般公共预算财政拨款三公经费支出决算表”应为“财政拨款三公经费支出决算表”。",
+   "in_targets": true,
+   "target_class": "D2-2022三公表名",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2022-08",
+   "tier": "R",
+   "rule": "CMM-021",
+   "raw_id": "CMM-021-12",
+   "pages": [
+    17
+   ],
+   "message": "十二、表名与规范表名不一致：“一般公共预算财政拨款三公经费支出决算表”应为“财政拨款三公经费支出决算表”。",
+   "in_targets": true,
+   "target_class": "D2-2022三公表名",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2023-01",
+   "tier": "F",
+   "rule": "CMM-013",
+   "raw_id": "CMM-013-1",
+   "pages": [
+    2,
+    10
+   ],
+   "message": "一、正文标题缺少“第二部分”字样：目录为“第二部分 上海市住房和城乡建设管理委员会 2023 年度部门决算表”，正文第10页标题未写“第二部分”。",
+   "in_targets": true,
+   "target_class": "D2-正文第二部分",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2023-01",
+   "tier": "F",
+   "rule": "CMM-007",
+   "raw_id": "CMM-007-19",
+   "pages": [
+    36
+   ],
+   "message": "十九、增减额与同比百分比复算不一致（因公出国(境)费）：本期 197.05 万元、增加 183.56 万元，复算基期 13.49 万元，应为增长1360.71%，声明 1,359.68%，相差 1.03 个百分点。本期金额、增减额与增长百分比三者不能同时成立，需人工复核底稿。",
+   "in_targets": true,
+   "target_class": "R16-舍入区间",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2023-02",
+   "tier": "F",
+   "rule": "CMM-013",
+   "raw_id": "CMM-013-2",
+   "pages": [
+    2,
+    5
+   ],
+   "message": "二、正文标题缺少“第二部分”字样：目录为“第二部分 上海市文化和旅游局执法总队 2023 年度部门决算表”，正文第5页标题未写“第二部分”。",
+   "in_targets": true,
+   "target_class": "D2-正文第二部分",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2023-02",
+   "tier": "F",
+   "rule": "CMM-013",
+   "raw_id": "CMM-013-3",
+   "pages": [
+    2,
+    18
+   ],
+   "message": "三、目录与正文标题不一致：目录为“第三部分上海市文化和旅游局执法总队 2023 年度部门决算情况说明”，正文第18页为“第三部分上海市文化和旅游局执法总队2023年度部门决算说明”。",
+   "in_targets": true,
+   "target_class": "R3-标题措辞",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2023-03",
+   "tier": "F",
+   "rule": "CMM-013",
+   "raw_id": "CMM-013-1",
+   "pages": [
+    2,
+    7
+   ],
+   "message": "一、正文标题缺少“第二部分”字样：目录为“第二部分 上海市知识产权局 2023 年度部门决算表”，正文第7页标题未写“第二部分”。",
+   "in_targets": true,
+   "target_class": "D2-正文第二部分",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2023-03",
+   "tier": "F",
+   "rule": "CMM-007",
+   "raw_id": "CMM-007-6",
+   "pages": [
+    27
+   ],
+   "message": "六、增减额与同比百分比复算不一致（公务接待费）：本期 7.42 万元、增加 6.20 万元，复算基期 1.22 万元，应为增长508.20%，声明 508.09%，相差 0.11 个百分点。本期金额、增减额与增长百分比三者不能同时成立，需人工复核底稿。",
+   "in_targets": true,
+   "target_class": "R16-舍入区间",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2023-04",
+   "tier": "F",
+   "rule": "V33-TREND-COMPLETION-RATE",
+   "raw_id": "V33-TREND-COMPLETION-RATE-8",
+   "pages": [
+    16,
+    22
+   ],
+   "message": "八、因公出国（境）费年初预算完成率不成立：说明0.00%，表内分母为0，有限完成率没有数学定义。",
+   "in_targets": true,
+   "target_class": "R26-零比零",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2023-08",
+   "tier": "F",
+   "rule": "V33-TREND-COMPLETION-RATE",
+   "raw_id": "V33-TREND-COMPLETION-RATE-6",
+   "pages": [
+    13,
+    19
+   ],
+   "message": "六、因公出国（境）费年初预算完成率不成立：说明0.00%，表内分母为0，有限完成率没有数学定义。",
+   "in_targets": true,
+   "target_class": "R26-零比零",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2024-01",
+   "tier": "F",
+   "rule": "CMM-013",
+   "raw_id": "CMM-013-1",
+   "pages": [
+    2,
+    8
+   ],
+   "message": "一、正文标题缺少“第二部分”字样：目录为“第二部分 上海市人力资源和社会保障局 2024 年度部门决算表”，正文第8页标题未写“第二部分”。",
+   "in_targets": true,
+   "target_class": "D2-正文第二部分",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2024-02",
+   "tier": "F",
+   "rule": "CMM-013",
+   "raw_id": "CMM-013-1",
+   "pages": [
+    2,
+    9
+   ],
+   "message": "一、正文标题缺少“第二部分”字样：目录为“第二部分 上海市生态环境局 2024 年度部门决算表”，正文第9页标题未写“第二部分”。",
+   "in_targets": true,
+   "target_class": "D2-正文第二部分",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2024-03",
+   "tier": "F",
+   "rule": "CMM-013",
+   "raw_id": "CMM-013-1",
+   "pages": [
+    2,
+    7
+   ],
+   "message": "一、正文标题缺少“第二部分”字样：目录为“第二部分 上海市数据局 2024 年度部门决算表”，正文第7页标题未写“第二部分”。",
+   "in_targets": true,
+   "target_class": "D2-正文第二部分",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2024-04",
+   "tier": "F",
+   "rule": "V33-234",
+   "raw_id": "V33-234-10",
+   "pages": [
+    20
+   ],
+   "message": "十、差异原因仅重述结果：年初预算39万元、决算3.82万元；“根据年度实际情况,经费支出有所减少”未说明产生差异的具体事项，建议补充说明。",
+   "in_targets": true,
+   "target_class": "R30-泛泛原因",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2024-06",
+   "tier": "F",
+   "rule": "CMM-013",
+   "raw_id": "CMM-013-3",
+   "pages": [
+    2,
+    8
+   ],
+   "message": "三、目录与正文标题不一致：目录为“第二部分上海市交通委员会 2024 年度决算表”，正文第8页为“第二部分上海市交通委员会2024年度部门决算表”。",
+   "in_targets": true,
+   "target_class": "R3-标题措辞",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2024-08",
+   "tier": "F",
+   "rule": "CMM-007",
+   "raw_id": "CMM-007-3",
+   "pages": [
+    22
+   ],
+   "message": "三、增减额与同比百分比复算不一致（公务接待费）：本期 1.17 万元、减少 0.31 万元，复算基期 1.48 万元，应为下降20.95%，声明 20.78%，相差 0.17 个百分点。本期金额、增减额与增长百分比三者不能同时成立，需人工复核底稿。",
+   "in_targets": true,
+   "target_class": "R16-舍入区间",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2025-01",
+   "tier": "F",
+   "rule": "V33-234",
+   "raw_id": "V33-234-9",
+   "pages": [
+    19
+   ],
+   "message": "九、完成率偏离100%但未说明原因（社会保障和就业支出（类）行政事业单位养老支出（款））：年初预算为1154.88万元，支出决算为1128.16万元，完成率为97.69%，建议补充差异原因说明",
+   "in_targets": true,
+   "target_class": "R30-泛泛原因",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2025-01",
+   "tier": "F",
+   "rule": "V33-TREND-COMPLETION-RATE",
+   "raw_id": "V33-TREND-COMPLETION-RATE-10",
+   "pages": [
+    14,
+    21
+   ],
+   "message": "十、因公出国（境）费年初预算完成率不成立：说明0.00%，表内分母为0，有限完成率没有数学定义。",
+   "in_targets": true,
+   "target_class": "R26-零比零",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2025-02",
+   "tier": "F",
+   "rule": "CMM-013",
+   "raw_id": "CMM-013-1",
+   "pages": [
+    2,
+    7
+   ],
+   "message": "一、正文标题缺少“第二部分”字样：目录为“第二部分 上海市审计局 2025 年度部门决算表”，正文第7页标题未写“第二部分”。",
+   "in_targets": true,
+   "target_class": "D2-正文第二部分",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2025-03",
+   "tier": "F",
+   "rule": "CMM-013",
+   "raw_id": "CMM-013-1",
+   "pages": [
+    2,
+    8
+   ],
+   "message": "一、正文标题缺少“第二部分”字样：目录为“第二部分 上海市财政局 2025 年度部门决算表”，正文第8页标题未写“第二部分”。",
+   "in_targets": true,
+   "target_class": "D2-正文第二部分",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2025-06",
+   "tier": "F",
+   "rule": "CMM-013",
+   "raw_id": "CMM-013-2",
+   "pages": [
+    2,
+    5
+   ],
+   "message": "二、正文标题缺少“第二部分”字样：目录为“第二部分 上海市信访办公室 2025 年度部门决算表”，正文第5页标题未写“第二部分”。",
+   "in_targets": true,
+   "target_class": "D2-正文第二部分",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2025-06",
+   "tier": "F",
+   "rule": "V33-234",
+   "raw_id": "V33-234-13",
+   "pages": [
+    19
+   ],
+   "message": "十三、差异原因仅重述结果：年初预算0万元、决算150.17万元；“根据年度实际情况,经费支出有所增加”未说明产生差异的具体事项，建议补充说明。",
+   "in_targets": true,
+   "target_class": "R30-泛泛原因",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2025-07",
+   "tier": "F",
+   "rule": "V33-TREND-COMPLETION-RATE",
+   "raw_id": "V33-TREND-COMPLETION-RATE-2",
+   "pages": [
+    14,
+    20
+   ],
+   "message": "二、因公出国（境）费年初预算完成率不成立：说明0.00%，表内分母为0，有限完成率没有数学定义。",
+   "in_targets": true,
+   "target_class": "R26-零比零",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2025-09",
+   "tier": "F",
+   "rule": "CMM-013",
+   "raw_id": "CMM-013-1",
+   "pages": [
+    2,
+    6
+   ],
+   "message": "一、正文标题缺少“第二部分”字样：目录为“第二部分 上海虹桥国际中央商务区管理委员会 2025 年度部门决算表”，正文第6页标题未写“第二部分”。",
+   "in_targets": true,
+   "target_class": "D2-正文第二部分",
+   "expect_after": "移除"
+  }
+ ],
+ "new_only": [
+  {
+   "sample_id": "GS-2023-03",
+   "tier": "N",
+   "rule": "rules_not_executed",
+   "raw_id": null,
+   "pages": [],
+   "message": "适用规则中仅 84/90 条得出结论，不允许在规则未执行完毕时输出 no_findings"
+  }
+ ],
+ "new_formal": [],
+ "new_notices": [
+  {
+   "sample_id": "GS-2023-03",
+   "tier": "N",
+   "rule": "rules_not_executed",
+   "raw_id": null,
+   "pages": [],
+   "message": "适用规则中仅 84/90 条得出结论，不允许在规则未执行完毕时输出 no_findings"
+  }
+ ],
+ "target_removed": 33,
+ "target_removed_rows": [
+  {
+   "sample_id": "GS-2022-01",
+   "tier": "R",
+   "rule": "CMM-021",
+   "raw_id": "CMM-021-9",
+   "pages": [
+    14
+   ],
+   "message": "九、表名与规范表名不一致：“一般公共预算财政拨款三公经费支出决算表”应为“财政拨款三公经费支出决算表”。",
+   "in_targets": true,
+   "target_class": "D2-2022三公表名",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2022-02",
+   "tier": "R",
+   "rule": "CMM-021",
+   "raw_id": "CMM-021-7",
+   "pages": [
+    17
+   ],
+   "message": "七、表名与规范表名不一致：“一般公共预算财政拨款三公经费支出决算表”应为“财政拨款三公经费支出决算表”。",
+   "in_targets": true,
+   "target_class": "D2-2022三公表名",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2022-03",
+   "tier": "R",
+   "rule": "CMM-021",
+   "raw_id": "CMM-021-20",
+   "pages": [
+    23
+   ],
+   "message": "二十、表名与规范表名不一致：“一般公共预算财政拨款三公经费支出决算表”应为“财政拨款三公经费支出决算表”。",
+   "in_targets": true,
+   "target_class": "D2-2022三公表名",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2022-04",
+   "tier": "R",
+   "rule": "CMM-021",
+   "raw_id": "CMM-021-1",
+   "pages": [
+    16
+   ],
+   "message": "一、表名与规范表名不一致：“一般公共预算财政拨款三公经费支出决算表”应为“财政拨款三公经费支出决算表”。",
+   "in_targets": true,
+   "target_class": "D2-2022三公表名",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2022-05",
+   "tier": "R",
+   "rule": "CMM-021",
+   "raw_id": "CMM-021-12",
+   "pages": [
+    12
+   ],
+   "message": "十二、表名与规范表名不一致：“一般公共预算财政拨款三公经费支出决算表”应为“财政拨款三公经费支出决算表”。",
+   "in_targets": true,
+   "target_class": "D2-2022三公表名",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2022-06",
+   "tier": "F",
+   "rule": "CMM-007",
+   "raw_id": "CMM-007-14",
+   "pages": [
+    21
+   ],
+   "message": "十四、同比零基数百分比无定义（因公出国(境)费）：本期 0 万元，减少 0 万元，复算基期为 0，却声明「下降0%」——分母为 0，同比百分比不存在有限定义。本期金额、增减额与增长百分比三者不能同时成立，需人工复核底稿。",
+   "in_targets": true,
+   "target_class": "R26-零比零",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2022-06",
+   "tier": "R",
+   "rule": "CMM-021",
+   "raw_id": "CMM-021-8",
+   "pages": [
+    15
+   ],
+   "message": "八、表名与规范表名不一致：“一般公共预算财政拨款三公经费支出决算表”应为“财政拨款三公经费支出决算表”。",
+   "in_targets": true,
+   "target_class": "D2-2022三公表名",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2022-07",
+   "tier": "F",
+   "rule": "V33-TREND-COMPLETION-RATE",
+   "raw_id": "V33-TREND-COMPLETION-RATE-2",
+   "pages": [
+    12,
+    18
+   ],
+   "message": "二、因公出国（境）费年初预算完成率不成立：说明0.00%，表内分母为0，有限完成率没有数学定义。",
+   "in_targets": true,
+   "target_class": "R26-零比零",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2022-07",
+   "tier": "F",
+   "rule": "V33-TREND-COMPLETION-RATE",
+   "raw_id": "V33-TREND-COMPLETION-RATE-3",
+   "pages": [
+    12,
+    18
+   ],
+   "message": "三、公务接待费年初预算完成率不成立：说明0.00%，表内分母为0，有限完成率没有数学定义。",
+   "in_targets": true,
+   "target_class": "R26-零比零",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2022-07",
+   "tier": "R",
+   "rule": "CMM-021",
+   "raw_id": "CMM-021-1",
+   "pages": [
+    12
+   ],
+   "message": "一、表名与规范表名不一致：“一般公共预算财政拨款三公经费支出决算表”应为“财政拨款三公经费支出决算表”。",
+   "in_targets": true,
+   "target_class": "D2-2022三公表名",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2022-08",
+   "tier": "R",
+   "rule": "CMM-021",
+   "raw_id": "CMM-021-12",
+   "pages": [
+    17
+   ],
+   "message": "十二、表名与规范表名不一致：“一般公共预算财政拨款三公经费支出决算表”应为“财政拨款三公经费支出决算表”。",
+   "in_targets": true,
+   "target_class": "D2-2022三公表名",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2023-01",
+   "tier": "F",
+   "rule": "CMM-013",
+   "raw_id": "CMM-013-1",
+   "pages": [
+    2,
+    10
+   ],
+   "message": "一、正文标题缺少“第二部分”字样：目录为“第二部分 上海市住房和城乡建设管理委员会 2023 年度部门决算表”，正文第10页标题未写“第二部分”。",
+   "in_targets": true,
+   "target_class": "D2-正文第二部分",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2023-01",
+   "tier": "F",
+   "rule": "CMM-007",
+   "raw_id": "CMM-007-19",
+   "pages": [
+    36
+   ],
+   "message": "十九、增减额与同比百分比复算不一致（因公出国(境)费）：本期 197.05 万元、增加 183.56 万元，复算基期 13.49 万元，应为增长1360.71%，声明 1,359.68%，相差 1.03 个百分点。本期金额、增减额与增长百分比三者不能同时成立，需人工复核底稿。",
+   "in_targets": true,
+   "target_class": "R16-舍入区间",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2023-02",
+   "tier": "F",
+   "rule": "CMM-013",
+   "raw_id": "CMM-013-2",
+   "pages": [
+    2,
+    5
+   ],
+   "message": "二、正文标题缺少“第二部分”字样：目录为“第二部分 上海市文化和旅游局执法总队 2023 年度部门决算表”，正文第5页标题未写“第二部分”。",
+   "in_targets": true,
+   "target_class": "D2-正文第二部分",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2023-02",
+   "tier": "F",
+   "rule": "CMM-013",
+   "raw_id": "CMM-013-3",
+   "pages": [
+    2,
+    18
+   ],
+   "message": "三、目录与正文标题不一致：目录为“第三部分上海市文化和旅游局执法总队 2023 年度部门决算情况说明”，正文第18页为“第三部分上海市文化和旅游局执法总队2023年度部门决算说明”。",
+   "in_targets": true,
+   "target_class": "R3-标题措辞",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2023-03",
+   "tier": "F",
+   "rule": "CMM-013",
+   "raw_id": "CMM-013-1",
+   "pages": [
+    2,
+    7
+   ],
+   "message": "一、正文标题缺少“第二部分”字样：目录为“第二部分 上海市知识产权局 2023 年度部门决算表”，正文第7页标题未写“第二部分”。",
+   "in_targets": true,
+   "target_class": "D2-正文第二部分",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2023-03",
+   "tier": "F",
+   "rule": "CMM-007",
+   "raw_id": "CMM-007-6",
+   "pages": [
+    27
+   ],
+   "message": "六、增减额与同比百分比复算不一致（公务接待费）：本期 7.42 万元、增加 6.20 万元，复算基期 1.22 万元，应为增长508.20%，声明 508.09%，相差 0.11 个百分点。本期金额、增减额与增长百分比三者不能同时成立，需人工复核底稿。",
+   "in_targets": true,
+   "target_class": "R16-舍入区间",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2023-04",
+   "tier": "F",
+   "rule": "V33-TREND-COMPLETION-RATE",
+   "raw_id": "V33-TREND-COMPLETION-RATE-8",
+   "pages": [
+    16,
+    22
+   ],
+   "message": "八、因公出国（境）费年初预算完成率不成立：说明0.00%，表内分母为0，有限完成率没有数学定义。",
+   "in_targets": true,
+   "target_class": "R26-零比零",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2023-08",
+   "tier": "F",
+   "rule": "V33-TREND-COMPLETION-RATE",
+   "raw_id": "V33-TREND-COMPLETION-RATE-6",
+   "pages": [
+    13,
+    19
+   ],
+   "message": "六、因公出国（境）费年初预算完成率不成立：说明0.00%，表内分母为0，有限完成率没有数学定义。",
+   "in_targets": true,
+   "target_class": "R26-零比零",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2024-01",
+   "tier": "F",
+   "rule": "CMM-013",
+   "raw_id": "CMM-013-1",
+   "pages": [
+    2,
+    8
+   ],
+   "message": "一、正文标题缺少“第二部分”字样：目录为“第二部分 上海市人力资源和社会保障局 2024 年度部门决算表”，正文第8页标题未写“第二部分”。",
+   "in_targets": true,
+   "target_class": "D2-正文第二部分",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2024-02",
+   "tier": "F",
+   "rule": "CMM-013",
+   "raw_id": "CMM-013-1",
+   "pages": [
+    2,
+    9
+   ],
+   "message": "一、正文标题缺少“第二部分”字样：目录为“第二部分 上海市生态环境局 2024 年度部门决算表”，正文第9页标题未写“第二部分”。",
+   "in_targets": true,
+   "target_class": "D2-正文第二部分",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2024-03",
+   "tier": "F",
+   "rule": "CMM-013",
+   "raw_id": "CMM-013-1",
+   "pages": [
+    2,
+    7
+   ],
+   "message": "一、正文标题缺少“第二部分”字样：目录为“第二部分 上海市数据局 2024 年度部门决算表”，正文第7页标题未写“第二部分”。",
+   "in_targets": true,
+   "target_class": "D2-正文第二部分",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2024-04",
+   "tier": "F",
+   "rule": "V33-234",
+   "raw_id": "V33-234-10",
+   "pages": [
+    20
+   ],
+   "message": "十、差异原因仅重述结果：年初预算39万元、决算3.82万元；“根据年度实际情况,经费支出有所减少”未说明产生差异的具体事项，建议补充说明。",
+   "in_targets": true,
+   "target_class": "R30-泛泛原因",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2024-06",
+   "tier": "F",
+   "rule": "CMM-013",
+   "raw_id": "CMM-013-3",
+   "pages": [
+    2,
+    8
+   ],
+   "message": "三、目录与正文标题不一致：目录为“第二部分上海市交通委员会 2024 年度决算表”，正文第8页为“第二部分上海市交通委员会2024年度部门决算表”。",
+   "in_targets": true,
+   "target_class": "R3-标题措辞",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2024-08",
+   "tier": "F",
+   "rule": "CMM-007",
+   "raw_id": "CMM-007-3",
+   "pages": [
+    22
+   ],
+   "message": "三、增减额与同比百分比复算不一致（公务接待费）：本期 1.17 万元、减少 0.31 万元，复算基期 1.48 万元，应为下降20.95%，声明 20.78%，相差 0.17 个百分点。本期金额、增减额与增长百分比三者不能同时成立，需人工复核底稿。",
+   "in_targets": true,
+   "target_class": "R16-舍入区间",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2025-01",
+   "tier": "F",
+   "rule": "V33-234",
+   "raw_id": "V33-234-9",
+   "pages": [
+    19
+   ],
+   "message": "九、完成率偏离100%但未说明原因（社会保障和就业支出（类）行政事业单位养老支出（款））：年初预算为1154.88万元，支出决算为1128.16万元，完成率为97.69%，建议补充差异原因说明",
+   "in_targets": true,
+   "target_class": "R30-泛泛原因",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2025-01",
+   "tier": "F",
+   "rule": "V33-TREND-COMPLETION-RATE",
+   "raw_id": "V33-TREND-COMPLETION-RATE-10",
+   "pages": [
+    14,
+    21
+   ],
+   "message": "十、因公出国（境）费年初预算完成率不成立：说明0.00%，表内分母为0，有限完成率没有数学定义。",
+   "in_targets": true,
+   "target_class": "R26-零比零",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2025-02",
+   "tier": "F",
+   "rule": "CMM-013",
+   "raw_id": "CMM-013-1",
+   "pages": [
+    2,
+    7
+   ],
+   "message": "一、正文标题缺少“第二部分”字样：目录为“第二部分 上海市审计局 2025 年度部门决算表”，正文第7页标题未写“第二部分”。",
+   "in_targets": true,
+   "target_class": "D2-正文第二部分",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2025-03",
+   "tier": "F",
+   "rule": "CMM-013",
+   "raw_id": "CMM-013-1",
+   "pages": [
+    2,
+    8
+   ],
+   "message": "一、正文标题缺少“第二部分”字样：目录为“第二部分 上海市财政局 2025 年度部门决算表”，正文第8页标题未写“第二部分”。",
+   "in_targets": true,
+   "target_class": "D2-正文第二部分",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2025-06",
+   "tier": "F",
+   "rule": "CMM-013",
+   "raw_id": "CMM-013-2",
+   "pages": [
+    2,
+    5
+   ],
+   "message": "二、正文标题缺少“第二部分”字样：目录为“第二部分 上海市信访办公室 2025 年度部门决算表”，正文第5页标题未写“第二部分”。",
+   "in_targets": true,
+   "target_class": "D2-正文第二部分",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2025-06",
+   "tier": "F",
+   "rule": "V33-234",
+   "raw_id": "V33-234-13",
+   "pages": [
+    19
+   ],
+   "message": "十三、差异原因仅重述结果：年初预算0万元、决算150.17万元；“根据年度实际情况,经费支出有所增加”未说明产生差异的具体事项，建议补充说明。",
+   "in_targets": true,
+   "target_class": "R30-泛泛原因",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2025-07",
+   "tier": "F",
+   "rule": "V33-TREND-COMPLETION-RATE",
+   "raw_id": "V33-TREND-COMPLETION-RATE-2",
+   "pages": [
+    14,
+    20
+   ],
+   "message": "二、因公出国（境）费年初预算完成率不成立：说明0.00%，表内分母为0，有限完成率没有数学定义。",
+   "in_targets": true,
+   "target_class": "R26-零比零",
+   "expect_after": "移除"
+  },
+  {
+   "sample_id": "GS-2025-09",
+   "tier": "F",
+   "rule": "CMM-013",
+   "raw_id": "CMM-013-1",
+   "pages": [
+    2,
+    6
+   ],
+   "message": "一、正文标题缺少“第二部分”字样：目录为“第二部分 上海虹桥国际中央商务区管理委员会 2025 年度部门决算表”，正文第6页标题未写“第二部分”。",
+   "in_targets": true,
+   "target_class": "D2-正文第二部分",
+   "expect_after": "移除"
+  }
+ ],
+ "target_missing": [],
+ "unexpected_removed": [],
+ "limited_removed": [],
+ "ledger_diff_count": 22,
+ "ledger_rule_status_changes": [
+  {
+   "sample": "GS-2022-01",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "kind": "rule_status_fail_to_pass",
+   "old": {
+    "basis": "清单 E-06：表名不得多字、少字或误用部门/单位前缀",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-021"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-021=fail",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "CORE_TABLES",
+    "group_title": "核心表完整性",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-STRUCT-TABLE-NAMES",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "表名与规范表名一致"
+   },
+   "new": {
+    "basis": "清单 E-06：表名不得多字、少字或误用部门/单位前缀",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-021"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-021=pass",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "CORE_TABLES",
+    "group_title": "核心表完整性",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-STRUCT-TABLE-NAMES",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "表名与规范表名一致"
+   }
+  },
+  {
+   "sample": "GS-2022-02",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "kind": "rule_status_fail_to_pass",
+   "old": {
+    "basis": "清单 E-06：表名不得多字、少字或误用部门/单位前缀",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-021"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-021=fail",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "CORE_TABLES",
+    "group_title": "核心表完整性",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-STRUCT-TABLE-NAMES",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "表名与规范表名一致"
+   },
+   "new": {
+    "basis": "清单 E-06：表名不得多字、少字或误用部门/单位前缀",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-021"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-021=pass",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "CORE_TABLES",
+    "group_title": "核心表完整性",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-STRUCT-TABLE-NAMES",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "表名与规范表名一致"
+   }
+  },
+  {
+   "sample": "GS-2022-03",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "kind": "rule_status_fail_to_pass",
+   "old": {
+    "basis": "清单 E-06：表名不得多字、少字或误用部门/单位前缀",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-021"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-021=fail",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "CORE_TABLES",
+    "group_title": "核心表完整性",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-STRUCT-TABLE-NAMES",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "表名与规范表名一致"
+   },
+   "new": {
+    "basis": "清单 E-06：表名不得多字、少字或误用部门/单位前缀",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-021"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-021=pass",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "CORE_TABLES",
+    "group_title": "核心表完整性",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-STRUCT-TABLE-NAMES",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "表名与规范表名一致"
+   }
+  },
+  {
+   "sample": "GS-2022-04",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "kind": "rule_status_fail_to_pass",
+   "old": {
+    "basis": "清单 E-06：表名不得多字、少字或误用部门/单位前缀",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-021"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-021=fail",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "CORE_TABLES",
+    "group_title": "核心表完整性",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-STRUCT-TABLE-NAMES",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "表名与规范表名一致"
+   },
+   "new": {
+    "basis": "清单 E-06：表名不得多字、少字或误用部门/单位前缀",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-021"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-021=pass",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "CORE_TABLES",
+    "group_title": "核心表完整性",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-STRUCT-TABLE-NAMES",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "表名与规范表名一致"
+   }
+  },
+  {
+   "sample": "GS-2022-05",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "kind": "rule_status_fail_to_pass",
+   "old": {
+    "basis": "清单 E-06：表名不得多字、少字或误用部门/单位前缀",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-021"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-021=fail",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "CORE_TABLES",
+    "group_title": "核心表完整性",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-STRUCT-TABLE-NAMES",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "表名与规范表名一致"
+   },
+   "new": {
+    "basis": "清单 E-06：表名不得多字、少字或误用部门/单位前缀",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-021"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-021=pass",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "CORE_TABLES",
+    "group_title": "核心表完整性",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-STRUCT-TABLE-NAMES",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "表名与规范表名一致"
+   }
+  },
+  {
+   "sample": "GS-2022-06",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "kind": "rule_status_fail_to_pass",
+   "old": {
+    "basis": "清单 E-06：表名不得多字、少字或误用部门/单位前缀",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-021"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-021=fail",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "CORE_TABLES",
+    "group_title": "核心表完整性",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-STRUCT-TABLE-NAMES",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "表名与规范表名一致"
+   },
+   "new": {
+    "basis": "清单 E-06：表名不得多字、少字或误用部门/单位前缀",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-021"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-021=pass",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "CORE_TABLES",
+    "group_title": "核心表完整性",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-STRUCT-TABLE-NAMES",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "表名与规范表名一致"
+   }
+  },
+  {
+   "sample": "GS-2022-06",
+   "obligation": "OBL-TREND-ZERO-BASE",
+   "kind": "rule_status_fail_to_pass",
+   "old": {
+    "basis": "本期金额等于增加金额时基期为0，不得表述为“增长X%”；增减额与增长百分比须可由基期/本期金额复算",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-007"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-007=fail",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "RATIO_TREND",
+    "group_title": "比例与变动",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-TREND-ZERO-BASE",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "同比基期/本期/增减额与增长百分比的确定性复算（零基数）"
+   },
+   "new": {
+    "basis": "本期金额等于增加金额时基期为0，不得表述为“增长X%”；增减额与增长百分比须可由基期/本期金额复算",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-007"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-007=pass",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "RATIO_TREND",
+    "group_title": "比例与变动",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-TREND-ZERO-BASE",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "同比基期/本期/增减额与增长百分比的确定性复算（零基数）"
+   }
+  },
+  {
+   "sample": "GS-2022-07",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "kind": "rule_status_fail_to_pass",
+   "old": {
+    "basis": "清单 E-06：表名不得多字、少字或误用部门/单位前缀",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-021"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-021=fail",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "CORE_TABLES",
+    "group_title": "核心表完整性",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-STRUCT-TABLE-NAMES",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "表名与规范表名一致"
+   },
+   "new": {
+    "basis": "清单 E-06：表名不得多字、少字或误用部门/单位前缀",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-021"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-021=pass",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "CORE_TABLES",
+    "group_title": "核心表完整性",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-STRUCT-TABLE-NAMES",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "表名与规范表名一致"
+   }
+  },
+  {
+   "sample": "GS-2022-07",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "kind": "rule_status_fail_to_pass",
+   "old": {
+    "basis": "预算完成率须明确分母口径，且分母为 0 时不得给出完成率",
+    "blocks_gate": true,
+    "checkers": [
+     "V33-TREND-COMPLETION-RATE"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "RATIO_TREND",
+    "group_title": "比例与变动",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-TREND-COMPLETION-RATE",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "预算完成率分母口径与复算"
+   },
+   "new": {
+    "basis": "预算完成率须明确分母口径，且分母为 0 时不得给出完成率",
+    "blocks_gate": true,
+    "checkers": [
+     "V33-TREND-COMPLETION-RATE"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "RATIO_TREND",
+    "group_title": "比例与变动",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-TREND-COMPLETION-RATE",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "预算完成率分母口径与复算"
+   }
+  },
+  {
+   "sample": "GS-2022-08",
+   "obligation": "OBL-STRUCT-TABLE-NAMES",
+   "kind": "rule_status_fail_to_pass",
+   "old": {
+    "basis": "清单 E-06：表名不得多字、少字或误用部门/单位前缀",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-021"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-021=fail",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "CORE_TABLES",
+    "group_title": "核心表完整性",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-STRUCT-TABLE-NAMES",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "表名与规范表名一致"
+   },
+   "new": {
+    "basis": "清单 E-06：表名不得多字、少字或误用部门/单位前缀",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-021"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-021=pass",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "CORE_TABLES",
+    "group_title": "核心表完整性",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-STRUCT-TABLE-NAMES",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "表名与规范表名一致"
+   }
+  },
+  {
+   "sample": "GS-2023-01",
+   "obligation": "OBL-STRUCT-TOC-ALIGN",
+   "kind": "rule_status_fail_to_pass",
+   "old": {
+    "basis": "清单 A-05、决算 A-04：目录所列标题须与正文各级标题一致",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-013"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-013=fail",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "DOC_STRUCTURE",
+    "group_title": "文档结构与必备要素",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-STRUCT-TOC-ALIGN",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "目录与正文标题逐项一致（名称、编号、顺序）"
+   },
+   "new": {
+    "basis": "清单 A-05、决算 A-04：目录所列标题须与正文各级标题一致",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-013"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-013=pass",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "DOC_STRUCTURE",
+    "group_title": "文档结构与必备要素",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-STRUCT-TOC-ALIGN",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "目录与正文标题逐项一致（名称、编号、顺序）"
+   }
+  },
+  {
+   "sample": "GS-2023-01",
+   "obligation": "OBL-TREND-ZERO-BASE",
+   "kind": "rule_status_fail_to_pass",
+   "old": {
+    "basis": "本期金额等于增加金额时基期为0，不得表述为“增长X%”；增减额与增长百分比须可由基期/本期金额复算",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-007"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-007=fail",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "RATIO_TREND",
+    "group_title": "比例与变动",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-TREND-ZERO-BASE",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "同比基期/本期/增减额与增长百分比的确定性复算（零基数）"
+   },
+   "new": {
+    "basis": "本期金额等于增加金额时基期为0，不得表述为“增长X%”；增减额与增长百分比须可由基期/本期金额复算",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-007"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-007=pass",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "RATIO_TREND",
+    "group_title": "比例与变动",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-TREND-ZERO-BASE",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "同比基期/本期/增减额与增长百分比的确定性复算（零基数）"
+   }
+  },
+  {
+   "sample": "GS-2023-03",
+   "obligation": "OBL-STRUCT-TOC-ALIGN",
+   "kind": "rule_status_fail_to_pass",
+   "old": {
+    "basis": "清单 A-05、决算 A-04：目录所列标题须与正文各级标题一致",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-013"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-013=fail",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "DOC_STRUCTURE",
+    "group_title": "文档结构与必备要素",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-STRUCT-TOC-ALIGN",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "目录与正文标题逐项一致（名称、编号、顺序）"
+   },
+   "new": {
+    "basis": "清单 A-05、决算 A-04：目录所列标题须与正文各级标题一致",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-013"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-013=pass",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "DOC_STRUCTURE",
+    "group_title": "文档结构与必备要素",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-STRUCT-TOC-ALIGN",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "目录与正文标题逐项一致（名称、编号、顺序）"
+   }
+  },
+  {
+   "sample": "GS-2023-03",
+   "obligation": "OBL-TREND-ZERO-BASE",
+   "kind": "rule_status_fail_to_pass",
+   "old": {
+    "basis": "本期金额等于增加金额时基期为0，不得表述为“增长X%”；增减额与增长百分比须可由基期/本期金额复算",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-007"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-007=fail",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "RATIO_TREND",
+    "group_title": "比例与变动",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-TREND-ZERO-BASE",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "同比基期/本期/增减额与增长百分比的确定性复算（零基数）"
+   },
+   "new": {
+    "basis": "本期金额等于增加金额时基期为0，不得表述为“增长X%”；增减额与增长百分比须可由基期/本期金额复算",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-007"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-007=pass",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "RATIO_TREND",
+    "group_title": "比例与变动",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-TREND-ZERO-BASE",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "同比基期/本期/增减额与增长百分比的确定性复算（零基数）"
+   }
+  },
+  {
+   "sample": "GS-2023-04",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "kind": "rule_status_fail_to_pass",
+   "old": {
+    "basis": "预算完成率须明确分母口径，且分母为 0 时不得给出完成率",
+    "blocks_gate": true,
+    "checkers": [
+     "V33-TREND-COMPLETION-RATE"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "RATIO_TREND",
+    "group_title": "比例与变动",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-TREND-COMPLETION-RATE",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "预算完成率分母口径与复算"
+   },
+   "new": {
+    "basis": "预算完成率须明确分母口径，且分母为 0 时不得给出完成率",
+    "blocks_gate": true,
+    "checkers": [
+     "V33-TREND-COMPLETION-RATE"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "RATIO_TREND",
+    "group_title": "比例与变动",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-TREND-COMPLETION-RATE",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "预算完成率分母口径与复算"
+   }
+  },
+  {
+   "sample": "GS-2023-08",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "kind": "rule_status_fail_to_pass",
+   "old": {
+    "basis": "预算完成率须明确分母口径，且分母为 0 时不得给出完成率",
+    "blocks_gate": true,
+    "checkers": [
+     "V33-TREND-COMPLETION-RATE"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "RATIO_TREND",
+    "group_title": "比例与变动",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-TREND-COMPLETION-RATE",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "预算完成率分母口径与复算"
+   },
+   "new": {
+    "basis": "预算完成率须明确分母口径，且分母为 0 时不得给出完成率",
+    "blocks_gate": true,
+    "checkers": [
+     "V33-TREND-COMPLETION-RATE"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "RATIO_TREND",
+    "group_title": "比例与变动",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-TREND-COMPLETION-RATE",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "预算完成率分母口径与复算"
+   }
+  },
+  {
+   "sample": "GS-2024-01",
+   "obligation": "OBL-STRUCT-TOC-ALIGN",
+   "kind": "rule_status_fail_to_pass",
+   "old": {
+    "basis": "清单 A-05、决算 A-04：目录所列标题须与正文各级标题一致",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-013"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-013=fail",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "DOC_STRUCTURE",
+    "group_title": "文档结构与必备要素",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-STRUCT-TOC-ALIGN",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "目录与正文标题逐项一致（名称、编号、顺序）"
+   },
+   "new": {
+    "basis": "清单 A-05、决算 A-04：目录所列标题须与正文各级标题一致",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-013"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-013=pass",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "DOC_STRUCTURE",
+    "group_title": "文档结构与必备要素",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-STRUCT-TOC-ALIGN",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "目录与正文标题逐项一致（名称、编号、顺序）"
+   }
+  },
+  {
+   "sample": "GS-2024-03",
+   "obligation": "OBL-STRUCT-TOC-ALIGN",
+   "kind": "rule_status_fail_to_pass",
+   "old": {
+    "basis": "清单 A-05、决算 A-04：目录所列标题须与正文各级标题一致",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-013"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-013=fail",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "DOC_STRUCTURE",
+    "group_title": "文档结构与必备要素",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-STRUCT-TOC-ALIGN",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "目录与正文标题逐项一致（名称、编号、顺序）"
+   },
+   "new": {
+    "basis": "清单 A-05、决算 A-04：目录所列标题须与正文各级标题一致",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-013"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-013=pass",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "DOC_STRUCTURE",
+    "group_title": "文档结构与必备要素",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-STRUCT-TOC-ALIGN",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "目录与正文标题逐项一致（名称、编号、顺序）"
+   }
+  },
+  {
+   "sample": "GS-2024-08",
+   "obligation": "OBL-TREND-ZERO-BASE",
+   "kind": "rule_status_fail_to_pass",
+   "old": {
+    "basis": "本期金额等于增加金额时基期为0，不得表述为“增长X%”；增减额与增长百分比须可由基期/本期金额复算",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-007"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-007=fail",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "RATIO_TREND",
+    "group_title": "比例与变动",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-TREND-ZERO-BASE",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "同比基期/本期/增减额与增长百分比的确定性复算（零基数）"
+   },
+   "new": {
+    "basis": "本期金额等于增加金额时基期为0，不得表述为“增长X%”；增减额与增长百分比须可由基期/本期金额复算",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-007"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-007=pass",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "RATIO_TREND",
+    "group_title": "比例与变动",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-TREND-ZERO-BASE",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "同比基期/本期/增减额与增长百分比的确定性复算（零基数）"
+   }
+  },
+  {
+   "sample": "GS-2025-02",
+   "obligation": "OBL-STRUCT-TOC-ALIGN",
+   "kind": "rule_status_fail_to_pass",
+   "old": {
+    "basis": "清单 A-05、决算 A-04：目录所列标题须与正文各级标题一致",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-013"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-013=fail",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "DOC_STRUCTURE",
+    "group_title": "文档结构与必备要素",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-STRUCT-TOC-ALIGN",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "目录与正文标题逐项一致（名称、编号、顺序）"
+   },
+   "new": {
+    "basis": "清单 A-05、决算 A-04：目录所列标题须与正文各级标题一致",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-013"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-013=pass",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "DOC_STRUCTURE",
+    "group_title": "文档结构与必备要素",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-STRUCT-TOC-ALIGN",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "目录与正文标题逐项一致（名称、编号、顺序）"
+   }
+  },
+  {
+   "sample": "GS-2025-03",
+   "obligation": "OBL-STRUCT-TOC-ALIGN",
+   "kind": "rule_status_fail_to_pass",
+   "old": {
+    "basis": "清单 A-05、决算 A-04：目录所列标题须与正文各级标题一致",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-013"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-013=fail",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "DOC_STRUCTURE",
+    "group_title": "文档结构与必备要素",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-STRUCT-TOC-ALIGN",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "目录与正文标题逐项一致（名称、编号、顺序）"
+   },
+   "new": {
+    "basis": "清单 A-05、决算 A-04：目录所列标题须与正文各级标题一致",
+    "blocks_gate": true,
+    "checkers": [
+     "CMM-013"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：CMM-013=pass",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "DOC_STRUCTURE",
+    "group_title": "文档结构与必备要素",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-STRUCT-TOC-ALIGN",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "目录与正文标题逐项一致（名称、编号、顺序）"
+   }
+  },
+  {
+   "sample": "GS-2025-07",
+   "obligation": "OBL-TREND-COMPLETION-RATE",
+   "kind": "rule_status_fail_to_pass",
+   "old": {
+    "basis": "预算完成率须明确分母口径，且分母为 0 时不得给出完成率",
+    "blocks_gate": true,
+    "checkers": [
+     "V33-TREND-COMPLETION-RATE"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=fail",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "RATIO_TREND",
+    "group_title": "比例与变动",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-TREND-COMPLETION-RATE",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "预算完成率分母口径与复算"
+   },
+   "new": {
+    "basis": "预算完成率须明确分母口径，且分母为 0 时不得给出完成率",
+    "blocks_gate": true,
+    "checkers": [
+     "V33-TREND-COMPLETION-RATE"
+    ],
+    "depends_on": [],
+    "detail": "规则已全部执行并到达终态：V33-TREND-COMPLETION-RATE=pass",
+    "evidence_kind": "locatable",
+    "gap_note": "",
+    "group_id": "RATIO_TREND",
+    "group_title": "比例与变动",
+    "input_gaps": [],
+    "missing_checkers": [],
+    "obligation_id": "OBL-TREND-COMPLETION-RATE",
+    "reason": null,
+    "reason_codes": [],
+    "reason_label": null,
+    "requires_ai": false,
+    "status": "completed",
+    "title": "预算完成率分母口径与复算"
+   }
+  }
+ ],
+ "ledger_other": [],
+ "ok": true
+}

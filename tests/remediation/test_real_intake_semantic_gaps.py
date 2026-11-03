@@ -26,15 +26,13 @@ def assert_original_refs(issues, doc):
         assert refs and all(ref["span"] in doc.page_texts[ref["page"] - 1] for ref in refs)
 
 
-def test_budget_restated_cause_requires_same_item_nonzero_difference_and_keeps_original():
+def test_budget_restated_cause_is_a_stated_reason_after_r30():
+    """R30（2026-11-03）：写了一句原因就算写明原因，不再按“仅重述结果”报正式问题。"""
     doc = document("10、甲项。年初预算为28万元，支出决算为14万元。"
                    "决算数小于预算数的主要原因：该项实际支出小于预算数。\n"
                    "11、乙项。年初预算为33万元，支出决算为17万元。主要原因：该项实际支出小于预算数。")
     issues, unresolved = check_quality_relations(RULE(), doc)
-    assert not unresolved and len(issues) == 2
-    assert all(issue.severity == "medium" for issue in issues)
-    assert [issue.location["budget_amount_wan"] for issue in issues] == ["28", "33"]
-    assert_original_refs(issues, doc)
+    assert not issues and not unresolved
 
 
 @pytest.mark.parametrize("cause", [
@@ -73,23 +71,20 @@ def test_unbound_or_adjusted_cause_is_unfinished_not_a_confirmed_finding(body):
     assert doc.fact_receipts[-1]["status"] == "insufficient_data"
 
 
-def test_operating_cause_is_same_clause_and_cross_page_original_quotes_survive():
+def test_operating_cross_page_cause_still_counts_as_a_stated_reason_after_r30():
+    """R30：跨页续写的原因句也算写明原因，不再报“仅重述结果”。"""
     doc = document("（一）机关运行经费支出情况\n机关运行经费支出110万元，比2026年度增加10万元，")
     doc.page_texts[1] = "十一、其他重要事项的情况说明\n" + doc.page_texts[1]
     doc.page_texts.append("增长10%。主要原因是机关运行支出同比略有增多。\n（二）政府采购支出情况\n其他内容。")
     issues, unresolved = check_quality_relations(RULE(), doc)
-    assert len(issues) == 1 and not unresolved
-    assert issues[0].location["cause_kind"] == "year_on_year"
-    assert issues[0].location["pages"] == [2, 3]
-    assert_original_refs(issues, doc)
+    assert not issues and not unresolved
 
 
-def test_operating_nonzero_change_supplies_cause_evidence_without_a_percentage():
+def test_operating_nonzero_change_with_cause_is_not_reported_after_r30():
     doc = document("机关运行经费支出110万元，比2026年度增加10万元。"
                    "主要原因是机关运行支出同比略有增多。", "十一、其他重要事项的情况说明")
     issues, unresolved = check_quality_relations(RULE(), doc)
-    assert len(issues) == 1 and not unresolved
-    assert issues[0].location["change_amount_wan"] == "10"
+    assert not issues and not unresolved
 
 
 def test_operating_yoy_uses_previous_base_and_valid_yoy_has_no_warning():

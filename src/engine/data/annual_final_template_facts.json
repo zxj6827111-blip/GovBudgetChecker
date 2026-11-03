@@ -1,0 +1,36 @@
+{
+  "_note": "上海市级决算公开官方模板的年度事实（只收已逐年比对过的项）。来源 gold/templates/README.md：2022–2024 由 Claude 用 textutil 从官方 .doc 转出并逐行比对；2025 年度模板尚未取得，按 2024 处理。改这里之前先核对官方模板。",
+  "source": "gold/templates/README.md",
+  "final": {
+    "2022": {
+      "department": {
+        "body_writes_part_number_2": true,
+        "three_public_table_name": "一般公共预算财政拨款“三公”经费支出决算表"
+      },
+      "unit": {
+        "body_writes_part_number_2": true,
+        "three_public_table_name": "一般公共预算财政拨款“三公”经费支出决算表"
+      }
+    },
+    "2023": {
+      "department": {
+        "body_writes_part_number_2": false,
+        "three_public_table_name": "财政拨款“三公”经费支出决算表"
+      },
+      "unit": {
+        "body_writes_part_number_2": true,
+        "three_public_table_name": "财政拨款“三公”经费支出决算表"
+      }
+    },
+    "2024": {
+      "department": {
+        "body_writes_part_number_2": false,
+        "three_public_table_name": "财政拨款“三公”经费支出决算表"
+      },
+      "unit": {
+        "body_writes_part_number_2": true,
+        "three_public_table_name": "财政拨款“三公”经费支出决算表"
+      }
+    }
+  }
+}

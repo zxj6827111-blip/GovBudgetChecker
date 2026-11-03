@@ -22,8 +22,12 @@ import unicodedata
 from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from .annual_template_facts import body_writes_part_number_2
+from .checklist_identity_rules import body_scope
 from .checklist_support import (
     report_kind,
+    report_year,
+    subject_scope,
     CJK,
     is_table_like_line,
     is_toc_page,
@@ -69,6 +73,39 @@ def _cn_to_int(text: str) -> Optional[int]:
         tens, _, ones = text.partition("十")
         return digits.get(tens, 0) * 10 + (digits.get(ones, 0) if ones else 0)
     return digits.get(text)
+
+
+def _body_part_number_expected(doc: Document, num: str) -> bool:
+    """正文标题是否应写该“第X部分”字样（年度模板事实，D2）。
+
+    2023 年起部门决算的官方模板正文表格部分不写“第二部分”（目录仍写），照模板
+    写不算缺字；单位决算各年模板正文都写，照常报告。未建模年份/口径不明时保持
+    原有行为。
+    """
+    if report_kind(doc) != "final" or _cn_to_int(num) != 2:
+        return True
+    writes = body_writes_part_number_2(report_year(doc), body_scope(doc) or subject_scope(doc))
+    return True if writes is None else writes
+
+
+#: R3：只把“报告类型槽位”和“尾部说明措辞”视为模板等价，不能全局删除
+#: “部门/单位”——组织名称内部的这些字（如“事业单位登记管理局”）是实质内容。
+#: 报告类型槽位：紧邻“预算/决算（表/情况/说明）”之前的“部门/单位”；
+#: 尾部措辞：“的情况说明 / 情况说明 / 说明 / 决算情况”收尾。
+_REPORT_SCOPE_SLOT_RE = re.compile(r"(?:部门|单位)(?=(?:预算|决算)(?:表|情况|说明|$))")
+_TEMPLATE_SUFFIX_RE = re.compile(r"(?:的)?情况(?=说明$)|(?<=[预决]算)情况$|说明$")
+
+
+def _strip_template_wording(text: str) -> str:
+    text = _REPORT_SCOPE_SLOT_RE.sub("", text or "")
+    return _TEMPLATE_SUFFIX_RE.sub("", text)
+
+
+def _template_wording_equal(left: str, right: str) -> bool:
+    """两侧仅报告类型槽位/尾部说明措辞不同（且仍有实质标题）即为同一标题。"""
+    bare_left = _strip_template_wording(left)
+    bare_right = _strip_template_wording(right)
+    return bool(bare_left and bare_right) and bare_left == bare_right
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +274,8 @@ class CMM013_TocHeadingAlignment(Rule):
                 num.startswith("第") and not body_num.startswith("第")
             ):
                 numdiff.append((entry, body_num, body.pages[pick]))
-            elif num.startswith("第") and not body_num.startswith("第") and body.heading_like(pick):
+            elif (num.startswith("第") and not body_num.startswith("第") and body.heading_like(pick)
+                  and _body_part_number_expected(doc, num)):
                 issues.append(issue_at(
                     self, f"正文标题缺少“{entry['num']}”字样：目录为“{entry['num']} {entry['title']}”，"
                     f"正文第{body.pages[pick]}页标题未写“{entry['num']}”。", *quote_args,
@@ -295,6 +333,8 @@ class CMM013_TocHeadingAlignment(Rule):
                     return
                 body_title = re.split(rf"[{_CN_NUM}]+、|[（(][{_CN_NUM}]+[)）]", extended[:len(relaxed) + 2])[0]
             body_relaxed = _norm(body_title) if num.startswith("第") else _relaxed(body_title, org)
+            if num.startswith("第") and _template_wording_equal(relaxed, body_relaxed):
+                return
             if relaxed and (relaxed == body_relaxed or (
                     not num.startswith("第") and (relaxed in body_relaxed or body_relaxed in relaxed))):
                 return

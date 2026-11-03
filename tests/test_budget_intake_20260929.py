@@ -499,13 +499,14 @@ def test_finals_unresolved_total_le_11(final_replays):
 def test_yichuan_findings_stay_12(final_replays):
     """按 portable 0.1 个百分点容差，车辆同比差 0.20pp 应另报一条提示。
 
-    2026-10-22 清单全系统默认后另有两条真实发现：正文决算表标题缺“第二部分”
-    字样（CMM-013，清单决算 A-01）、具体情况逐项支出决算合计 20214.01 万元与
-    总额 20218.21 万元差 4.20 万元（V33-251，清单决算 C-12）。
+    2026-10-22 清单全系统默认后另有真实发现：具体情况逐项支出决算合计
+    20214.01 万元与总额 20218.21 万元差 4.20 万元（V33-251，清单决算 C-12）。
+    正文标题缺“第二部分”一条按 D2（2026-11-03）不报：2025 年部门决算用 2024
+    年模板，部门模板正文表格部分不写“第二部分”。
     """
     issues = final_replays["yichuan"]["issues"]
     checklist = sorted(i.rule for i in issues if i.rule in {"CMM-013", "V33-251"})
-    assert checklist == ["CMM-013", "V33-251"]
+    assert checklist == ["V33-251"]
     # 批次1 年份角色修复新增一条真实完成率复算发现（97.64% vs 98%），
     # 非清单项由 13 条增至 14 条。
     assert len(issues) - len(checklist) == 14

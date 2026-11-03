@@ -15,6 +15,7 @@ import re
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from .annual_template_facts import normative_three_public_table_name
 from .checklist_support import (
     CJK,
     compact,
@@ -27,6 +28,7 @@ from .checklist_support import (
     page_flat,
     page_has_table,
     report_kind,
+    report_year,
     subject_scope,
 )
 from .checklist_identity_rules import body_scope
@@ -187,6 +189,16 @@ class CMM021_TableTitleNormative(Rule):
             if index is None:
                 continue
             expected = names[index]
+            if kind == "final" and index == 6:
+                # D2：2022 年官方模板第七张表带“一般公共预算”，2023 年起去掉；
+                # 年度事实来自 annual_final_template_facts.json。2022 年两种写法都
+                # 接受（本批只移除按旧口径的误报，不新增反向报告）。
+                annual = normative_three_public_table_name(
+                    report_year(doc), body_scope(doc) or subject_scope(doc))
+                if annual and body in {expected, annual}:
+                    continue
+                if annual:
+                    expected = annual
             if kind == "final" and index == 8 and body in {"国有资本经营预算财政拨款支出决算表"}:
                 continue  # 清单 A-06 写法，视为规范
             if body != expected:
