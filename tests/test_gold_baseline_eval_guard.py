@@ -81,7 +81,7 @@ def test_decision_signature_reads_final_links_cause_amend():
     assert guard.decision_signature(None) is None
 
 
-def _raw(bbox, *, pre="CMM-013-2", merged=None):
+def _raw(bbox, *, pre="CMM-013-2", merged=None, members=None, related=None):
     raw = {"id": "CMM-013-1", "rule_id": "CMM-013", "severity": "warn", "title": "目录与正文标题不一致",
            "message": "一、问题", "bbox": bbox,
            "location": {"bbox": bbox, "pre_group_issue_id": pre},
@@ -89,37 +89,110 @@ def _raw(bbox, *, pre="CMM-013-2", merged=None):
            "analysis_revision": "rev-old", "created_at": 1}
     if merged is not None:
         raw["merged_issue_ids"] = merged
+    if members is not None:
+        raw["location"]["member_issue_ids"] = members
+    if related is not None:
+        raw["location"]["related_findings"] = [{"location": {"pre_group_issue_id": value}} for value in related]
     return raw
 
 
 def test_raw_fingerprint_detects_bbox_drift():
     left = guard.canonical_raw(_raw([10.0, 20.0, 30.0, 40.0]))
     right = guard.canonical_raw(_raw([1.0, 1.0, 10.0, 10.0]))
-    left, right = guard.reconcile_references(left, right, {}, {})
     paths = guard.diff_paths(left, right)
     assert any(path.startswith("/bbox[") for path in paths)
     assert any(path.startswith("/location/bbox[") for path in paths)
     assert any(path.startswith("/evidence[0]/bbox[") for path in paths)
 
 
-def test_raw_reference_requires_literal_or_verified_mapping():
-    left = guard.canonical_raw(_raw([1.0, 2.0, 3.0, 4.0], pre="CMM-013-2"))
-    right = guard.canonical_raw(_raw([1.0, 2.0, 3.0, 4.0], pre="CMM-013-3"))
-    mapped_left, mapped_right = guard.reconcile_references(
-        left, right, {}, {"CMM-013-3": "CMM-013-2"})
-    assert guard.diff_paths(mapped_left, mapped_right) == []
-    plain_left, plain_right = guard.reconcile_references(left, right, {}, {})
-    assert "/location/pre_group_issue_id" in guard.diff_paths(plain_left, plain_right)
+def test_reference_path_detection():
+    assert guard.is_reference_path("/location/pre_group_issue_id")
+    assert guard.is_reference_path("/location/member_issue_ids[1]")
+    assert guard.is_reference_path("/merged_issue_ids[1]")
+    assert not guard.is_reference_path("/bbox[0]")
 
 
-def test_raw_member_ids_use_verified_item_mapping():
-    left = guard.canonical_raw(_raw([1.0, 2.0, 3.0, 4.0], merged=["V33-1", "CMM-011-16"]))
-    right = guard.canonical_raw(_raw([1.0, 2.0, 3.0, 4.0], merged=["V33-1", "CMM-011-15"]))
-    mapped_left, mapped_right = guard.reconcile_references(
-        left, right, {"CMM-011-15": "CMM-011-16"}, {})
-    assert guard.diff_paths(mapped_left, mapped_right) == []
-    plain_left, plain_right = guard.reconcile_references(left, right, {}, {})
-    assert "/merged_issue_ids[1]" in guard.diff_paths(plain_left, plain_right)
+def test_reference_change_requires_frozen_exception_and_bounds():
+    doc, old_id, new_id = "DOC", "old|F|X", "new|F|X"
+    path, old_value, new_value = "/location/pre_group_issue_id", "CMM-013-8", "CMM-013-999999"
+    maxima = {("DOC", "CMM-013"): 8}
+    allowed, reason, entry = guard.reference_change_allowed(
+        doc, old_id, new_id, path, old_value, new_value, {}, maxima)
+    assert not allowed and "冻结例外" in reason and entry is None
+
+    key = (doc, old_id, new_id, path,
+           guard.json.dumps(old_value, ensure_ascii=False, sort_keys=True),
+           guard.json.dumps(new_value, ensure_ascii=False, sort_keys=True))
+    exceptions = {key: {"doc": doc, "old_value": old_value, "new_value": new_value}}
+    allowed, reason, entry = guard.reference_change_allowed(
+        doc, old_id, new_id, path, old_value, new_value, exceptions, maxima)
+    assert not allowed and "超出基线 ID 范围" in reason
+
+    allowed, _, _ = guard.reference_change_allowed(
+        doc, old_id, new_id, path, "CMM-013-8", "CMM-013-7",
+        {(doc, old_id, new_id, path,
+          guard.json.dumps("CMM-013-8", ensure_ascii=False, sort_keys=True),
+          guard.json.dumps("CMM-013-7", ensure_ascii=False, sort_keys=True)): {"ok": True}},
+        maxima)
+    assert allowed
+
+    # 错误现存成员：新值在范围内但不在冻结例外清单 → 拒收
+    allowed, reason, _ = guard.reference_change_allowed(
+        doc, old_id, new_id, path, "CMM-013-8", "CMM-013-7", {}, maxima)
+    assert not allowed and "冻结例外" in reason
+    # 跨文档：例外条目属于别的文档 → 拒收
+    cross_doc_exceptions = {("OTHER", old_id, new_id, path,
+                             guard.json.dumps("CMM-013-8", ensure_ascii=False, sort_keys=True),
+                             guard.json.dumps("CMM-013-7", ensure_ascii=False, sort_keys=True)): {"ok": True}}
+    allowed, _, _ = guard.reference_change_allowed(
+        doc, old_id, new_id, path, "CMM-013-8", "CMM-013-7", cross_doc_exceptions, maxima)
+    assert not allowed
+
+
+def test_reference_id_bounds_and_unknown_prefix():
+    maxima = {("DOC", "CMM-013"): 8, ("DOC", "CMM-011"): 18}
+    assert guard.reference_id_allowed("CMM-013-8", "DOC", maxima)
+    assert guard.reference_id_allowed("CMM-011-15", "DOC", maxima)
+    assert not guard.reference_id_allowed("CMM-013-999999", "DOC", maxima)
+    assert not guard.reference_id_allowed("CMM-999-1", "DOC", maxima)
+    assert not guard.reference_id_allowed(16, "DOC", maxima)
+
+
+def test_membership_must_match_related_findings():
+    good = _raw([1.0, 2.0, 3.0, 4.0], merged=["V33-1", "CMM-011-16"],
+                related=["V33-1", "CMM-011-16"])
+    assert guard.membership_consistent(good)
+    bad = _raw([1.0, 2.0, 3.0, 4.0], merged=["V33-1", "CMM-011-999999"],
+               related=["V33-1", "CMM-011-16"])
+    assert not guard.membership_consistent(bad)
+
+
+def test_cross_representation_reference_view_detects_mismatch():
+    review = _raw([1.0, 2.0, 3.0, 4.0], pre="CMM-013-999999")
+    entity = _raw([1.0, 2.0, 3.0, 4.0], pre="CMM-013-8")
+    assert guard.reference_view(review) != guard.reference_view(entity)
+
+
+def test_exception_bidirectional_conflicts():
+    entries = [
+        {"doc": "DOC", "path": "/location/pre_group_issue_id", "old_value": "A-1", "new_value": "A-2"},
+        {"doc": "DOC", "path": "/location/pre_group_issue_id", "old_value": "A-1", "new_value": "A-2"},
+        {"doc": "DOC", "path": "/location/pre_group_issue_id", "old_value": "A-1", "new_value": "A-3"},
+    ]
+    conflicts = guard.exception_bidirectional_conflicts(entries)
+    assert conflicts and conflicts[0]["family"] == "pre"
+
+
+def test_count_exception_requires_exact_values_and_removed_count():
+    path = "/unresolved_rules[1]/partial_findings_count"
+    key = ("DOC", "old|N|X", "new|N|X", path)
+    exceptions = {key: {"old_count": 1, "new_count": None, "rule_id": "R1", "removed_count": 1}}
+    assert guard.count_change_allowed("DOC", "old|N|X", "new|N|X", path, 1, None, "R1", 1, exceptions)[0]
+    assert guard.count_change_allowed("DOC", "old|N|X", "new|N|X", path, 1, 0, "R1", 1, exceptions)[0]
+    assert not guard.count_change_allowed("DOC", "old|N|X", "new|N|X", path, 1, 999, "R1", 1, exceptions)[0]
+    assert not guard.count_change_allowed("DOC", "old|N|X", "new|N|X", path, 1, 2, "R1", 1, exceptions)[0]
+    assert not guard.count_change_allowed("DOC", "old|N|X", "new|N|X", path, 2, None, "R1", 1, exceptions)[0]
+    assert not guard.count_change_allowed("DOC", "old|N|X", "new|N|X", path, 1, None, "R2", 1, exceptions)[0]
 
 
 def test_fingerprint_rejects_severity_drift():

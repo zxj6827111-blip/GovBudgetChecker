@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import csv
 import gzip
+import hashlib
 import importlib.util
 import json
 import re
@@ -274,65 +275,173 @@ def canonical_raw(raw: Dict[str, Any]) -> Dict[str, Any]:
     return data
 
 
-#: 只对明确的问题引用字段做“字面量相等 或 已验证新旧映射后相等”的归一；
-#: 其他 location 字段原样比较，不做整体豁免。
-_REF_FIELD_RE = re.compile(r"(?:^|_)(?:issue_id|issue_ids)$")
+#: 引用字段：只接受冻结例外清单里的精确旧/新值；不做运行时推导。
+_REF_KEY_NAMES = {"pre_group_issue_id", "member_issue_ids", "merged_issue_ids"}
+_ID_RE = re.compile(r"^([A-Za-z][A-Za-z0-9-]*)-(\d+)$")
 
 
-def _ref_equal(left: Any, right: Any, mapping: Dict[str, str]) -> bool:
-    if left == right:
-        return True
-    if isinstance(left, str) and isinstance(right, str):
-        return mapping.get(right) == left
-    if isinstance(left, list) and isinstance(right, list):
-        mapped = [mapping.get(value, value) if isinstance(value, str) else value for value in right]
-        return sorted(map(str, left)) == sorted(map(str, mapped))
-    return False
+def is_reference_path(path: str) -> bool:
+    key = path.rstrip("/").split("/")[-1].split("[")[0]
+    return key in _REF_KEY_NAMES
 
 
-def _collect_ref_votes(left: Any, right: Any, votes: Dict[Tuple[str, str], set],
-                       doc: str, path: str = "") -> None:
-    """同结构递归收集“文档内 新引用 → 旧引用”的共现票；只对引用字段收集。"""
-    if isinstance(left, dict) and isinstance(right, dict):
-        for key in sorted(set(left) & set(right)):
-            if _REF_FIELD_RE.search(key):
-                old_val, new_val = left[key], right[key]
-                if isinstance(old_val, str) and isinstance(new_val, str) and old_val != new_val:
-                    votes.setdefault((doc, new_val), set()).add(old_val)
-                elif isinstance(old_val, list) and isinstance(new_val, list) \
-                        and len(old_val) == len(new_val):
-                    for old_item, new_item in zip(old_val, new_val, strict=True):
-                        if isinstance(old_item, str) and isinstance(new_item, str) and old_item != new_item:
-                            votes.setdefault((doc, new_item), set()).add(old_item)
-            _collect_ref_votes(left[key], right[key], votes, doc, f"{path}/{key}")
-    elif isinstance(left, list) and isinstance(right, list) and len(left) == len(right):
-        for index, (old_item, new_item) in enumerate(zip(left, right, strict=True)):
-            _collect_ref_votes(old_item, new_item, votes, doc, f"{path}[{index}]")
+def get_path(value: Any, path: str, default: Any = None) -> Any:
+    current = value
+    try:
+        for key, index in re.findall(r"/([^/\[]+)|\[(\d+)\]", path):
+            current = current[key] if key else current[int(index)]
+    except (KeyError, IndexError, TypeError):
+        return default
+    return current
 
 
-def reconcile_references(left: Any, right: Any, item_map: Dict[str, str],
-                         pre_group_map: Dict[str, str], path: str = ""):
-    """把“字面量相等或已验证映射相等”的引用字段替换为占位符，其余原样保留。
+def reference_view(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """抽取一个条目的全部引用字段，用于跨表示一致性比较。"""
+    view: Dict[str, Any] = {}
+    for key in _REF_KEY_NAMES:
+        if key in raw:
+            view[key] = raw[key]
+    location = raw.get("location") if isinstance(raw.get("location"), dict) else {}
+    for key in _REF_KEY_NAMES:
+        if key in location:
+            view[f"location.{key}"] = location[key]
+    related = [ref.get("location", {}).get("pre_group_issue_id")
+               for ref in location.get("related_findings") or []
+               if isinstance(ref, dict)]
+    if any(related):
+        view["related_findings_pre"] = related
+    return view
 
-    ``pre_group_issue_id`` 是合并前的问题组代表 ID，可能与当前条目 ID 不同；
-    它只用同规则组内按顺序验证过的 pre-group 映射，不用条目 ID 映射。
-    """
-    if isinstance(left, dict) and isinstance(right, dict):
-        out_left, out_right = {}, {}
-        for key in sorted(set(left) | set(right)):
-            mapping = pre_group_map if key == "pre_group_issue_id" else item_map
-            if key in left and key in right and _REF_FIELD_RE.search(key) \
-                    and _ref_equal(left[key], right[key], mapping):
-                out_left[key] = out_right[key] = "<verified-reference>"
-            else:
-                out_left[key], out_right[key] = reconcile_references(
-                    left.get(key), right.get(key), item_map, pre_group_map, f"{path}/{key}")
-        return out_left, out_right
-    if isinstance(left, list) and isinstance(right, list) and len(left) == len(right):
-        pairs = [reconcile_references(a, b, item_map, pre_group_map, f"{path}[{index}]")
-                 for index, (a, b) in enumerate(zip(left, right, strict=True))]
-        return [pair[0] for pair in pairs], [pair[1] for pair in pairs]
-    return left, right
+
+def membership_consistent(raw: Dict[str, Any]) -> bool:
+    """merged/member 列表必须与 related_findings 中的成员引用一致。"""
+    location = raw.get("location") if isinstance(raw.get("location"), dict) else {}
+    members: List[str] = []
+    for source in (raw, location):
+        for key in ("member_issue_ids", "merged_issue_ids"):
+            value = source.get(key)
+            if isinstance(value, list):
+                members.extend(str(item) for item in value)
+    related = [str(ref.get("location", {}).get("pre_group_issue_id"))
+               for ref in location.get("related_findings") or []
+               if isinstance(ref, dict) and ref.get("location", {}).get("pre_group_issue_id")]
+    if members and related:
+        return sorted(set(members)) == sorted(set(related))
+    return True
+
+
+def load_entity_index(run: Path) -> Dict[Tuple[str, str], Dict[str, Any]]:
+    """result.issues.* 的原始实体表（跨表示一致性用），按 id 去重。"""
+    index: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for path in sorted((run / "status").glob("*.status.json.gz")):
+        sid = path.name.split(".")[0]
+        status = read_gz(path)
+        buckets = ((status.get("result") or {}).get("issues") or {})
+        for bucket in buckets.values():
+            if not isinstance(bucket, list):
+                continue
+            for item in bucket:
+                if item.get("id"):
+                    index.setdefault((sid, item["id"]), item)
+    return index
+
+
+def collect_id_maxima(run: Path) -> Dict[Tuple[str, str], int]:
+    """基线 run 中每个文档、每个 ID 前缀的最大编号（重编号只能变小）。"""
+    maxima: Dict[Tuple[str, str], int] = {}
+
+    def visit(sid: str, value: Any) -> None:
+        if isinstance(value, str):
+            match = _ID_RE.fullmatch(value)
+            if match:
+                key = (sid, match.group(1))
+                maxima[key] = max(maxima.get(key, 0), int(match.group(2)))
+        elif isinstance(value, dict):
+            for item in value.values():
+                visit(sid, item)
+        elif isinstance(value, list):
+            for item in value:
+                visit(sid, item)
+
+    for path in sorted((run / "status").glob("*.status.json.gz")):
+        sid = path.name.split(".")[0]
+        visit(sid, read_gz(path))
+    return maxima
+
+
+def reference_id_allowed(value: Any, doc: str, maxima: Dict[Tuple[str, str], int]) -> bool:
+    if not isinstance(value, str):
+        return False
+    match = _ID_RE.fullmatch(value)
+    if not match:
+        return False
+    suffix = int(match.group(2))
+    return 1 <= suffix <= maxima.get((doc, match.group(1)), 0)
+
+
+def load_reference_exceptions(path: Path):
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    refs = {}
+    for entry in payload.get("entries") or []:
+        key = (entry["doc"], entry["old_id"], entry["new_id"], entry["path"],
+               json.dumps(entry["old_value"], ensure_ascii=False, sort_keys=True),
+               json.dumps(entry["new_value"], ensure_ascii=False, sort_keys=True))
+        refs[key] = entry
+    counts = {(entry["doc"], entry["old_id"], entry["new_id"], entry["path"]): entry
+              for entry in payload.get("count_exceptions") or []}
+    return refs, counts, payload
+
+
+def reference_change_allowed(doc: str, old_id: str, new_id: str, path: str,
+                             old_value: Any, new_value: Any,
+                             exceptions: Dict[Any, Dict[str, Any]],
+                             maxima: Dict[Tuple[str, str], int]):
+    """引用变化只有在冻结例外清单精确命中且新 ID 未超出基线范围时放行。"""
+    key = (doc, old_id, new_id, path,
+           json.dumps(old_value, ensure_ascii=False, sort_keys=True),
+           json.dumps(new_value, ensure_ascii=False, sort_keys=True))
+    entry = exceptions.get(key)
+    if entry is None:
+        return False, "引用变化不在冻结例外清单", None
+    if not reference_id_allowed(new_value, doc, maxima):
+        return False, f"新引用 {new_value} 超出基线 ID 范围", None
+    return True, "", entry
+
+
+def count_change_allowed(doc: str, old_id: str, new_id: str, path: str,
+                         old_count: Any, new_count: Any, rule_id: Optional[str],
+                         expected_removed: int, exceptions: Dict[Any, Dict[str, Any]]):
+    """计数变化只允许冻结条目；旧/新值、规则与移除数量必须精确一致。"""
+    entry = exceptions.get((doc, old_id, new_id, path))
+    if entry is None:
+        return False, "计数变化不在冻结例外清单", None
+    expected_new = entry.get("new_count")
+    new_ok = new_count in (None, 0) if expected_new is None else new_count == expected_new
+    if entry.get("old_count") != old_count or not new_ok:
+        return False, f"计数 {old_count}->{new_count} 与冻结例外值不符", None
+    if entry.get("rule_id") != rule_id or entry.get("removed_count") != expected_removed:
+        return False, "规则或目标移除数量与冻结例外不符", None
+    if (old_count or 0) - (new_count or 0) != expected_removed:
+        return False, "计数差与目标移除数量不符", None
+    return True, "", entry
+
+
+def exception_bidirectional_conflicts(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    groups: Dict[Tuple[str, str], List[Tuple[str, str]]] = {}
+    for entry in entries:
+        family = "pre" if entry["path"].endswith("pre_group_issue_id") else "members"
+        pairs = groups.setdefault((entry["doc"], family), [])
+        pair = (str(entry["new_value"]), str(entry["old_value"]))
+        if pair not in pairs:
+            pairs.append(pair)
+    conflicts = []
+    for (doc, family), pairs in groups.items():
+        news = [new for new, _ in pairs]
+        olds = [old for _, old in pairs]
+        if len(news) != len(set(news)) or len(olds) != len(set(olds)):
+            conflicts.append({"doc": doc, "family": family,
+                              "pairs": [{"new": n, "old": o} for n, o in pairs]})
+    return conflicts
 
 
 def diff_paths(left: Any, right: Any, path: str = "") -> List[str]:
@@ -372,6 +481,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--targets", required=True, help="目标行 CSV（判断移除是否符合预期）")
     parser.add_argument("--out", required=True, help="独立评估输出目录（不得已存在非空）")
     parser.add_argument("--match-script", default=str(DEFAULT_MATCH), help="gold_baseline_match.py 路径")
+    parser.add_argument("--reference-exceptions", default=str(HERE / "fp_batch1_reference_exceptions.json"),
+                        help="冻结的引用/计数精确例外清单")
     args = parser.parse_args(argv)
 
     run = Path(args.run).resolve()
@@ -418,54 +529,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     # F5：直接对照基线 run 的原始 status（bbox/location/证据结构/结构化期望值）。
     old_raw_index = load_raw_index(baseline_run)
     new_raw_index = load_raw_index(run)
-    new_to_old_raw: Dict[str, Dict[str, str]] = {}
-    for old, new, _ in pairs:
-        if old.get("raw_id") and new.get("raw_id"):
-            new_to_old_raw.setdefault(old["doc"], {})[new["raw_id"]] = old["raw_id"]
-    # pre_group_issue_id 是合并前的问题组代表 ID，可能与当前条目 ID 不同；按同文档
-    # 同规则组内顺序验证后建立 new_pre → old_pre 映射，不套用条目 ID 映射。
-    pre_groups: Dict[Tuple[str, str], List[Tuple[str, str, str, str]]] = defaultdict(list)
-    for old, new, _ in pairs:
-        raw_old, raw_new = raw_item(old_raw_index, old), raw_item(new_raw_index, new)
-        if raw_old is None or raw_new is None:
-            continue
-        loc_old = raw_old.get("location") if isinstance(raw_old.get("location"), dict) else {}
-        loc_new = raw_new.get("location") if isinstance(raw_new.get("location"), dict) else {}
-        old_pre, new_pre = loc_old.get("pre_group_issue_id"), loc_new.get("pre_group_issue_id")
-        if old_pre and new_pre:
-            pre_groups[(old["doc"], old["rule"])].append((old_pre, new_pre, old["id"], new["id"]))
-    pre_group_map: Dict[Tuple[str, str], str] = {}
-    pre_group_details = []
-    for (doc, rule), entries in pre_groups.items():
-        olds = [entry[0] for entry in entries]
-        news = [entry[1] for entry in entries]
-        verified = len(olds) == len(set(olds)) and len(news) == len(set(news))
-        if verified:
-            for old_pre, new_pre, _, _ in entries:
-                pre_group_map[(doc, new_pre)] = old_pre
-        pairs_detail = [{"old_id": entry[2], "new_id": entry[3],
-                         "old_pre": entry[0], "new_pre": entry[1]} for entry in entries]
-        pre_group_details.append({
-            "doc": doc, "rule": rule, "count": len(entries), "verified": verified,
-            "changed_count": sum(1 for item in pairs_detail if item["old_pre"] != item["new_pre"]),
-            "pairs": pairs_detail})
-    # 合并成员 ID（如 member_issue_ids/merged_issue_ids 指向已合并、未单独输出的问题）
-    # 没有条目级配对；按同结构同位置的共现票建立映射，只有票数唯一才采用。
-    ref_votes: Dict[Tuple[str, str], set] = {}
-    for old, new, _ in pairs:
-        raw_old, raw_new = raw_item(old_raw_index, old), raw_item(new_raw_index, new)
-        if raw_old is not None and raw_new is not None:
-            _collect_ref_votes(raw_old, raw_new, ref_votes, old["doc"])
-    vote_map = {key: next(iter(olds)) for key, olds in ref_votes.items() if len(olds) == 1}
-    vote_conflicts = {f"{key[0]}|{key[1]}": sorted(olds)
-                      for key, olds in ref_votes.items() if len(olds) > 1}
-    raw_fingerprint_drift, raw_missing, reference_mappings = [], [], []
-    approved_ledger_detail = []
-    approved_notice_counts = []
-    target_rules_by_doc: Dict[str, set] = defaultdict(set)
+    old_entity_index = load_entity_index(baseline_run)
+    new_entity_index = load_entity_index(run)
+    id_maxima = collect_id_maxima(baseline_run)
+    reference_exceptions_path = Path(args.reference_exceptions).resolve()
+    ref_exceptions, count_exceptions, exceptions_payload = load_reference_exceptions(
+        reference_exceptions_path)
+    reference_exceptions_sha256 = hashlib.sha256(reference_exceptions_path.read_bytes()).hexdigest()
+    exception_conflicts = exception_bidirectional_conflicts(list(ref_exceptions.values()))
+    target_removal_counts = Counter()
     for (sid, _), row in targets.items():
         if row["expect_after"] == "移除":
-            target_rules_by_doc[sid].add(row["rule"])
+            target_removal_counts[(sid, row["rule"])] += 1
+
+    raw_fingerprint_drift, raw_missing = [], []
+    reference_exceptions_applied, count_exceptions_applied = [], []
+    used_reference_keys = set()
     for old, new, how in pairs:
         raw_old = raw_item(old_raw_index, old)
         raw_new = raw_item(new_raw_index, new)
@@ -473,51 +552,77 @@ def main(argv: Optional[List[str]] = None) -> int:
             raw_missing.append({"old_id": old["id"], "new_id": new["id"],
                                 "old_found": raw_old is not None, "new_found": raw_new is not None})
             continue
-        mapping = new_to_old_raw.get(old["doc"], {})
-        pre_map = {new_pre: old_pre for (doc, new_pre), old_pre in pre_group_map.items()
-                   if doc == old["doc"]}
-        doc_votes = {new_ref: old_ref for (doc, new_ref), old_ref in vote_map.items()
-                     if doc == old["doc"]}
-        item_effective = {**doc_votes, **mapping}
-        pre_effective = {**doc_votes, **pre_map}
+        reasons, drift_paths = [], []
+
+        # 1) 跨表示一致性：review_report 的引用必须与 result.issues 同一实体一致。
+        for label, raw, entity_index, item in (("old", raw_old, old_entity_index, old),
+                                                ("new", raw_new, new_entity_index, new)):
+            view = reference_view(raw)
+            if not view:
+                continue
+            entity_key = (item["doc"], item.get("raw_id"))
+            entity = entity_index.get(entity_key) if entity_key[1] else None
+            if entity is None:
+                reasons.append(f"{label} 引用在 result.issues 中没有对应实体")
+                drift_paths.append("/__cross_representation__")
+            elif reference_view(entity) != view:
+                reasons.append(f"{label} review_report 与 result.issues 的引用不一致")
+                drift_paths.append("/__cross_representation__")
+
+        # 2) 成员归属：member/merged 列表必须与 related_findings 的成员引用一致。
+        for label, raw in (("old", raw_old), ("new", raw_new)):
+            if not membership_consistent(raw):
+                reasons.append(f"{label} member/merged 与 related_findings 引用不一致")
+                drift_paths.append("/__membership__")
+
+        # 3) 逐字段：引用只认冻结例外清单；计数值按精确旧/新值与移除数量核验。
         left = canonical_raw(raw_old)
         right = canonical_raw(raw_new)
-        left_base, right_base = reconcile_references(left, right, {}, {})
-        left, right = reconcile_references(left, right, item_effective, pre_effective)
-        if (left_base, right_base) != (left, right):
-            reference_mappings.append({"old_id": old["id"], "new_id": new["id"],
-                                       "mapped_reference_ids": True})
-        paths = diff_paths(left, right)
-        if not paths:
-            continue
-        # 已批准的附带变化：O 层义务账本 detail 的规则 fail→pass，且没有其他字段变化。
-        if (old["tier"] == "O" and all(path == "/detail" for path in paths)
-                and re.search(r"=fail\b", str(raw_old.get("detail") or ""))
-                and re.search(r"=pass\b", str(raw_new.get("detail") or ""))):
-            approved_ledger_detail.append({"old_id": old["id"], "new_id": new["id"],
-                                           "old_detail": raw_old.get("detail"),
-                                           "new_detail": raw_new.get("detail")})
-            continue
-        # 已批准的附带变化：N 层“规则取数不足”提示里的 partial_findings_count 随目标
-        # 正式问题移除而变化；只在该计数所属规则确有目标移除时放行，并单独记账。
-        if (old["tier"] == "N" and paths
-                and all(re.fullmatch(r"/unresolved_rules\[\d+\]/partial_findings_count", path)
-                        for path in paths)):
-            old_rules = raw_old.get("unresolved_rules") or []
-            entries, approved = [], True
-            for path in paths:
-                index = int(re.search(r"\[(\d+)\]", path).group(1))
-                rule_id = (old_rules[index] or {}).get("rule_id") if index < len(old_rules) else None
-                if rule_id not in target_rules_by_doc.get(old["doc"], set()):
-                    approved = False
-                    break
-                entries.append({"rule_id": rule_id, "path": path})
-            if approved:
-                approved_notice_counts.append({"old_id": old["id"], "new_id": new["id"],
-                                               "changes": entries})
+        for path in diff_paths(left, right):
+            if is_reference_path(path):
+                try:
+                    old_value, new_value = get_path(left, path), get_path(right, path)
+                except (KeyError, IndexError, TypeError):
+                    reasons.append(f"{path} 引用无法读取")
+                    drift_paths.append(path)
+                    continue
+                allowed, reason, entry = reference_change_allowed(
+                    old["doc"], old["id"], new["id"], path, old_value, new_value,
+                    ref_exceptions, id_maxima)
+                if not allowed:
+                    reasons.append(f"{path} {reason}")
+                    drift_paths.append(path)
+                else:
+                    exception_key = (old["doc"], old["id"], new["id"], path,
+                                     json.dumps(old_value, ensure_ascii=False, sort_keys=True),
+                                     json.dumps(new_value, ensure_ascii=False, sort_keys=True))
+                    used_reference_keys.add(exception_key)
+                    reference_exceptions_applied.append(entry)
                 continue
-        raw_fingerprint_drift.append({"old_id": old["id"], "new_id": new["id"], "how": how,
-                                      "paths": paths[:20]})
+            count_match = re.fullmatch(r"/unresolved_rules\[(\d+)\]/partial_findings_count", path)
+            if count_match and old["tier"] == "N":
+                old_value, new_value = get_path(left, path), get_path(right, path)
+                old_rules = raw_old.get("unresolved_rules") or []
+                index = int(count_match.group(1))
+                rule_id = (old_rules[index] or {}).get("rule_id") if index < len(old_rules) else None
+                expected_removed = target_removal_counts.get((old["doc"], rule_id), 0)
+                allowed, reason, entry = count_change_allowed(
+                    old["doc"], old["id"], new["id"], path, old_value, new_value,
+                    rule_id, expected_removed, count_exceptions)
+                if not allowed:
+                    reasons.append(f"{path} {reason}")
+                else:
+                    count_exceptions_applied.append(entry)
+                continue
+            reasons.append("非引用/非冻结计数字段漂移")
+            drift_paths.append(path)
+        if reasons:
+            raw_fingerprint_drift.append({"old_id": old["id"], "new_id": new["id"], "how": how,
+                                          "paths": sorted(set(drift_paths))[:20],
+                                          "reasons": list(dict.fromkeys(reasons))[:10]})
+
+    unused_reference_exceptions = [entry for key, entry in ref_exceptions.items()
+                                   if key not in used_reference_keys]
 
     # 旧裁决只能通过唯一对齐继承；移除条目必须全部是目标 CSV 的“移除”行。
     unused, unexpected_unused, missing_decision = [], [], []
@@ -631,7 +736,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                                                  "added_formal", "decisions_unused_unexpected", "missing_decision",
                                                  "review_required", "resolved_duplicates", "fingerprint_drift",
                                                  "decision_drift", "raw_fingerprint_drift", "raw_missing",
-                                                 "raw_reference_mappings", "approved_ledger_detail_changes",
+                                                 "reference_exceptions_applied", "reference_exceptions_unused",
+                                                 "reference_exception_conflicts", "count_exceptions_applied",
                                                  "headline", "ok")},
                          ensure_ascii=False, indent=1, default=dict)[:6000])
         return 0 if summary["ok"] else 1
@@ -649,11 +755,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         "review_required": review, "resolved_duplicates": resolved_duplicates,
         "fingerprint_drift": fingerprint_drift, "decision_drift": [],
         "raw_fingerprint_drift": raw_fingerprint_drift, "raw_missing": raw_missing,
-        "raw_reference_mappings": reference_mappings,
-        "pre_group_reference_mappings": pre_group_details,
-        "reference_vote_conflicts": vote_conflicts,
-        "approved_ledger_detail_changes": approved_ledger_detail,
-        "approved_notice_count_changes": approved_notice_counts,
+        "reference_exceptions_applied": reference_exceptions_applied,
+        "reference_exceptions_unused": unused_reference_exceptions,
+        "reference_exception_conflicts": exception_conflicts,
+        "count_exceptions_applied": count_exceptions_applied,
+        "reference_exceptions_file": str(reference_exceptions_path),
+        "reference_exceptions_sha256": reference_exceptions_sha256,
         "headline": None,
     }
     if review or missing_decision:
@@ -713,7 +820,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                      and not unexpected_unused and not missing_decision and not review
                      and not fingerprint_drift and not decision_drift
                      and not raw_fingerprint_drift and not raw_missing
-                     and not vote_conflicts)
+                     and not exception_conflicts)
     return write_reports(summary)
 
 
