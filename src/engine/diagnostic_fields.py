@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import threading
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
@@ -353,16 +354,63 @@ _RULE_LEVEL_PATTERNS = (
     (("解析存在不确定",), "table_mapping_incomplete", "instance_uid"),
     (("金额单位未识别", "金额单位不一致"), "scope_unconfirmed", "fund_scope"),
     (("财政年度",), "scope_unconfirmed", "year"),
-    (("列身份", "列组", "未绑定", "缺列", "列宽"), "column_identity_unconfirmed", "column"),
+    (("列身份", "列组", "未绑定", "缺列", "列宽", "未登记「决算数」列", "列段内未定位", "未定位到功能分类"),
+     "column_identity_unconfirmed", "column"),
     (("行身份", "行未", "重复行", "合计行", "层级", "科目编码"), "row_level_unresolved", "row"),
     (("身份不一致", "行内编码与名称", "编码与名称指向不同"), "row_level_unresolved", "row"),
+    (("没有唯一当前事实",), "cell_unbound", "cell"),
+    (("识别状态不可作操作数",), "cell_low_confidence", "cell"),
+    (("缺少明确可用数值", "不能按零", "为横线", "分项有空白"), "cell_blank_semantics_unknown", "cell"),
+    (("存在多个实例",), "table_mapping_incomplete", "instance_uid"),
+    (("来源表仍有未完成读取",), "table_mapping_incomplete", "instance_uid"),
+    (("识别风险阻断",), "cell_low_confidence", "cell"),
+    (("评级类别未识别",), "row_level_unresolved", "row"),
     (("未取到", "取不到", "取数失败", "没有可用金额事实", "原文未定位"),
      "table_mapping_incomplete", "instance_uid"),
 )
 
+#: “说明里没有这段表述”类文本 → 用说明章节标题定位页码（找到才写，找不到写 null）。
+_SECTION_HINTS = (
+    ("基本支出", ("基本支出情况说明", "基本支出")),
+    ("功能分类", ("支出决算情况说明", "功能分类")),
+    ("人员经费", ("基本支出情况说明", "人员经费")),
+    ("公用经费", ("基本支出情况说明", "公用经费")),
+    ("财政拨款收支总计", ("财政拨款收支总表", "财政拨款")),
+    ("决算情况说明", ("决算情况说明",)),
+    ("三公", ("三公",)),
+)
+_DEFAULT_SECTION_HINTS = ("情况说明", "决算")
 
-def rule_level_entry(text: Any, rule_id: Any = None) -> Dict[str, Any]:
+
+def _section_page(doc: Any, text: str) -> Optional[int]:
+    hints: tuple = _DEFAULT_SECTION_HINTS
+    for token, values in _SECTION_HINTS:
+        if token in text:
+            hints = values
+            break
+    pages = getattr(doc, "page_texts", None) or []
+    for page_number, page in enumerate(pages, 1):
+        content = str(page or "")
+        if any(hint in content for hint in hints):
+            return page_number
+    return None
+
+
+_TABLE_REF_RE = re.compile(r"第(\d+)页([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def rule_level_entry(text: Any, rule_id: Any = None, doc: Any = None) -> Dict[str, Any]:
     value = str(text or "")
+    # 来源表映射失败：文本本身带“第N页表代码”，阻断位置直接取它，不降级成模糊规则级。
+    if "来源表映射/读取未完成" in value:
+        blockers = [
+            {"dimension": "instance_uid", "ref": f"第{page}页{table}",
+             "reason_code": "table_mapping_incomplete"}
+            for page, table in dict.fromkeys(_TABLE_REF_RE.findall(value))
+        ]
+        if blockers:
+            return {"reason_codes": ["table_mapping_incomplete"], "blocked_by": blockers,
+                    "missing_operands": [], "candidates": []}
     for tokens, code, dimension in _RULE_LEVEL_PATTERNS:
         if any(token in value for token in tokens):
             return {
@@ -372,6 +420,16 @@ def rule_level_entry(text: Any, rule_id: Any = None) -> Dict[str, Any]:
                 "missing_operands": [],
                 "candidates": [],
             }
+    if any(token in value for token in ("未提取到", "未识别到", "未披露", "无法绑定", "未定位", "未找到")):
+        page = _section_page(doc, value) if doc is not None else None
+        return {
+            "reason_codes": ["text_statement_absent"],
+            "blocked_by": [],
+            "missing_operands": [text_missing_operand(
+                section="决算情况说明", role=value[:40] or "说明金额", page=page,
+                row_key=None, column="说明表述", stage="决算")],
+            "candidates": [],
+        }
     return default_entry("insufficient_data")
 
 
@@ -403,7 +461,7 @@ def diagnostics_for_texts(doc: Any, texts: Iterable[Any], *, rule_id: Any = None
         if not str(text or "").strip():
             continue
         try:
-            finalized = finalize(rule_level_entry(text, rule_id), rule_id=rule_id,
+            finalized = finalize(rule_level_entry(text, rule_id, doc), rule_id=rule_id,
                                  sub_check_id=sub_check_id, obligation_id=obligation_id)
         except ValueError:
             continue

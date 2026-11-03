@@ -80,6 +80,28 @@ def _bilateral_blank_padding(table, rows, mappings_by_col, measure_columns):
     return positions
 
 
+def _record_projection_gap(doc, message, *, codes, blockers=(), missing=None):
+    """DH-02：把投影失败登记成结构化卡点；位置只取表/单元格自身给出的信息。"""
+    from .diagnostic_fields import record_gap
+
+    try:
+        record_gap(doc, text, reason_codes=list(codes), blocked_by=list(blockers),
+                   missing_operands=list(missing or ()))
+    except Exception:  # noqa: BLE001 - 登记失败不影响原结论
+        pass
+
+
+def _table_blocker(table_code, ref, code):
+    from .diagnostic_fields import blocker
+
+    return blocker(dimension='instance_uid', ref=f'{table_code}:{ref}', reason_code=code)
+
+
+def _cell_blocker(cell_id, code):
+    from .diagnostic_fields import blocker
+
+    return blocker(dimension='cell', ref=str(cell_id), reason_code=code)
+
 def fact_bound_table_rows(doc, table_name, *, strict_unknown_values=False):
     artifact = getattr(doc, "parse_artifact", None)
     context = getattr(doc, "fact_context", None)
@@ -97,13 +119,22 @@ def fact_bound_table_rows(doc, table_name, *, strict_unknown_values=False):
         context.file_hash != artifact.source_file_hash
         or context.parse_run_uid != artifact.parse_run_uid
     ):
-        raise ProjectionUnavailable("统一事实与解析原件或运行身份不一致")
+        message = "统一事实与解析原件或运行身份不一致"
+        _record_projection_gap(doc, message, codes=['table_mapping_incomplete'],
+                               blockers=[_table_blocker(code, 'parse-version', 'table_mapping_incomplete')])
+        raise ProjectionUnavailable(message)
     if len(instances) != 1:
-        raise ProjectionUnavailable(f"{table_name} 存在多个实例，需确认主体/年度/口径")
+        message = f"{table_name} 存在多个实例，需确认主体/年度/口径"
+        _record_projection_gap(doc, message, codes=['table_mapping_incomplete'],
+                               blockers=[_table_blocker(code, f'{len(instances)}个实例', 'table_mapping_incomplete')])
+        raise ProjectionUnavailable(message)
     instance = instances[0]
     table = _fragment_for_instance(artifact, instance)
     if table is None:
-        raise ProjectionUnavailable(f"{table_name} 逻辑实例没有物理片段")
+        message = f"{table_name} 逻辑实例没有物理片段"
+        _record_projection_gap(doc, message, codes=['table_mapping_incomplete'],
+                               blockers=[_table_blocker(code, 'no-fragment', 'table_mapping_incomplete')])
+        raise ProjectionUnavailable(message)
     from src.services.fiscal_empty_disclosure import disclosed_empty_fiscal_table
 
     if disclosed_empty_fiscal_table(doc, instance, table):
@@ -111,15 +142,28 @@ def fact_bound_table_rows(doc, table_name, *, strict_unknown_values=False):
         # usable disclosure evidence, not a source of zero monetary facts.
         return [list(row) for row in table.rows]
     if context is None:
-        raise ProjectionUnavailable(f"{table_name} 已识别，但没有当前统一事实")
+        message = f"{table_name} 已识别，但没有当前统一事实"
+        _record_projection_gap(doc, message, codes=['table_mapping_incomplete'],
+                               blockers=[_table_blocker(code, 'no-current-facts', 'table_mapping_incomplete')])
+        raise ProjectionUnavailable(message)
     rows = [list(row) for row in table.rows]
     widths = {len(row) for row in rows if any(str(cell or "").strip() for cell in row)}
     if len(widths) > 1:
-        raise ProjectionUnavailable(f"{table_name} 跨页列宽/列身份变化，无法使用同一列映射")
+        message = f"{table_name} 跨页列宽/列身份变化，无法使用同一列映射"
+        from .diagnostic_fields import blocker
+        _record_projection_gap(doc, message, codes=['column_width_drift'],
+                               blockers=[blocker(dimension='column', ref=f'{code}:跨页列宽',
+                                                 reason_code='column_width_drift')])
+        raise ProjectionUnavailable(message)
     mappings = _column_mappings_for_instance(instance, table)
     measure_columns = {int(mapping["source_col_idx"]) for mapping in mappings}
     if not measure_columns:
-        raise ProjectionUnavailable(f"{table_name} 金额列尚未绑定")
+        message = f"{table_name} 金额列尚未绑定"
+        from .diagnostic_fields import blocker
+        _record_projection_gap(doc, message, codes=['column_identity_unconfirmed'],
+                               blockers=[blocker(dimension='column', ref=f'{code}:金额列',
+                                                 reason_code='column_identity_unconfirmed')])
+        raise ProjectionUnavailable(message)
     by_cell = {}
     for fact in context.facts:
         if fact.table_code != code or fact.instance_uid != instance.instance_uid:
@@ -148,7 +192,11 @@ def fact_bound_table_rows(doc, table_name, *, strict_unknown_values=False):
             # 有金额的业务行中，缺失分项不能被旧规则的 `or 0` 静默吞掉。
             if strict_unknown_values and any(c.numeric_value is not None and c.col_idx in measure_columns
                    for c in table.cells if c.row_idx == cell.row_idx):
-                raise ProjectionUnavailable(f"{table_name} 第{cell.row_idx + 1}行第{cell.col_idx + 1}列为空白，不能按零计算")
+                message = f"{table_name} 第{cell.row_idx + 1}行第{cell.col_idx + 1}列为空白，不能按零计算"
+                _record_projection_gap(doc, message, codes=['cell_blank_semantics_unknown'],
+                                       blockers=[_cell_blocker(f'{code}:r{cell.row_idx}c{cell.col_idx}',
+                                                               'cell_blank_semantics_unknown')])
+                raise ProjectionUnavailable(message)
             continue
         if (cell.row_idx, cell.col_idx) in padding_positions:
             continue  # 真实占位零仍在表格中；它没有右侧业务行，不能借左侧标签生成事实。
@@ -157,12 +205,19 @@ def fact_bound_table_rows(doc, table_name, *, strict_unknown_values=False):
             # 保留原件破折号的展示角色，不要求它拥有数字事实，也不将其转换成零。
             # 后续需要金额的关系仍会如实报取数不足。
             if strict_unknown_values:
-                raise ProjectionUnavailable(f"{table_name} 第{cell.row_idx + 1}行第{cell.col_idx + 1}列为横线，计算含义未确认")
+                message = f"{table_name} 第{cell.row_idx + 1}行第{cell.col_idx + 1}列为横线，计算含义未确认"
+                _record_projection_gap(doc, message, codes=['cell_blank_semantics_unknown'],
+                                       blockers=[_cell_blocker(f'{code}:r{cell.row_idx}c{cell.col_idx}',
+                                                               'cell_blank_semantics_unknown')])
+                raise ProjectionUnavailable(message)
             continue
         cell_id = f"{cell.origin_fragment_uid or table.fragment_uid}:r{cell.origin_row_idx if cell.origin_row_idx is not None else cell.row_idx}c{cell.origin_col_idx if cell.origin_col_idx is not None else cell.col_idx}"
         facts = by_cell.get(cell_id, [])
         if len(facts) != 1:
-            raise ProjectionUnavailable(f"{table_name} 单元格 {cell_id} 没有唯一当前事实")
+            message = f"{table_name} 单元格 {cell_id} 没有唯一当前事实"
+            _record_projection_gap(doc, message, codes=['cell_unbound'],
+                                   blockers=[_cell_blocker(cell_id, 'cell_unbound')])
+            raise ProjectionUnavailable(message)
         fact = facts[0]
         reason = operand_rejection_reason(fact, context.org_name)
         mapping = mappings_by_col[cell.col_idx]

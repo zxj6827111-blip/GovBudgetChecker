@@ -1158,6 +1158,17 @@ def _build_docx_document_xml(
                 ("状态", str(item.get("status") or "")),
                 ("原因", str(item.get("reason_label") or "")),
                 ("说明", str(item.get("detail") or item.get("gap_note") or "")),
+                # DH-02：结构化卡点随未完成清单一起导出（空值不隐藏字段名）。
+                ("原因码", "、".join(str(code) for code in (item.get("reason_codes") or []))),
+                ("阻断项", "；".join(
+                    f"{entry.get('dimension')}:{entry.get('ref')}({entry.get('reason_code')})"
+                    for entry in (item.get("blocked_by") or []) if isinstance(entry, dict))),
+                ("缺数位置", "；".join(
+                    f"{entry.get('source')}:{entry.get('table_code') or entry.get('section')}"
+                    f"/第{entry.get('page')}页/{entry.get('row_key') or ''}"
+                    for entry in (item.get("missing_operands") or []) if isinstance(entry, dict))),
+                ("下一步", str(item.get("next_action") or "")),
+                ("根因键", str(item.get("root_cause_key") or "")),
             ]))
 
     review_report = status_payload.get("review_report")

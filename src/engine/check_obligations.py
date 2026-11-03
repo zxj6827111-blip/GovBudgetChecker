@@ -1661,6 +1661,29 @@ def _ai_root_key(instance: ObligationInstance) -> str:
     )
 
 
+def _pair_root_keys(instance: ObligationInstance, fields: Mapping[str, Any]) -> List[str]:
+    """义务×规则汇总回执各自的根因键（与生产根因签名逐字段一致）。
+
+    DH-02 的一一对应要求：同一签名只能对应同一根因键。汇总回执带有自己的
+    ``rule_id``/``sub_check_id``，不能共用义务聚合键（聚合键不含规则维度），
+    否则同一义务下多个规则的汇总回执会在缺失阻断/缺数位置时撞键。
+    """
+    from src.engine.diagnostic_fields import root_cause_key
+
+    keys: List[str] = []
+    for rule_id in dict.fromkeys((*instance.checkers, *instance.missing_checkers)):
+        keys.append(root_cause_key({
+            "reason_codes": list(fields.get("reason_codes") or []),
+            "blocked_by": list(fields.get("blocked_by") or []),
+            "missing_operands": list(fields.get("missing_operands") or []),
+            "candidates": list(fields.get("candidates") or []),
+            "rule_id": str(rule_id),
+            "sub_check_id": f"{instance.obligation_id}:{rule_id}",
+            "obligation_id": instance.obligation_id,
+        }))
+    return keys
+
+
 def _attach_structured_diagnostics(
     instances: Sequence[ObligationInstance],
     *,
@@ -1710,11 +1733,23 @@ def _attach_structured_diagnostics(
             if instance.status == OBLIGATION_AI_NOT_RUN:
                 instance.reason_codes = tuple(dict.fromkeys((*instance.reason_codes, "ai_not_requested")))
                 instance.next_action = "rerun_ai"
-                instance.root_cause_key = _ai_root_key(instance)
+                _ai_keys = _pair_root_keys(instance, {
+                    "reason_codes": instance.reason_codes,
+                    "blocked_by": instance.blocked_by,
+                    "missing_operands": instance.missing_operands,
+                    "candidates": instance.candidates,
+                })
+                instance.root_cause_key = min(_ai_keys) if _ai_keys else _ai_root_key(instance)
             elif instance.status == OBLIGATION_AI_FAILED:
                 instance.reason_codes = tuple(dict.fromkeys((*instance.reason_codes, "ai_timeout")))
                 instance.next_action = "rerun_ai"
-                instance.root_cause_key = _ai_root_key(instance)
+                _ai_keys = _pair_root_keys(instance, {
+                    "reason_codes": instance.reason_codes,
+                    "blocked_by": instance.blocked_by,
+                    "missing_operands": instance.missing_operands,
+                    "candidates": instance.candidates,
+                })
+                instance.root_cause_key = min(_ai_keys) if _ai_keys else _ai_root_key(instance)
             else:
                 continue
             continue
@@ -1735,7 +1770,14 @@ def _attach_structured_diagnostics(
         instance.missing_operands = tuple(summary["missing_operands"])
         instance.candidates = tuple(summary["candidates"])
         instance.next_action = summary["next_action"]
-        instance.root_cause_key = summary["root_cause_key"]
+        pair_keys = _pair_root_keys(instance, {
+            "reason_codes": codes,
+            "blocked_by": instance.blocked_by,
+            "missing_operands": instance.missing_operands,
+            "candidates": instance.candidates,
+        })
+        # 义务级主根因键取自同一最上游回执；无规则配对时沿用聚合键。
+        instance.root_cause_key = min(pair_keys) if pair_keys else summary["root_cause_key"]
 
 
 def build_obligation_ledger(
@@ -1898,6 +1940,7 @@ def build_check_receipts(
         return worst, reason
 
     receipt_items: List[Dict[str, Any]] = []
+    pair_primary: Dict[str, List[Tuple[str, Optional[str]]]] = {}
     instances = (
         obligation_coverage.get("instances", [])
         if isinstance(obligation_coverage, Mapping)
@@ -1995,6 +2038,20 @@ def build_check_receipts(
                         obligation_id=obligation_id,
                     )
                     structured.update(fallback)
+                elif structured["reason_codes"]:
+                    # DH-02：汇总回执带自己的规则/子检查身份，根因键按本回执
+                    # 签名重算；直接沿用义务聚合键会让同义务多规则在无阻断时撞键。
+                    from src.engine.diagnostic_fields import root_cause_key
+
+                    structured["root_cause_key"] = root_cause_key({
+                        "reason_codes": list(structured["reason_codes"]),
+                        "blocked_by": list(structured["blocked_by"]),
+                        "missing_operands": list(structured["missing_operands"]),
+                        "candidates": list(structured["candidates"]),
+                        "rule_id": raw_rule_id,
+                        "sub_check_id": f"{obligation_id}:{raw_rule_id}",
+                        "obligation_id": obligation_id,
+                    })
             receipt = CheckReceipt(
                 rule_id=raw_rule_id,
                 sub_check_id=f"{obligation_id}:{raw_rule_id}",
@@ -2016,6 +2073,22 @@ def build_check_receipts(
                 root_cause_key=structured.get("root_cause_key"),
             )
             receipt_items.append(receipt.to_dict())
+            if receipt.status in UNCOMPLETED_RECEIPT_STATUSES and receipt.root_cause_key:
+                pair_primary.setdefault(obligation_id, []).append(
+                    (receipt.root_cause_key, receipt.next_action))
+
+    # 义务级主根因键必须来自一条真实未完成回执（与验收口径一致）：
+    # 通过的汇总回执不承载义务诊断，不能把它们的规则身份键选成主键。
+    instance_by_id = {str(item.get("obligation_id")): item for item in instances
+                      if isinstance(item, dict)}
+    for obligation_id, pairs in pair_primary.items():
+        instance = instance_by_id.get(obligation_id)
+        if not instance:
+            continue
+        key, action = min(pairs, key=lambda item: item[0])
+        instance["root_cause_key"] = key
+        if action:
+            instance["next_action"] = action
 
     # 关系级回执置于义务级回执之后，逐关系可追溯（AC-04 验收要求）
     receipt_items.extend(relation_receipts)

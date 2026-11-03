@@ -120,6 +120,20 @@ export interface ObligationReviewItemRecord {
   decided_at: string | null;
   note: string | null;
   evidence_reference: string | null;
+  /**
+   * DH-02 结构化卡点：后端原样透传。旧后端没有这些字段，保持可选，
+   * 展示层只在字段存在时使用；不在适配层推断或补默认原因。
+   */
+  reason_codes?: string[];
+  blocked_by?: Array<{
+    dimension: string;
+    ref: string;
+    reason_code: string;
+  }>;
+  missing_operands?: Array<Record<string, unknown>>;
+  candidates?: Array<Record<string, unknown>>;
+  next_action?: string | null;
+  root_cause_key?: string | null;
 }
 
 /** `obligation_review` 块。`available=false` 时 items 必为空、pending_total 为 null。 */
