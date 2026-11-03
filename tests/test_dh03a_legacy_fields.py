@@ -133,3 +133,55 @@ def _profile():
     )
     assert profile.kind == "final"
     return profile
+
+
+# ---------------------------------------------------------------------------
+# DH-03a 消费方迁移：同源覆盖只读冻结短语列表，[] 不回退 detail
+# ---------------------------------------------------------------------------
+from types import SimpleNamespace
+
+from src.services.obligation_finding_coverage import obligation_covered_by_finding
+
+
+def _finding_row():
+    return {
+        "rule_findings": [
+            {
+                "id": "finding-1",
+                "rule_id": "V33-222",
+                "tags": ["V33-222"],
+                "severity": "medium",
+                "title": "说明款级科目名称不一致",
+                "message": "说明写“行政事业单位离退休”，表内为“行政事业单位养老支出”",
+                "location": {"actual_name": "行政事业单位离退休"},
+            }
+        ]
+    }
+
+
+def _item(**overrides):
+    base = {
+        "status": "insufficient_data",
+        "checkers": ["V33-222"],
+        "detail": "无引号原文",
+    }
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+def test_consumer_reads_frozen_terms_instead_of_detail():
+    item = _item(legacy_coverage_terms=["行政事业单位离退休"])
+    assert obligation_covered_by_finding(item, _finding_row()) is True
+
+
+def test_empty_frozen_terms_do_not_fall_back_to_detail():
+    item = _item(
+        detail="说明中的款“行政事业单位离退休”在表内找不到同名科目",
+        legacy_coverage_terms=[],
+    )
+    assert obligation_covered_by_finding(item, _finding_row()) is False
+
+
+def test_missing_field_keeps_historical_detail_parsing():
+    item = _item(detail="说明中的款“行政事业单位离退休”在表内找不到同名科目")
+    assert obligation_covered_by_finding(item, _finding_row()) is True

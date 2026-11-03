@@ -512,6 +512,9 @@ def test_obligation_covered_by_same_finding_is_not_a_duplicate_todo():
     """同源正式问题已经报出来的，不再要求补核；问题本身仍留在问题清单。"""
     item = _obligation_item("OBL-TXT-T5", status="insufficient_data")
     item.detail = "说明中的款“行政事业单位离退休”在表内找不到同名科目"
+    # DH-03a：新结果的同源覆盖只读冻结短语列表（生产方按旧算法从 detail 冻结）。
+    item.legacy_coverage_terms = ["行政事业单位离退休"]
+    item.legacy_same_source_keys = []
     item.checkers = ["V33-222", "V33-227"]
     finding = {
         "id": "finding-1",

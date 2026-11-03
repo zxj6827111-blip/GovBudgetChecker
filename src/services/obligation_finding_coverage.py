@@ -133,7 +133,12 @@ def obligation_covered_by_finding(
     if str(getattr(item, "status", "") or "") != "insufficient_data":
         return False
     checkers = {str(code).strip() for code in (getattr(item, "checkers", None) or [])}
-    terms = distinctive_terms(str(getattr(item, "detail", None) or ""))
+    # DH-03a：新结果读冻结短语列表；只有历史结果没有该字段时才回退解析 detail。
+    frozen_terms = getattr(item, "legacy_coverage_terms", None)
+    if frozen_terms is None:
+        terms = distinctive_terms(str(getattr(item, "detail", None) or ""))
+    else:
+        terms = {str(term) for term in frozen_terms if str(term)}
     if not checkers or not terms:
         return False
 
