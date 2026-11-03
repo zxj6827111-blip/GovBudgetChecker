@@ -4,7 +4,12 @@ import re
 from decimal import Decimal
 from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple
 
-from .amount_math import classify_amount_diff, compute_dynamic_envelope, rounding_envelope
+from .amount_math import (
+    classify_amount_diff,
+    compute_dynamic_envelope,
+    half_unit_for_term,
+    rounding_envelope,
+)
 from .rule_policy import amount_difference_exceeds_policy, percentage_difference_exceeds_policy
 from .budget_rules import _append_relation_receipt, _portable_amount_tolerance, find_budget_anchors
 from .rule_outcome import RuleDeferred, RuleNotApplicable
@@ -2254,6 +2259,13 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
             pct_verb = _cmm007_verb_direction(match.group("pverb"))
 
             if abs(derived_prior) <= amount_envelope:
+                # R26（2026-11-03）：基数与分子都是 0 时写“0%”“0.00%”不是缺陷；
+                # 只有分子不为 0 却写百分比才无定义。
+                numerator_zero = abs(delta_wan) <= compute_dynamic_envelope(
+                    [(_cmm007_scale(delta_text), delta_unit)]
+                )
+                if Decimal(pct_text) == 0 and numerator_zero:
+                    continue
                 issues.append(
                     self._issue(
                         f"同比零基数百分比无定义（{canon}）：本期"
@@ -2296,6 +2308,14 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
             declared = Decimal(pct_text)
             diff = abs(declared - recomputed)
             if not percentage_difference_exceeds_policy(diff):
+                continue
+            # R16（2026-11-03）：本年数、增减额各按显示半步长取区间，正文值落在
+            # 复算增长率的上下限内即不报（与“与复算值差不超过 0.1 个百分点”任一成立）。
+            if self._declared_within_recompute_range(
+                declared, derived_prior, delta_wan,
+                current_half=half_unit_for_term(current["scale"], current["unit"]),
+                delta_half=half_unit_for_term(_cmm007_scale(delta_text), delta_unit),
+            ):
                 continue
             severity = "error" if diff > Decimal("1.0") else "warn"
             issues.append(
@@ -2422,6 +2442,30 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
 
     def _recompute(self, current_wan: Decimal, derived_prior: Decimal) -> Decimal:
         return abs(current_wan - derived_prior) / abs(derived_prior) * Decimal("100")
+
+    @staticmethod
+    def _declared_within_recompute_range(
+        declared: Decimal,
+        derived_prior: Decimal,
+        delta_wan: Decimal,
+        *,
+        current_half: Decimal,
+        delta_half: Decimal,
+    ) -> bool:
+        """R16：按本年数、增减额的显示半步长复算增长率区间，判断声明值是否在区间内。
+
+        基期 = 本期 − 增减额，故基期区间为 ``derived_prior ± (current_half + delta_half)``；
+        增长率 = 增减额 ÷ 基期，分子、分母各取区间端点得到上下限。
+        """
+        prior_half = current_half + delta_half
+        prior_low, prior_high = derived_prior - prior_half, derived_prior + prior_half
+        if prior_low <= 0:
+            return False
+        delta_low = max(Decimal("0"), delta_wan - delta_half)
+        delta_high = delta_wan + delta_half
+        low = delta_low / prior_high * Decimal("100")
+        high = delta_high / prior_low * Decimal("100")
+        return low <= declared <= high
 
     def _location(
         self,
