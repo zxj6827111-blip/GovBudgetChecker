@@ -443,7 +443,7 @@
 
 ## 9. 统计自检
 
-`scripts/validate_outputs.py` 从 CSV/JSON 与源标注独立复算，12 项全部通过：
+`scripts/validate_outputs.py` 从 CSV/JSON 与源标注独立复算，13 项全部通过：
 
 1. 108 检查点齐全（final 54 + budget 54）。
 2. 每个 final 子场景 `pass+defect+NA+CD+unconfirmed = 33`。
@@ -452,11 +452,12 @@
 5. 检查项缺陷单位去重 = 78。
 6. 自由发现去重 = 105。
 7. 每个子场景 `defect_units` 与明细行数一致。
-8. 33×24 = 792 条四态记录，24 项检查 ID 齐全。
-9. 33 份 annotation 与 `FROZEN.csv` 一致（33/33）。
-10. 33 份 PDF 与样本清单一致（33/33）。
-11. 穷尽类 68、尽力类 37。
-12. 页码均为整数或空。
+8. 每个子场景 `pass_docs`/`defect_docs`/`na_docs` 与明细去重一致。
+9. 33×24 = 792 条四态记录，24 项检查 ID 齐全。
+10. 33 份 annotation 与 `FROZEN.csv` 一致（33/33）。
+11. 33 份 PDF 与样本清单一致（33/33）。
+12. 穷尽类 68、尽力类 37。
+13. 页码均为整数或空。
 
 复算命令：
 

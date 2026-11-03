@@ -84,6 +84,30 @@ def main():
             bad.append((r["sub_id"], r["defect_units"], per_sub.get(r["sub_id"], 0)))
     check("子场景 defect_units 与明细一致", not bad, str(bad[:5]))
 
+    # 6b. 每个子场景 pass/defect/NA 文档数与明细去重一致
+    pass_docs = collections.defaultdict(set)
+    defect_docs = collections.defaultdict(set)
+    na_docs = collections.defaultdict(set)
+    for c in cases:
+        if c["counted_as"] == "pass_doc":
+            pass_docs[c["sub_id"]].add(c["sample_id"])
+        elif c["counted_as"] == "defect_unit":
+            defect_docs[c["sub_id"]].add(c["sample_id"])
+        elif c["counted_as"] == "na_doc":
+            na_docs[c["sub_id"]].add(c["sample_id"])
+    bad = []
+    for r in inv:
+        if r["report_kind"] != "final":
+            continue
+        sid = r["sub_id"]
+        if int(r["pass_docs"]) != len(pass_docs.get(sid, set())):
+            bad.append((sid, "pass", r["pass_docs"], len(pass_docs.get(sid, set()))))
+        if int(r["defect_docs"]) != len(defect_docs.get(sid, set())):
+            bad.append((sid, "defect", r["defect_docs"], len(defect_docs.get(sid, set()))))
+        if int(r["na_docs"]) != len(na_docs.get(sid, set())):
+            bad.append((sid, "na", r["na_docs"], len(na_docs.get(sid, set()))))
+    check("子场景 pass/defect/NA 份数与明细去重一致", not bad, str(bad[:5]))
+
     # 7. 792 条四态记录
     total = 0
     for sid in sample_ids:
