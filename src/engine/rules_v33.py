@@ -9065,7 +9065,7 @@ def _completion_rate_has_reason(
     segment: str, match: re.Match[str], *, tail: str = ""
 ) -> bool:
     window_start = max(0, match.start() - 80)
-    window_end = min(len(segment), match.end() + 160)
+    window_end = min(len(segment), match.end() + 400)
     window = segment[window_start:window_end]
     if _FINAL_COMPLETION_REASON_RE.search(window):
         return True

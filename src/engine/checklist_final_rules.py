@@ -1009,7 +1009,13 @@ class R33251_FunctionalDetailCompleteness(Rule):
                     and _canonical_budget_stage(fact.budget_stage) == "决算"
                     and fact.normalized_value not in (None, Decimal(0))):
                 leaves[code] = re.sub(r"\s+", "", fact.subject_name or "")
-        missing = [name for name in leaves.values() if name and name not in joined]
+        def _present(name: str) -> bool:
+            # 及/与、其他/其它只用于“是否出现”的候选判定；名称差异由名称规则报告。
+            variants = {name, name.replace("与", "及"), name.replace("及", "与"),
+                        name.replace("其他", "其它"), name.replace("其它", "其他")}
+            return any(variant and variant in joined for variant in variants)
+
+        missing = [name for name in leaves.values() if name and not _present(name)]
         listed = max(len(items), listed_final)
         if not missing or listed >= len(leaves):
             return []

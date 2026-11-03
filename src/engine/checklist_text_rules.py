@@ -190,10 +190,11 @@ def _paren_balance_issues(rule: Rule, doc: Document) -> List[Issue]:
 
 def _primary_hit(hits: List[Tuple[int, str, int, int]], pad: int = 24):
     """取第一条能生成唯一引文的命中，保证证据守卫可验证。"""
-    for page, text, start, end in hits:
-        left, right = max(0, start - pad), min(len(text), end + pad)
-        if unique_quote(text, left, right):
-            return page, text, left, right
+    for pad_size in (pad, 12, 6, 2, 0):
+        for page, text, start, end in hits:
+            left, right = max(0, start - pad_size), min(len(text), end + pad_size)
+            if unique_quote(text, left, right):
+                return page, text, left, right
     return hits[0]
 
 
