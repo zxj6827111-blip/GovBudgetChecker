@@ -112,7 +112,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     docs = gm.load_gold()
     items, aux = gm.load_system(run, docs)
     old_items = json.loads((baseline / "system_items.json").read_text(encoding="utf-8"))
-    old_ledgers = json.loads((baseline / "ledgers.json").read_text(encoding="utf-8"))
 
     targets: Dict[Tuple[str, str], Dict[str, str]] = {}
     with targets_path.open(encoding="utf-8-sig") as handle:
@@ -121,8 +120,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     pairs, old_only, new_only = align(old_items, items)
     new_to_old = {n["id"]: o for o, n, _ in pairs}
-    removed_ids = {o["id"] for o in old_only}
-    added_ids = {n["id"] for n in new_only}
 
     # 旧裁决只能通过唯一对齐继承；移除条目必须全部是目标 CSV 的“移除”行。
     unused, unexpected_unused, missing_decision = [], [], []
@@ -175,7 +172,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             row = {"id": r["id"], "doc": item["doc"], "tier": item["tier"], "rule": item["rule"],
                    "raw_id": item.get("raw_id") or item["rule"], "sev": item.get("sev"),
                    "ct": r["ct"], "pages": item["pages"], "title": item["title"], "message": item["message"],
-                   "auto_status": r["status"], "auto_links": [l["unit"] for l in r["links"]],
+                   "auto_status": r["status"], "auto_links": [link["unit"] for link in r["links"]],
                    "final": "", "links": [], "cause": "", "why": "", "evidence": "", "amend": False,
                    "decided": "auto"}
             d = dec.D.get(key) if item["tier"] in {"F", "P"} else None

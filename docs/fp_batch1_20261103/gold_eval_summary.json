@@ -1,0 +1,131 @@
+{
+ "run": "/Volumes/workSSD/software development/GovBudgetChecker/outputs/fp_batch1_20261103/after/run1",
+ "baseline_analysis": "/Volumes/workSSD/software development/GovBudgetChecker/outputs/gold_baseline_20261102/rev2/analysis",
+ "items_old": 545,
+ "items_new": 513,
+ "tiers_old": {
+  "F": 155,
+  "R": 166,
+  "N": 61,
+  "P": 73,
+  "O": 90
+ },
+ "tiers_new": {
+  "F": 130,
+  "R": 158,
+  "N": 62,
+  "P": 73,
+  "O": 90
+ },
+ "pairs": 512,
+ "removed": 33,
+ "added": 1,
+ "target_removed": 33,
+ "target_missing": [],
+ "unexpected_removed": [],
+ "added_formal": [],
+ "decisions_inherited": 77,
+ "decisions_unused_expected": [
+  "GS-2024-04|V33-234-10",
+  "GS-2025-06|V33-234-13",
+  "GS-2025-01|V33-234-9",
+  "GS-2025-09|CMM-013-1",
+  "GS-2023-01|CMM-013-1",
+  "GS-2023-02|CMM-013-2",
+  "GS-2023-03|CMM-013-1",
+  "GS-2024-01|CMM-013-1",
+  "GS-2024-02|CMM-013-1",
+  "GS-2024-03|CMM-013-1",
+  "GS-2025-02|CMM-013-1",
+  "GS-2025-03|CMM-013-1",
+  "GS-2025-06|CMM-013-2",
+  "GS-2023-02|CMM-013-3",
+  "GS-2024-06|CMM-013-3",
+  "GS-2023-03|CMM-007-6",
+  "GS-2024-08|CMM-007-3",
+  "GS-2022-07|V33-TREND-COMPLETION-RATE-2",
+  "GS-2022-07|V33-TREND-COMPLETION-RATE-3",
+  "GS-2023-04|V33-TREND-COMPLETION-RATE-8",
+  "GS-2023-08|V33-TREND-COMPLETION-RATE-6",
+  "GS-2025-01|V33-TREND-COMPLETION-RATE-10",
+  "GS-2025-07|V33-TREND-COMPLETION-RATE-2",
+  "GS-2022-06|CMM-007-14",
+  "GS-2023-01|CMM-007-19"
+ ],
+ "decisions_unused_unexpected": [],
+ "missing_decision": [],
+ "headline": {
+  "F_total": 130,
+  "F_final": {
+   "TP": 101,
+   "FP_GOLD": 19,
+   "ADJ_FALSE": 9,
+   "ADJ_TRUE": 1
+  },
+  "FPR_headline": {
+   "num": 28,
+   "den": 130,
+   "rate": 0.2154
+  },
+  "FPR_strict_gold": {
+   "num": 19,
+   "den": 120,
+   "rate": 0.1583
+  },
+  "MR_overall": {
+   "num": 86,
+   "den": 146,
+   "rate": 0.589
+  },
+  "MR_CU": {
+   "num": 25,
+   "den": 78,
+   "rate": 0.3205,
+   "silent_literal": 9,
+   "silent_rate": 0.1154
+  },
+  "MR_FU_exhaustive": {
+   "num": 61,
+   "den": 68,
+   "rate": 0.8971,
+   "silent_literal": 60,
+   "silent_rate": 0.8824
+  },
+  "PendingHit": {
+   "HIT": 10,
+   "of_in_scope": 0.3846,
+   "in_scope_den": 26,
+   "of_all_P": 0.137,
+   "all_P": 73,
+   "HIT_or_true_not_in_gold": 0.3846
+  },
+  "coverage": {
+   "with_verdict": 730,
+   "total": 792,
+   "rate": 0.9217
+  },
+  "workload": {
+   "mean": 8.88,
+   "median": 7,
+   "min": 1,
+   "max": 26,
+   "total": 293,
+   "F_total": 130,
+   "O_total": 90,
+   "P_total": 73,
+   "mean_F": 3.94,
+   "mean_O": 2.73,
+   "mean_P": 2.21,
+   "P_excl_CMM004_total": 26,
+   "mean_workload_excl_CMM004": 7.45,
+   "F_true_share": 0.7846
+  },
+  "tiers": {
+   "F": 130,
+   "R": 158,
+   "P": 73,
+   "O": 90
+  }
+ },
+ "ok": true
+}

@@ -1,0 +1,27 @@
+{
+ "run": "/Volumes/workSSD/software development/GovBudgetChecker/outputs/fp_batch1_20261103/step0/run1",
+ "items_new": 545,
+ "items_old": 545,
+ "tiers_new": {
+  "F": 155,
+  "R": 166,
+  "N": 61,
+  "P": 73,
+  "O": 90
+ },
+ "tiers_old": {
+  "F": 155,
+  "R": 166,
+  "N": 61,
+  "P": 73,
+  "O": 90
+ },
+ "old_tiers_missing": false,
+ "added": [],
+ "removed": [],
+ "changed": [],
+ "ledger_diff_count": 0,
+ "ledger_diffs": [],
+ "selfcheck_mismatch": {},
+ "identical": true
+}
