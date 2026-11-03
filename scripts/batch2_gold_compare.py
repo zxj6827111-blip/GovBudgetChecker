@@ -170,6 +170,19 @@ def run(args: argparse.Namespace) -> int:
     def decision_of(item: Dict[str, Any]):
         return eval_lib.decision_signature(baseline_rows.get(f"{item['doc']}|{item.get('raw_id') or item['rule']}"))
 
+    # 组合期 O/N 条目的 message 承载义务 detail；DH-03b 会改写 detail。
+    # 身份按 (文档, 层级, 规则, 页码, 严重度) 对齐，文本漂移单独记录并须命中允许字段。
+    ignore_text_tiers = set(contract.get("identity_ignore_text_tiers") or ())
+    if ignore_text_tiers:
+        original_identity = eval_lib.identity_key
+
+        def _identity(item, _original=original_identity, _tiers=ignore_text_tiers):
+            if item.get("tier") in _tiers:
+                return (item["doc"], item["tier"], item["rule"], tuple(item["pages"]), item.get("sev"))
+            return _original(item)
+
+        eval_lib.identity_key = _identity
+
     pairs, old_only, new_only, review, resolved_duplicates = eval_lib.align(old_items, items, decision_of)
     new_to_old = {new["id"]: old for old, new, _ in pairs}
 
@@ -205,17 +218,26 @@ def run(args: argparse.Namespace) -> int:
 
     # ---- 非目标条目漂移 ----
     target_fp_keys = set(fp_targets)
+    allowed_fields_by_tier = contract.get("allowed_fingerprint_fields_by_tier") or {}
     fingerprint_drift = []
+    expected_fingerprint_drift = []
     decision_drift = []
     for old, new, how in pairs:
         if item_key(old) in target_fp_keys:
             continue
         diffs = eval_lib.fingerprint_diffs(old, new)
         if diffs:
-            fingerprint_drift.append({"sample_id": old["doc"], "old_raw_id": old.get("raw_id"),
-                                      "new_raw_id": new.get("raw_id"), "how": how, "fields": diffs,
-                                      "old": {f: old.get(f) for f in diffs},
-                                      "new": {f: new.get(f) for f in diffs}})
+            allowed_fields = set(allowed_fields_by_tier.get(new.get("tier"), []))
+            unexpected = [field for field in diffs if field not in allowed_fields]
+            record = {"sample_id": old["doc"], "old_raw_id": old.get("raw_id"),
+                      "new_raw_id": new.get("raw_id"), "how": how, "fields": diffs,
+                      "old": {f: old.get(f) for f in diffs},
+                      "new": {f: new.get(f) for f in diffs}}
+            if unexpected:
+                record["unexpected_fields"] = unexpected
+                fingerprint_drift.append(record)
+            else:
+                expected_fingerprint_drift.append(record)
         old_row, new_row = baseline_rows.get(f"{old['doc']}|{old.get('raw_id')}"), None
         parent = new_to_old.get(new["id"])
         if parent is not None and old_row is not None and old_row.get("final") != (baseline_rows.get(
@@ -345,7 +367,9 @@ def run(args: argparse.Namespace) -> int:
         "unexpected_removed": removed_unexpected,
         "satisfied_miss_targets": {k: v for k, v in satisfied.items()},
         "missing_additions": missing_additions, "unexpected_additions": unexpected_additions,
-        "fingerprint_drift": fingerprint_drift, "raw_fingerprint_drift": raw_drift,
+        "fingerprint_drift": fingerprint_drift,
+        "fingerprint_expected": expected_fingerprint_drift,
+        "raw_fingerprint_drift": raw_drift,
         "raw_fingerprint_expected": raw_expected,
         "raw_missing": raw_missing, "decision_drift": decision_drift,
         "review_required": review, "resolved_duplicates": resolved_duplicates,
