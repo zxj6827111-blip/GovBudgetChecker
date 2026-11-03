@@ -200,6 +200,7 @@ const t5Structured = item({
   obligation_id: "OBL-TXT-T5",
   detail: "判断不了的原因：疑似旧科目名无法在文内定位。",
   reason_codes: ["subject_name_unlocated"],
+  legacy_coverage_terms: [],
   checkers: ["V33-106", "V33-222", "V33-227"],
 });
 const t5StructuredGuidance = obligationGuidance(t5Structured, [t5Structured, finalDetail]);
@@ -211,6 +212,7 @@ const emptyCodes = item({
   obligation_id: "OBL-TXT-T5",
   detail: "说明中的款“行政事业单位离退休”在表内找不到同名科目",
   reason_codes: [],
+  legacy_coverage_terms: [],
   checkers: ["V33-227"],
 });
 assert.equal(obligationGuidance(emptyCodes, [emptyCodes]).sameSource, null);
@@ -240,3 +242,81 @@ const bindingWithoutTerms = item({
   checkers: ["V33-227"],
 });
 assert.equal(obligationGuidance(bindingWithoutTerms, [bindingWithoutTerms]).sameSource, null);
+
+// ---- R1：真实 API 模型投影后的旧任务（reason_codes=[], legacy=null） ----------
+
+const projectedOldTask = item({
+  obligation_id: "OBL-TXT-T5",
+  detail: "说明中的款“行政事业单位离退休”在表内找不到同名科目",
+  reason_codes: [],
+  legacy_coverage_terms: null,
+  checkers: ["V33-106", "V33-222", "V33-227"],
+});
+assert.deepEqual(
+  obligationGuidance(projectedOldTask, [projectedOldTask]).sameSource?.findingIds,
+  ["V33-227"],
+  "旧任务经当前 API 投影后 reason_codes 是 []，不能据此当成新结果",
+);
+
+// 新结果同样是 [] 原因码，但 legacy_coverage_terms 为列表 ⇒ 不读旧 detail。
+const newTaskWithEmptyTerms = item({
+  obligation_id: "OBL-TXT-T5",
+  detail: "说明中的款“行政事业单位离退休”在表内找不到同名科目",
+  reason_codes: [],
+  legacy_coverage_terms: [],
+  checkers: ["V33-227"],
+});
+assert.equal(obligationGuidance(newTaskWithEmptyTerms, [newTaskWithEmptyTerms]).sameSource, null);
+
+// ---- R2：FIN_04 同源消费方迁移，冻结业务说明优先 -----------------------------
+
+const fin04Empty = item({
+  obligation_id: "OBL-STRUCT-EMPTY-STATEMENT",
+  title: "空表/无此项说明与总表零值确认",
+  detail: "正在核对：财政拨款收入支出决算总表空白格。",
+  reason_codes: [],
+  legacy_coverage_terms: [],
+});
+const fin04Total = item({
+  obligation_id: "OBL-CROSS-FISCAL-TOTAL",
+  title: "财政拨款收入支出决算总表合计一致性",
+  detail: "待核对",
+  reason_codes: [],
+  legacy_coverage_terms: [],
+});
+assert.deepEqual(
+  obligationGuidance(fin04Empty, [fin04Empty, fin04Total]).sameSource?.obligationIds,
+  ["OBL-CROSS-FISCAL-TOTAL"],
+);
+
+// 改写 detail 但仍保留 FIN_04 表身份：旧提示语义不能丢。
+const fin04RewrittenDetail = item({
+  ...fin04Empty,
+  detail: "正在核对：表FIN_04_fiscal_grant_total空白格。",
+});
+assert.deepEqual(
+  obligationGuidance(fin04RewrittenDetail, [fin04RewrittenDetail, fin04Total]).sameSource?.obligationIds,
+  ["OBL-CROSS-FISCAL-TOTAL"],
+);
+
+// 有冻结业务说明时只读冻结文本：前言提到 FIN_04 但业务原因是基金表，不得误报。
+const fin04FrozenFundOnly = item({
+  ...fin04Empty,
+  detail: "正在核对：财政拨款收入支出决算总表空白格。规则说明：政府性基金预算财政拨款收入支出决算表对应的总表资金列缺少明确可用数值。下一步：系统修复解析或规则后重跑。",
+});
+assert.equal(
+  obligationGuidance(fin04FrozenFundOnly, [fin04FrozenFundOnly, fin04Total]).sameSource,
+  null,
+);
+
+// 旧任务（legacy=null）仍按第一阶段 title/detail 语义提示。
+const fin04Legacy = item({
+  ...fin04Empty,
+  legacy_coverage_terms: null,
+  detail: "财政拨款收入支出决算总表 没有可用金额事实",
+});
+assert.deepEqual(
+  obligationGuidance(fin04Legacy, [fin04Legacy, fin04Total]).sameSource?.obligationIds,
+  ["OBL-CROSS-FISCAL-TOTAL"],
+);
+

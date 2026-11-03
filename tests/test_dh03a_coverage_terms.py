@@ -126,3 +126,45 @@ def test_export_and_review_model_keep_legacy_terms() -> None:
         legacy_coverage_terms=["旧科目名称"],
     )
     assert item.legacy_coverage_terms == ["旧科目名称"]
+
+
+def test_old_task_projected_through_api_model_keeps_legacy_null_and_empty_codes() -> None:
+    """真实 API 模型投影不能把旧任务伪装成“新结果”。
+
+    旧任务经 ``build_coverage`` → ``ObligationReviewItem`` 后，``reason_codes``
+    会被模型默认成 ``[]``；旧/新判别必须继续看 ``legacy_coverage_terms``
+    是 ``None``（旧）还是列表（新，含 ``[]``）。
+    """
+    from src.schemas.review_lifecycle import ObligationReviewItem
+
+    raw = {
+        "catalog_version": "obligations-v12-checklist-global-20261022",
+        "applicable_total": 2, "completed_total": 0, "not_applicable_total": 0,
+        "unresolved_total": 2, "blocking_total": 2,
+        "instances": [
+            {
+                "obligation_id": "OBL-TXT-T5", "status": "insufficient_data",
+                "detail": "说明中的款“旧科目名称”在表内找不到同名科目",
+                "checkers": ["V33-222", "V33-227"],
+            },
+            {
+                "obligation_id": "OBL-TXT-T5-NEW", "status": "insufficient_data",
+                "detail": "新结果",
+                "checkers": ["V33-222"],
+                "reason_codes": [],
+                "legacy_coverage_terms": [],
+            },
+        ],
+    }
+    coverage = build_coverage(raw)
+    projected = {
+        item.obligation_id: ObligationReviewItem(**item.model_dump()).model_dump()
+        for item in coverage.items
+    }
+    old_task = projected["OBL-TXT-T5"]
+    assert old_task["reason_codes"] == []
+    assert old_task["legacy_coverage_terms"] is None
+    assert old_task["checkers"] == ["V33-222", "V33-227"]
+    new_task = projected["OBL-TXT-T5-NEW"]
+    assert new_task["reason_codes"] == []
+    assert new_task["legacy_coverage_terms"] == []

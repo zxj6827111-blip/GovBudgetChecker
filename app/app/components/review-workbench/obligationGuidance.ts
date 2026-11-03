@@ -393,29 +393,61 @@ function classify(
   return known?.category ?? "review";
 }
 
+/** 旧结果 = 缺 `legacy_coverage_terms` 字段或为 null；列表（含 []）是新结果。 */
+function isLegacyResult(item: ObligationReviewItemRecord): boolean {
+  return item.legacy_coverage_terms === undefined || item.legacy_coverage_terms === null;
+}
+
+/**
+ * 同源判断的可追溯文本。
+ *
+ * - 旧结果：沿用第一阶段的 title/detail 语义；
+ * - 新结果：优先使用 DH-03b 保留的“规则说明”冻结业务文本，不使用被改写后的
+ *   结构化 detail；只有冻结文本缺失时才回退完整 detail（旧语义兜底）。
+ * `includeTitle` 只给财政拨款总表一侧使用：义务标题本身就是稳定的表身份。
+ */
+function sameSourceEvidenceText(
+  item: ObligationReviewItemRecord,
+  { includeTitle = false }: { includeTitle?: boolean } = {},
+): string {
+  const title = includeTitle ? String(item.title ?? "") : "";
+  if (isLegacyResult(item)) {
+    return `${title} ${item.detail ?? ""}`;
+  }
+  const frozen = retainedRuleExplanation(item.detail);
+  const fallback = frozen === null ? String(item.detail ?? "") : "";
+  return `${title} ${frozen ?? ""} ${fallback}`;
+}
+
+/** FIN_04 的稳定表身份：中文表名、简称或冻结表代号，不依赖叙述句式。 */
+const FIN04_IDENTITY_RE = /财政拨款收入支出决算总表|财政拨款收支总表|FIN_04_fiscal_grant_total/;
+
 function mentionsFiscalGrantTotal(item: ObligationReviewItemRecord): boolean {
-  return /财政拨款收支总表|财政拨款收入支出决算总表/.test(
-    `${item.title ?? ""} ${item.detail ?? ""}`,
+  return FIN04_IDENTITY_RE.test(
+    sameSourceEvidenceText(item, { includeTitle: true }),
   );
 }
 
 function mentionsEmptyStatement(item: ObligationReviewItemRecord): boolean {
-  return /财政拨款收入支出决算总表/.test(String(item.detail ?? ""));
+  return FIN04_IDENTITY_RE.test(
+    sameSourceEvidenceText(item),
+  );
 }
 
 function subjectBindingUnlocated(item: ObligationReviewItemRecord): boolean {
-  // 新结果用冻结原因码 + 冻结覆盖词判断；只有旧后端缺字段（undefined/null）
-  // 时才读 detail。[] 是合法的新结果，表示“没有该原因”，不能回退到中文正则。
-  if (item.reason_codes === undefined || item.reason_codes === null) {
+  // 旧/新结果不能靠 reason_codes 是否为空判断：当前 API 会把旧任务的
+  // reason_codes 投影成 []。以 legacy_coverage_terms 的 null/缺失（旧）
+  // 与列表（新，含 []）为契约；旧结果回退 detail，新结果只读原因码。
+  if (isLegacyResult(item)) {
     return /找不到同名科目/.test(String(item.detail ?? ""));
   }
-  if (item.reason_codes.includes("subject_name_unlocated")) {
+  if (item.reason_codes?.includes("subject_name_unlocated")) {
     return true;
   }
   // text_binding_failed 比“找不到同名科目”宽；只有同时保留了旧覆盖词
   // （说明确实定位到了具体科目名）才按同源处理，避免把金额绑定失败误报成
   // 科目名称问题。
-  return item.reason_codes.includes("text_binding_failed")
+  return (item.reason_codes ?? []).includes("text_binding_failed")
     && (item.legacy_coverage_terms?.length ?? 0) > 0;
 }
 
