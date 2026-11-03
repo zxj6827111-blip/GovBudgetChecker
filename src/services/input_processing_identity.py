@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_VERSION = 'gbc.parse-artifact.v3'
 #: 解析身份方案版本。改变身份定义时必须递增，旧运行不能被新实现冒充。
 PARSE_IDENTITY_VERSION = 'gbc.parse-run-identity.v2'
-PARSE_IMPLEMENTATION_VERSION = 'gbc.parse-implementation.v2'
+PARSE_IMPLEMENTATION_VERSION = 'gbc.parse-implementation.v3'
 _FLAGS = ('GBC_TEMPLATE_SCOPE', 'GBC_BUDGET_TEMPLATE_SCOPE', 'GBC_TEMPLATE_EXPORT_SHA256', 'FACT_DISABLE_CELL_CONF_FLOOR', 'INTAKE_DISABLE_ZERO_GAP_PASS', 'PDF_DISABLE_TOC_GUARD',
           'INTAKE_DISABLE_TOC_HINT_GUARD', 'PDF_DISABLE_TITLE_MARKER',
           'PDF_DISABLE_PLACEHOLDER_ON_TABLE_PAGE', 'GOVBUDGET_PDF_DISABLE_LABEL_VISIBILITY_RECOVERY',
@@ -51,11 +51,17 @@ _EXECUTION_DEPENDENCIES = (
 #: 这些模块的变化只能改变完整运行指纹，不能改变可复用的解析身份。
 #: 新增解析模块必须同时登记在这里，并递增 PARSE_IMPLEMENTATION_VERSION。
 PARSE_IMPLEMENTATION_FILES = (
+    'api/__init__.py',
+    'api/config.py',
     'ocr_service/app.py',
     'ocr_service/protocol.py',
+    'src/__init__.py',
+    'src/engine/__init__.py',
     'src/engine/fiscal_lexeme.py',
+    'src/schemas/__init__.py',
     'src/schemas/parse_artifact.py',
     'src/schemas/source_reconstruction.py',
+    'src/services/__init__.py',
     'src/services/fiscal_column_identity.py',
     'src/services/fiscal_row_roles.py',
     'src/services/fiscal_table_rules.py',
@@ -95,6 +101,16 @@ SEMANTIC_EVIDENCE_MANIFEST_KEYS = (
     'raw_interpretation',
 )
 
+#: 明确审定的非解析本地导入。每项必须说明边界，不能整体跳过包或目录。
+NON_PARSE_LOCAL_IMPORTS = {
+    'src/schemas/check_receipt.py':
+        '回执/诊断 schema 已拆分；解析只做兼容导出',
+    'src/services/job_orchestrator.py':
+        'src.services.__getattr__ 惰性属性；解析不访问 JobOrchestrator',
+    'src/services/ai_model_settings.py':
+        'api.config.AppConfig.load() 内惰性导入；解析只导入常量，不调用 load()',
+}
+
 
 def content_hash(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
@@ -109,6 +125,7 @@ def _package_version(name: str) -> str | None:
 
 
 def _local_module_path(root: Path, dotted: str) -> str | None:
+    """按 CPython 文件优先、同名包次之的顺序解析本地模块。"""
     relative = Path(*dotted.split('.'))
     for candidate in (root / relative.with_suffix('.py'), root / relative / '__init__.py'):
         if candidate.is_file():
@@ -116,23 +133,39 @@ def _local_module_path(root: Path, dotted: str) -> str | None:
     return None
 
 
-def local_import_dependencies(relative_file: str, root: Path | None = None) -> set[str]:
-    """解析模块的全部本地导入（含延迟导入、ocr_service 与相对导入）。
+def _parent_package_inits(root: Path, relative_file: str) -> set[str]:
+    """返回导入该文件时会执行的必要父包 ``__init__.py``。"""
+    path = Path(relative_file)
+    parts = path.parts[:-1]
+    if path.name == '__init__.py':
+        parts = parts[:-1]
+    result = set()
+    for index in range(1, len(parts) + 1):
+        candidate = root / Path(*parts[:index]) / '__init__.py'
+        if candidate.is_file():
+            result.add(candidate.relative_to(root).as_posix())
+    return result
 
-    只返回项目内真实存在的文件；外部包不返回。相对导入按模块所在包解析，
-    因此新增未登记的解析模块不能再靠命名空间或相对路径逃过守卫。
+
+def local_import_dependencies(relative_file: str, root: Path | None = None) -> set[str]:
+    """解析模块的全部本地导入（含延迟导入、ocr_service、相对导入与包初始化）。
+
+    只返回项目内真实存在的文件；外部包不返回。相对导入按模块所在包解析；
+    目标包和必要父包的 ``__init__.py`` 都会返回，不能靠包形式逃过守卫。
+    同名 ``.py`` 与包目录并存时按 CPython 文件优先解析。
     """
     root = Path(root or ROOT)
     path = root / relative_file
     if not path.is_file():
         return set()
     package = Path(relative_file).parent.parts
-    result: set[str] = set()
+    result = _parent_package_inits(root, relative_file)
 
-    def add(dotted: str, *, include_package: bool = True) -> None:
+    def add(dotted: str) -> None:
         resolved = _local_module_path(root, dotted)
-        if resolved and (include_package or not resolved.endswith('/__init__.py')):
+        if resolved:
             result.add(resolved)
+            result.update(_parent_package_inits(root, resolved))
 
     tree = ast.parse(path.read_text())
     for node in ast.walk(tree):
@@ -149,14 +182,16 @@ def local_import_dependencies(relative_file: str, root: Path | None = None) -> s
                 base = []
             if node.module:
                 module = [*base, *node.module.split('.')]
-                add('.'.join(module), include_package=False)
+                add('.'.join(module))
                 for alias in node.names:
                     if alias.name != '*':
-                        add('.'.join((*module, alias.name)), include_package=False)
+                        add('.'.join((*module, alias.name)))
             else:
+                if base:
+                    add('.'.join(base))
                 for alias in node.names:
                     if alias.name != '*':
-                        add('.'.join((*base, alias.name)), include_package=False)
+                        add('.'.join((*base, alias.name)))
     return result
 
 

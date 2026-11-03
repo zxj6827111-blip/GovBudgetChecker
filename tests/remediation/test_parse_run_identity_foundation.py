@@ -26,8 +26,8 @@ from src.services.input_processing_identity import (
     semantic_artifact_hash,
 )
 
-#: 解析模块唯一允许的非解析导入：回执/诊断 schema 已拆分到独立模块。
-_NON_PARSE_IMPORTS = {"src/schemas/check_receipt.py"}
+#: 解析模块允许的非解析导入；每项都在生产模块里显式说明边界。
+_NON_PARSE_IMPORTS = identity.NON_PARSE_LOCAL_IMPORTS
 
 
 @pytest.fixture(autouse=True)
@@ -399,7 +399,147 @@ def test_parse_manifest_covers_parse_module_import_edges():
     outside = set()
     for relative in manifest:
         outside |= identity.local_import_dependencies(relative, identity.ROOT)
-    assert outside - manifest <= _NON_PARSE_IMPORTS, sorted((outside - manifest) - _NON_PARSE_IMPORTS)
+    unexpected = (outside - manifest) - set(_NON_PARSE_IMPORTS)
+    assert not unexpected, sorted(unexpected)
+
+
+def test_local_import_dependencies_include_target_package_and_parents(tmp_path: Path):
+    service = tmp_path / "ocr_service"
+    package = service / "unregistered_parser"
+    package.mkdir(parents=True)
+    (service / "app.py").write_text("from .unregistered_parser import transform\n")
+    (service / "__init__.py").write_text("")
+    (package / "__init__.py").write_text("def transform(value): return value * 10\n")
+    assert identity.local_import_dependencies("ocr_service/app.py", tmp_path) == {
+        "ocr_service/__init__.py",
+        "ocr_service/unregistered_parser/__init__.py",
+    }
+
+    parser = tmp_path / "src/services/pdf_parser.py"
+    parser.parent.mkdir(parents=True)
+    parser.write_text("")
+    (tmp_path / "src/__init__.py").write_text("")
+    (tmp_path / "src/services/__init__.py").write_text("")
+    dependencies = identity.local_import_dependencies("src/services/pdf_parser.py", tmp_path)
+    assert {"src/__init__.py", "src/services/__init__.py"} <= dependencies
+
+
+def test_local_import_prefers_module_file_over_same_name_package(tmp_path: Path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/__init__.py").write_text("")
+    (tmp_path / "src/foo.py").write_text("VALUE = 'module'\n")
+    package = tmp_path / "src/foo"
+    package.mkdir()
+    (package / "__init__.py").write_text("VALUE = 'package'\n")
+    (tmp_path / "src/consumer.py").write_text("from src.foo import VALUE\n")
+    dependencies = identity.local_import_dependencies("src/consumer.py", tmp_path)
+    assert "src/foo.py" in dependencies
+    assert "src/foo/__init__.py" not in dependencies
+
+
+@pytest.mark.parametrize("source", [
+    "from ocr_service.unregistered_parser import transform\n",
+    "from ocr_service import unregistered_parser\n",
+    "from .unregistered_parser import transform\n",
+    "from . import unregistered_parser\n",
+    "import ocr_service.unregistered_parser\n",
+    "def later():\n    from .unregistered_parser import transform\n",
+])
+def test_import_guard_rejects_unregistered_package_parser(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, source: str
+):
+    service = tmp_path / "ocr_service"
+    package = service / "unregistered_parser"
+    package.mkdir(parents=True)
+    (service / "app.py").write_text(source)
+    (package / "__init__.py").write_text("def transform(value): return value * 10\n")
+    monkeypatch.setattr(identity, "ROOT", tmp_path)
+    monkeypatch.setattr(identity, "PARSE_IMPLEMENTATION_FILES", ("ocr_service/app.py",))
+    with pytest.raises(AssertionError):
+        test_parse_manifest_covers_parse_module_import_edges()
+
+
+def test_parent_package_init_change_moves_parse_implementation_fingerprint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    for relative in ("src/__init__.py", "src/services/__init__.py", "src/services/pdf_parser.py"):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(relative)
+    monkeypatch.setattr(identity, "ROOT", tmp_path)
+    monkeypatch.setattr(identity, "PARSE_IMPLEMENTATION_FILES", (
+        "src/__init__.py", "src/services/__init__.py", "src/services/pdf_parser.py"))
+    monkeypatch.setattr(identity, "PARSE_DEPENDENCIES", ())
+    identity.parse_code_manifest.cache_clear()
+    before = identity.parse_implementation_manifest()
+    (tmp_path / "src/services/__init__.py").write_text("changed parent package")
+    identity.parse_code_manifest.cache_clear()
+    after = identity.parse_implementation_manifest()
+    assert after["sha256"] != before["sha256"]
+    assert after["code"]["src/services/__init__.py"] != before["code"]["src/services/__init__.py"]
+
+
+def test_execution_manifest_covers_rule_helper_modules(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    required = {
+        "api/main.py": "",
+        "api/runtime.py": "",
+        "src/db/migrations.py": "",
+        "src/engine/rules_v33.py": "from src.utils.narration import extract_amounts\n",
+        "src/utils/narration.py": (
+            "def extract_amounts(text):\n"
+            "    value = 1.0\n"
+            "    if '亿元' in text:\n"
+            "        value *= 10000\n"
+            "    return value\n"
+        ),
+        "rules/checklists/amount.yaml": "version: 1\n",
+    }
+    for relative, text in required.items():
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    monkeypatch.setattr(identity, "ROOT", tmp_path)
+    identity.runtime_code_manifest.cache_clear()
+    identity.parse_code_manifest.cache_clear()
+
+    first = identity.processing_manifest()
+    parse_manifest = identity.parse_implementation_manifest()
+    artifact = _artifact(
+        parser_fingerprint=_parser_fingerprint(parse_manifest),
+        config_fingerprint=processing_config_fingerprint("caller", parse_manifest),
+    )
+    first_uid = refresh_parse_identity(artifact)
+    first_execution = snapshots.freeze_execution_manifest()
+    first_fingerprint = snapshots.compute_execution_fingerprint(
+        execution_manifest=first_execution,
+        source_file_hash=artifact.source_file_hash,
+        parse_run_uid=first_uid,
+        artifact_content_hash_value=artifact_content_hash(artifact),
+        semantic_artifact_hash_value=semantic_artifact_hash(artifact),
+    )
+    assert "src/utils/narration.py" in first["code"]
+    assert "rules/checklists/amount.yaml" in first["configuration_files"]
+
+    (tmp_path / "src/utils/narration.py").write_text(
+        (tmp_path / "src/utils/narration.py").read_text().replace("10000", "1000"))
+    (tmp_path / "rules/checklists/amount.yaml").write_text("version: 2\n")
+    identity.runtime_code_manifest.cache_clear()
+    second = identity.processing_manifest()
+    second_execution = snapshots.freeze_execution_manifest()
+    second_fingerprint = snapshots.compute_execution_fingerprint(
+        execution_manifest=second_execution,
+        source_file_hash=artifact.source_file_hash,
+        parse_run_uid=first_uid,
+        artifact_content_hash_value=artifact_content_hash(artifact),
+        semantic_artifact_hash_value=semantic_artifact_hash(artifact),
+    )
+    assert second["sha256"] != first["sha256"]
+    assert second_fingerprint != first_fingerprint
+    # 只改执行侧辅助模块：解析实现、语义产物与 parse_run_uid 均不变。
+    assert identity.parse_implementation_manifest()["sha256"] == parse_manifest["sha256"]
+    assert refresh_parse_identity(artifact) == first_uid
 
 
 @pytest.mark.parametrize("source", [
