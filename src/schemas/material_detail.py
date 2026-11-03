@@ -347,6 +347,9 @@ class CoverageObligationItem(BaseModel):
     candidates: List[Dict[str, Any]] = Field(default_factory=list)
     next_action: Optional[str] = None
     root_cause_key: Optional[str] = None
+    #: DH-03a 旧兼容字段：原样透传，只供第一阶段 UI 提示，不参与覆盖/关闭/门禁。
+    legacy_same_source_keys: List[str] = Field(default_factory=list)
+    legacy_coverage_terms: List[str] = Field(default_factory=list)
 
 
 class CoverageSummaryBlock(BaseModel):

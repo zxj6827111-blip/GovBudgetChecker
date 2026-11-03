@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
 
@@ -1196,6 +1197,9 @@ class ObligationInstance:
     candidates: Tuple[Dict[str, Any], ...] = ()
     next_action: Optional[str] = None
     root_cause_key: Optional[str] = None
+    # DH-03a 旧兼容字段（只供第一阶段 UI 提示；不参与覆盖/关闭/待办/门禁）
+    legacy_same_source_keys: Tuple[str, ...] = ()
+    legacy_coverage_terms: Tuple[str, ...] = ()
 
     @property
     def is_completed(self) -> bool:
@@ -1234,6 +1238,8 @@ class ObligationInstance:
             "candidates": [dict(item) for item in self.candidates],
             "next_action": self.next_action,
             "root_cause_key": self.root_cause_key,
+            "legacy_same_source_keys": list(self.legacy_same_source_keys),
+            "legacy_coverage_terms": list(self.legacy_coverage_terms),
         }
 
 
@@ -1647,6 +1653,39 @@ def _build_summary(
     }
 
 
+#: DH-03a 唯一合法旧同源键（冻结第一阶段既有 UI 提示依据）。
+LEGACY_SAME_SOURCE_KEY = "FIN_04_fiscal_grant_total"
+#: 旧算法不参与同源匹配的泛化词（与 2026-11-01 obligation_finding_coverage 逐字一致）。
+_LEGACY_GENERIC_TERMS = frozenset({
+    "一般公共", "一般公共预算", "财政拨款", "年初预算", "决算数", "预算数", "基本支出", "项目支出",
+    "合计", "本年", "上年", "三公经费", "机关运行经费", "支出决算", "收入决算",
+})
+_LEGACY_QUOTED_RE = re.compile(r"[“「]([^”」]{2,40})[”」]")
+
+
+def legacy_same_source_keys(instance: ObligationInstance) -> List[str]:
+    """冻结旧 UI 算法：只认 FIN_04 两个义务的固定表名短语，不扩大简称/表代号。"""
+    oid = instance.obligation_id
+    detail = str(instance.detail or "")
+    matched = oid == "OBL-STRUCT-EMPTY-STATEMENT" and "财政拨款收入支出决算总表" in detail
+    if oid == "OBL-CROSS-FISCAL-TOTAL":
+        text = str(instance.title or "") + " " + detail
+        matched = "财政拨款收支总表" in text or "财政拨款收入支出决算总表" in text
+    return [LEGACY_SAME_SOURCE_KEY] if matched else []
+
+
+def legacy_coverage_terms(detail: Any) -> List[str]:
+    """冻结旧算法：detail 中 4 字以上、非泛化的引号短语，排序去重。"""
+    terms = {match.group(1).strip() for match in _LEGACY_QUOTED_RE.finditer(str(detail or ""))}
+    return sorted(term for term in terms if len(term) >= 4 and term not in _LEGACY_GENERIC_TERMS)
+
+
+def _fill_legacy_fields(instances: Sequence[ObligationInstance]) -> None:
+    for instance in instances:
+        instance.legacy_same_source_keys = tuple(legacy_same_source_keys(instance))
+        instance.legacy_coverage_terms = tuple(legacy_coverage_terms(instance.detail))
+
+
 def _ai_root_key(instance: ObligationInstance) -> str:
     from src.engine.diagnostic_fields import root_cause_key
 
@@ -1797,6 +1836,8 @@ def build_obligation_ledger(
     "调度出去的规则跑成什么样"。
     """
     instances, notes = expand_obligations(profile, report_kind=report_kind)
+    # DH-03a：旧兼容字段在实例展开后立即冻结，后续 detail/诊断变化不回写它们。
+    _fill_legacy_fields(instances)
     kind = str(report_kind or (profile.kind if profile else "") or "unknown").strip().lower()
     # 只在该次预算分析实际采用新链路时增加义务，默认预算回执要求不变。
     if kind=='budget' and (getattr(profile,'writing_scope',{}) or {}).get('domain')=='budget':

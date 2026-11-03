@@ -134,6 +134,12 @@ export interface ObligationReviewItemRecord {
   candidates?: Array<Record<string, unknown>>;
   next_action?: string | null;
   root_cause_key?: string | null;
+  /**
+   * DH-03a 旧兼容字段：后端原样透传，只供第一阶段同源提示；
+   * 不参与义务关闭、待办或门禁。旧后端没有这两个字段，保持可选。
+   */
+  legacy_same_source_keys?: string[];
+  legacy_coverage_terms?: string[];
 }
 
 /** `obligation_review` 块。`available=false` 时 items 必为空、pending_total 为 null。 */

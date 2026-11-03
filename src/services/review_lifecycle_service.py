@@ -818,6 +818,9 @@ def _obligation_review_block(state: ReviewState) -> "ObligationReviewBlock":
                 candidates=[dict(value) for value in getattr(item, "candidates", []) or []],
                 next_action=getattr(item, "next_action", None),
                 root_cause_key=getattr(item, "root_cause_key", None),
+                # DH-03a：旧兼容字段原样透传；只作提示，不参与关闭/待办/门禁。
+                legacy_same_source_keys=list(getattr(item, "legacy_same_source_keys", []) or []),
+                legacy_coverage_terms=list(getattr(item, "legacy_coverage_terms", []) or []),
             )
         )
     return ObligationReviewBlock(

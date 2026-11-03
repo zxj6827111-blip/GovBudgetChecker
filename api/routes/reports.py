@@ -1169,6 +1169,9 @@ def _build_docx_document_xml(
                     for entry in (item.get("missing_operands") or []) if isinstance(entry, dict))),
                 ("下一步", str(item.get("next_action") or "")),
                 ("根因键", str(item.get("root_cause_key") or "")),
+                # DH-03a：旧兼容字段只作提示，随未完成清单原样导出（含空列表）。
+                ("旧同源键", "、".join(str(key) for key in (item.get("legacy_same_source_keys") or []))),
+                ("旧覆盖短语", "、".join(str(term) for term in (item.get("legacy_coverage_terms") or []))),
             ]))
 
     review_report = status_payload.get("review_report")
@@ -1836,6 +1839,9 @@ def _append_report_appendix_pages(
                 "status": item.get("status"),
                 "reason": item.get("reason_label") or item.get("status"),
                 "detail": item.get("detail") or item.get("gap_note"),
+                # DH-03a：旧兼容字段原样透传（含空列表）。
+                "legacy_same_source_keys": list(item.get("legacy_same_source_keys") or []),
+                "legacy_coverage_terms": list(item.get("legacy_coverage_terms") or []),
             }
             for item in conclusion["unfinished_items"]
         ]
