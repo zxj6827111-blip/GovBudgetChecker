@@ -1,0 +1,80 @@
+{
+  "absent_stages": [
+    "baseline",
+    "DH-02"
+  ],
+  "allowed_keys": [
+    "FIN_04_fiscal_grant_total"
+  ],
+  "business_recheck_required": [
+    "RB-2024-U07 原双向提示恢复",
+    "数据库保存/独立连接读回/真实版本读取/水合",
+    "复核和导出处理器",
+    "前端适配器/真实页面提示与摘要缓存版本"
+  ],
+  "collector_raw_allowed_paths": [
+    "status.check_coverage.instances[*]",
+    "status.result.meta.obligation_coverage.instances[*]",
+    "status.review_report.obligation_coverage.instances[*]",
+    "status.review_report.manual_review[record_type=unfinished_check]",
+    "todo.coverage_items[*]"
+  ],
+  "consumer_truth_table": [
+    {
+      "behavior": "only intersection of both frozen key lists; [] never falls back; mixed list/missing side has no intersection",
+      "keys": "list including []",
+      "terms": "any"
+    },
+    {
+      "behavior": "exact original matcher, no abbreviation/code expansion",
+      "keys": "missing or null",
+      "terms": "missing or null"
+    },
+    {
+      "behavior": "strict e4ad0c50 structured FIN_04 identity; no detail/rule-explanation fallback; no history rewrite",
+      "keys": "missing or null",
+      "terms": "list including []"
+    }
+  ],
+  "field": "legacy_same_source_keys",
+  "introduced_stages": [
+    "DH-03a",
+    "DH-03b"
+  ],
+  "meaning": "仅冻结第一阶段原 UI 同源提示依据；不证明原页同一单元格或同根因，不参与正式问题覆盖/义务关闭/待办/门禁",
+  "old_algorithm": {
+    "OBL-CROSS-FISCAL-TOTAL": {
+      "input": "title + space + detail",
+      "literal_any": [
+        "财政拨款收支总表",
+        "财政拨款收入支出决算总表"
+      ]
+    },
+    "OBL-STRUCT-EMPTY-STATEMENT": {
+      "input": "detail",
+      "literal_any": [
+        "财政拨款收入支出决算总表"
+      ]
+    },
+    "nonmatch_or_other_obligation": []
+  },
+  "producer_all_new_instances_require_both_lists": [
+    "legacy_same_source_keys",
+    "legacy_coverage_terms"
+  ],
+  "producer_freeze_point": "旧 title/detail 形成后、DH-03b 改写前；比较器只从正式基线旧文本独立计算",
+  "tool_test_limit": "只验证包比较器和真实前端纯函数边界；不替代数据库/API/真实UI/导出端到端证据",
+  "transport": [
+    "ObligationInstance.to_dict",
+    "result.meta.obligation_coverage.instances",
+    "CoverageObligationItem/build_coverage",
+    "ObligationReviewItem",
+    "build_review_report.manual_review[record_type=unfinished_check]",
+    "build_review_report.obligation_coverage.instances",
+    "JSON/文档导出约定义务范围块",
+    "reviewLifecycleAdapters/obligationGuidance"
+  ],
+  "type": "string[] | null",
+  "unregistered_export_shapes": "不得泛化放行。新增实际导出形状须由原聊天审核登记，未登记位置 FAIL；其他未知新增字段 I10 REVIEW。",
+  "version": 1
+}

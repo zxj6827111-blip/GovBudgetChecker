@@ -1,0 +1,390 @@
+{
+  "cases": [
+    {
+      "expected": [
+        true,
+        true
+      ],
+      "id": "L01_old_full",
+      "introduced": "baseline",
+      "items": [
+        {
+          "detail": "财政拨款收入支出决算总表",
+          "obligation_id": "OBL-STRUCT-EMPTY-STATEMENT"
+        },
+        {
+          "detail": "",
+          "obligation_id": "OBL-CROSS-FISCAL-TOTAL",
+          "title": "财政拨款收支总表"
+        }
+      ]
+    },
+    {
+      "expected": [
+        false,
+        false
+      ],
+      "id": "L02_old_abbreviated_empty",
+      "introduced": "baseline",
+      "items": [
+        {
+          "detail": "财政拨款收支总表",
+          "obligation_id": "OBL-STRUCT-EMPTY-STATEMENT"
+        },
+        {
+          "detail": "",
+          "obligation_id": "OBL-CROSS-FISCAL-TOTAL",
+          "title": "财政拨款收支总表"
+        }
+      ]
+    },
+    {
+      "expected": [
+        false,
+        false
+      ],
+      "id": "L03_old_code_only",
+      "introduced": "baseline",
+      "items": [
+        {
+          "detail": "FIN_04_fiscal_grant_total",
+          "obligation_id": "OBL-STRUCT-EMPTY-STATEMENT"
+        },
+        {
+          "detail": "",
+          "obligation_id": "OBL-CROSS-FISCAL-TOTAL",
+          "title": "FIN_04_fiscal_grant_total"
+        }
+      ]
+    },
+    {
+      "expected": [
+        true,
+        true
+      ],
+      "id": "L04_old_null_fields",
+      "introduced": "baseline",
+      "items": [
+        {
+          "detail": "财政拨款收入支出决算总表",
+          "legacy_coverage_terms": null,
+          "legacy_same_source_keys": null,
+          "obligation_id": "OBL-STRUCT-EMPTY-STATEMENT"
+        },
+        {
+          "detail": "",
+          "legacy_coverage_terms": null,
+          "legacy_same_source_keys": null,
+          "obligation_id": "OBL-CROSS-FISCAL-TOTAL",
+          "title": "财政拨款收支总表"
+        }
+      ]
+    },
+    {
+      "expected": [
+        false,
+        false
+      ],
+      "id": "L05_empty_title_does_not_match",
+      "introduced": "baseline",
+      "items": [
+        {
+          "detail": "",
+          "obligation_id": "OBL-STRUCT-EMPTY-STATEMENT",
+          "title": "财政拨款收入支出决算总表"
+        },
+        {
+          "detail": "",
+          "obligation_id": "OBL-CROSS-FISCAL-TOTAL",
+          "title": "财政拨款收支总表"
+        }
+      ]
+    },
+    {
+      "expected": [
+        true,
+        true
+      ],
+      "id": "N01_keys_authority",
+      "introduced": "DH-03a",
+      "items": [
+        {
+          "detail": "新文案",
+          "legacy_coverage_terms": [],
+          "legacy_same_source_keys": [
+            "FIN_04_fiscal_grant_total"
+          ],
+          "obligation_id": "OBL-STRUCT-EMPTY-STATEMENT"
+        },
+        {
+          "detail": "规则说明：无关",
+          "legacy_coverage_terms": [],
+          "legacy_same_source_keys": [
+            "FIN_04_fiscal_grant_total"
+          ],
+          "obligation_id": "OBL-CROSS-FISCAL-TOTAL",
+          "title": "新标题"
+        }
+      ]
+    },
+    {
+      "expected": [
+        false,
+        false
+      ],
+      "id": "N02_empty_never_fallback",
+      "introduced": "DH-03a",
+      "items": [
+        {
+          "detail": "财政拨款收入支出决算总表",
+          "legacy_coverage_terms": [],
+          "legacy_same_source_keys": [],
+          "obligation_id": "OBL-STRUCT-EMPTY-STATEMENT"
+        },
+        {
+          "detail": "",
+          "legacy_coverage_terms": [],
+          "legacy_same_source_keys": [],
+          "obligation_id": "OBL-CROSS-FISCAL-TOTAL",
+          "title": "财政拨款收支总表"
+        }
+      ]
+    },
+    {
+      "expected": [
+        false,
+        false
+      ],
+      "id": "N03_no_intersection",
+      "introduced": "DH-03a",
+      "items": [
+        {
+          "detail": "财政拨款收入支出决算总表",
+          "legacy_coverage_terms": [],
+          "legacy_same_source_keys": [
+            "FIN_04_fiscal_grant_total"
+          ],
+          "obligation_id": "OBL-STRUCT-EMPTY-STATEMENT"
+        },
+        {
+          "detail": "",
+          "legacy_coverage_terms": [],
+          "legacy_same_source_keys": [],
+          "obligation_id": "OBL-CROSS-FISCAL-TOTAL",
+          "title": "财政拨款收支总表"
+        }
+      ]
+    },
+    {
+      "expected": [
+        false,
+        false
+      ],
+      "id": "N04_mixed_new_old_has_no_two_lists",
+      "introduced": "DH-03a",
+      "items": [
+        {
+          "detail": "财政拨款收入支出决算总表",
+          "legacy_coverage_terms": [],
+          "legacy_same_source_keys": [
+            "FIN_04_fiscal_grant_total"
+          ],
+          "obligation_id": "OBL-STRUCT-EMPTY-STATEMENT"
+        },
+        {
+          "detail": "",
+          "obligation_id": "OBL-CROSS-FISCAL-TOTAL",
+          "title": "财政拨款收支总表"
+        }
+      ]
+    },
+    {
+      "expected": [
+        false,
+        false
+      ],
+      "id": "T01_no_detail_fallback",
+      "introduced": "DH-03a",
+      "items": [
+        {
+          "detail": "财政拨款收入支出决算总表",
+          "legacy_coverage_terms": [],
+          "legacy_same_source_keys": null,
+          "obligation_id": "OBL-STRUCT-EMPTY-STATEMENT"
+        },
+        {
+          "detail": "",
+          "legacy_coverage_terms": [],
+          "legacy_same_source_keys": null,
+          "obligation_id": "OBL-CROSS-FISCAL-TOTAL",
+          "title": "财政拨款收支总表"
+        }
+      ]
+    },
+    {
+      "expected": [
+        true,
+        true
+      ],
+      "id": "T02_operands",
+      "introduced": "DH-03a",
+      "items": [
+        {
+          "detail": "无关",
+          "legacy_coverage_terms": [],
+          "missing_operands": [
+            {
+              "table_code": "FIN_04_fiscal_grant_total"
+            }
+          ],
+          "obligation_id": "OBL-STRUCT-EMPTY-STATEMENT"
+        },
+        {
+          "candidates": [
+            {
+              "table_code": "FIN_04_fiscal_grant_total"
+            }
+          ],
+          "detail": "",
+          "legacy_coverage_terms": [],
+          "obligation_id": "OBL-CROSS-FISCAL-TOTAL",
+          "title": "无关"
+        }
+      ]
+    },
+    {
+      "expected": [
+        true,
+        true
+      ],
+      "id": "T03_blocked_ref",
+      "introduced": "DH-03a",
+      "items": [
+        {
+          "blocked_by": [
+            {
+              "ref": "table:FIN_04:total"
+            }
+          ],
+          "detail": "无关",
+          "legacy_coverage_terms": [],
+          "obligation_id": "OBL-STRUCT-EMPTY-STATEMENT"
+        },
+        {
+          "blocked_by": [
+            {
+              "ref": "FIN 04/row"
+            }
+          ],
+          "detail": "",
+          "legacy_coverage_terms": [],
+          "obligation_id": "OBL-CROSS-FISCAL-TOTAL",
+          "title": "无关"
+        }
+      ]
+    },
+    {
+      "expected": [
+        true,
+        true
+      ],
+      "id": "T04_stable_total_title",
+      "introduced": "DH-03a",
+      "items": [
+        {
+          "detail": "无关",
+          "legacy_coverage_terms": [],
+          "missing_operands": [
+            {
+              "table_code": "FIN_04_fiscal_grant_total"
+            }
+          ],
+          "obligation_id": "OBL-STRUCT-EMPTY-STATEMENT"
+        },
+        {
+          "detail": "",
+          "legacy_coverage_terms": [],
+          "obligation_id": "OBL-CROSS-FISCAL-TOTAL",
+          "title": "财政拨款收支总表"
+        }
+      ]
+    },
+    {
+      "expected": [
+        false,
+        false
+      ],
+      "id": "T05_wrong_code",
+      "introduced": "DH-03a",
+      "items": [
+        {
+          "detail": "财政拨款收入支出决算总表",
+          "legacy_coverage_terms": [],
+          "missing_operands": [
+            {
+              "table_code": "FIN_05"
+            }
+          ],
+          "obligation_id": "OBL-STRUCT-EMPTY-STATEMENT"
+        },
+        {
+          "detail": "",
+          "legacy_coverage_terms": [],
+          "obligation_id": "OBL-CROSS-FISCAL-TOTAL",
+          "title": "财政拨款收支总表"
+        }
+      ]
+    },
+    {
+      "expected": [
+        false,
+        false
+      ],
+      "id": "T06_ref_numeric_boundary",
+      "introduced": "DH-03a",
+      "items": [
+        {
+          "blocked_by": [
+            {
+              "ref": "FIN_040"
+            }
+          ],
+          "detail": "财政拨款收入支出决算总表",
+          "legacy_coverage_terms": [],
+          "obligation_id": "OBL-STRUCT-EMPTY-STATEMENT"
+        },
+        {
+          "detail": "",
+          "legacy_coverage_terms": [],
+          "obligation_id": "OBL-CROSS-FISCAL-TOTAL",
+          "title": "财政拨款收支总表"
+        }
+      ]
+    },
+    {
+      "expected": [
+        false,
+        false
+      ],
+      "id": "N05_detail_mutation_independent",
+      "introduced": "DH-03a",
+      "items": [
+        {
+          "detail": "规则说明：财政拨款收入支出决算总表。随意新文案",
+          "legacy_coverage_terms": [],
+          "legacy_same_source_keys": [],
+          "obligation_id": "OBL-STRUCT-EMPTY-STATEMENT"
+        },
+        {
+          "detail": "",
+          "legacy_coverage_terms": [],
+          "legacy_same_source_keys": [],
+          "obligation_id": "OBL-CROSS-FISCAL-TOTAL",
+          "title": "财政拨款收支总表"
+        }
+      ]
+    }
+  ],
+  "scope": "仅FIN_04 UI提示；原正式覆盖边界不变",
+  "version": 1
+}
