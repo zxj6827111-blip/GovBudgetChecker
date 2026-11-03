@@ -268,55 +268,118 @@ const newTaskWithEmptyTerms = item({
 });
 assert.equal(obligationGuidance(newTaskWithEmptyTerms, [newTaskWithEmptyTerms]).sameSource, null);
 
-// ---- R2：FIN_04 同源消费方迁移，冻结业务说明优先 -----------------------------
+// ---- R2：FIN_04 同源判断只认结构化/冻结依据 -------------------------------
 
+const fin04Diagnostics = {
+  reason_codes: ["cell_blank_semantics_unknown"],
+  blocked_by: [{
+    dimension: "cell",
+    ref: "FIN04:row-total:col-expenditure",
+    reason_code: "cell_blank_semantics_unknown",
+  }],
+  missing_operands: [{
+    source: "table" as const,
+    role: "expenditure_actual",
+    table_code: "FIN_04_fiscal_grant_total",
+    page: 7,
+    row_key: "total",
+    column: "expenditure_actual",
+    fund_scope: "fiscal_appropriation",
+    stage: "决算",
+    year: 2025,
+  }],
+  candidates: [],
+  next_action: "human_confirm",
+  root_cause_key: "rc:identical-fin04-cell",
+  legacy_coverage_terms: [],
+};
 const fin04Empty = item({
+  ...fin04Diagnostics,
   obligation_id: "OBL-STRUCT-EMPTY-STATEMENT",
   title: "空表/无此项说明与总表零值确认",
-  detail: "正在核对：财政拨款收入支出决算总表空白格。",
-  reason_codes: [],
-  legacy_coverage_terms: [],
+  detail: "原文位置：FIN_04_fiscal_grant_total，第7页，合计行支出列。",
 });
 const fin04Total = item({
+  ...fin04Diagnostics,
   obligation_id: "OBL-CROSS-FISCAL-TOTAL",
   title: "财政拨款收入支出决算总表合计一致性",
-  detail: "待核对",
-  reason_codes: [],
-  legacy_coverage_terms: [],
+  detail: "对应原文位置见结构化操作数。",
 });
-assert.deepEqual(
-  obligationGuidance(fin04Empty, [fin04Empty, fin04Total]).sameSource?.obligationIds,
-  ["OBL-CROSS-FISCAL-TOTAL"],
-);
+const fin04Hint = (target: ObligationReviewItemRecord) =>
+  obligationGuidance(target, [target, fin04Total]).sameSource;
+assert.deepEqual(fin04Hint(fin04Empty)?.obligationIds, ["OBL-CROSS-FISCAL-TOTAL"]);
 
-// 改写 detail 但仍保留 FIN_04 表身份：旧提示语义不能丢。
-const fin04RewrittenDetail = item({
+// 边界 1：仅改 detail 不得改变判断。
+const fin04ProseOnly = item({
   ...fin04Empty,
-  detail: "正在核对：表FIN_04_fiscal_grant_total空白格。",
+  detail: "原文位置：第7页，合计行支出列；表身份见结构化操作数。",
 });
-assert.deepEqual(
-  obligationGuidance(fin04RewrittenDetail, [fin04RewrittenDetail, fin04Total]).sameSource?.obligationIds,
-  ["OBL-CROSS-FISCAL-TOTAL"],
-);
-
-// 有冻结业务说明时只读冻结文本：前言提到 FIN_04 但业务原因是基金表，不得误报。
-const fin04FrozenFundOnly = item({
+const fin04NoTableName = item({
   ...fin04Empty,
-  detail: "正在核对：财政拨款收入支出决算总表空白格。规则说明：政府性基金预算财政拨款收入支出决算表对应的总表资金列缺少明确可用数值。下一步：系统修复解析或规则后重跑。",
+  detail: "完全不同的结构化说明，不含表名或表代号。",
 });
-assert.equal(
-  obligationGuidance(fin04FrozenFundOnly, [fin04FrozenFundOnly, fin04Total]).sameSource,
-  null,
-);
+assert.deepEqual(fin04Hint(fin04ProseOnly), fin04Hint(fin04Empty));
+assert.deepEqual(fin04Hint(fin04NoTableName), fin04Hint(fin04Empty));
 
-// 旧任务（legacy=null）仍按第一阶段 title/detail 语义提示。
-const fin04Legacy = item({
+// 边界 2：仅改“规则说明”不得改变判断；结构化依据相同，文案不同也同判。
+const fin04RetainedFin04 = item({
+  ...fin04Empty,
+  detail: "规则说明：财政拨款收入支出决算总表金额未取得。下一步：人工核对。",
+});
+const fin04RetainedFund = item({
+  ...fin04Empty,
+  detail: "规则说明：政府性基金预算财政拨款收入支出决算表金额未取得。下一步：人工核对。",
+});
+assert.deepEqual(fin04Hint(fin04RetainedFin04), fin04Hint(fin04RetainedFund));
+assert.deepEqual(fin04Hint(fin04RetainedFund), fin04Hint(fin04Empty));
+
+// 边界 3：旧任务简称/表代号不得扩大第一阶段的空表匹配范围。
+const fin04LegacyShort = item({
   ...fin04Empty,
   legacy_coverage_terms: null,
+  reason_codes: [],
+  blocked_by: [],
+  missing_operands: [],
+  candidates: [],
+  detail: "财政拨款收支总表存在空白格。",
+});
+const fin04LegacyCode = item({
+  ...fin04Empty,
+  legacy_coverage_terms: null,
+  reason_codes: [],
+  blocked_by: [],
+  missing_operands: [],
+  candidates: [],
+  detail: "FIN_04_fiscal_grant_total存在空白格。",
+});
+assert.equal(obligationGuidance(fin04LegacyShort, [fin04LegacyShort, fin04Total]).sameSource, null);
+assert.equal(obligationGuidance(fin04LegacyCode, [fin04LegacyCode, fin04Total]).sameSource, null);
+
+// 旧任务完整表名仍按原匹配器提示。
+const fin04LegacyExact = item({
+  ...fin04Empty,
+  legacy_coverage_terms: null,
+  reason_codes: [],
+  blocked_by: [],
+  missing_operands: [],
+  candidates: [],
   detail: "财政拨款收入支出决算总表 没有可用金额事实",
 });
 assert.deepEqual(
-  obligationGuidance(fin04Legacy, [fin04Legacy, fin04Total]).sameSource?.obligationIds,
+  obligationGuidance(fin04LegacyExact, [fin04LegacyExact, fin04Total]).sameSource?.obligationIds,
   ["OBL-CROSS-FISCAL-TOTAL"],
+);
+
+// 新结果没有结构化 FIN_04 身份时，detail 里的全称也不能触发（不读 detail）。
+const fin04NewWithoutStructured = item({
+  ...fin04Empty,
+  blocked_by: [],
+  missing_operands: [],
+  candidates: [],
+  detail: "正在核对：财政拨款收入支出决算总表空白格。",
+});
+assert.equal(
+  obligationGuidance(fin04NewWithoutStructured, [fin04NewWithoutStructured, fin04Total]).sameSource,
+  null,
 );
 

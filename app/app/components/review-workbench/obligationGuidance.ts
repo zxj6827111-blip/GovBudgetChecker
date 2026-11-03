@@ -398,40 +398,47 @@ function isLegacyResult(item: ObligationReviewItemRecord): boolean {
   return item.legacy_coverage_terms === undefined || item.legacy_coverage_terms === null;
 }
 
+const FIN04_TABLE_CODE = "FIN_04_fiscal_grant_total";
+const FIN04_REF_RE = /(?:^|[^A-Za-z0-9])FIN[_ ]?04(?:[^0-9]|$)/i;
+const FIN04_TITLE_RE = /财政拨款收入支出决算总表|财政拨款收支总表/;
+
 /**
- * 同源判断的可追溯文本。
- *
- * - 旧结果：沿用第一阶段的 title/detail 语义；
- * - 新结果：优先使用 DH-03b 保留的“规则说明”冻结业务文本，不使用被改写后的
- *   结构化 detail；只有冻结文本缺失时才回退完整 detail（旧语义兜底）。
- * `includeTitle` 只给财政拨款总表一侧使用：义务标题本身就是稳定的表身份。
+ * 新结果的 FIN_04 同源依据只能是持久化结构化字段：
+ * 缺失操作数/候选的表代号，或阻断项 ref 里的 FIN_04 身份。
+ * 不读 detail、不读“规则说明”——它们仍是可变文案。
  */
-function sameSourceEvidenceText(
-  item: ObligationReviewItemRecord,
-  { includeTitle = false }: { includeTitle?: boolean } = {},
-): string {
-  const title = includeTitle ? String(item.title ?? "") : "";
-  if (isLegacyResult(item)) {
-    return `${title} ${item.detail ?? ""}`;
+function hasFin04StructuredIdentity(item: ObligationReviewItemRecord): boolean {
+  for (const spec of item.missing_operands ?? []) {
+    if (String(spec.table_code ?? "") === FIN04_TABLE_CODE) return true;
   }
-  const frozen = retainedRuleExplanation(item.detail);
-  const fallback = frozen === null ? String(item.detail ?? "") : "";
-  return `${title} ${frozen ?? ""} ${fallback}`;
+  for (const candidate of item.candidates ?? []) {
+    if (String(candidate.table_code ?? "") === FIN04_TABLE_CODE) return true;
+  }
+  for (const blocked of item.blocked_by ?? []) {
+    if (FIN04_REF_RE.test(String(blocked.ref ?? ""))) return true;
+  }
+  return false;
 }
 
-/** FIN_04 的稳定表身份：中文表名、简称或冻结表代号，不依赖叙述句式。 */
-const FIN04_IDENTITY_RE = /财政拨款收入支出决算总表|财政拨款收支总表|FIN_04_fiscal_grant_total/;
-
 function mentionsFiscalGrantTotal(item: ObligationReviewItemRecord): boolean {
-  return FIN04_IDENTITY_RE.test(
-    sameSourceEvidenceText(item, { includeTitle: true }),
-  );
+  if (isLegacyResult(item)) {
+    // 旧结果：逐字保留第一阶段匹配器（title + detail）。
+    return /财政拨款收支总表|财政拨款收入支出决算总表/.test(
+      `${item.title ?? ""} ${item.detail ?? ""}`,
+    );
+  }
+  // 新结果：只认结构化操作数/阻断项，或以稳定表题识别总表；不读 detail。
+  return hasFin04StructuredIdentity(item)
+    || FIN04_TITLE_RE.test(String(item.title ?? ""));
 }
 
 function mentionsEmptyStatement(item: ObligationReviewItemRecord): boolean {
-  return FIN04_IDENTITY_RE.test(
-    sameSourceEvidenceText(item),
-  );
+  if (isLegacyResult(item)) {
+    // 旧结果：逐字保留第一阶段匹配器（只看 detail，且只认全称）。
+    return /财政拨款收入支出决算总表/.test(String(item.detail ?? ""));
+  }
+  // 新结果：空表一侧必须由结构化操作数/阻断项证明 FIN_04；不读 detail。
+  return hasFin04StructuredIdentity(item);
 }
 
 function subjectBindingUnlocated(item: ObligationReviewItemRecord): boolean {
