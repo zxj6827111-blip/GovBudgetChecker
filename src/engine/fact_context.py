@@ -1389,6 +1389,20 @@ def make_fact_receipt(
             default_migration_status = "not_applicable" if status == "not_applicable" else "pending"
         evaluation_basis = evaluation_basis or default_basis
         fact_migration_status = fact_migration_status or default_migration_status
+    if status in {"insufficient_data", "parse_error", "execution_error"} and incomplete_reason:
+        # DH-03b：未完成原因改用结构化文案；未完成事实本身不变。
+        from src.engine.diagnostic_fields import render_reason_text
+
+        incomplete_reason = render_reason_text(
+            incomplete_reason,
+            {
+                "reason_codes": list(reason_codes),
+                "blocked_by": list(blocked_by),
+                "missing_operands": list(missing_operands),
+                "candidates": list(candidates),
+            },
+            fallback=incomplete_reason,
+        )
     receipt = CheckReceipt(
         rule_id=str(rule_id),
         sub_check_id=str(sub_check_id),

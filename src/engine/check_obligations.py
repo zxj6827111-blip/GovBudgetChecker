@@ -1214,6 +1214,20 @@ class ObligationInstance:
         return self.status in UNRESOLVED_OBLIGATION_STATUSES
 
     def to_dict(self) -> Dict[str, Any]:
+        detail = self.detail
+        if self.is_unresolved:
+            # DH-03b：未完成原因改用结构化文案；旧 detail 已冻结进 legacy 字段。
+            from src.engine.diagnostic_fields import render_reason_text
+
+            detail = render_reason_text(
+                detail,
+                {
+                    "reason_codes": list(self.reason_codes),
+                    "blocked_by": list(self.blocked_by),
+                    "missing_operands": list(self.missing_operands),
+                    "candidates": list(self.candidates),
+                },
+            )
         return {
             "obligation_id": self.obligation_id,
             "group_id": self.group_id,
@@ -1222,7 +1236,7 @@ class ObligationInstance:
             "status": self.status,
             "reason": self.reason,
             "reason_label": OBLIGATION_REASON_LABELS.get(self.reason or "", None),
-            "detail": self.detail,
+            "detail": detail,
             "checkers": list(self.checkers),
             "missing_checkers": list(self.missing_checkers),
             "depends_on": list(self.depends_on),

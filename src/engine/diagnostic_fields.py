@@ -684,6 +684,100 @@ def record_gap(doc: Any, texts: Any, *, reason_codes: Sequence[str],
     record_failure(doc, texts, entry)
 
 
+#: DH-03b：原因码 → 新文案短语（只用于未完成原因，不改变判定）。
+_REASON_TEXT_LABELS = {
+    "operand_missing": "缺少可核对金额",
+    "operand_ambiguous": "存在多个候选位置，无法唯一绑定",
+    "table_mapping_incomplete": "来源表映射/读取未完成",
+    "table_missing": "未识别到目标表",
+    "row_code_missing": "行缺少科目编码",
+    "row_identity_duplicate": "行身份重复",
+    "row_level_unresolved": "行层级未确定",
+    "column_identity_unconfirmed": "金额列身份未确认",
+    "column_width_drift": "跨页列宽/列身份变化",
+    "cell_unbound": "单元格未绑定唯一事实",
+    "cell_low_confidence": "单元格识别置信度低",
+    "cell_blank_semantics_unknown": "空白/横线单元格含义未确认",
+    "text_statement_absent": "说明缺少该表述",
+    "text_binding_failed": "说明文字无法绑定",
+    "text_statement_unparsed": "说明表述无法解析",
+    "subject_unconfirmed": "主体口径未确认",
+    "scope_unconfirmed": "统计口径未确认",
+    "year_unconfirmed": "年度口径未确认",
+    "parse_error": "解析失败",
+    "execution_error": "执行异常",
+    "rule_no_reason": "规则未给出具体原因",
+    "ai_not_requested": "语义复核未执行",
+    "ai_timeout": "语义复核超时",
+    "withheld_amount_unknown": "暂不纳入的金额未知",
+    "sum_scope_not_comparable": "加总范围不可比",
+    "stated_total_missing": "未识别到说明总额",
+    "item_sum_mismatch": "分项合计与总额不一致",
+    "source_unit_normalized": "原文单位已折算",
+}
+
+#: DH-03b 明确要清理的旧文案。
+_OLD_REASON_PHRASES = ("缺失或不唯一",)
+_OLD_REASON_REPLACEMENT = "缺少可唯一核对的事实"
+
+
+def _diagnostic_summary(entry: Mapping[str, Any]) -> str:
+    """从结构化字段生成一句可读原因；没有结构化事实时返回空串。"""
+    parts: list[str] = []
+    blockers = entry.get("blocked_by") if isinstance(entry.get("blocked_by"), list) else []
+    for blocker_item in blockers[:2]:
+        if not isinstance(blocker_item, Mapping):
+            continue
+        code = str(blocker_item.get("reason_code") or "")
+        label = _REASON_TEXT_LABELS.get(code, code or "上游阻断")
+        ref = str(blocker_item.get("ref") or "").strip()
+        parts.append(f"阻断 {ref}（{label}）" if ref else label)
+    missing = entry.get("missing_operands") if isinstance(entry.get("missing_operands"), list) else []
+    for operand in missing[:2]:
+        if not isinstance(operand, Mapping):
+            continue
+        page = operand.get("page")
+        source = str(operand.get("source") or "")
+        place = str(operand.get("table_code") or operand.get("section") or "")
+        label = f"缺数位置 第{page}页" if isinstance(page, int) and page > 0 else "缺数位置"
+        parts.append(f"{label}{(' ' + source) if source else ''}{(':' + place) if place else ''}")
+    candidates = entry.get("candidates") if isinstance(entry.get("candidates"), list) else []
+    if len(candidates) >= 2 and not missing:
+        parts.append(f"候选位置 {len(candidates)} 处")
+    if not parts:
+        codes = [str(code) for code in entry.get("reason_codes") or [] if str(code)]
+        labels = [_REASON_TEXT_LABELS.get(code, code) for code in codes[:3]]
+        if labels:
+            parts.append("原因：" + "、".join(labels))
+    return "；".join(dict.fromkeys(parts))
+
+
+def render_reason_text(text: Any, entry: Mapping[str, Any], *, fallback: str = "") -> str:
+    """DH-03b：未完成原因的新文案。
+
+    - 清理旧文案短语，保留原有解释（不清空历史上下文）；
+    - 追加由结构化字段生成的原因摘要；没有结构化事实时至少给出可读原因；
+    - 永不返回空串。
+    """
+    value = str(text or "")
+    for phrase in _OLD_REASON_PHRASES:
+        value = value.replace(phrase, _OLD_REASON_REPLACEMENT)
+    summary = _diagnostic_summary(entry)
+    if summary and summary not in value:
+        value = f"{value}；结构：{summary}" if value else f"结构：{summary}"
+    value = value.strip()
+    return value or (str(fallback or "").strip() or "检查未完成，需人工复核。")
+
+
+def _reason_entry(item: Mapping[str, Any]) -> Dict[str, Any]:
+    return {
+        "reason_codes": list(item.get("reason_codes") or []),
+        "blocked_by": list(item.get("blocked_by") or []),
+        "missing_operands": list(item.get("missing_operands") or []),
+        "candidates": list(item.get("candidates") or []),
+    }
+
+
 __all__ = [
     "FROZEN_REASON_CODES",
     "UPSTREAM_REASON_DIMENSIONS",
@@ -704,6 +798,7 @@ __all__ = [
     "primary_blocker",
     "record_failure",
     "record_gap",
+    "render_reason_text",
     "root_cause_key",
     "root_signature",
     "rule_level_entry",
