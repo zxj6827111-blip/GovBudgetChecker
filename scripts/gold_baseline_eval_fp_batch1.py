@@ -364,13 +364,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         summary["ok"] = False
         return write_reports(summary)
 
+    # r2 的 metrics_main 固定读 <RUN_ROOT>/run1/todo；用输出目录内的别名兼容任意 run 目录名。
+    run_alias = out / "_run_alias"
+    run_alias.mkdir(exist_ok=True)
+    alias_link = run_alias / "run1"
+    if alias_link.is_symlink() or alias_link.exists():
+        alias_link.unlink()
+    alias_link.symlink_to(run, target_is_directory=True)
+
     # 复用 r2 的指标实现：只换数据目录与“新条目→旧裁决”的取用方式。
     (analysis / "gold_docs.json").write_text(json.dumps(docs, ensure_ascii=False, indent=1), encoding="utf-8")
     (analysis / "system_items.json").write_text(json.dumps(items, ensure_ascii=False, indent=1), encoding="utf-8")
     (analysis / "auto_match.json").write_text(json.dumps(auto, ensure_ascii=False, indent=1), encoding="utf-8")
     (analysis / "ledgers.json").write_text(json.dumps(aux["ledgers"], ensure_ascii=False), encoding="utf-8")
     gm.REV = "fp_batch1"
-    gm.RUN_ROOT = run.parent
+    gm.RUN_ROOT = run_alias
     gm.OUT = out
     gm.ANALYSIS = analysis
     gm.finalize = finalize_mapped
