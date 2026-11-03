@@ -277,10 +277,11 @@ def test_wenlv_cascade_errors_zero(replays):
 def test_yichuan_output_budget(replays):
     # Portable percentage tolerance is 0.1pp: the 0.20pp vehicle delta is a
     # valid additional warning on top of the prior 12-item sample baseline.
-    # 2026-10-22 检查点清单（CMM-013 缺“第二部分”、V33-251 具体情况差 4.20 万元）另计。
+    # 2026-10-22 检查点清单中，V33-251 具体情况差 4.20 万元仍报；D2（2026-11-03）
+    # 起 2025 年部门决算照 2024 年模板，正文不写“第二部分”，CMM-013 不再报。
     issues = replays["yichuan"]["issues"]
     checklist = [i for i in issues if getattr(i, "rule", "") in {"CMM-013", "V33-251"}]
-    assert len(checklist) == 2
+    assert len(checklist) == 1 and checklist[0].rule == "V33-251"
     # 批次1 年份角色修复恢复了完成率复算：yichuan 声明 98%，按
     # 20707.11→20218.21 应为 97.64%，相差 0.36pp；这是真实新增发现，
     # 不是回归，也不能为了维持旧条数而删除检查。
