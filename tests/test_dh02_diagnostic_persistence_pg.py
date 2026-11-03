@@ -12,11 +12,13 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 
+import asyncpg
 import pytest
 
 from src.db.migrations import run_migrations
@@ -265,7 +267,7 @@ async def _persist_job(conn, *, job_uuid: str, version_id: int) -> None:
 
 
 async def test_save_read_review_and_export_keep_diagnostic_fields(
-    diagnostic_db, monkeypatch
+    diagnostic_db, real_database_url, monkeypatch
 ) -> None:
     schema, pool = diagnostic_db
     async with _conn(schema, pool) as conn:
@@ -298,6 +300,31 @@ async def test_save_read_review_and_export_keep_diagnostic_fields(
     assert stored_items["OBL-TXT-T5"]["legacy_coverage_terms"] == []
     assert "reason_codes" not in stored_items["OBL-OLD-LEGACY"]
     assert "legacy_coverage_terms" not in stored_items["OBL-OLD-LEGACY"]
+
+    # 再用一条不经过应用连接池的独立连接直接读库，证明不是内存对象往返。
+    raw_conn = await asyncpg.connect(real_database_url)
+    try:
+        raw_metadata = await raw_conn.fetchval(
+            f'SELECT metadata FROM "{schema}".analysis_jobs WHERE job_uuid = $1',
+            job_uuid,
+        )
+        raw_payload = await raw_conn.fetchval(
+            f'SELECT raw_response FROM "{schema}".analysis_results r'
+            f' JOIN "{schema}".analysis_jobs j ON j.id = r.job_id'
+            " WHERE j.job_uuid = $1",
+            job_uuid,
+        )
+    finally:
+        await raw_conn.close()
+    raw_meta = json.loads(raw_metadata)
+    raw_instances = {
+        item["obligation_id"]: item
+        for item in raw_meta["result_meta"]["obligation_coverage"]["instances"]
+    }
+    assert raw_instances["OBL-TXT-T5"]["missing_operands"] == [_text_operand()]
+    assert raw_instances["OBL-TXT-T5"]["legacy_coverage_terms"] == []
+    raw_payload_data = json.loads(raw_payload)
+    assert raw_payload_data["result"]["meta"]["check_receipts"] == _receipts()
 
     # 2) 真实复核接口：GET /api/reviews/{slot} 的服务层。
     async with _conn(schema, pool) as conn:
