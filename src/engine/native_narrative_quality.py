@@ -162,7 +162,7 @@ def _numbering_issues(rule, doc, merged, offsets):
                 f"说明条目序号由{first}跳到{second}，建议核对编号连续性；不能据此判定科目内容缺失。",
                 {"page": refs[0]["page"], "pages": sorted({ref["page"] for ref in refs}),
                  "section": title, "relation_type": "item_number_gap", "table_refs": refs},
-                "low", evidence_text="\n".join(ref["span"] for ref in refs)))
+                "info", evidence_text="\n".join(ref["span"] for ref in refs)))
     return issues
 
 
