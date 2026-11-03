@@ -153,6 +153,28 @@ def test_r3_real_title_defects_still_reported(body):
     assert any("目录与正文标题不一致" in i.message for i in issues)
 
 
+def _title_with_org(body_org: str, org: str = "上海市事业单位登记管理局"):
+    pages = [
+        f"{org}\n2023年度部门决算",
+        f"目录\n第一部分 {org}概况 ...... 3\n第二部分 {org}2023年度部门决算表 ...... 4\n"
+        f"第三部分 {org}2023年度部门决算情况说明 ...... 5",
+        f"第一部分 {org}概况\n一、主要职能\n负责测试。",
+        f"第二部分 {org}2023年度部门决算表\n收入支出决算总表\n收入决算表\n支出决算表",
+        f"第三部分 {body_org}2023年度部门决算情况说明\n一、收入支出决算总体情况说明\n收支总计1.00万元。",
+    ]
+    return _final_doc(pages, year=2023, scope="department", org=org)
+
+
+def test_r3_organization_name_internal_unit_word_is_not_template_wording():
+    # 组织名称内部的“单位”是实质内容：事业单位登记管理局 → 事业登记管理局 必须报
+    issues = CMM013_TocHeadingAlignment().apply(_title_with_org("上海市事业登记管理局"))
+    assert any("目录与正文标题不一致" in i.message for i in issues)
+
+
+def test_r3_same_organization_name_is_clean():
+    assert CMM013_TocHeadingAlignment().apply(_title_with_org("上海市事业单位登记管理局")) == []
+
+
 # ---------------------------------------------------------------------------
 # D2-2022 三公表名（CMM-021）
 # ---------------------------------------------------------------------------
@@ -255,6 +277,26 @@ def test_r16_declared_value_inside_rounding_interval_is_not_reported():
 def test_r16_declared_value_outside_rounding_interval_is_still_reported():
     issues = _cmm007("公务接待费支出决算 7.42 万元。\n"
                      "公务接待费支出决算增加 6.20 万元，增长 520%。")
+    assert len(issues) == 1 and "复算不一致" in issues[0].message
+
+
+def test_r16_decrease_uses_implementable_endpoints_and_reports_2140():
+    # 下降率 = D/(C+D)，区间 20.608108%–21.283784%（C=1.17±0.005，D=0.31±0.005）
+    issues = _cmm007("公务接待费支出决算 1.17 万元。\n"
+                     "公务接待费支出决算减少 0.31 万元，下降 21.40%。")
+    assert len(issues) == 1 and "复算不一致" in issues[0].message
+
+
+def test_r16_decrease_inside_true_interval_is_not_reported():
+    issues = _cmm007("公务接待费支出决算 1.17 万元。\n"
+                     "公务接待费支出决算减少 0.31 万元，下降 20.78%。")
+    assert issues == []
+
+
+def test_r16_one_decimal_amount_still_uses_frozen_half_unit_0005():
+    # 冻结口径为两数各 ±0.005，不因增减额原文一位小数改用 ±0.05
+    issues = _cmm007("公务接待费支出决算 0.70 万元。\n"
+                     "公务接待费支出决算增加 0.4 万元，增长 150%。")
     assert len(issues) == 1 and "复算不一致" in issues[0].message
 
 

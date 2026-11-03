@@ -88,15 +88,23 @@ def _body_part_number_expected(doc: Document, num: str) -> bool:
     return True if writes is None else writes
 
 
-#: R3：目录与正文标题只差这些模板措辞（“的情况/情况/说明”“部门/单位”）不算不一致；
-#: “部门/单位”口径矛盾由 B-02 口径规则单独管。
-_TEMPLATE_WORDING_RE = re.compile(r"的情况|情况|说明|部门|单位")
+#: R3：只把“报告类型槽位”和“尾部说明措辞”视为模板等价，不能全局删除
+#: “部门/单位”——组织名称内部的这些字（如“事业单位登记管理局”）是实质内容。
+#: 报告类型槽位：紧邻“预算/决算（表/情况/说明）”之前的“部门/单位”；
+#: 尾部措辞：“的情况说明 / 情况说明 / 说明 / 决算情况”收尾。
+_REPORT_SCOPE_SLOT_RE = re.compile(r"(?:部门|单位)(?=(?:预算|决算)(?:表|情况|说明|$))")
+_TEMPLATE_SUFFIX_RE = re.compile(r"(?:的)?情况(?=说明$)|(?<=[预决]算)情况$|说明$")
+
+
+def _strip_template_wording(text: str) -> str:
+    text = _REPORT_SCOPE_SLOT_RE.sub("", text or "")
+    return _TEMPLATE_SUFFIX_RE.sub("", text)
 
 
 def _template_wording_equal(left: str, right: str) -> bool:
-    """两侧去掉模板措辞后相同（且仍有实质标题）即为同一标题。"""
-    bare_left = _TEMPLATE_WORDING_RE.sub("", left or "")
-    bare_right = _TEMPLATE_WORDING_RE.sub("", right or "")
+    """两侧仅报告类型槽位/尾部说明措辞不同（且仍有实质标题）即为同一标题。"""
+    bare_left = _strip_template_wording(left)
+    bare_right = _strip_template_wording(right)
     return bool(bare_left and bare_right) and bare_left == bare_right
 
 

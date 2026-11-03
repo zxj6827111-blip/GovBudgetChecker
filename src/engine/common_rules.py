@@ -7,7 +7,6 @@ from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tup
 from .amount_math import (
     classify_amount_diff,
     compute_dynamic_envelope,
-    half_unit_for_term,
     rounding_envelope,
 )
 from .rule_policy import amount_difference_exceeds_policy, percentage_difference_exceeds_policy
@@ -2309,13 +2308,10 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
             diff = abs(declared - recomputed)
             if not percentage_difference_exceeds_policy(diff):
                 continue
-            # R16（2026-11-03）：本年数、增减额各按显示半步长取区间，正文值落在
-            # 复算增长率的上下限内即不报（与“与复算值差不超过 0.1 个百分点”任一成立）。
-            if self._declared_within_recompute_range(
-                declared, derived_prior, delta_wan,
-                current_half=half_unit_for_term(current["scale"], current["unit"]),
-                delta_half=half_unit_for_term(_cmm007_scale(delta_text), delta_unit),
-            ):
+            # R16（冻结口径，2026-11-03）：本年数、增减额各 ±0.005 万元，按同一组
+            # 原始金额端点计算可实现极值；正文值落在区间内（或与复算值差 ≤0.1pp）
+            # 即不报。
+            if self._declared_within_recompute_range(declared, current_wan, delta_wan, direction):
                 continue
             severity = "error" if diff > Decimal("1.0") else "warn"
             issues.append(
@@ -2446,25 +2442,30 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
     @staticmethod
     def _declared_within_recompute_range(
         declared: Decimal,
-        derived_prior: Decimal,
+        current_wan: Decimal,
         delta_wan: Decimal,
-        *,
-        current_half: Decimal,
-        delta_half: Decimal,
+        direction: str,
     ) -> bool:
-        """R16：按本年数、增减额的显示半步长复算增长率区间，判断声明值是否在区间内。
+        """R16（冻结口径）：本年数、增减额各 ±0.005 万元，按同一组原始金额端点复算。
 
-        基期 = 本期 − 增减额，故基期区间为 ``derived_prior ± (current_half + delta_half)``；
-        增长率 = 增减额 ÷ 基期，分子、分母各取区间端点得到上下限。
+        增加时基期 = 本期 − 增减，比率 R = D/(C−D)：R 随 D 增、随 C 减，故
+        下限 = D_lo/(C_hi−D_lo)，上限 = D_hi/(C_lo−D_hi)；
+        减少时基期 = 本期 + 增减，R = D/(C+D)：下限 = D_lo/(C_hi+D_lo)，
+        上限 = D_hi/(C_lo+D_hi)。分子、分母必须来自同一组可实现端点，不能
+        把分子端点与独立分母端点拼在一起（会放宽出无法同时成立的区间）。
         """
-        prior_half = current_half + delta_half
-        prior_low, prior_high = derived_prior - prior_half, derived_prior + prior_half
-        if prior_low <= 0:
+        half = Decimal("0.005")
+        current_low, current_high = current_wan - half, current_wan + half
+        delta_low = max(Decimal("0"), delta_wan - half)
+        delta_high = delta_wan + half
+        if direction == "down":
+            denom_low, denom_high = current_high + delta_low, current_low + delta_high
+        else:
+            denom_low, denom_high = current_high - delta_low, current_low - delta_high
+        if denom_low <= 0 or denom_high <= 0:
             return False
-        delta_low = max(Decimal("0"), delta_wan - delta_half)
-        delta_high = delta_wan + delta_half
-        low = delta_low / prior_high * Decimal("100")
-        high = delta_high / prior_low * Decimal("100")
+        low = delta_low / denom_low * Decimal("100")
+        high = delta_high / denom_high * Decimal("100")
         return low <= declared <= high
 
     def _location(

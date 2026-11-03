@@ -63,28 +63,124 @@ def similarity(a: Dict[str, Any], b: Dict[str, Any]) -> float:
     return 0.85 * message + 0.15 * quote
 
 
-def align(old: List[Dict[str, Any]], new: List[Dict[str, Any]]):
+def identity_key(item: Dict[str, Any]):
+    """完整业务身份：文档、层级、规则、页码、标题、去序号正文与原文引文。"""
+    return (item["doc"], item["tier"], item["rule"], tuple(item["pages"]), item.get("sev"),
+            _ws(item.get("title")), norm(item.get("message")),
+            tuple(_ws(q) for q in item.get("quotes") or []))
+
+
+def align(old: List[Dict[str, Any]], new: List[Dict[str, Any]], decision_of=None):
+    """一对一配对；同指纹重复组只有组内裁决完全相同时才按组配对，其余一律 REVIEW。"""
     pool = {item["id"]: item for item in new}
     pairs: List[Tuple[Dict[str, Any], Dict[str, Any], str]] = []
     old_only: List[Dict[str, Any]] = []
     pending: List[Dict[str, Any]] = []
+    review: List[Dict[str, Any]] = []
+    resolved: List[Dict[str, Any]] = []
+
+    groups: Dict[Any, List[Dict[str, Any]]] = {}
+    for item in old:
+        groups.setdefault(identity_key(item), []).append(item)
+    handled: set = set()
     for o in old:
-        exact = [n for n in pool.values() if similarity(o, n) == 1.0]
-        if len(exact) == 1:
-            pairs.append((o, exact[0], "exact"))
-            pool.pop(exact[0]["id"])
-        else:
-            pending.append(o)
+        key = identity_key(o)
+        if key in handled:
+            continue
+        old_group = groups[key]
+        candidates = [n for n in pool.values() if identity_key(n) == key]
+        if len(old_group) == 1 and len(candidates) == 1:
+            pairs.append((o, candidates[0], "exact"))
+            pool.pop(candidates[0]["id"])
+            handled.add(key)
+            continue
+        if len(old_group) == len(candidates) and candidates:
+            decisions = {decision_of(m) for m in old_group if m["tier"] in {"F", "P"}} if decision_of else set()
+            if len(decisions) <= 1:
+                for old_item, new_item in zip(old_group, candidates, strict=True):
+                    pairs.append((old_item, new_item, "duplicate-group"))
+                for candidate in candidates:
+                    pool.pop(candidate["id"])
+                resolved.append({"old_ids": [m["id"] for m in old_group],
+                                 "new_ids": [n["id"] for n in candidates],
+                                 "decision": next(iter(decisions)) if decisions else None,
+                                 "reason": "同指纹重复组；实例不可区分，但组内旧裁决相同（或均无裁决），按组配对"})
+                handled.add(key)
+                continue
+            review.append({"old_ids": [m["id"] for m in old_group],
+                           "candidates": [n["id"] for n in candidates],
+                           "reason": "同指纹重复组内旧裁决不一致，无法按组继承"})
+            for candidate in candidates:
+                pool.pop(candidate["id"])
+            handled.add(key)
+            continue
+        if candidates:
+            review.append({"old_ids": [m["id"] for m in old_group],
+                           "candidates": [n["id"] for n in candidates],
+                           "reason": "旧同指纹组与候选数量不一致，无法一一对应"})
+            for candidate in candidates:
+                pool.pop(candidate["id"])
+            handled.add(key)
+            continue
+        pending.append(o)
+
     for o in pending:
         scored = sorted(((similarity(o, n), n) for n in pool.values()), key=lambda x: -x[0])
         scored = [(s, n) for s, n in scored if s >= 0.90]
-        if scored:
-            s, n = scored[0]
-            pairs.append((o, n, f"similar:{s:.3f}"))
-            pool.pop(n["id"])
-        else:
+        if not scored:
             old_only.append(o)
-    return pairs, old_only, list(pool.values())
+            continue
+        best_score, best = scored[0]
+        second_score = scored[1][0] if len(scored) > 1 else -1.0
+        if best_score - second_score < 0.02:
+            review.append({"old_id": o["id"], "candidates": [n["id"] for _, n in scored[:3]],
+                           "scores": [round(s, 4) for s, _ in scored[:3]],
+                           "reason": "最高分不唯一（并列或差 <0.02），无法唯一对应"})
+            for _, candidate in scored:
+                pool.pop(candidate["id"], None)
+            continue
+        pairs.append((o, best, f"similar:{best_score:.3f}"))
+        pool.pop(best["id"])
+    return pairs, old_only, list(pool.values()), review, resolved
+
+
+def _ws(text: str) -> str:
+    return re.sub(r"\s+", "", text or "")
+
+
+def message_equal(left: str, right: str) -> bool:
+    """去展示序号后相等；仅当两侧都触发 600 字截断时允许 1–2 字前缀差。"""
+    a, b = norm(left), norm(right)
+    if a == b:
+        return True
+    if len(left or "") >= 600 and len(right or "") >= 600:
+        short, long = sorted((a, b), key=len)
+        return len(long) - len(short) <= 2 and long.startswith(short)
+    return False
+
+
+def _text_key(item: Dict[str, Any]) -> str:
+    """text = 标题 + 空格 + 正文/原文；只归一规则自动加的展示序号，不归一原文。"""
+    text = item.get("text") or ""
+    title = item.get("title") or ""
+    prefix = len(title) + 1 if title and text.startswith(title + " ") else 0
+    head, rest = text[:prefix], text[prefix:]
+    rest = re.sub(r"^[一二三四五六七八九十百]+、", "", rest)
+    return _ws(head + rest)
+
+
+def fingerprint_diffs(old: Dict[str, Any], new: Dict[str, Any]) -> List[str]:
+    """完整实质指纹：严重度、原文、证据位置、期望/实际值（在 text 中）等。"""
+    diffs = [field for field in ("tier", "rule", "pages", "sev", "title", "bucket",
+                                 "checklist_item", "obligation_ids")
+             if old.get(field) != new.get(field)]
+    if not message_equal(old.get("message"), new.get("message")):
+        diffs.append("message")
+    if [_ws(q) for q in old.get("quotes") or []] != [_ws(q) for q in new.get("quotes") or []]:
+        diffs.append("quotes")
+    if _text_key(old) != _text_key(new):
+        diffs.append("text")
+    return diffs
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -118,8 +214,22 @@ def main(argv: Optional[List[str]] = None) -> int:
         for row in csv.DictReader(handle):
             targets[(row["sample_id"], row["system_item_id"])] = row
 
-    pairs, old_only, new_only = align(old_items, items)
+    def decision_of(item: Dict[str, Any]):
+        if item["tier"] not in {"F", "P"}:
+            return None
+        decision = dec.D.get(f"{item['doc']}|{item.get('raw_id')}")
+        return decision.get("final") if decision else None
+
+    pairs, old_only, new_only, review, resolved_duplicates = align(old_items, items, decision_of)
     new_to_old = {n["id"]: o for o, n, _ in pairs}
+    fingerprint_drift = []
+    for old, new, how in pairs:
+        diffs = fingerprint_diffs(old, new)
+        if diffs:
+            fingerprint_drift.append({"old_id": old["id"], "new_id": new["id"], "how": how,
+                                      "fields": diffs,
+                                      "old": {f: old.get(f) for f in diffs},
+                                      "new": {f: new.get(f) for f in diffs}})
 
     # 旧裁决只能通过唯一对齐继承；移除条目必须全部是目标 CSV 的“移除”行。
     unused, unexpected_unused, missing_decision = [], [], []
@@ -210,21 +320,33 @@ def main(argv: Optional[List[str]] = None) -> int:
         auto.append(gm.match_o(item, docs[item["doc"]]) if item["tier"] == "O"
                     else gm.match_item(item, docs[item["doc"]]))
 
-    (analysis / "gold_docs.json").write_text(json.dumps(docs, ensure_ascii=False, indent=1), encoding="utf-8")
-    (analysis / "system_items.json").write_text(json.dumps(items, ensure_ascii=False, indent=1), encoding="utf-8")
-    (analysis / "auto_match.json").write_text(json.dumps(auto, ensure_ascii=False, indent=1), encoding="utf-8")
-    (analysis / "ledgers.json").write_text(json.dumps(aux["ledgers"], ensure_ascii=False), encoding="utf-8")
+    def write_reports(summary: Dict[str, Any]) -> int:
+        (out / "eval_summary.json").write_text(
+            json.dumps(summary, ensure_ascii=False, indent=1, default=dict) + "\n", encoding="utf-8")
+        with (out / "item_alignment.csv").open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(["kind", "sample_id", "tier", "rule", "old_raw_id", "new_raw_id", "pages",
+                             "how_or_status", "in_targets", "target_class", "message"])
+            for old, new, how in sorted(pairs, key=lambda p: (p[0]["doc"], str(p[0].get("raw_id")))):
+                writer.writerow(["matched", old["doc"], old["tier"], old["rule"], old.get("raw_id"),
+                                 new.get("raw_id"), " ".join(map(str, old["pages"])), how, "", "",
+                                 new.get("message")])
+            for row in removed_rows:
+                writer.writerow(["removed", row["sample_id"], row["tier"], row["rule"], row["raw_id"], "",
+                                 " ".join(map(str, row["pages"])), "", "Y" if row["in_targets"] else "",
+                                 row["target_class"] or "", row["message"]])
+            for row in added_rows:
+                writer.writerow(["added", row["sample_id"], row["tier"], row["rule"], "", row["raw_id"],
+                                 " ".join(map(str, row["pages"])), "", "", "", row["message"]])
+        print(json.dumps({k: summary[k] for k in ("items_old", "items_new", "tiers_old", "tiers_new", "pairs",
+                                                 "target_removed", "target_missing", "unexpected_removed",
+                                                 "added_formal", "decisions_unused_unexpected", "missing_decision",
+                                                 "review_required", "fingerprint_drift", "decision_drift",
+                                                 "headline", "ok")},
+                         ensure_ascii=False, indent=1, default=dict)[:6000])
+        return 0 if summary["ok"] else 1
 
-    # 复用 r2 的指标实现：只换数据目录与“新条目→旧裁决”的取用方式。
-    gm.REV = "fp_batch1"
-    gm.RUN_ROOT = run.parent
-    gm.OUT = out
-    gm.ANALYSIS = analysis
-    gm.finalize = finalize_mapped
-    gm.metrics_main(SimpleNamespace())
-
-    metrics = json.loads((analysis / "metrics.json").read_text(encoding="utf-8"))
-    summary = {
+    summary: Dict[str, Any] = {
         "run": str(run), "baseline_analysis": str(baseline),
         "items_old": len(old_items), "items_new": len(items),
         "tiers_old": dict(Counter(i["tier"] for i in old_items)),
@@ -234,6 +356,46 @@ def main(argv: Optional[List[str]] = None) -> int:
         "unexpected_removed": unexpected_removed, "added_formal": added_formal,
         "decisions_inherited": len(used), "decisions_unused_expected": unused,
         "decisions_unused_unexpected": unexpected_unused, "missing_decision": missing_decision,
+        "review_required": review, "resolved_duplicates": resolved_duplicates,
+        "fingerprint_drift": fingerprint_drift, "decision_drift": [],
+        "headline": None,
+    }
+    if review or missing_decision:
+        summary["ok"] = False
+        return write_reports(summary)
+
+    # 复用 r2 的指标实现：只换数据目录与“新条目→旧裁决”的取用方式。
+    (analysis / "gold_docs.json").write_text(json.dumps(docs, ensure_ascii=False, indent=1), encoding="utf-8")
+    (analysis / "system_items.json").write_text(json.dumps(items, ensure_ascii=False, indent=1), encoding="utf-8")
+    (analysis / "auto_match.json").write_text(json.dumps(auto, ensure_ascii=False, indent=1), encoding="utf-8")
+    (analysis / "ledgers.json").write_text(json.dumps(aux["ledgers"], ensure_ascii=False), encoding="utf-8")
+    gm.REV = "fp_batch1"
+    gm.RUN_ROOT = run.parent
+    gm.OUT = out
+    gm.ANALYSIS = analysis
+    gm.finalize = finalize_mapped
+    gm.metrics_main(SimpleNamespace())
+
+    metrics = json.loads((analysis / "metrics.json").read_text(encoding="utf-8"))
+    old_rows = {f"{row['doc']}|{row.get('raw_id')}": row for row in
+                json.loads((baseline / "final_rows.json").read_text(encoding="utf-8"))}
+    new_rows = {row["id"]: row for row in
+                json.loads((analysis / "final_rows.json").read_text(encoding="utf-8"))}
+    decision_drift = []
+    for old, new, _ in pairs:
+        old_row = old_rows.get(f"{old['doc']}|{old.get('raw_id')}")
+        new_row = new_rows.get(new["id"])
+        if old_row is None or new_row is None:
+            continue
+        for field in ("final", "links", "cause", "amend"):
+            left, right = old_row.get(field), new_row.get(field)
+            if field == "links" and isinstance(left, list) and isinstance(right, list):
+                left, right = sorted(left), sorted(right)
+            if left != right:
+                decision_drift.append({"old_id": old["id"], "new_id": new["id"], "field": field,
+                                       "old": left, "new": right})
+    summary.update({
+        "decision_drift": decision_drift,
         "headline": {
             "F_total": metrics["F_total"], "F_final": metrics["F_final"],
             "FPR_headline": metrics["FPR_headline"], "FPR_strict_gold": metrics["FPR_strict_gold"],
@@ -242,31 +404,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             "PendingHit": metrics["PendingHit"], "coverage": metrics["coverage"],
             "workload": metrics["workload"], "tiers": metrics["tiers"],
         },
-        "ok": (not added_formal and not unexpected_removed and not target_missing
-               and not unexpected_unused and not missing_decision),
-    }
-    (out / "eval_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=1, default=dict) + "\n",
-                                           encoding="utf-8")
-    with (out / "item_alignment.csv").open("w", encoding="utf-8-sig", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(["kind", "sample_id", "tier", "rule", "old_raw_id", "new_raw_id", "pages", "how_or_status",
-                         "in_targets", "target_class", "message"])
-        for o, n, how in sorted(pairs, key=lambda p: (p[0]["doc"], str(p[0].get("raw_id")))):
-            writer.writerow(["matched", o["doc"], o["tier"], o["rule"], o.get("raw_id"), n.get("raw_id"),
-                             " ".join(map(str, o["pages"])), how, "", "", n.get("message")])
-        for r in removed_rows:
-            writer.writerow(["removed", r["sample_id"], r["tier"], r["rule"], r["raw_id"], "",
-                             " ".join(map(str, r["pages"])), "", "Y" if r["in_targets"] else "",
-                             r["target_class"] or "", r["message"]])
-        for r in added_rows:
-            writer.writerow(["added", r["sample_id"], r["tier"], r["rule"], "", r["raw_id"],
-                             " ".join(map(str, r["pages"])), "", "", "", r["message"]])
-    print(json.dumps({k: summary[k] for k in ("items_old", "items_new", "tiers_old", "tiers_new", "pairs",
-                                             "target_removed", "target_missing", "unexpected_removed",
-                                             "added_formal", "decisions_unused_unexpected", "missing_decision",
-                                             "headline", "ok")},
-                     ensure_ascii=False, indent=1, default=dict)[:6000])
-    return 0 if summary["ok"] else 1
+    })
+    summary["ok"] = (not added_formal and not unexpected_removed and not target_missing
+                     and not unexpected_unused and not missing_decision and not review
+                     and not fingerprint_drift and not decision_drift)
+    return write_reports(summary)
 
 
 if __name__ == "__main__":
