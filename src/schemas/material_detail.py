@@ -348,8 +348,9 @@ class CoverageObligationItem(BaseModel):
     next_action: Optional[str] = None
     root_cause_key: Optional[str] = None
     #: DH-03a 旧兼容字段：原样透传，只供第一阶段 UI 提示，不参与覆盖/关闭/门禁。
-    legacy_same_source_keys: List[str] = Field(default_factory=list)
-    legacy_coverage_terms: List[str] = Field(default_factory=list)
+    #: ``None`` 表示历史结果没有该字段（允许旧匹配器回退）；新生产结果必为列表（含 []）。
+    legacy_same_source_keys: Optional[List[str]] = None
+    legacy_coverage_terms: Optional[List[str]] = None
 
 
 class CoverageSummaryBlock(BaseModel):

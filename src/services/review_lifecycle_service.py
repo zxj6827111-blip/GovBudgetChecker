@@ -819,8 +819,9 @@ def _obligation_review_block(state: ReviewState) -> "ObligationReviewBlock":
                 next_action=getattr(item, "next_action", None),
                 root_cause_key=getattr(item, "root_cause_key", None),
                 # DH-03a：旧兼容字段原样透传；只作提示，不参与关闭/待办/门禁。
-                legacy_same_source_keys=list(getattr(item, "legacy_same_source_keys", []) or []),
-                legacy_coverage_terms=list(getattr(item, "legacy_coverage_terms", []) or []),
+                # 历史结果没有字段时保持 None，让旧匹配器仍可按 detail 回退。
+                legacy_same_source_keys=getattr(item, "legacy_same_source_keys", None),
+                legacy_coverage_terms=getattr(item, "legacy_coverage_terms", None),
             )
         )
     return ObligationReviewBlock(

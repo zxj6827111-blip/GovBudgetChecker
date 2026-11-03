@@ -318,8 +318,9 @@ class ObligationReviewItem(BaseModel):
     next_action: Optional[str] = None
     root_cause_key: Optional[str] = None
     #: DH-03a 旧兼容字段：只透传，不参与义务关闭、待办或门禁。
-    legacy_same_source_keys: List[str] = Field(default_factory=list)
-    legacy_coverage_terms: List[str] = Field(default_factory=list)
+    #: ``None`` 表示历史结果没有该字段；新生产结果必为列表（含 []）。
+    legacy_same_source_keys: Optional[List[str]] = None
+    legacy_coverage_terms: Optional[List[str]] = None
 
 
 class ObligationReviewBlock(BaseModel):
