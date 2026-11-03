@@ -1369,6 +1369,10 @@ def make_fact_receipt(
     missing_operands: Sequence[Dict[str, Any]] = (),
     candidates: Sequence[Dict[str, Any]] = (),
     diagnostics: Sequence[Mapping[str, Any]] = (),
+    amount_subcheck_status: Optional[str] = None,
+    explained_by: Optional[str] = None,
+    residual_difference_wan: Optional[str] = None,
+    cascade_of: Optional[str] = None,
 ) -> Dict[str, Any]:
     """构造一条关系级 CheckReceipt（dict 形态，规则直接写入 doc.fact_receipts）。
 
@@ -1438,5 +1442,9 @@ def make_fact_receipt(
         evaluation_basis=evaluation_basis,
         fact_migration_status=fact_migration_status,
         reason_codes=[str(item) for item in reason_codes if str(item)],
+        amount_subcheck_status=amount_subcheck_status,
+        explained_by=explained_by,
+        residual_difference_wan=residual_difference_wan,
+        cascade_of=cascade_of,
     )
     return receipt.to_dict()

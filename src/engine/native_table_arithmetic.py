@@ -234,13 +234,18 @@ def journal(rule, doc, facts):
 
 
 def receipt(rule, doc, relation, facts, *, status, formula, reason=None, disclosure_sources=(),
-            reason_codes=()):
+            reason_codes=(), amount_subcheck_status=None, explained_by=None,
+            residual_difference_wan=None, cascade_of=None):
     from .rules_v33 import _v33_relation_receipt
     ids, evidence = journal(rule, doc, facts)
     _v33_relation_receipt(doc, rule.code, relation, status=status,
                           operand_fact_ids=ids, formula=formula, incomplete_reason=reason,
                           cell_observations=blank_observations(facts), disclosure_sources=disclosure_sources,
-                          reason_codes=reason_codes)
+                          reason_codes=reason_codes,
+                          amount_subcheck_status=amount_subcheck_status,
+                          explained_by=explained_by,
+                          residual_difference_wan=residual_difference_wan,
+                          cascade_of=cascade_of)
     return ids, evidence
 
 

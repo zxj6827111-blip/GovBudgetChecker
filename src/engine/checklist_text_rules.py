@@ -395,6 +395,14 @@ class CMM010_AmountFormat(Rule):
 _YUAN_AMOUNT_RE = re.compile(r"(?<![\d.,，])(\d[\d,]*(?:\.\d+)?)\s*元(?![/／每])")
 _YUAN_RATE_CONTEXT_RE = re.compile(r"(?:单价|标准|每人|每天|每月|每年|人均|每次|每台|补助标准|收费)\S{0,6}$")
 
+# 2A：正文金额漏写单位“万元”——金额带小数、后接“占X%”，且同段存在万元金额。
+_MISSING_UNIT_RE = re.compile(r"(?<![\d.,，])(\d[\d,]*(?:\.\d+)?)\s*(?=[，,；;]?\s*占)")
+_SIBLING_WAN_RE = re.compile(r"\d[\d,]*(?:\.\d+)?\s*万元")
+_MISSING_UNIT_SUBJECT_RE = re.compile(r"(?:支出|收入|预算|决算)[^，。；]{0,12}$")
+# 2A：零值金额写作“0 元”，但同段其余金额以万元列示。
+_ZERO_YUAN_RE = re.compile(r"(?<![\d.,，])0(?:\.0+)?\s*元")
+_ZERO_UNIT_BEFORE_RE = re.compile(r"(?:年初预算|预算数|支出决算|决算数)为?\s*$")
+
 
 class CMM011_AmountUnitWan(Rule):
     code, severity = "CMM-011", "warn"
@@ -424,6 +432,36 @@ class CMM011_AmountUnitWan(Rule):
                     ))
                 else:
                     integer_hits.append((page, text, start, end))
+            # 2A：同段（按句号切段，含并列分项）内存在万元金额时，
+            # 缺失单位的金额与“0 元”才判定为漏写万元，避免单价/人数/编码误判。
+            for paragraph in re.finditer(r"[^。]{0,800}。?", flat):
+                chunk = paragraph.group(0)
+                if not _SIBLING_WAN_RE.search(chunk):
+                    continue
+                for match in _MISSING_UNIT_RE.finditer(chunk):
+                    before = chunk[max(0, match.start() - 24):match.start()]
+                    if not _MISSING_UNIT_SUBJECT_RE.search(before):
+                        continue
+                    if "." not in match.group(1):
+                        continue
+                    start, end = flat_span(positions, paragraph.start() + match.start(),
+                                           paragraph.start() + match.end())
+                    literal = text[start:end].strip()
+                    issues.append(issue_at(
+                        self, f"金额缺少单位“万元”：“{literal}”，同段其余金额均以万元列示。",
+                        page, text, start, end, severity="warn", checklist_item="C-14",
+                    ))
+                for match in _ZERO_YUAN_RE.finditer(chunk):
+                    before = chunk[max(0, match.start() - 18):match.start()]
+                    if not _ZERO_UNIT_BEFORE_RE.search(before):
+                        continue
+                    start, end = flat_span(positions, paragraph.start() + match.start(),
+                                           paragraph.start() + match.end())
+                    literal = text[start:end].strip()
+                    issues.append(issue_at(
+                        self, f"零值金额单位写作“元”：“{literal}”，同段其余金额均以万元列示，应统一为“0万元”。",
+                        page, text, start, end, severity="warn", checklist_item="C-14",
+                    ))
         if integer_hits:
             page, text, start, end = integer_hits[0]
             issues.append(issue_at(

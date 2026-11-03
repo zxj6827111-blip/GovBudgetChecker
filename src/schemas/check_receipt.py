@@ -52,6 +52,15 @@ class CheckReceipt:
     candidates: List[Dict[str, Any]] = field(default_factory=list)
     next_action: Optional[str] = None
     root_cause_key: Optional[str] = None
+    # 2A：下游回执的金额子检查状态与单位错解释
+    # - amount_subcheck_status：executed/not_executed，关闭/隐藏金额检查必须留痕
+    # - explained_by：unit_error 表示差额被同源单位错精确解释
+    # - residual_difference_wan：解释后仍存在的差额（万元，字符串保留精度）
+    # - cascade_of：运行期缺陷键（文档指纹+页码+span+操作数），不依赖金标 ID
+    amount_subcheck_status: Optional[str] = None
+    explained_by: Optional[str] = None
+    residual_difference_wan: Optional[str] = None
+    cascade_of: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.status not in SUB_CHECK_STATUSES:
@@ -88,6 +97,10 @@ class CheckReceipt:
             candidates=[dict(item) for item in data.get("candidates") or [] if isinstance(item, dict)],
             next_action=_opt_str(data.get("next_action")),
             root_cause_key=_opt_str(data.get("root_cause_key")),
+            amount_subcheck_status=_opt_str(data.get("amount_subcheck_status")),
+            explained_by=_opt_str(data.get("explained_by")),
+            residual_difference_wan=_opt_str(data.get("residual_difference_wan")),
+            cascade_of=_opt_str(data.get("cascade_of")),
             formula=_opt_str(data.get("formula")),
             tolerance=dict(data.get("tolerance") or {}),
             status=str(data.get("status") or "insufficient_data"),

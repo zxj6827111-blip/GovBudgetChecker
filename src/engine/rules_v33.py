@@ -725,6 +725,37 @@ def _historical_narrative_checks(doc: Document, rule: Any, text: str) -> List[Is
     return issues
 
 
+def _unit_error_explains_amount(difference: Any, conditional_delta: Any, tolerance: Any) -> bool:
+    """2A：差额是否被单位错精确解释（既定额差内）。"""
+    try:
+        return abs(abs(Decimal(str(difference))) - abs(Decimal(str(conditional_delta)))) <= Decimal(str(tolerance))
+    except Exception:  # noqa: BLE001 - 非数值不解释
+        return False
+
+
+def _unit_error_explains_direction(budget_val: float, budget_unit: str, final_val: float,
+                                   final_unit: str, direction: str) -> bool:
+    """2A：一侧“元”、另一侧“万元”时，按万元名义值重算后原文方向是否成立。"""
+    if {budget_unit, final_unit} != {"元", "万元"}:
+        return False
+    nominal_budget = budget_val * 10000 if budget_unit == "元" else budget_val
+    nominal_final = final_val * 10000 if final_unit == "元" else final_val
+    nominal_actual = ("大于" if nominal_final > nominal_budget
+                      else "小于" if nominal_final < nominal_budget else "等于")
+    return nominal_actual == direction
+
+
+def _runtime_defect_key(doc: Document, page: int, suffix: str) -> str:
+    """2A：运行期缺陷键（文档指纹+页码+操作数），不依赖 GS-* 金标 ID。"""
+    fingerprint = ""
+    for attr in ("source_file_hash", "file_sha256", "sha256", "doc_sha256"):
+        value = getattr(doc, attr, None)
+        if value:
+            fingerprint = str(value)
+            break
+    return f"{fingerprint}|p{page}|{suffix}"
+
+
 def _v33_relation_receipt(
     doc: Document,
     rule_code: str,
@@ -737,6 +768,10 @@ def _v33_relation_receipt(
     cell_observations: Sequence[Dict[str, Any]] = (),
     disclosure_sources: Sequence[Dict[str, Any]] = (),
     reason_codes: Sequence[str] = (),
+    amount_subcheck_status: Optional[str] = None,
+    explained_by: Optional[str] = None,
+    residual_difference_wan: Optional[str] = None,
+    cascade_of: Optional[str] = None,
 ) -> None:
     """RC-04：V33 族关系级回执——每条适用关系一条，携带真实操作数 ID。"""
     from src.engine.fact_context import make_fact_receipt
@@ -778,6 +813,10 @@ def _v33_relation_receipt(
             missing_operands=structured.get("missing_operands") or (),
             candidates=structured.get("candidates") or (),
             diagnostics=(structured,) if structured else (),
+            amount_subcheck_status=amount_subcheck_status,
+            explained_by=explained_by,
+            residual_difference_wan=residual_difference_wan,
+            cascade_of=cascade_of,
         )
     )
 
@@ -3883,25 +3922,27 @@ class R33110_BudgetVsFinal_TextConsistency(Rule):
         _FINAL_MARKS = ("支出决算为", "决算数为", "决算为", "支出决算")
         _DIRECTION_WORDS = ("大于", "小于", "等于", "持平")
 
-        def clause_amount(clause: str, marks) -> Optional[float]:
+        def clause_amount(clause: str, marks) -> Optional[Tuple[float, str]]:
             if not any(mark in clause for mark in marks):
                 return None
             amounts = extract_amounts(clause)
             if not amounts:
                 return None
-            # 年份 token 已被 extract_amounts 排除
-            return amounts[0][0]
+            # 年份 token 已被 extract_amounts 排除；保留原文单位供单位错判定。
+            return amounts[0]
 
         matched_comparisons = 0
         i = 0
         while i < len(clauses):
             clause = clauses[i]
-            budget_val = clause_amount(clause, _BUDGET_MARKS)
-            if budget_val is None:
+            budget_info = clause_amount(clause, _BUDGET_MARKS)
+            if budget_info is None:
                 i += 1
                 continue
+            budget_val, budget_unit = budget_info
 
             # 向后有限窗口找决算金额与方向词
+            final_info = None
             final_val = None
             final_clause_idx = -1
             direction = None
@@ -3910,10 +3951,11 @@ class R33110_BudgetVsFinal_TextConsistency(Rule):
             j = i + 1
             while j < len(clauses) and window < 6:
                 nxt = clauses[j]
-                if final_val is None:
+                if final_info is None:
                     candidate = clause_amount(nxt, _FINAL_MARKS)
                     if candidate is not None:
-                        final_val = candidate
+                        final_info = candidate
+                        final_val = candidate[0]
                         final_clause_idx = j
                         j += 1
                         window += 1
@@ -3921,7 +3963,7 @@ class R33110_BudgetVsFinal_TextConsistency(Rule):
                     # 遇到新的预算金额配对起点 → 当前窗口作废（缺决算，不判定）
                     if clause_amount(nxt, _BUDGET_MARKS) is not None:
                         break
-                if final_val is not None:
+                if final_info is not None:
                     hit = next((w for w in _DIRECTION_WORDS if w in nxt), None)
                     if hit:
                         direction = "等于" if hit in ("持平",) else hit
@@ -3933,7 +3975,8 @@ class R33110_BudgetVsFinal_TextConsistency(Rule):
                 j += 1
                 window += 1
 
-            if budget_val is not None and final_val is not None and direction:
+            if budget_info is not None and final_info is not None and direction:
+                final_unit = final_info[1]
                 matched_comparisons += 1
                 actual = "等于"
                 if final_val > budget_val:
@@ -3964,12 +4007,35 @@ class R33110_BudgetVsFinal_TextConsistency(Rule):
                         for role, index in [("年初预算", i), ("支出决算", final_clause_idx)]
                         if index >= 0
                     ]
-                    issues.append(self._issue(
-                        f"预算数与决算数比较不一致：预算数{budget_val:.2f}，决算数{final_val:.2f}，实际{actual}，但文本表述为{direction}。",
-                        {"page": page, "table_refs": refs},
-                        severity="error",
-                        evidence_text=clip,
-                    ))
+                    # 2A：一侧“元”、另一侧“万元”时，按万元名义值重算；
+                    # 若原文方向成立，说明差额由单位错解释，下游只记回执。
+                    explained = _unit_error_explains_direction(
+                        budget_val, budget_unit, final_val, final_unit, direction)
+                    if explained:
+                        from .native_table_arithmetic import receipt as relation_receipt
+
+                        relation_receipt(
+                            self, doc, f"V33-110:direction:{page}:{int(clause_positions[i])}",
+                            [], status="fail",
+                            formula="declared direction == comparison of normalized amounts",
+                            reason=(
+                                f"预算数/决算数一侧以元列示、另一侧以万元列示；按万元名义值重算后"
+                                f"原文方向“{direction}”成立，差额由单位错解释"
+                            ),
+                            reason_codes=["direction_mismatch", "explained_by_unit_error"],
+                            amount_subcheck_status="executed",
+                            explained_by="unit_error",
+                            residual_difference_wan="0",
+                            cascade_of=_runtime_defect_key(
+                                doc, page, f"{budget_val}:{final_val}"),
+                        )
+                    else:
+                        issues.append(self._issue(
+                            f"预算数与决算数比较不一致：预算数{budget_val:.2f}，决算数{final_val:.2f}，实际{actual}，但文本表述为{direction}。",
+                            {"page": page, "table_refs": refs},
+                            severity="error",
+                            evidence_text=clip,
+                        ))
             i = max(j, i + 1)
 
         if matched_comparisons == 0:
