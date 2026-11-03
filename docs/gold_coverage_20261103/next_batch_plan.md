@@ -254,7 +254,7 @@
 
 | 目标 | 目标类型 | 单目标筛选上限 | 停止条件 | 案例状态（不含检出） |
 |---|---|---:|---|---|
-| GS-T01 | 真实缺陷 | 8 | 找到 1 份即停；用满 8 份仍 0 → NOT_FOUND | FOUND / NOT_FOUND / INCOMPLETE |
+| GS-T01 | 真实缺陷 | 8 | 找到 1 份即停；用满 8 份仍 0 → NOT_FOUND | FOUND / NOT_FOUND / INCOMPLETE / PENDING_REVIEW |
 | GS-T02 | 真实缺陷 | 6 | 找到 1 份即停；用满 6 份仍 0 → NOT_FOUND | 同上 |
 | GS-T03 | 真实缺陷 | 6 | 找到 1 份即停；用满 6 份仍 0 → NOT_FOUND | 同上 |
 | GS-T04 | 真实缺陷 | 6 | 找到 1 份即停；用满 6 份仍 0 → NOT_FOUND | 同上 |
