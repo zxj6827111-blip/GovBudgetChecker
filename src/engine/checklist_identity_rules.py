@@ -297,14 +297,15 @@ class CMM018_ScopeTerminology(Rule):
     def apply(self, doc: Document) -> List[Issue]:
         doc = prepare_identity_document(doc) if _uses_writing_resolution(doc) else doc
         scope = body_scope(doc) if _uses_writing_resolution(doc) else (body_scope(doc) or subject_scope(doc))
-        # R2：部门/单位口径以封面为准；封面只写“年度决算”按单位口径。
-        scope = _cover_scope(doc) or scope
         issues: List[Issue] = []
         contrast = _archive_writing_contrast(doc)
         contrast_hits: List[Tuple[int, str, int, int]] = []
-        if scope in _SCOPE_WRONG_TERMS:
-            label = "部门" if scope == "department" else "单位"
-            for term, pattern in _SCOPE_WRONG_TERMS[scope]:
+        page1 = str((doc.page_texts or [""])[0] or "")
+        bare_cover = (_cover_scope(doc) == "unit" and "部门" not in page1 and "单位" not in page1)
+        term_scope = "unit" if (bare_cover and scope == "department") else scope
+        if term_scope in _SCOPE_WRONG_TERMS:
+            label = "部门" if term_scope == "department" else "单位"
+            for term, pattern in _SCOPE_WRONG_TERMS[term_scope]:
                 hits: List[Tuple[int, str, int, int]] = []
                 for page, text in iter_pages(doc):
                     flat, positions = page_flat(doc, page, text)
@@ -336,7 +337,7 @@ class CMM018_ScopeTerminology(Rule):
                     more = f"（全文共 {len(hits)} 处）" if len(hits) > 1 else ""
                     issues.append(issue_at(
                         self, f"主体口径混用：本材料为{label}{'预算' if report_kind(doc) == 'budget' else '决算'}，"
-                        f"正文出现“{term}”表述{more}，应统一为“{'本部门' if scope == 'department' else '本单位'}”口径。",
+                        f"正文出现“{term}”表述{more}，应统一为“{'本部门' if term_scope == 'department' else '本单位'}”口径。",
                         page, text, start, end, severity="warn", checklist_item="B-02", occurrences=len(hits),
                         locations=[{'page':p,'text':unique_quote(t,a,b),'start':a,'end':b} for p,t,a,b in hits],
                         table_refs=[{'page':p,'span':unique_quote(t,a,b),'role':'反向主体用语'} for p,t,a,b in hits],
@@ -485,10 +486,13 @@ class CMM019_CoverElements(Rule):
         # 文种（部门/单位）
         resolution = getattr(getattr(doc, "document_profile", None), "writing_scope", {}) or {}
         scope = resolution.get("cover_independent_scope") if _uses_writing_resolution(doc) else body_scope(doc)
-        scope = _cover_scope(doc) or scope
         contrast = _archive_writing_contrast(doc)
         noun = "预算" if kind == "budget" else "决算"
-        if contrast and contrast.get("comprehensive_contrast"):
+        bare_cover = _cover_scope(doc) == "unit" and "部门" not in flat and "单位" not in flat
+        if bare_cover and scope == "department" and kind == "final":
+            # 封面只写“年度决算”且口径来自正文：文种子项证据不足，不据此判“漏写部门”，也不新增待核义务。
+            pass
+        elif contrast and contrast.get("comprehensive_contrast"):
             # 全面相反：文种子项不出 warn，改出一条待人工复核；年度、名称等其余子项照常执行。
             summary = _contrast_summary(contrast)
             pages_text = "、".join(str(p) for p in summary["opposite_pages"]) or "未定位"
