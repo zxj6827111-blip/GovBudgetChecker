@@ -1,0 +1,74 @@
+{
+ "contract_id": "occurrence-binding-20261104",
+ "version": 1,
+ "purpose": "114 出现点重评的规则/对照裁定契约：只按检查类型和逐条对照句裁定，不按目标编号放行。",
+ "check_rules_sources": [
+  "joint-execution-20261103-evidence/s3/S3_contract.json",
+  "joint-execution-20261103-evidence/s4/S4_contract.json",
+  "joint-execution-20261103-evidence/s5/S5_contract.json"
+ ],
+ "check_rules": {
+  "GS-S01": ["CMM-021"],
+  "GS-S03": ["CMM-013"],
+  "GS-S04": ["CMM-017"],
+  "GS-N03": ["CMM-020", "V33-249", "V33-106"],
+  "GS-N05": ["V33-227"],
+  "GS-N07": ["V33-224", "V33-TREND-COMPLETION-RATE", "V33-SG-COMPLETION", "V33-234"],
+  "GS-N09": ["V33-110", "V33-245", "CMM-006"],
+  "GS-W01": ["CMM-011"],
+  "free:R21": ["CMM-018", "CMM-027", "V33-236"],
+  "free:R22": ["CMM-002"],
+  "free:R24": ["CMM-014"],
+  "free:R28": ["CMM-002"],
+  "free:R9-小数位": ["CMM-010"],
+  "free:R9-千分位": ["CMM-010"],
+  "free:R9-半角冒号": ["CMM-002"]
+ },
+ "check_rules_basis": {
+  "stage_contracts": "S3/S4/S5 已冻结的 check_key→规则族映射；GS-W01 按 AGENTS C-14/R001 补 CMM-011（漏写万元）。",
+  "scope": "只约束“哪类规则可以证明该类缺陷”，不指定具体目标编号。"
+ },
+ "control_adjudications": [
+  {
+   "sample_id": "GS-2024-06",
+   "check_id": "GS-W01",
+   "page": 27,
+   "quote": "住房保障支出9,783.06 万元",
+   "decision": "control_sentence_not_defect",
+   "basis": "带“万元”的正确对照句；同段缺陷点是“自然资源海洋气象等支出1,659.14”（漏万元）。AGENTS：正确对照句不作缺陷。独立复核 20261104 R-03 认可按逐句剔除后重算。"
+  },
+  {
+   "sample_id": "GS-2024-05",
+   "check_id": "GS-S01",
+   "page": 16,
+   "quote": "说明：上海药品审评核查中心本年度没有政府性基金预算财政拨款收入和支出，故本表无数据。",
+   "decision": "control_sentence_not_defect",
+   "basis": "正确空表说明；缺陷是目录/正文第七张表名多“一般公共预算”。"
+  },
+  {
+   "sample_id": "GS-2024-05",
+   "check_id": "GS-S01",
+   "page": 17,
+   "quote": "说明：上海药品审评核查中心本年度没有国有资本经营预算财政拨款收入和支出，故本表无数据。",
+   "decision": "control_sentence_not_defect",
+   "basis": "正确空表说明；同上。"
+  },
+  {
+   "sample_id": "GS-2024-06",
+   "check_id": "GS-N03",
+   "page": 26,
+   "quote": "本年支出合计2,296,588.24 万元",
+   "decision": "control_sentence_not_defect",
+   "basis": "正确金额对照；缺陷点是“项目支出217,7380.31 万元”千分位错位。"
+  },
+  {
+   "sample_id": "GS-2024-06",
+   "check_id": "GS-N03",
+   "page": 26,
+   "quote": "基本支出119,207.93 万元",
+   "decision": "control_sentence_not_defect",
+   "basis": "正确金额对照；同上。"
+  }
+ ],
+ "control_basis_note": "对照句按 sample+check+page+quote 版本化；新增/修改必须带依据重新登记，不能按 target_id 直接 fixed。"
+}
