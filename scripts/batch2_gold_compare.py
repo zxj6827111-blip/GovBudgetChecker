@@ -164,6 +164,11 @@ def _text_segments(needle: str) -> List[str]:
             if len(re.findall(r"[\u4e00-\u9fff]", segment)) >= 4]
 
 
+def _name_key(text: str) -> str:
+    """名称比较键：去掉标点/空白/括号，避免 clause 切分后标点残留导致漏配。"""
+    return re.sub(r"[^\u4e00-\u9fff0-9A-Za-z]", "", str(text or ""))
+
+
 #: 金额 token + 紧跟其后的精确单位。顺序保证“万元/亿元”先于“元”，
 #: 避免把“100.00万元”解析成单位“元”。
 _AMOUNT_UNIT_RE = re.compile(r"(?<![\d.,，])(\d[\d,]*(?:\.\d+)?)\s*(万元|亿元|元|%|％)?")
@@ -225,9 +230,12 @@ def _item_occurrences(item: Dict[str, Any]) -> List[tuple]:
     top_texts = [str(item.get("text") or "")] + [str(q) for q in item.get("quotes") or [] if q]
     top_texts = [value for value in top_texts if value]
     if explicit:
-        # 已有明确页码引用：顶层摘要不参与带页锚点，避免“页 6 的精确引文
-        # 借 location.page=5 覆盖页 5”。
-        return explicit + [(None, value) for value in top_texts]
+        # 已有明确页码引用：多页条目的顶层摘要不参与带页锚点，避免
+        # “页 6 的精确引文借 location.page=5 覆盖页 5”。单页条目的
+        # 顶层正文/引文可以绑到该唯一页（message 常引用同页原句）。
+        pages = {int(p) for p in item.get("pages") or [] if isinstance(p, int)}
+        single = next(iter(pages)) if len(pages) == 1 else None
+        return explicit + [(single, value) for value in top_texts]
     pages = {int(p) for p in item.get("pages") or [] if isinstance(p, int)}
     primary = location.get("page")
     single = next(iter(pages)) if len(pages) == 1 else None
@@ -277,6 +285,16 @@ def _anchor_covered(item: Dict[str, Any], anchor: str, eval_lib,
         occurrences = [(p, t) for p, t in occurrences if p == page]
     if not occurrences:
         return False
+    # 同页相邻片段池：格式/标点类锚点常被表格提取拆成多个 ref，
+    # 同一页的片段按原顺序拼接后允许整段命中；不跨页，也不用于
+    # 名称-金额的局部配对（那里仍走 clause 级）。
+    page_pools: Dict[int, str] = {}
+    for ref_page, ref_text in occurrences:
+        if ref_page is not None:
+            page_pools[ref_page] = page_pools.get(ref_page, "") + ref_text
+    needle = eval_lib.norm(anchor)
+    if any(needle in pool for pool in page_pools.values()):
+        return True
     anchor_bindings = _amount_bindings(needle)
     segments = _text_segments(needle)
     if not anchor_bindings:
@@ -291,13 +309,13 @@ def _anchor_covered(item: Dict[str, Any], anchor: str, eval_lib,
                         and longer and shorter / longer >= 0.8:
                     return True
                 for segment in segments:
-                    if len(segment) >= max(4, int(len(needle) * 0.6)) and segment in clause:
+                    if len(segment) >= max(4, int(len(needle) * 0.6)) and _name_key(segment) in _name_key(clause):
                         return True
                 if not amount_required and page is not None:
                     for segment in segments:
                         for start in range(0, max(1, len(segment) - 7)):
                             window = segment[start:start + 8]
-                            if len(re.findall(r"[\u4e00-\u9fff]", window)) >= 6 and window in clause:
+                            if len(re.findall(r"[\u4e00-\u9fff]", window)) >= 6 and _name_key(window) in _name_key(clause):
                                 return True
         return False
     # 金额锚点：同一 clause 内数值、精确单位、名称三项都要命中。
@@ -312,17 +330,17 @@ def _anchor_covered(item: Dict[str, Any], anchor: str, eval_lib,
             return True
         for clause in _clauses(text):
             if _clause_amount_ok(clause, material):
-                if not segments or any(segment in clause for segment in segments):
+                if not segments or any(_name_key(segment) in _name_key(clause) for segment in segments):
                     return True
             # 名称/口径类显式契约：候选不必复述金额，但必须同页同 clause
             # 命中名称；金额/格式类调用方不会启用这个分支。
             if not amount_required and segments:
-                if any(segment in clause for segment in segments):
+                if any(_name_key(segment) in _name_key(clause) for segment in segments):
                     return True
                 for segment in segments:
                     for start in range(0, max(1, len(segment) - 7)):
                         window = segment[start:start + 8]
-                        if len(re.findall(r"[\u4e00-\u9fff]", window)) >= 6 and window in clause:
+                        if len(re.findall(r"[\u4e00-\u9fff]", window)) >= 6 and _name_key(window) in _name_key(clause):
                             return True
     return False
 
