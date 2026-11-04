@@ -280,6 +280,24 @@ def _contrast_label(scope: Optional[str]) -> str:
     return "单位" if scope == "unit" else "部门"
 
 
+#: 已授权的人工/归档口径来源；封面自动推断不在其中。
+_AUTHORIZED_SCOPE_SOURCES = {"human_confirmation", "human", "manual", "archive"}
+
+
+def _confirmed_scope(doc: Document) -> Optional[str]:
+    """已授权人工/归档确认的部门-单位口径；自动封面推断不参与。"""
+    resolution = getattr(getattr(doc, "document_profile", None), "writing_scope", {}) or {}
+    if str(resolution.get("status") or "") != "confirmed":
+        return None
+    value = resolution.get("value")
+    if value not in ("unit", "department"):
+        return None
+    source = str(resolution.get("source") or "").strip().lower()
+    if source not in _AUTHORIZED_SCOPE_SOURCES:
+        return None
+    return value
+
+
 def _cover_scope(doc: Document) -> Optional[str]:
     """封面文种口径：只认封面页明确的“部门决算/单位决算”。"""
     text = str((doc.page_texts or [""])[0] or "")
@@ -306,8 +324,11 @@ class CMM018_ScopeTerminology(Rule):
         contrast = _archive_writing_contrast(doc)
         contrast_hits: List[Tuple[int, str, int, int]] = []
         page1 = str((doc.page_texts or [""])[0] or "")
-        bare_cover = (_cover_scope(doc) == "unit" and "部门" not in page1 and "单位" not in page1)
-        term_scope = "unit" if (bare_cover and scope == "department") else scope
+        confirmed_scope = _confirmed_scope(doc)
+        effective_scope = confirmed_scope or scope
+        bare_cover = (_cover_scope(doc) == "unit" and "部门" not in page1 and "单位" not in page1
+                      and not confirmed_scope)
+        term_scope = "unit" if (bare_cover and effective_scope == "department") else effective_scope
         if term_scope in _SCOPE_WRONG_TERMS:
             label = "部门" if term_scope == "department" else "单位"
             for term, pattern in _SCOPE_WRONG_TERMS[term_scope]:
@@ -348,7 +369,8 @@ class CMM018_ScopeTerminology(Rule):
                         table_refs=[{'page':p,'span':unique_quote(t,a,b),'role':'反向主体用语'} for p,t,a,b in hits],
                     ))
         # R21：表注/构成段的部门-单位口径必须与封面/选定层级一致。
-        caption_scope = _cover_scope(doc) or scope
+        # 优先链：已授权人工/归档口径 > 自动封面 R2 > 正文推断。
+        caption_scope = confirmed_scope or _cover_scope(doc) or scope
         caption_re = {
             "department": re.compile(r"本表反映单位(?:本年度|年度)|单位本年度没有|纳入[^，。；]{0,40}单位决算"),
             "unit": re.compile(r"本表反映部门(?:本年度|年度)|部门本年度没有|纳入[^，。；]{0,40}部门决算|部门决算单位构成"),
@@ -361,7 +383,13 @@ class CMM018_ScopeTerminology(Rule):
                 flat, positions = page_flat(doc, page, text)
                 for match in caption_re[caption_scope].finditer(flat):
                     hits.append((page, text, *flat_span(positions, match.start(), match.end())))
-            if len(hits) >= 4:
+            if hits:
+                # 全面相反时，单处/多处相反表注并入同一条待复核，不再另发 warn；
+                # 非全面相反时逐处聚合成一条正式问题（不设 4 处门槛）。
+                if contrast and contrast.get("comprehensive_contrast"):
+                    contrast_hits.extend(hits)
+                    hits = []
+            if hits:
                 page, text, start, end = hits[0]
                 expected_label = "本部门/部门" if caption_scope == "department" else "本单位/单位"
                 issues.append(issue_at(
