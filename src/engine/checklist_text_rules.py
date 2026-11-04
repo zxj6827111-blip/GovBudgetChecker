@@ -456,9 +456,13 @@ class CMM010_AmountFormat(Rule):
         return issues
 
     def _zero_one_decimal_issues(self, doc: Document) -> List[Issue]:
-        """R9-小数位：0/1 位小数的金额与百分比也属“未保留两位”。"""
+        """R9-小数位：0/1 位小数的金额与百分比也属“未保留两位”。
+
+        整数金额不限于“万元”：正文“年初预算为0 元”“采购金额0 元”同样
+        未保留两位小数；单位后允许换行/空白（“0\\n元”）。
+        """
         one_dec_amount = re.compile(r"(?<![\d.,，])(\d[\d,]*)\.(\d)\s*(万元|元)(?![/／每])")
-        int_amount = re.compile(r"(?<![\d.,，])(\d{1,3}(?:,\d{3})+|\d+)\s*万元(?![/／每])")
+        int_amount = re.compile(r"(?<![\d.,，])(\d{1,3}(?:,\d{3})+|\d+)\s*(?:万元|元)(?![/／每])")
         one_dec_pct = re.compile(r"(?<![\d.,，])(\d+)\.(\d)\s*[%％]")
         int_pct = re.compile(r"(?<![\d.,，])(\d+)\s*[%％]")
         hits: List[Tuple[int, str, int, int]] = []
@@ -483,8 +487,12 @@ class CMM010_AmountFormat(Rule):
         )]
 
     def _missing_thousands_issues(self, doc: Document) -> List[Issue]:
-        """R9-千分位：金额 ≥1000 未按半角逗号分千分位。"""
-        pattern = re.compile(r"(?<![\d.,，])(\d{4,})(?:\.\d+)?\s*万元(?![/／每])")
+        """R9-千分位：金额 ≥1000 未按半角逗号分千分位。
+
+        单位支持“万元/元”且允许跨行；正文“年初预算为7750.99\\n元”也是
+        金额，不因单位在下一行或不是表格而漏检。
+        """
+        pattern = re.compile(r"(?<![\d.,，])(\d{4,})(?:\.\d+)?\s*(?:万元|元)(?![/／每])")
         hits: List[Tuple[int, str, int, int]] = []
         for page, text in iter_pages(doc):
             flat, positions = page_flat(doc, page, text)
