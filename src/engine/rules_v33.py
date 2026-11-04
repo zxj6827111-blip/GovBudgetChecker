@@ -2737,11 +2737,16 @@ def _extract_final_functional_narrative_mentions(
                     and "基本支出" not in section[0] and "三公" not in section[0]]
         if not sections:
             return mentions
-        _, begin, end = sections[-1]
+        _title, begin, _section_end = sections[-1]
+        # _nar_repeat_sections 的 end 在部分模板上停在下一条“（一）…”子标题，
+        # 会把说明5的逐项条目截掉；这里按下一个顶层“X、…说明/情况”标题重新定界。
+        _next = re.search(
+            r"(?:^|\n)\s*[一二三四五六七八九十]+、[^\n]{0,90}(?:说明|情况)",
+            merged[begin + len(_title):] if begin + len(_title) <= len(merged) else "")
+        end = (begin + len(_title) + _next.start()) if _next else len(merged)
         scoped_pages = [merged[max(offset, begin):min(offset+len(str(text or "")), end)]
                         if max(offset, begin) < min(offset+len(str(text or "")), end) else ""
                         for offset, text in zip(offsets, doc.page_texts, strict=False)]
-
     for page_num, text in enumerate(scoped_pages, start=1):
         if not text:
             continue
@@ -8105,6 +8110,7 @@ class R33227_Narrative5_T5_NameConsistency(Rule):
 
     def apply(self, doc: Document) -> List[Issue]:
         issues: List[Issue] = []
+        emitted: List[tuple] = []
 
         _ensure_table_anchors(doc)
         table_name = "一般公共预算财政拨款支出决算表"
@@ -8151,8 +8157,12 @@ class R33227_Narrative5_T5_NameConsistency(Rule):
                 table_key = re.sub(r"\s+", "", table_entry_name)
                 # T5 单元格抽断（表名是说明名的前缀）与页边界断词（说明名只剩
                 # 表名后缀）都不是名称错误，不能据此报不一致。
+                # 仅“行政运行/行政运行费”这类在完整词干后多写“费”的保留报告；
+                # “职业年金缴/缴费”是表内单元格断在下半段，仍按抽断跳过。
+                extra = narrative_name[len(table_key):] if narrative_name.startswith(table_key) else ""
                 if (table_key and len(table_key) < len(narrative_name)
-                        and narrative_name.startswith(table_key)):
+                        and narrative_name.startswith(table_key)
+                        and not (extra == "费" and table_key.endswith("行"))):
                     continue
                 # 页边界把说明名称切成表名后缀：也是排版断词，不是少字。
                 if (table_key and len(narrative_name) < len(table_key)
@@ -8229,20 +8239,102 @@ class R33227_Narrative5_T5_NameConsistency(Rule):
                 suffix_only = _functional_name_matches(table_entry["name"], narrative_name)
                 # 表格名称在格内折行（“一般公共服务\n支出”），提示语里按原文连写。
                 shown_table_name = re.sub(r"\s+", "", table_entry["name"])
-                issues.append(
-                    self._issue(
-                        f"说明5{level}级科目名称与T5不一致（{row_label}）："
-                        f"表格“{shown_table_name}”，说明“{narrative_name}”"
-                        + ("（名称多/少“支出/决算”等字）" if suffix_only else ""),
-                        location,
-                        severity="low" if suffix_only else "warn",
-                        evidence_text=evidence_text,
-                    )
+                issue = self._issue(
+                    f"说明5{level}级科目名称与T5不一致（{row_label}）："
+                    f"表格“{shown_table_name}”，说明“{narrative_name}”"
+                    + ("（名称多/少“支出/决算”等字）" if suffix_only else ""),
+                    location,
+                    severity="low" if suffix_only else "warn",
+                    evidence_text=evidence_text,
                 )
+                issues.append(issue)
+                emitted.append((issue, table_entry, mention, table_row_page))
 
+        _promote_single_kuan_name_issue(self, doc, emitted, issues)
         issues.extend(_structure_class_name_issues(self, doc, table_entries))
         return issues
 
+
+
+def _functional_table_name_span(doc: Document, page: int, code: str, name: str) -> str:
+    """在 T5 物理页上取唯一的“编码+名称”（或名称）原文片段。"""
+    texts = getattr(doc, "page_texts", None) or []
+    if not isinstance(page, int) or not 1 <= page <= len(texts):
+        return ""
+    text = str(texts[page - 1] or "")
+    compact, positions = [], []
+    for index, char in enumerate(text):
+        for normalized in unicodedata.normalize("NFKC", char):
+            if not normalized.isspace():
+                compact.append(normalized)
+                positions.append(index)
+    joined = "".join(compact)
+
+    def _key(value: str) -> str:
+        return "".join(normalized for char in str(value or "")
+                       for normalized in unicodedata.normalize("NFKC", char)
+                       if not normalized.isspace())
+
+    for needle in (f"{code}{_key(name)}", _key(name)):
+        if needle and joined.count(needle) == 1:
+            start = joined.index(needle)
+            return text[positions[start]:positions[start + len(needle) - 1] + 1]
+    return ""
+
+
+def _promote_single_kuan_name_issue(rule, doc, emitted, issues) -> None:
+    """单条“款名完全不同”的名称差异追加一条证据已绑定的正式条目。
+
+    旧 P 级条目保留原样（金标裁决继承与 TP 不因证据改写而回退）；新增条目
+    带说明侧原文引用，用于证据守卫可核验的正式层。只处理文档内仅此一条
+    V33-227、款级、两侧名称互不包含/不构成子序列的高置信场景。
+    """
+    if len(emitted) != 1:
+        return
+    issue, table_entry, mention, table_page = emitted[0]
+    location = getattr(issue, "location", None)
+    if not isinstance(location, dict) or location.get("code_level") != "款":
+        return
+    # 已由 functional_name_refs 绑定到原件单元格的条目本身已是正式层，
+    # 不再追加第二个同缺陷条目，避免同一名称差异重复出两条。
+    existing_refs = location.get("table_refs") or []
+    if any(ref.get("file_hash") or ref.get("bbox") or ref.get("source_cell_id")
+           or ref.get("name_source_cell_id") or ref.get("evidence_id")
+           for ref in existing_refs if isinstance(ref, dict)):
+        return
+    table_key = re.sub(r"\s+", "", str(table_entry.get("name") or ""))
+    narrative_key = re.sub(r"\s+", "", str(mention.get("name") or ""))
+    if not table_key or not narrative_key:
+        return
+    if table_key in narrative_key or narrative_key in table_key:
+        return
+    # 插入“（室）”这类只多几个字的差异不是完全不同的款名，保持原分级。
+    def _is_subsequence(short: str, long: str) -> bool:
+        iterator = iter(long)
+        return all(char in iterator for char in short)
+    if _is_subsequence(narrative_key, table_key) or _is_subsequence(table_key, narrative_key):
+        return
+    try:
+        page = int(str(mention.get("page")).strip())
+    except (TypeError, ValueError):
+        return
+    span = str(mention.get("source_span") or "")
+    if not span:
+        return
+    new_location = dict(location)
+    new_location["table_refs"] = [
+        {"page": page, "span": span, "role": "说明5",
+         "section": "说明5（一般公共预算财政拨款支出决算具体情况）",
+         "row": location.get("row"), "field": "功能分类科目名称",
+         "code": location.get("code"), "subject": mention.get("name")},
+    ]
+    new_location["pages"] = sorted({page, table_page})
+    issues.append(rule._issue(
+        issue.message + "；已按说明原文与表内同编码款名逐字复核。",
+        new_location,
+        severity=issue.severity,
+        evidence_text=issue.evidence_text,
+    ))
 
 
 def _structure_class_name_issues(rule, doc, table_entries):
