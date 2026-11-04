@@ -27,7 +27,8 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, Iterable, List, Optional, Set
+import unicodedata
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Set
 
 from src.services.evidence_guard import is_formal_finding
 
@@ -207,6 +208,226 @@ def _finding_text(finding: Dict[str, Any]) -> str:
     return " ".join(str(part) for part in parts if part)
 
 
+def _identity_text(value: Any) -> str:
+    """身份字段归一：全半角、空白、大小写。不删除语义字符。"""
+    if value is None:
+        return ""
+    if isinstance(value, Mapping):
+        for key in ("code", "row", "name", "subject_code", "subject_name", "key"):
+            if value.get(key) not in (None, ""):
+                return _identity_text(value.get(key))
+        return json.dumps(dict(value), ensure_ascii=False, sort_keys=True, default=str)
+    text = unicodedata.normalize("NFKC", str(value))
+    return re.sub(r"\s+", "", text).strip().lower()
+
+
+def _identity_int(value: Any) -> Optional[int]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    text = str(value or "").strip()
+    return int(text) if text.isdigit() else None
+
+
+def _first_value(source: Mapping[str, Any], keys: Iterable[str]) -> Any:
+    for key in keys:
+        value = source.get(key)
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+#: 页码字段：说明侧用 page，表格侧参考 pages 与事实源页。
+_PAGE_KEYS = ("page", "physical_page", "page_number")
+
+
+def _finding_pages(location: Mapping[str, Any]) -> Set[int]:
+    pages: Set[int] = set()
+    for key in _PAGE_KEYS:
+        value = _identity_int(location.get(key))
+        if value:
+            pages.add(value)
+    for key in ("pages", "fact_source_pages"):
+        values = location.get(key)
+        if isinstance(values, (list, tuple, set)):
+            pages.update(value for value in (_identity_int(item) for item in values) if value)
+    for item in location.get("fact_source_refs") or []:
+        if isinstance(item, Mapping):
+            value = _identity_int(item.get("page") or item.get("physical_page"))
+            if value:
+                pages.add(value)
+    for item in location.get("table_refs") or []:
+        if isinstance(item, Mapping):
+            value = _identity_int(item.get("page") or item.get("physical_page"))
+            if value:
+                pages.add(value)
+    return pages
+
+
+#: 列身份的同义写法（表头措辞随模板变化，但检查关系不变）。
+_COLUMN_ALIASES = {
+    "决算数": "final", "决算金额": "final", "支出决算数": "final", "支出决算": "final",
+    "本年支出": "final", "本年支出合计": "final", "合计": "total", "总计": "total",
+    "预算数": "budget", "年初预算": "budget", "年初预算数": "budget",
+    "基本支出": "basic", "项目支出": "project",
+}
+
+
+def _column_identity(value: Any) -> str:
+    text = _identity_text(value)
+    if not text:
+        return ""
+    return _COLUMN_ALIASES.get(text, text)
+
+
+def _operand_identity(operand: Mapping[str, Any]) -> Dict[str, Any]:
+    """缺数位置的身份维度。缺省字段留空，不用推断补值。"""
+    return {
+        "relation": _identity_text(_first_value(
+            operand, ("check_relation_id", "sub_check_id", "relation_id"))),
+        "source": _identity_text(operand.get("source")),
+        "page": _identity_int(_first_value(operand, _PAGE_KEYS)),
+        "table": _identity_text(_first_value(
+            operand, ("table_instance_id", "table_code", "table"))),
+        "table_instance": _identity_text(operand.get("table_instance_id")),
+        "row": _identity_text(_first_value(operand, ("row_key", "row", "subject_code", "code"))),
+        "column": _column_identity(_first_value(operand, ("column", "field"))),
+        "year": _identity_int(_first_value(operand, ("year", "fiscal_year"))),
+        "stage": _identity_text(_first_value(operand, ("stage", "budget_stage"))),
+        "subject": _identity_text(_first_value(
+            operand, ("org_name", "subject", "org", "organization"))),
+    }
+
+
+def _finding_identity(finding: Mapping[str, Any]) -> Dict[str, Any]:
+    """正式问题的位置身份。与义务缺数位置逐维可比。"""
+    location = _json_dict(finding.get("location"))
+    relation = _first_value(
+        finding, ("check_relation_id", "sub_check_id", "relation_id"))
+    if relation is None:
+        relations = location.get("check_relation_ids")
+        if isinstance(relations, (list, tuple)) and len(relations) == 1:
+            relation = relations[0]
+    return {
+        "relation": _identity_text(relation) or _identity_text(
+            _first_value(location, ("check_relation_id", "sub_check_id", "relation_id"))),
+        "source": _identity_text(location.get("source")),
+        "page": _identity_int(_first_value(location, _PAGE_KEYS)),
+        "pages": _finding_pages(location),
+        "table": _identity_text(_first_value(
+            location, ("table_instance_id", "table_code", "table"))),
+        "table_instance": _identity_text(location.get("table_instance_id")),
+        "row": _identity_text(_first_value(
+            location, ("row_key", "row", "subject_code", "code", "subject"))),
+        "column": _column_identity(_first_value(location, ("column", "field"))),
+        "year": _identity_int(_first_value(location, ("year", "fiscal_year"))),
+        "stage": _identity_text(_first_value(location, ("stage", "budget_stage"))),
+        "subject": _identity_text(_first_value(
+            location, ("org_name", "subject_org", "organization", "org"))),
+    }
+
+
+def _identity_has_anchor(identity: Mapping[str, Any]) -> bool:
+    """至少有一个能定位到具体位置的强身份，才允许关闭金额义务。"""
+    return bool(
+        identity.get("relation")
+        or identity.get("page")
+        or identity.get("table_instance")
+        or (identity.get("table") and identity.get("row"))
+    )
+
+
+def _identity_agrees(operand: Mapping[str, Any], finding: Mapping[str, Any]) -> bool:
+    """缺数位置与问题位置是否指向同一个检查关系/同一处事实。
+
+    规则：
+    - 双方都声明关系 ID 时，必须完全相等（同页不同关系也不得关闭）；
+    - 问题声明了关系、义务没有：无法证明同关系，按不覆盖处理；
+    - 义务声明了关系、问题没有：问题缺少身份，按不覆盖处理；
+    - 双方都没有关系 ID 时，逐维比较双方都声明的维度；义务声明的维度在
+      问题侧缺失即视为身份不足（fail-closed），不允许用文字相似补位；
+    - 至少命中一个强身份维度（页/表实例/表+行）才算同一位置。
+    """
+    operand_relation = str(operand.get("relation") or "")
+    finding_relation = str(finding.get("relation") or "")
+    if operand_relation or finding_relation:
+        if not operand_relation or not finding_relation:
+            return False
+        return operand_relation == finding_relation
+
+    strong = False
+    operand_page = operand.get("page")
+    if operand_page:
+        pages = set(finding.get("pages") or ())
+        declared = finding.get("page")
+        if declared:
+            pages.add(declared)
+        if not pages or operand_page not in pages:
+            return False
+        strong = True
+
+    operand_table = str(operand.get("table") or "")
+    finding_table = str(finding.get("table") or "")
+    if operand_table:
+        if not finding_table or operand_table != finding_table:
+            return False
+        strong = True
+
+    operand_table_instance = str(operand.get("table_instance") or "")
+    finding_table_instance = str(finding.get("table_instance") or "")
+    if operand_table_instance:
+        if not finding_table_instance or operand_table_instance != finding_table_instance:
+            return False
+        strong = True
+
+    operand_row = str(operand.get("row") or "")
+    finding_row = str(finding.get("row") or "")
+    if operand_row:
+        if not finding_row or operand_row != finding_row:
+            return False
+        strong = True
+
+    operand_column = str(operand.get("column") or "")
+    finding_column = str(finding.get("column") or "")
+    if operand_column:
+        if not finding_column or operand_column != finding_column:
+            return False
+        strong = True
+
+    operand_year = operand.get("year")
+    finding_year = finding.get("year")
+    if operand_year and finding_year and operand_year != finding_year:
+        return False
+
+    operand_stage = str(operand.get("stage") or "")
+    finding_stage = str(finding.get("stage") or "")
+    if operand_stage and finding_stage and operand_stage != finding_stage:
+        return False
+
+    operand_subject = str(operand.get("subject") or "")
+    finding_subject = str(finding.get("subject") or "")
+    if operand_subject and finding_subject and operand_subject != finding_subject:
+        return False
+
+    return strong
+
+
+def _finding_matches_operand(
+    finding: Dict[str, Any],
+    operand: Mapping[str, Any],
+    terms: Set[str],
+    *,
+    requires_amount: bool,
+) -> bool:
+    """一条 finding 是否证明某个具体缺数位置已完成。"""
+    if requires_amount and _finding_amount_kind(finding) != "amount":
+        return False
+    text = _finding_text(finding)
+    if not any(term in text for term in terms):
+        return False
+    return _identity_agrees(_operand_identity(operand), _finding_identity(finding))
+
 def obligation_covered_by_finding(
     item: Any,
     result_row: Any,
@@ -217,6 +438,11 @@ def obligation_covered_by_finding(
     ``visible_issue_ids`` 为当前问题集合里可见的 issue id；被 legacy 忽略的
     finding 不在其中，不能用来关闭义务。传 ``None`` 表示不校验可见性
     （仅供纯函数测试）。
+
+    金额义务带缺数位置时按身份逐处核对（关系 ID / 页 / 表实例 / 行 / 列 /
+    年度 / 主体）：同一处必须由同关系或同位置的正式金额问题证明；任何一处
+    没有证明，整条义务保持未完成。历史结果没有缺数位置时沿用冻结短语匹配，
+    但同样不能把名称/单位类问题当作金额检查完成。
     """
     if str(getattr(item, "status", "") or "") != "insufficient_data":
         return False
@@ -235,8 +461,8 @@ def obligation_covered_by_finding(
         return False
 
     visible = set(visible_issue_ids) if visible_issue_ids is not None else None
-    findings = _json_list(_json_dict(result_row).get("rule_findings"))
-    for finding in findings:
+    candidates: List[Dict[str, Any]] = []
+    for finding in _json_list(_json_dict(result_row).get("rule_findings")):
         if not isinstance(finding, dict) or not is_formal_finding(finding):
             continue
         issue_id = str(finding.get("id") or "").strip()
@@ -244,9 +470,43 @@ def obligation_covered_by_finding(
             continue
         tags = {str(tag).strip() for tag in _json_list(finding.get("tags"))}
         rule_id = str(finding.get("rule_id") or finding.get("check") or "").strip()
-        matched = (checkers & tags) | ({rule_id} if rule_id in checkers else set())
-        if not matched:
+        if not ((checkers & tags) | ({rule_id} if rule_id in checkers else set())):
             continue
+        candidates.append(finding)
+
+    operands = [
+        operand
+        for operand in (getattr(item, "missing_operands", None) or [])
+        if isinstance(operand, dict)
+    ]
+    if requires_amount and operands:
+        # 缺数位置携带身份：逐处证明。旧结果缺少完整身份时保持未完成，
+        # 但仍可正常展示/读回，不因字段缺失而报错或降级成“已完成”。
+        identities = [_operand_identity(operand) for operand in operands]
+        if not any(_identity_has_anchor(identity) for identity in identities):
+            return False
+        used: Set[int] = set()
+        for operand, identity in zip(operands, identities):
+            if not _identity_has_anchor(identity):
+                # 有位置但身份不足以定位：不能凭文字相似补位。
+                return False
+            match = next(
+                (
+                    index
+                    for index, finding in enumerate(candidates)
+                    if index not in used
+                    and _finding_matches_operand(
+                        finding, operand, terms, requires_amount=True
+                    )
+                ),
+                None,
+            )
+            if match is None:
+                return False
+            used.add(match)
+        return True
+
+    for finding in candidates:
         if requires_amount and _finding_amount_kind(finding) != "amount":
             # 名称/单位/结构类问题不覆盖金额子检查；子检查性质不明时同样
             # fail-closed，不能仅凭规则编号族把未完成金额检查关掉。

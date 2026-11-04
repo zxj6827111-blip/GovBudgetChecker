@@ -127,4 +127,8 @@ def test_detail_text_is_not_rewritten_by_diagnostics():
     assert detail == "total的overseas/决算操作数缺失或不唯一"
     assert fields["reason_codes"] == ["operand_missing"]
     assert fields["missing_operands"][0]["page"] == 9
-    assert canonical(fields["missing_operands"][0]) == canonical(_missing(9))
+    # J-01：登记的原值逐字保留，只补真实检查关系身份（不推断、不改写）。
+    operand = fields["missing_operands"][0]
+    assert {key: operand[key] for key in _missing(9)} == _missing(9)
+    assert operand["check_relation_id"] == "V33-224:x:y"
+    assert operand["sub_check_id"] == "x:y"

@@ -105,13 +105,29 @@ def _source_refs(facts):
 def _location(doc, refs, facts, section, relation, **extra):
     fact_source_refs = _source_refs(facts)
     pages = sorted({ref['page'] for ref in list(refs) + fact_source_refs if ref.get('page')})
+    context = getattr(doc, 'fact_context', None)
+    identity = {
+        'fiscal_year': getattr(context, 'fiscal_year', None),
+        'budget_stage': getattr(context, 'budget_stage', None),
+        'org_name': getattr(context, 'org_name', None),
+        'file_hash': getattr(context, 'file_hash', None),
+    }
+    # 表实例身份：同一表代码可能跨页续排，页码+行号+表代码共同定位原格。
+    instances = sorted({
+        str((fact.extra_dims or {}).get('table_instance_id'))
+        for fact in facts or ()
+        if (fact.extra_dims or {}).get('table_instance_id')
+    })
+    if len(instances) == 1:
+        identity['table_instance_id'] = instances[0]
+    identity.update(extra)
     result = {'page': refs[0]['page'] if refs else None, 'pages': pages,
             'bbox': None, 'section': section, 'relation_type': relation,
             # Source binding authenticates fiscal cells through fact identity,
             # not a repeated bare number anywhere on the same table page.
             'table_refs': list(refs), 'fact_source_refs': fact_source_refs,
-            'fact_context_version_token': getattr(getattr(doc, 'fact_context', None),
-                                                  'version_token', None), **extra}
+            'fact_context_version_token': getattr(context, 'version_token', None),
+            **identity}
     if facts:
         result['operand_refs'] = [operand_ref(fact, f'{relation}:{i}')
                                   for i, fact in enumerate(facts)]

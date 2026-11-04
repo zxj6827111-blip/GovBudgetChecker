@@ -555,6 +555,36 @@ def default_entry(status: Any) -> Dict[str, Any]:
     return {"reason_codes": ["rule_no_reason"], "blocked_by": [], "missing_operands": [], "candidates": []}
 
 
+def _stamp_relation_identity(entry: Mapping[str, Any], rule_id: Any, sub_check_id: Any) -> Dict[str, Any]:
+    """给缺数位置补真实检查关系身份（只补空字段，不改写已有取值）。
+
+    J-01：义务覆盖必须能证明“同一检查关系/同一处事实”。关系 ID 由产生
+    回执的规则与子检查决定，属于可核验的来源身份，不是从文字推断的标签。
+    该字段随回执落库、汇总进义务并原样进入 API/导出，供覆盖判定核对。
+    """
+    result = dict(entry)
+    rule = str(rule_id or "").strip()
+    sub_check = str(sub_check_id or "").strip()
+    relation = f"{rule}:{sub_check}" if rule and sub_check else ""
+    operands = result.get("missing_operands")
+    if not isinstance(operands, list):
+        return result
+    stamped: List[Dict[str, Any]] = []
+    for operand in operands:
+        if not isinstance(operand, Mapping):
+            continue
+        item = dict(operand)
+        if relation:
+            item.setdefault("check_relation_id", relation)
+        if sub_check:
+            item.setdefault("sub_check_id", sub_check)
+        if rule:
+            item.setdefault("rule_id", rule)
+        stamped.append(item)
+    result["missing_operands"] = stamped
+    return result
+
+
 def fields_for_text(doc: Any, text: Any, *, status: Any = "insufficient_data", rule_id: Any = None,
                    sub_check_id: Any = None, obligation_id: Any = None,
                    explicit_codes: Sequence[str] = (),
@@ -587,10 +617,12 @@ def fields_for_text(doc: Any, text: Any, *, status: Any = "insufficient_data", r
         candidates.insert(0, merged)
     for candidate in candidates:
         try:
-            return finalize(candidate, rule_id=rule_id, sub_check_id=sub_check_id, obligation_id=obligation_id)
+            return finalize(_stamp_relation_identity(candidate, rule_id, sub_check_id),
+                            rule_id=rule_id, sub_check_id=sub_check_id, obligation_id=obligation_id)
         except ValueError:
             continue
-    return finalize(default_entry(status), rule_id=rule_id, sub_check_id=sub_check_id, obligation_id=obligation_id)
+    return finalize(_stamp_relation_identity(default_entry(status), rule_id, sub_check_id),
+                    rule_id=rule_id, sub_check_id=sub_check_id, obligation_id=obligation_id)
 
 
 # ---------------------------------------------------------------------------
