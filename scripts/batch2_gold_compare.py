@@ -147,28 +147,119 @@ def _defect_anchors(unit: Dict[str, Any], needles: Sequence[str] = ()) -> List[s
     return anchors or quotes
 
 
-def _anchor_covered(item: Dict[str, Any], anchor: str, eval_lib) -> bool:
+_AMOUNT_TOKEN_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+_UNIT_TOKENS = ("万元", "亿元", "元", "%", "％")
+
+
+def _amount_tokens(text: str) -> List[str]:
+    normalized = re.sub(r"\s+", "", str(text or ""))
+    return [token.replace(",", "").replace("，", "")
+            for token in _AMOUNT_TOKEN_RE.findall(normalized)]
+
+
+def _text_segments(needle: str) -> List[str]:
+    """去掉金额、单位和括注后的中文片段；不按名称前缀/后缀互相吞并。"""
+    segments = re.split(r"[（(][^）)]*[）)]|\d[\d,.]*\s*(?:万元|亿元|元|%|％)?", needle)
+    return [segment for segment in segments
+            if len(re.findall(r"[\u4e00-\u9fff]", segment)) >= 4]
+
+
+def _anchor_covered(item: Dict[str, Any], anchor: str, eval_lib,
+                    page: Optional[int] = None) -> bool:
+    """出现点覆盖：必须同时满足位置、金额/单位、名称/关系，不接受通用短语。
+
+    R-02：
+    - 锚点带金额时，锚点里的每个金额 token 必须逐字出现在候选条目中；
+      单位（万元/元/%）也必须一致；只共享“项目支出”“住房公积金”等名称
+      或只差一个金额的发现不能覆盖该出现点。
+    - 锚点不带金额时，允许等价长片段，但片段必须覆盖锚点的主要长度，
+      不能用一个短名称前缀代表整句。
+    - 传入 ``page`` 时，候选条目必须覆盖该页；单页/跨页由通用条款证明。
+    """
     needle = eval_lib.norm(anchor)
     if not needle:
+        return False
+    if page is not None and _pages(item) and page not in _pages(item):
         return False
     text = eval_lib.norm(str(item.get("text") or "") + " " + " ".join(item.get("quotes") or []))
     if needle in text:
         return True
-    if any(q and (eval_lib.norm(q) in needle or needle in eval_lib.norm(q))
-           for q in item.get("quotes") or []):
-        return True
-    # 金标锚点常带“（项）/（款）代码/金额”外壳；按其中的名称片段核验，
-    # 避免只因缺少括注或金额就判未覆盖。
-    segments = [segment for segment in re.split(r"[（(][^）)]*[）)]|\d[\d,.]*\s*万元?", needle)
-                if len(re.findall(r"[\u4e00-\u9fff]", segment)) >= 4]
-    return any(segment in text for segment in segments)
+    quotes = [eval_lib.norm(quote) for quote in item.get("quotes") or [] if quote]
+    anchor_amounts = _amount_tokens(needle)
+    if not anchor_amounts:
+        # 纯文本锚点：只接受覆盖 80% 以上的引文，或锚点本身的等价长片段。
+        for candidate in quotes:
+            if candidate and (candidate in needle or needle in candidate):
+                shorter, longer = sorted((len(candidate), len(needle)))
+                if longer and shorter / longer >= 0.8:
+                    return True
+        for segment in _text_segments(needle):
+            if len(segment) >= max(4, int(len(needle) * 0.6)) and segment in text:
+                return True
+        return False
+    # 金额锚点：金额 token 必须全部命中，单位不能换，名称片段必须在。
+    # 例外只给“名称缺陷 + 明确同页”的锚点：金标的名称出现点常带金额上下文，
+    # 但名称类 finding 不必复述金额；此时用页码绑定证明同一出现点，不能仅凭
+    # 名称文本（无页码）放行。
+    text_amounts = _amount_tokens(text)
+    segments = _text_segments(needle)
+    amount_ok = bool(text_amounts) and all(token in text_amounts for token in anchor_amounts)
+    if not amount_ok:
+        if page is not None and page in _pages(item) and segments:
+            return any(segment in text for segment in segments)
+        return False
+    if "亿元" in needle:
+        required_unit = "亿元"
+    elif "万元" in needle:
+        required_unit = "万元"
+    elif "%" in needle or "％" in needle:
+        required_unit = "%"
+    elif "元" in needle:
+        required_unit = "元"
+    else:
+        required_unit = ""
+    if required_unit == "%":
+        if "%" not in text and "％" not in text:
+            return False
+    elif required_unit and required_unit not in text:
+        return False
+    if segments and not any(segment in text for segment in segments):
+        return False
+    return True
+
+
+def _defect_anchor_entries(unit: Dict[str, Any], needles: Sequence[str] = ()) -> List[Dict[str, Any]]:
+    """带页码的出现点：用于把覆盖绑定到原页，而不是只看正文。"""
+    entries = []
+    for value in unit.get("values") or []:
+        if not isinstance(value, dict):
+            continue
+        quote = str(value.get("quote") or "")
+        compact = re.sub(r"\s+", "", quote)
+        if not compact or re.fullmatch(r"[\d,.;%％]+", compact):
+            continue
+        if len(re.findall(r"[\u4e00-\u9fff]", compact)) < 3:
+            continue
+        if re.search(r"完成年初预算的|完成预算的", compact) and not re.search(r"支出|收入|费|金", compact):
+            continue
+        entries.append({"quote": quote, "page": value.get("page")})
+    if needles:
+        compact_needles = [re.sub(r"\s+", "", str(item)) for item in needles if str(item)]
+        narrowed = [entry for entry in entries
+                    if any(item and item in re.sub(r"\s+", "", entry["quote"])
+                           for item in compact_needles)]
+        if narrowed:
+            return narrowed
+    return entries or [{"quote": str(value.get("quote") or ""), "page": value.get("page")}
+                        for value in unit.get("values") or [] if isinstance(value, dict)]
 
 
 def _item_covers_anchor(item: Dict[str, Any], target: Dict[str, Any], docs, eval_lib) -> bool:
     unit = _find_unit(docs, target["sample_id"], target.get("gold_unit") or "")
     if unit is None:
         return True  # 无金标单位数据时退回页码/原文匹配
-    return any(_anchor_covered(item, anchor, eval_lib) for anchor in _defect_anchors(unit))
+    return any(_anchor_covered(item, entry["quote"], eval_lib, entry.get("page"))
+               for entry in _defect_anchor_entries(unit))
 
 
 def _evidence_qualified(item: Dict[str, Any]) -> bool:
@@ -218,6 +309,13 @@ def match_addition(item: Dict[str, Any], targets: Sequence[Dict[str, Any]],
         if needles and not any(str(needle) in str(item.get("message") or "") for needle in needles):
             continue
         if target.get("gold_unit") and target["gold_unit"] in linked:
+            # unit 链接只证明“同一金标单位”，还要绑定目标检查规则与页码，
+            # 否则同文档任意 F 条目都能借 unit 链接冒充该出现点。
+            rules = contract["check_rules"].get(target["check_key"] or "", [])
+            if rules and not _rule_matches(item, rules):
+                continue
+            if target["pages"] and not (set(_pages(item)) & set(target["pages"])):
+                continue
             if _item_covers_anchor(item, target, docs, eval_lib):
                 hits.append(target)
             continue
@@ -376,11 +474,11 @@ def run(args: argparse.Namespace) -> int:
     for item in new_only:
         if allow_notice_changes and item.get("tier") not in {"F", "P"}:
             added_notice.append({"sample_id": item["doc"], "raw_id": item.get("raw_id"), "rule": item["rule"]})
-    target_anchors: Dict[str, List[str]] = {}
+    target_anchors: Dict[str, List[Dict[str, Any]]] = {}
     for target in miss_targets:
         unit = _find_unit(docs, target["sample_id"], target.get("gold_unit") or "")
         needles = (contract.get("target_message_contains") or {}).get(target["target_id"]) or []
-        target_anchors[target["target_id"]] = _defect_anchors(unit, needles) if unit else []
+        target_anchors[target["target_id"]] = _defect_anchor_entries(unit, needles) if unit else []
     target_covered: Dict[str, set] = defaultdict(set)
     target_items: Dict[str, List[str]] = defaultdict(list)
     for item in coverage_additions:
@@ -411,7 +509,7 @@ def run(args: argparse.Namespace) -> int:
         for target in hits:
             anchors = target_anchors.get(target["target_id"]) or []
             covered = {index for index, anchor in enumerate(anchors)
-                       if _anchor_covered(item, anchor, eval_lib)}
+                       if _anchor_covered(item, anchor["quote"], eval_lib, anchor.get("page"))}
             target_covered[target["target_id"]] |= covered
             target_items[target["target_id"]].append(item["id"])
     missing_additions = []
@@ -423,7 +521,7 @@ def run(args: argparse.Namespace) -> int:
         occurrence_coverage.append({
             "target_id": target["target_id"], "sample_id": target["sample_id"],
             "anchors": len(anchors), "covered": len(covered),
-            "missing": [anchors[index] for index in range(len(anchors)) if index not in covered],
+            "missing": [anchors[index]["quote"] for index in range(len(anchors)) if index not in covered],
             "items": target_items.get(target["target_id"]) or [],
         })
         if full:
