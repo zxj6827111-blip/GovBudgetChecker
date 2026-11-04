@@ -683,6 +683,9 @@ def relation(rule, doc, key, label, parent, children, *, hints=True, fund_compos
         receipt(rule, doc, key, facts, status='not_applicable', formula='原件完整网格各项均为空白，无发生额关系')
         return [], []
     level, diff = classify_amount_diff(parent.normalized_value, total, n_children=len(children))
+    if rule.code == 'V33-117' and abs(diff) <= Decimal('0.05'):
+        # 人员/公用经费类是多个末级科目汇总后的二次加总，0.05 内按显示取整提示。
+        level = 'rounding_hint'
     ids, evidence = receipt(rule, doc, key, facts,
                             status='fail' if level == 'mismatch' else 'pass',
                             formula='total = sum(parts) (万元)')
