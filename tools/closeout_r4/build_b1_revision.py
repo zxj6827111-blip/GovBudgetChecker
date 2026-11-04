@@ -74,6 +74,19 @@ def build_annotations() -> None:
                 added_log.append({"sample_id": sid, "check_id": check["check_id"],
                                   "value": value,
                                   "reason": "初标整句 quote 含多个数值；补原文中真实存在的精确片段，供单位/数值唯一绑定"})
+        # 修订裁决覆盖层：T03 在修订版中与台账 PENDING_REVIEW 一致；
+        # 原初标 verdict=pass 保留在 annotations/，不覆盖。
+        if sid == "B1-2023-D01":
+            for check in payload.get("checks") or []:
+                if check.get("check_id") != "GS-T03":
+                    continue
+                payload.setdefault("revision_notes", {})["GS-T03"] = {
+                    "original_verdict": check.get("verdict"),
+                    "revised_verdict": "pending_review",
+                    "reason": "p13 支出表 20503 款级 0.02 超款级 0.015 包络；完整子链可解释但需独立裁定。20508 已用 p13 实际三列 2,022.67/1,450.20/572.47 补证。",
+                }
+                check["verdict"] = "pending_review"
+                check["revision_note"] = payload["revision_notes"]["GS-T03"]["reason"]
         dest = OUT / "annotations_revised" / sid / "annotation.json"
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(json.dumps(payload, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
@@ -390,16 +403,60 @@ def verify_pdf_quotes(spec: dict) -> dict:
             "items": results}
 
 
+T06_LEAF_RE = re.compile(r"(\d{3})\s*(\d{2})\s+([^\d]+?)\s+([\d,]+\.\d{2})")
+
+
+def build_t06_items() -> dict:
+    """从基本支出表原页解析 T06 非零末级项（真实编码/名称/页/列/数值）。"""
+    data: dict = {}
+    for sid, pages in (("B1-2024-D02", [15, 16]), ("B1-2025-D01", [18, 19])):
+        doc = pymupdf.open(PDFS[sid])
+        items = []
+        for page in pages:
+            text = re.sub(r"\s+", " ", doc[page - 1].get_text())
+            for match in T06_LEAF_RE.finditer(text):
+                code3, code2, name, value = match.groups()
+                if "合计" in name:
+                    continue
+                code = f"{code3}{code2}"
+                if any(existing["code"] == code and existing["page"] == page
+                       for existing in items):
+                    continue
+                items.append({
+                    "code": code,
+                    "name": name.strip(),
+                    "page": page,
+                    "column": "人员经费" if code3 in {"301", "303"} else "公用经费",
+                    "category": code3,
+                    "value": value.replace(",", ""),
+                })
+        nonzero = [item for item in items if Decimal(item["value"]) != 0]
+        data[sid] = {"printed_count": len(items), "nonzero_count": len(nonzero)}
+        for column in ("人员经费", "公用经费"):
+            rows = [item for item in nonzero if item["column"] == column]
+            data[sid][column] = {
+                "count": len(rows),
+                "sum": str(sum((Decimal(item["value"]) for item in rows), Decimal("0"))),
+                "items": rows,
+            }
+    (OUT / "t06_items.json").parent.mkdir(parents=True, exist_ok=True)
+    (OUT / "t06_items.json").write_text(
+        json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    return data
+
+
 def build_closure_evidence() -> dict:
     """205/20503/20508 与 T03/T06 的完整闭合关系。"""
+    t06 = build_t06_items()
     relations = [
         {"sample_id": "B1-2023-D01", "target": "T03", "page": 13, "level": "类", "code": "205",
+         "table": "支出决算表",
          "total": "31118.07", "part1_name": "基本支出", "part1": "20834.59",
          "part2_name": "项目支出", "part2": "10283.50",
          "leaf_items": ["2050302", "2050305", "2050802"], "n_leaves": 3,
          "formula": "20,834.59 + 10,283.50 = 31,118.09；表列 31,118.07；差 0.02",
          "verdict": "PASS_ROUNDING",
-         "explanation": "0.02 等于 20503（0.02）+ 20508（0.00）；20503 的 0.02 又由 2050302、2050305 各 0.01 叠加。按 3 个末级项包络 (3+1)×0.005=0.02，差 0.02 在边界内。"},
+         "explanation": "p13 支出表：20503（29,095.40/19,384.39/9,711.03）+ 20508（2,022.67/1,450.20/572.47）= 205（31,118.07/20,834.59/10,283.50），款级相加逐列精确；0.02 只发生在 20503 内部，由 2050302、2050305 各 0.01 叠加。按 3 个末级项包络 (3+1)×0.005=0.02，205 类差 0.02 在边界内。"},
         {"sample_id": "B1-2023-D01", "target": "T03", "page": 13, "level": "款", "code": "20503",
          "total": "29095.40", "part1_name": "基本支出", "part1": "19384.39",
          "part2_name": "项目支出", "part2": "9711.03",
@@ -414,11 +471,26 @@ def build_closure_evidence() -> dict:
          "formula": "906.09 + 1,490.61 = 2,396.70；表列 2,396.69；差 0.01",
          "verdict": "PASS_ROUNDING", "explanation": "单项比较，0.01 在 0.015 包络内。"},
         {"sample_id": "B1-2023-D01", "target": "T03", "page": 13, "level": "项", "code": "2050305",
+         "table": "支出决算表",
          "total": "26698.71", "part1_name": "基本支出", "part1": "18478.30",
          "part2_name": "项目支出", "part2": "8220.42",
          "leaf_items": ["2050305"], "n_leaves": 1,
          "formula": "18,478.30 + 8,220.42 = 26,698.72；表列 26,698.71；差 0.01",
          "verdict": "PASS_ROUNDING", "explanation": "单项比较，0.01 在 0.015 包络内。"},
+        {"sample_id": "B1-2023-D01", "target": "T03", "page": 13, "level": "款", "code": "20508",
+         "table": "支出决算表",
+         "total": "2022.67", "part1_name": "基本支出", "part1": "1450.20",
+         "part2_name": "项目支出", "part2": "572.47",
+         "leaf_items": ["2050802"], "n_leaves": 1,
+         "formula": "1,450.20 + 572.47 = 2,022.67 = 表列 2,022.67；差 0.00",
+         "verdict": "PASS", "explanation": "p13 支出表 20508 款：基本+项目精确等于合计 2,022.67；这是 T03 在同一张 p13 支出表上的 20508 三列，不是 p9 收入表或 p19 财政拨款支出。"},
+        {"sample_id": "B1-2023-D01", "target": "T03", "page": 13, "level": "项", "code": "2050802",
+         "table": "支出决算表",
+         "total": "2022.67", "part1_name": "基本支出", "part1": "1450.20",
+         "part2_name": "项目支出", "part2": "572.47",
+         "leaf_items": ["2050802"], "n_leaves": 1,
+         "formula": "1,450.20 + 572.47 = 2,022.67 = 表列 2,022.67；差 0.00",
+         "verdict": "PASS", "explanation": "p13 支出表 2050802 项与 20508 款三列一致。"},
         {"sample_id": "B1-2023-D01", "target": "T02", "page": 9, "level": "类", "code": "205",
          "total": "29065.36", "part1_name": "财政拨款收入", "part1": "20234.93",
          "part2_name": "事业收入+其他收入", "part2": "4022.42+4808.01",
@@ -456,18 +528,31 @@ def build_closure_evidence() -> dict:
          "formula": "1,991.96 = 1,991.96",
          "verdict": "PASS", "explanation": "20508 款项一致。"},
         {"sample_id": "B1-2024-D02", "target": "T06", "page": 16, "level": "基本支出",
-         "code": "人员+公用", "total": "6745.63", "part1_name": "人员经费合计",
-         "part1": "5350.25", "part2_name": "公用经费合计", "part2": "1395.40",
-         "leaf_items": [f"leaf-{i}" for i in range(35)], "n_leaves": 35,
-         "formula": "5,350.25 + 1,395.40 = 6,745.65；表5 基本支出合计 6,745.63；差 0.02；(35+1)×0.005=0.18",
+         "table": "一般公共预算财政拨款基本支出决算表",
+         "code": "人员+公用",
+         "total": "6745.63", "part1_name": "人员经费合计",
+         "part1": t06["B1-2024-D02"]["人员经费"]["sum"],
+         "part2_name": "公用经费合计",
+         "part2": t06["B1-2024-D02"]["公用经费"]["sum"],
+         "leaf_items": [item["code"] for item in t06["B1-2024-D02"]["人员经费"]["items"]
+                        + t06["B1-2024-D02"]["公用经费"]["items"]],
+         "n_leaves": t06["B1-2024-D02"]["nonzero_count"],
+         "formula": f"{t06['B1-2024-D02']['人员经费']['sum']} + {t06['B1-2024-D02']['公用经费']['sum']} = 6,745.65；表5 基本支出合计 6,745.63；差 0.02；{t06['B1-2024-D02']['nonzero_count']} 个非零末级项包络 (n+1)×0.005=0.18",
          "verdict": "PASS_ROUNDING",
-         "explanation": "T06 是表内基本支出=人员+公用；35 个末级项包络 0.18，0.02 在内。N06 是说明 vs 表，容差 0.01，0.02 判 defect；两者不重复计。"},
+         "explanation": f"T06 是表内基本支出=人员+公用；人员经费 {t06['B1-2024-D02']['人员经费']['count']} 项、公用经费 {t06['B1-2024-D02']['公用经费']['count']} 项，共 {t06['B1-2024-D02']['nonzero_count']} 个非零末级项，包络 0.18，0.02 在内。N06 是说明内部人员+公用 vs 说明总额，两项包络 0.015（基础 0.01），0.02 判 defect；两者不重复计。"},
         {"sample_id": "B1-2025-D01", "target": "T06", "page": 19, "level": "基本支出",
-         "code": "人员+公用", "total": "106625.87", "part1_name": "人员经费合计",
-         "part1": "89230.64", "part2_name": "公用经费合计", "part2": "17395.21",
-         "leaf_items": [f"leaf-{i}" for i in range(24)], "n_leaves": 24,
-         "formula": "89,230.64 + 17,395.21 = 106,625.85；表5 106,625.87；差 0.02；(24+1)×0.005=0.125",
-         "verdict": "PASS_ROUNDING", "explanation": "T06 表内差 0.02 在 24 个末级项包络 0.125 内。"},
+         "table": "一般公共预算财政拨款基本支出决算表",
+         "code": "人员+公用",
+         "total": "106625.87", "part1_name": "人员经费合计",
+         "part1": t06["B1-2025-D01"]["人员经费"]["sum"],
+         "part2_name": "公用经费合计",
+         "part2": t06["B1-2025-D01"]["公用经费"]["sum"],
+         "leaf_items": [item["code"] for item in t06["B1-2025-D01"]["人员经费"]["items"]
+                        + t06["B1-2025-D01"]["公用经费"]["items"]],
+         "n_leaves": t06["B1-2025-D01"]["nonzero_count"],
+         "formula": f"{t06['B1-2025-D01']['人员经费']['sum']} + {t06['B1-2025-D01']['公用经费']['sum']} = 106,625.89；表5 106,625.87；差 0.02；{t06['B1-2025-D01']['nonzero_count']} 个非零末级项包络 (n+1)×0.005=0.18",
+         "verdict": "PASS_ROUNDING",
+         "explanation": f"T06 表内差 0.02 在 {t06['B1-2025-D01']['nonzero_count']} 个非零末级项包络 0.18 内。旧注释的“24 个末级项”是 T03 支出表项行数，不是 T06 基本支出表叶项数；本行以 t06_items.json 的真实编码/页/列/数值为准。"},
         {"sample_id": "B1-2024-D02", "target": "N06", "page": 24, "level": "说明vs表",
          "code": "基本支出", "total": "6745.63", "part1_name": "人员经费",
          "part1": "5350.25", "part2_name": "公用经费", "part2": "1395.40",
@@ -489,7 +574,7 @@ def build_closure_evidence() -> dict:
          "verdict": "DEFECT",
          "explanation": "p21 结构占比误用预算数 4.50 作分母，保留 GS-N07 defect。"},
     ]
-    return {"version": "b1-closure-20261104", "note": "T03/T06 统一口径：T03=支出表行 合计=基本+项目，包络按末级项数 (n+1)*0.005；T06=基本支出表 人员+公用=基本支出合计，包络按末级项数；N06=说明内部人员+公用 vs 说明总额，两项包络 0.015（基础容差 0.01）。",
+    return {"version": "b1-closure-20261104", "note": "T03/T06 统一口径：T03=支出表行 合计=基本+项目，包络按末级项数 (n+1)*0.005；T06=基本支出表 人员+公用=基本支出合计，以 t06_items.json 的真实非零末级项为准（两份均 35 项，包络 0.18）；旧“24 项”是 T03 支出表项行数，已纠正。N06=说明内部人员+公用 vs 说明总额，两项包络 0.015（基础容差 0.01）。",
             "relations": relations}
 
 
@@ -498,13 +583,13 @@ def build_target_status() -> list:
     revisions = {
         "T03": {
             "status": "PENDING_REVIEW", "effective_screened": "7", "candidate_sample": "B1-2023-D01",
-            "note": "原 NOT_FOUND 6/6 修订为 PENDING_REVIEW 7/6（超1份保留）：B1-2023-D01 p13 20503 款级 0.02 超款级包络 0.015，完整子链（2050302/2050305 各 0.01）可解释但需裁定；B1-2025-D01 T03 pass（0.02 在 24 项包络 0.125 内）。",
-            "change_basis": "closure_evidence.csv 205/20503/2050302/2050305；T03_T06_BASIS.md",
+            "note": "原 NOT_FOUND 6/6 修订为 PENDING_REVIEW 7/6（超1份保留）：B1-2023-D01 p13 20503 款级 0.02 超款级包络 0.015，完整子链（2050302/2050305 各 0.01）可解释但需裁定；B1-2025-D01 T03 pass（0.02 在 24 项包络 0.125 内）。20508/2050802 已用 p13 同一支出表实际三列 2,022.67/1,450.20/572.47 补证，不再用 p9/p19 代替。",
+            "change_basis": "closure_evidence.csv 205/20503/2050302/2050305/20508/2050802（p13）；T03_T06_BASIS.md",
         },
         "T06": {
             "status": "NOT_FOUND", "effective_screened": "2", "candidate_sample": "",
-            "note": "原 INCOMPLETE 0/6 修订为 NOT_FOUND 2/6：B1-2024-D02、B1-2025-D01 的 GS-T06 逐项证据均在，差均为 0.02，分别在 35 项包络 0.18、24 项包络 0.125 内；筛选日志未登记属过程缺口，不否定已存在 annotation 证据。",
-            "change_basis": "closure_evidence.csv T06 两行；B1-2024-D02/B1-2025-D01 annotation GS-T06",
+            "note": "原 INCOMPLETE 0/6 修订为 NOT_FOUND 2/6：B1-2024-D02、B1-2025-D01 的 GS-T06 逐项证据均在，差均为 0.02，分别为 B1-2024-D02 35 项包络 0.18、B1-2025-D01 35 项包络 0.18（旧“24 项”是 T03 支出表项行数，已纠正）；筛选日志未登记属过程缺口，不否定已存在 annotation 证据。",
+            "change_basis": "closure_evidence.csv T06 两行 + t06_items.json（真实编码/页/列/数值）",
         },
     }
     for row in original:
@@ -561,7 +646,7 @@ def main() -> int:
     (OUT / "closure_evidence.json").write_text(
         json.dumps(closure, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     with (OUT / "closure_evidence.csv").open("w", encoding="utf-8-sig", newline="") as handle:
-        fields = ["sample_id", "target", "page", "level", "code", "total",
+        fields = ["sample_id", "target", "page", "level", "code", "table", "total",
                   "part1_name", "part1", "part2_name", "part2", "n_leaves",
                   "formula", "verdict", "explanation"]
         writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")

@@ -38,7 +38,8 @@ CONTRACT_FILES = (
     EVIDENCE / "s4b/contract_n05_all.json",
     EVIDENCE / "s4b/contract_residual.json",
 )
-OCCURRENCE_CONTRACT = REPO / "outputs/unified_closeout_round3_20261104/tools/occurrence_contract_20261104.json"
+OCCURRENCE_CONTRACT = Path(__file__).with_name("occurrence_contract_20261104.json")
+STRICT_ROLES = Path(__file__).with_name("strict_roles_20261104.json")
 KNOWN_PENDING = {
     "FP|GS-2022-03|V33-202-16",
     "FP|GS-2024-02|V33-202-9",
@@ -199,6 +200,10 @@ def main() -> int:
         if OCCURRENCE_CONTRACT.exists() else {"check_rules": {}, "control_adjudications": []}
     check_rules = occurrence_contract.get("check_rules") or {}
     controls = occurrence_contract.get("control_adjudications") or []
+    strict_roles = {}
+    if STRICT_ROLES.exists():
+        strict_roles = (json.loads(STRICT_ROLES.read_text(encoding="utf-8"))
+                        .get("targets") or {})
     needles: Dict[str, List[str]] = {}
     for path in CONTRACT_FILES:
         if path.exists():
@@ -322,7 +327,17 @@ def main() -> int:
             scoped = needles.get(tid) or []
             check_key = str(target.get("rule_or_check") or "")
             allowed_rules = check_rules.get(check_key) or []
-            entries = cmp._defect_anchor_entries(unit, scoped) if unit else []
+            role_entry = strict_roles.get(tid)
+            if unit is None:
+                entries = []
+            elif role_entry:
+                entries = [{"quote": item["quote"], "page": item.get("page"),
+                            "role": item.get("role") or "defect_occurrence"}
+                           for item in role_entry.get("anchors") or []]
+            else:
+                entries = cmp._defect_anchor_entries(unit, scoped)
+                for item in entries:
+                    item["role"] = "defect_occurrence"
             raw_entries = cmp._defect_anchor_entries(unit) if unit else []
             f_items = [i for i in current_items
                        if i["doc"] == sample and i.get("tier") == "F" and evidence_ok(i)
@@ -347,31 +362,37 @@ def main() -> int:
                           if cmp._anchor_covered(i, anchor["quote"], eval_lib, anchor.get("page"),
                                                  amount_required=not name_only)]
                 row = {"quote": anchor["quote"], "page": anchor.get("page"),
+                       "role": anchor.get("role") or "defect_occurrence",
                        "covered": bool(f_hits), "f_items": f_hits[:6], "p_items": p_hits[:6]}
                 anchor_rows.append(row)
                 remaining.append(row)
-            covering = [item for row in remaining for item in row["f_items"]]
-            covering_p = [row for row in remaining if row["p_items"] and not row["covered"]]
-            covered = [row for row in remaining if row["covered"]]
+            required = [row for row in remaining if row.get("role") != "correct_contrast"]
+            correct_contrast = [row for row in remaining if row.get("role") == "correct_contrast"]
+            covering = [item for row in required for item in row["f_items"]]
+            covering_p = [row for row in required if row["p_items"] and not row["covered"]]
+            covered = [row for row in required if row["covered"]]
+            missing = [row for row in required if not row["covered"]]
             if unit is None:
                 entry.update(current_state="gold_unit_missing",
                              anchors_total=0, anchors_covered=0)
             else:
                 entry.update(
-                    anchors_total=len(remaining),
+                    anchors_total=len(required),
                     anchors_covered=len(covered),
                     anchors_raw_total=len(raw_entries),
                     anchor_entries=anchor_rows,
+                    required_anchor_roles=sorted({row["role"] for row in required}),
+                    correct_contrast_entries=correct_contrast,
                     excluded_control_entries=excluded,
                     scoped_needles=scoped,
                     check_rules=allowed_rules,
-                    missing_anchors=[row["quote"] for row in remaining if not row["covered"]],
+                    missing_anchors=[row["quote"] for row in missing],
                     covering_f_items=sorted(set(covering))[:12],
                     new_f_items=sorted({i for i in set(covering)
                                         if is_new(current_by_id[i])})[:12],
                     covering_p_items=len(covering_p),
                 )
-                if remaining and len(covered) == len(remaining):
+                if required and len(covered) == len(required):
                     state = "satisfied"
                 elif covered:
                     state = "partial"
@@ -380,14 +401,20 @@ def main() -> int:
                 else:
                     state = "missing"
                 entry["current_state"] = state
+                defect_missing = any(row["role"] == "defect_occurrence" for row in missing)
+                operand_missing = any(row["role"] == "required_operand" for row in missing)
                 if state != "satisfied" and covering_p and not covered:
                     entry["classification"] = "candidate_pending_confirmation"
                 elif state == "partial":
-                    entry["classification"] = "occurrence_gap"
+                    entry["classification"] = ("occurrence_gap" if defect_missing
+                                               else "required_operand_gap")
                 elif state == "missing":
-                    entry["classification"] = "no_formal_occurrence"
+                    entry["classification"] = ("no_formal_occurrence" if defect_missing
+                                               else "required_operand_gap")
                 else:
                     entry["classification"] = "satisfied"
+                if operand_missing and not defect_missing:
+                    entry["classification"] = "required_operand_gap"
             entry["rule_matches"] = sorted({i.get("rule") for i in f_items
                                             if any(cmp._anchor_covered(i, row["quote"], eval_lib, row.get("page"))
                                                    for row in remaining)}) if unit else []

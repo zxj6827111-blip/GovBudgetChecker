@@ -89,14 +89,24 @@ def decide(row: dict) -> tuple[str, str]:
         ).format(base=row.get("baseline_amounts"), now=best.get("amounts"),
                  tier=best.get("tier"))
 
-    entries = row.get("anchor_entries") or []
+    # 正确对照不要求另造 F；缺陷出现点与必要操作数才计入 required。
+    entries = [entry for entry in (row.get("anchor_entries") or [])
+               if entry.get("role") != "correct_contrast"]
     if not entries:
-        return "strict_partial", "没有可核验的缺陷出现点（不得凭目标编号判 fixed）。"
+        return "strict_partial", "没有可核验的缺陷出现点/必要操作数（不得凭目标编号判 fixed）。"
     covered = [entry for entry in entries if entry.get("covered")]
     if len(covered) == len(entries):
-        return "fixed", "剩余缺陷出现点全部由 F 层、证据合格、同规则同页码的条目覆盖。"
-    missing = [entry.get("quote") for entry in entries if not entry.get("covered")]
-    return "strict_partial", f"仍有 {len(missing)} 个缺陷出现点未覆盖：{missing[:3]}"
+        roles = sorted({entry.get("role") or "defect_occurrence" for entry in entries})
+        return "fixed", (
+            "要求的出现点全部由 F 层、证据合格、同规则同页码的条目覆盖；"
+            f"角色={roles}。正确对照不要求另造 F。"
+        )
+    missing = [entry for entry in entries if not entry.get("covered")]
+    roles = sorted({entry.get("role") or "defect_occurrence" for entry in missing})
+    label = "必要操作数缺来源" if roles == ["required_operand"] else "出现点未覆盖"
+    return "strict_partial", (
+        f"{label}（{roles}）：" + " | ".join(str(entry.get("quote")) for entry in missing[:3])
+    )
 
 
 def main() -> int:

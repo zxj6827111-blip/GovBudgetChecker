@@ -1,0 +1,31 @@
+{
+ "version": "strict-roles-20261104",
+ "source": "outputs/unified_closeout_round3_review_codex_20261104/strict3_gold_context.json",
+ "note": "按冻结 gold note 给三条 strict 的出现点分角色：defect_occurrence 必须由 F 覆盖；required_operand 必须有来源绑定；correct_contrast 是正确对照，不要求另造 F。",
+ "targets": {
+  "MISS|GS-2024-06|C|GS-W01|1": {
+   "anchors": [
+    {"quote": "年初预算为0 元", "page": 37, "role": "defect_occurrence"},
+    {"quote": "支出决算为10,142.71 万元", "page": 37, "role": "correct_contrast"}
+   ],
+   "basis": "gold note: 第37页第2项“年初预算为0 元”漏“万”字；同句支出决算为 10,142.71 万元是正确对照。"
+  },
+  "MISS|GS-2024-05|C|GS-S03|0": {
+   "anchors": [
+    {"quote": "七、一般公共预算财政拨款“三公”经费支出决算情况说明", "page": 3, "role": "defect_occurrence"},
+    {"quote": "七、财政拨款“三公”经费支出决算情况说明", "page": 21, "role": "correct_contrast"}
+   ],
+   "basis": "gold note: 目录 p3 多“一般公共预算财政拨款”，正文 p21 与模板一致，是正确对照。"
+  },
+  "MISS|GS-2023-05|C|GS-N03|0": {
+   "anchors": [
+    {"quote": "本年支出合计74,982.82 万元", "page": 19, "role": "required_operand"},
+    {"quote": "基本支出3,962.80 万元", "page": 19, "role": "defect_occurrence"},
+    {"quote": "项目支出71,020.02 万元", "page": 19, "role": "defect_occurrence"},
+    {"quote": "占8.26%", "page": 19, "role": "defect_occurrence"},
+    {"quote": "占91.74%", "page": 19, "role": "defect_occurrence"}
+   ],
+   "basis": "gold note: 基本支出应为 3,962.80/74,982.82=5.28%，项目支出应为 94.72%；正文写 8.26%/91.74%。74,982.82 是占比分母（必要比较操作数），不是另一处总额句漏报。"
+  }
+ }
+}
