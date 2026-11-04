@@ -30,6 +30,7 @@ from .checklist_support import (
     report_kind,
     report_year,
     subject_scope,
+    unique_quote,
 )
 from .checklist_identity_rules import body_scope
 from .rule_outcome import RuleDeferred, RuleNotApplicable
@@ -103,11 +104,21 @@ class CMM020_ShareSum(Rule):
                         continue
                     expected = amount * Decimal(100) / total
                     if abs(expected - share) > Decimal("0.1"):
+                        denominator_start, denominator_end = flat_span(
+                            positions, total_match.start(), total_match.end())
+                        # 占比缺陷的必要比较来源：分母句与比例句都落在同一
+                        # finding 的位置引用里，不能只在 message 里提分母。
                         issues.append(issue_at(
                             self, f"{label}占比与金额不符：{raw_amount}万元 ÷ {total}万元 = "
                             f"{expected.quantize(Decimal('0.01'))}%，正文写{raw_share}%。",
                             page, text, start, end, severity="warn", checklist_item="C-08",
                             expected_share=str(expected.quantize(Decimal("0.01"))), actual_share=raw_share,
+                            table_refs=[
+                                {"page": page, "span": unique_quote(text, denominator_start, denominator_end),
+                                 "role": "denominator"},
+                                {"page": page, "span": unique_quote(text, start, end),
+                                 "role": "ratio"},
+                            ],
                         ))
         return issues
 
