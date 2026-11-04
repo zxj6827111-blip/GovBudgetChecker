@@ -144,7 +144,7 @@ def _numbering_issues(rule, doc, merged, offsets):
         if "一般公共预算" not in title or "基本支出" in title:
             continue
         scope = merged[start:end]
-        markers = list(re.finditer(r"(?:^|\n)\s*(?P<num>\d{1,2})[、.．](?!\d)", scope))
+        markers = list(re.finditer(r"(?:^|\n)\s*(?P<num>\d{1,2})[ \t\u3000]*[、.．](?!\d)", scope))
         if len(markers) < 4:
             continue
         for previous, current in zip(markers, markers[1:], strict=False):

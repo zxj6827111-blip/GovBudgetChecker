@@ -64,3 +64,20 @@ def test_cid_removal_keeps_disclosure_text_missing_when_absent():
     assert compact == "公务接待费支出决算15.45万元。主要用于公务接待。"
     batches = {key: pattern for key, _label, pattern in _COUNT_SPECS[2][3]}["reception_batches"]
     assert not batches.search(compact)
+
+
+def test_structure_class_check_importable_and_noops_without_fact_context():
+    from src.engine.rules_v33 import _structure_class_name_issues
+
+    assert _structure_class_name_issues(None, object(), {}) == []
+
+
+def test_narrative_name_similarity_locates_small_differences_only():
+    from src.engine.rules_v33 import _functional_names_similar
+
+    assert _functional_names_similar("政府办公厅及相关机构事务", "政府办公厅（室）及相关机构事务")
+    assert _functional_names_similar("其他行政事业单位离退休支出", "其他行政事业单位养老支出")
+    assert _functional_names_similar("卫生及健康支出", "卫生健康支出")
+    assert _functional_names_similar("行政运行费", "行政运行")
+    assert _functional_names_similar("其它行政事业单位养老支出", "其他行政事业单位养老支出")
+    assert not _functional_names_similar("一般公共服务支出", "公共安全支出")
