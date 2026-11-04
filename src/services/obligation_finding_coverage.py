@@ -297,6 +297,9 @@ def _operand_identity(operand: Mapping[str, Any]) -> Dict[str, Any]:
         "stage": _identity_text(_first_value(operand, ("stage", "budget_stage"))),
         "subject": _identity_text(_first_value(
             operand, ("org_name", "subject", "org", "organization"))),
+        "file_hash": _identity_text(_first_value(operand, ("file_hash", "source_file_hash"))),
+        "fact_version": _identity_text(_first_value(
+            operand, ("fact_version", "fact_context_version_token", "version_token"))),
     }
 
 
@@ -325,36 +328,64 @@ def _finding_identity(finding: Mapping[str, Any]) -> Dict[str, Any]:
         "stage": _identity_text(_first_value(location, ("stage", "budget_stage"))),
         "subject": _identity_text(_first_value(
             location, ("org_name", "subject_org", "organization", "org"))),
+        "file_hash": _identity_text(_first_value(
+            location, ("file_hash", "source_file_hash"))),
+        "fact_version": _identity_text(_first_value(
+            location, ("fact_version", "fact_context_version_token", "version_token"))),
     }
 
 
+#: 义务显式声明后，问题侧必须有值的身份维度（缺一即 fail-closed）。
+_REQUIRED_WHEN_DECLARED = ("year", "stage", "subject", "file_hash", "fact_version")
+
+
 def _identity_has_anchor(identity: Mapping[str, Any]) -> bool:
-    """至少有一个能定位到具体位置的强身份，才允许关闭金额义务。"""
-    return bool(
-        identity.get("relation")
-        or identity.get("page")
-        or identity.get("table_instance")
-        or (identity.get("table") and identity.get("row"))
-    )
+    """是否足以定位到具体检查位置。
+
+    单页不算强身份：同一页可能有多张表、多行、多个关系。至少要有关系 ID，
+    或“行 + (页/表/表实例)”，或“表实例 + 列”，才允许关闭金额义务。
+    """
+    if identity.get("relation"):
+        return True
+    if identity.get("row") and (identity.get("page") or identity.get("table")
+                                or identity.get("table_instance")):
+        return True
+    if identity.get("table_instance") and identity.get("column"):
+        return True
+    return False
 
 
 def _identity_agrees(operand: Mapping[str, Any], finding: Mapping[str, Any]) -> bool:
     """缺数位置与问题位置是否指向同一个检查关系/同一处事实。
 
     规则：
-    - 双方都声明关系 ID 时，必须完全相等（同页不同关系也不得关闭）；
+    - 双方都声明关系 ID 时，关系必须相等；相等也不豁免显式年度/主体/版本冲突；
     - 问题声明了关系、义务没有：无法证明同关系，按不覆盖处理；
     - 义务声明了关系、问题没有：问题缺少身份，按不覆盖处理；
+    - 义务显式声明的年度/阶段/主体/文件版本，问题侧必须同样声明且相等；
     - 双方都没有关系 ID 时，逐维比较双方都声明的维度；义务声明的维度在
       问题侧缺失即视为身份不足（fail-closed），不允许用文字相似补位；
-    - 至少命中一个强身份维度（页/表实例/表+行）才算同一位置。
+    - 至少命中一个强身份维度（关系 / 行+页表 / 表实例+列）才算同一位置。
     """
     operand_relation = str(operand.get("relation") or "")
     finding_relation = str(finding.get("relation") or "")
     if operand_relation or finding_relation:
         if not operand_relation or not finding_relation:
             return False
-        return operand_relation == finding_relation
+        if operand_relation != finding_relation:
+            return False
+        # 关系相同不代表同一材料版本/同一主体：显式声明必须一致。
+        for key in _REQUIRED_WHEN_DECLARED:
+            left, right = operand.get(key), finding.get(key)
+            if left in (None, "") and right in (None, ""):
+                continue
+            if left in (None, "") or right in (None, ""):
+                if left not in (None, ""):
+                    return False
+                continue
+            if left != right:
+                return False
+        return True
 
     strong = False
     operand_page = operand.get("page")
@@ -395,22 +426,14 @@ def _identity_agrees(operand: Mapping[str, Any], finding: Mapping[str, Any]) -> 
             return False
         strong = True
 
-    operand_year = operand.get("year")
-    finding_year = finding.get("year")
-    if operand_year and finding_year and operand_year != finding_year:
-        return False
+    for key in _REQUIRED_WHEN_DECLARED:
+        left, right = operand.get(key), finding.get(key)
+        if left in (None, ""):
+            continue
+        if right in (None, "") or left != right:
+            return False
 
-    operand_stage = str(operand.get("stage") or "")
-    finding_stage = str(finding.get("stage") or "")
-    if operand_stage and finding_stage and operand_stage != finding_stage:
-        return False
-
-    operand_subject = str(operand.get("subject") or "")
-    finding_subject = str(finding.get("subject") or "")
-    if operand_subject and finding_subject and operand_subject != finding_subject:
-        return False
-
-    return strong
+    return strong and _identity_has_anchor(operand)
 
 
 def _finding_matches_operand(
@@ -479,6 +502,10 @@ def obligation_covered_by_finding(
         for operand in (getattr(item, "missing_operands", None) or [])
         if isinstance(operand, dict)
     ]
+    if requires_amount and not operands:
+        # R-01：金额义务没有缺数位置就没有可核验的操作数身份。旧结果/缺字段
+        # 一律保持未完成；不得回退到“同规则+同名短语”关闭金额检查。
+        return False
     if requires_amount and operands:
         # 缺数位置携带身份：逐处证明。旧结果缺少完整身份时保持未完成，
         # 但仍可正常展示/读回，不因字段缺失而报错或降级成“已完成”。

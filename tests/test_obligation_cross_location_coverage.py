@@ -64,6 +64,7 @@ def _amount_finding(relation: str = RELATION, **location) -> dict:
         "message": "住房公积金表文金额不一致：说明100万元，表内90万元，相差10万元。",
         "location": {"page": 8, "subject_code": "2210201", "column": "决算数",
                      "table_code": "FIN_05_general_public_expenditure",
+                     "year": 2024, "org_name": "某单位", "stage": "决算",
                      "check_relation_id": relation, **location},
     }
     return {"rule_findings": [payload]}
@@ -133,11 +134,15 @@ def test_obligation_without_relation_cannot_use_relation_bearing_finding():
     assert obligation_covered_by_finding(item, result, _visible(result)) is False
 
 
-def test_legacy_obligation_without_operands_keeps_old_matching():
-    """历史结果没有缺数位置：维持冻结短语匹配（旧审核断言不改）。"""
+def test_amount_obligation_without_operands_stays_unfinished():
+    """R-01：金额义务没有缺数位置就没有操作数身份，旧结果保持未完成。
+
+    旧实现“无操作数时回退同规则+同名短语”已被独立复核判定违反接续契约，
+    本测试固定新行为；非金额义务的短语匹配另见 test_name_only_...。
+    """
     item = _obligation(missing_operands=[])
     result = _amount_finding()
-    assert obligation_covered_by_finding(item, result, _visible(result)) is True
+    assert obligation_covered_by_finding(item, result, _visible(result)) is False
 
 
 def test_operand_without_any_location_stays_unfinished():

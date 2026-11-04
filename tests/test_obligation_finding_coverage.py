@@ -21,12 +21,14 @@ def _item(
     *,
     status: str = "insufficient_data",
     checkers: list[str] | None = None,
+    operands: list[dict] | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         obligation_id="OBL-TXT-T5",
         status=status,
         detail=detail,
         checkers=list(checkers or ["V33-222", "V33-227"]),
+        missing_operands=list(operands or []),
     )
 
 
@@ -58,13 +60,32 @@ def test_same_finding_covers_obligation():
     ) is False
 
 
-def test_amount_finding_still_covers_amount_obligation():
-    """金额结论命中同一短语时仍可覆盖同一金额检查。"""
+def test_amount_obligation_without_operands_is_not_closed_by_phrase():
+    """R-01：金额义务没有缺数位置时，不得凭同规则+同名短语关闭。"""
     assert obligation_covered_by_finding(
         _item(),
         _result(_finding(rule_id="V33-222", tags=["V33-222"],
                          message="说明5金额与T5不一致（行政事业单位离退休）：表内差额 0.01 万元")),
         visible_issue_ids={"finding-1"},
+    ) is False
+
+
+def test_amount_obligation_with_same_identity_is_closed():
+    """正控：同一关系+同一操作数身份+金额结论时仍可关闭。"""
+    operands = [{
+        "source": "text", "role": "narrative_amount", "page": 8,
+        "row_key": "2080502", "column": "决算数", "stage": "决算", "year": 2024,
+        "check_relation_id": "V33-222:amount:1",
+    }]
+    finding = _finding(
+        rule_id="V33-222", tags=["V33-222"],
+        message="说明5金额与T5不一致（行政事业单位离退休）：表内差额 0.01 万元",
+        location={"page": 8, "subject_code": "2080502", "column": "决算数",
+                  "year": 2024, "stage": "决算",
+                  "check_relation_id": "V33-222:amount:1"},
+    )
+    assert obligation_covered_by_finding(
+        _item(operands=operands), _result(finding), visible_issue_ids={"finding-1"}
     ) is True
 
 

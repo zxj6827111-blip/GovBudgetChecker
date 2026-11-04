@@ -57,10 +57,25 @@ def test_unit_finding_does_not_close_amount_check():
     assert obligation_covered_by_finding(_item(), row, visible_issue_ids={"finding-1"}) is False
 
 
-def test_amount_finding_can_still_close_same_amount_check():
+def test_amount_finding_can_still_close_same_amount_check_with_identity():
+    """正控：只有同关系+同操作数身份的金额结论才能关闭金额检查。"""
+    item = _item(missing_operands=[{
+        "source": "text", "role": "narrative_amount", "page": 8,
+        "row_key": "2080502", "column": "决算数", "stage": "决算",
+        "check_relation_id": "V33-222:amount:1",
+    }])
+    row = _finding("V33-222",
+                   message="说明5金额与T5不一致（行政事业单位离退休）：表内差额 0.01 万元",
+                   location={"page": 8, "subject_code": "2080502", "column": "决算数",
+                             "stage": "决算", "check_relation_id": "V33-222:amount:1"})
+    assert obligation_covered_by_finding(item, row, visible_issue_ids={"finding-1"}) is True
+    assert blocking_coverage_obligations([item], row, visible_issue_ids={"finding-1"}) == []
+
+
+def test_amount_finding_without_operand_identity_cannot_close():
+    """R-01：没有缺数位置的金额义务保持未完成，哪怕正文短语完全一致。"""
     row = _finding("V33-222", message="说明5金额与T5不一致（行政事业单位离退休）：表内差额 0.01 万元")
-    assert obligation_covered_by_finding(_item(), row, visible_issue_ids={"finding-1"}) is True
-    assert blocking_coverage_obligations([_item()], row, visible_issue_ids={"finding-1"}) == []
+    assert obligation_covered_by_finding(_item(), row, visible_issue_ids={"finding-1"}) is False
 
 
 def test_same_v33222_unit_subcheck_cannot_close_amount_check():

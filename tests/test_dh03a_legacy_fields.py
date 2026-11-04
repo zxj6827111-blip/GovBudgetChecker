@@ -171,11 +171,11 @@ def _finding_row():
         "rule_findings": [
             {
                 "id": "finding-1",
-                "rule_id": "V33-222",
-                "tags": ["V33-222"],
-                "severity": "medium",
+                "rule_id": "V33-227",
+                "tags": ["V33-227"],
+                "severity": "low",
                 "title": "说明款级科目名称不一致",
-                "message": "说明5金额与T5不一致（行政事业单位离退休）：表内差额 0.01 万元",
+                "message": "表格“行政事业单位养老支出”，说明“行政事业单位离退休”",
                 "location": {"actual_name": "行政事业单位离退休"},
             }
         ]
@@ -183,9 +183,11 @@ def _finding_row():
 
 
 def _item(**overrides):
+    # DH-03a 只验证“冻结短语 vs detail 回退”的消费路径，用非金额名称义务；
+    # 金额义务无操作数必须保持未完成由 R-01 测试单独固定。
     base = {
         "status": "insufficient_data",
-        "checkers": ["V33-222"],
+        "checkers": ["V33-227"],
         "detail": "无引号原文",
     }
     base.update(overrides)
