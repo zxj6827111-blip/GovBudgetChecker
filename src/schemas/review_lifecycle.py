@@ -144,6 +144,9 @@ RESOLVED_OBLIGATION_DECISIONS: frozenset = frozenset(
 #: 业务错误码（HTTP 409 + ``detail.error``），沿用 ``review_*`` 前缀风格。
 #: 没有活动会话时不能补核：决定必须挂在"当前这一次复核"上，先开始再处理。
 ERROR_REVIEW_NOT_ACTIVE = "review_not_active"
+#: 请求没有携带分析依据：补核结论必须绑定到写回时读到的分析代际；缺失/空值
+#: 不能跳过代际保护（HTTP 409）。
+ERROR_ANALYSIS_BASIS_REQUIRED = "analysis_basis_required"
 #: 客户端携带的分析依据已过期：请求是在旧分析代际上读到的页面里发出的，
 #: 即使当前另有活动会话，也不能把旧依据下的结论写进新会话。必须刷新到
 #: 当前 ``analysis_basis_token`` 后重试（HTTP 409）。
@@ -358,9 +361,10 @@ class ObligationDecisionRequest(BaseModel):
       （并发红线，任务书 § 十五）；
     - ``job_uuid`` 与 ``ReviewActionRequest`` 的口径一致：只被当作"待核对的声明"，
       服务端自行验证它属于这条槽位且正是当前分析。
-    - ``analysis_basis_token`` 是客户端读到的分析代际；携带时必须与当前分析一致，
-      否则 409 ``analysis_basis_stale``。不传时保持旧客户端兼容，仍由活动会话
-      的失效检查兜底。
+    - ``analysis_basis_token`` 是客户端读到的分析代际；**必须携带**。缺失/空值
+      由服务层 409 ``analysis_basis_required`` 拒收；与当前分析不一致则 409
+      ``analysis_basis_stale``。保留 Optional 只是为了让服务层返回结构化 409，
+      不是允许无依据写入。
     """
 
     decision: str
@@ -508,6 +512,7 @@ __all__ = [
     "OBLIGATION_DECISIONS",
     "RESOLVED_OBLIGATION_DECISIONS",
     "ERROR_REVIEW_NOT_ACTIVE",
+    "ERROR_ANALYSIS_BASIS_REQUIRED",
     "ERROR_ANALYSIS_BASIS_STALE",
     "ERROR_OBLIGATION_NOT_BLOCKING",
     "ERROR_OBLIGATION_DECISION_CONFLICT",

@@ -83,6 +83,7 @@ from src.schemas.review_lifecycle import (
     BLOCKER_REVIEW_ALREADY_COMPLETED,
     BLOCKER_REVIEW_NOT_STARTED,
     ERROR_COMPLETION_BLOCKED,
+    ERROR_ANALYSIS_BASIS_REQUIRED,
     ERROR_ANALYSIS_BASIS_STALE,
     ERROR_OBLIGATION_DECISION_CONFLICT,
     ERROR_OBLIGATION_DECISION_EVIDENCE_REQUIRED,
@@ -1665,18 +1666,27 @@ async def decide_obligation(
         # 就变得不成立（在事务内直接抛错会把纠正一起回滚掉）。
         await _invalidate_stale_sessions(conn, state, effects=effects, actor=actor)
 
-        # 客户端若携带读到的分析依据，必须与当前代际一致。这条检查发生在
-        # 会话失效处理之后、任何写库之前：新会话已经存在时，旧页面仍可能
-        # 发回旧 basis，此时不能把旧结论写进新会话（R2-06 负控）。
+        # 客户端必须携带读到的分析依据。缺失/空值不能跳过代际保护：
+        # 新会话已经激活时，旧页面请求与当前请求在字段上无法区分，只有
+        # basis 能证明它读的是哪一代分析。先拒收，再谈旧页面刷新（R3-01）。
         presented_basis = str(analysis_basis_token or "").strip()
-        basis_stale = bool(presented_basis) and presented_basis != str(state.basis_token or "")
-        active = None if basis_stale else state.active_session
-        if basis_stale:
-            rejection = ReviewLifecycleError(
+        if not presented_basis:
+            basis_error = ReviewLifecycleError(
+                409,
+                ERROR_ANALYSIS_BASIS_REQUIRED,
+                "缺少分析依据：请刷新到当前分析版本后再写回复核结论",
+            )
+        elif presented_basis != str(state.basis_token or ""):
+            basis_error = ReviewLifecycleError(
                 409,
                 ERROR_ANALYSIS_BASIS_STALE,
                 "分析依据已更新：请刷新到当前分析版本后再写回复核结论",
             )
+        else:
+            basis_error = None
+        active = None if basis_error is not None else state.active_session
+        if basis_error is not None:
+            rejection = basis_error
         elif active is None:
             if state.completed_session is not None:
                 # 复核完成后补核同样锁定（与"复核完成后问题不可再改"同源）。

@@ -860,6 +860,15 @@ export function ReviewWorkbenchPage() {
         return false;
       }
       const slotId = reviewContext.review.slot_id;
+      // 页面必须把自己实际读到的分析代际一并提交；否则重分析后旧页面
+      // 仍可能把结论写进新会话。basis 缺失时不发请求，提示刷新。
+      const basisToken = String(
+        reviewContext.review.current_analysis.analysis_basis_token ?? "",
+      ).trim();
+      if (!basisToken) {
+        setReviewNotice("当前复核分析依据缺失，请刷新页面后再提交。");
+        return false;
+      }
       setReviewNotice(null);
       try {
         const response = await fetch(
@@ -872,6 +881,7 @@ export function ReviewWorkbenchPage() {
               note: note.trim() || undefined,
               evidence_reference: evidenceReference.trim() || undefined,
               job_uuid: jobId,
+              analysis_basis_token: basisToken,
               ...(item.decision_revision !== null
                 ? { expected_revision: item.decision_revision }
                 : {}),

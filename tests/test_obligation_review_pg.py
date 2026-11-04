@@ -43,12 +43,27 @@ from fastapi import HTTPException
 
 from src.db.migrations import MIGRATIONS, run_migrations
 from src.schemas.review_lifecycle import (
+    ERROR_ANALYSIS_BASIS_REQUIRED,
     ERROR_ANALYSIS_BASIS_STALE,
     ERROR_COMPLETION_BLOCKED,
 )
 from src.services import review_lifecycle_service, review_obligation_store
 
 pytestmark = pytest.mark.real_database
+
+
+async def _decide_with_current_basis(conn, slot_id, **kwargs):
+    """测试其他行为时自动带上当前分析依据；basis 专项测试显式传值。
+
+    R3-01 起服务层要求 basis 必填，缺失/空值 409。除 basis 专项用例外，
+    本文件测的是门禁/并发/审计，不应因缺测试脚手架字段而改断言语义。
+    """
+    state = await review_lifecycle_service.load_review_by_slot(conn, slot_id)
+    kwargs.setdefault(
+        "analysis_basis_token",
+        state.current_analysis.analysis_basis_token,
+    )
+    return await review_lifecycle_service.decide_obligation(conn, slot_id, **kwargs)
 
 MIGRATION_ID = "2026-09-23_0021_review_obligation_decisions"
 
@@ -381,7 +396,7 @@ async def test_manual_decision_unblocks_completion(review_db):
             ("blocking_obligations", 2)
         ]
 
-        first = await review_lifecycle_service.decide_obligation(
+        first = await _decide_with_current_basis(
             conn,
             ctx["slot_id"],
             obligation_id="OBL-A",
@@ -397,7 +412,7 @@ async def test_manual_decision_unblocks_completion(review_db):
             ("blocking_obligations", 1)
         ]
 
-        second = await review_lifecycle_service.decide_obligation(
+        second = await _decide_with_current_basis(
             conn,
             ctx["slot_id"],
             obligation_id="OBL-B",
@@ -460,8 +475,23 @@ async def test_stale_analysis_basis_is_rejected_even_with_active_session(review_
         current_basis = str(state.current_analysis.analysis_basis_token or "")
         assert current_basis
 
-        with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
+        # 缺失/空 basis 不能跳过代际保护：与旧 token 一样 409，但错误码不同，
+        # 前端据此提示“刷新到当前分析版本”。
+        with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as missing:
             await review_lifecycle_service.decide_obligation(
+                conn,
+                ctx["slot_id"],
+                obligation_id="OBL-A",
+                decision="verified_ok",
+                actor="reviewer-a",
+                note="旧页面无依据写回",
+                analysis_basis_token="",
+            )
+        assert missing.value.status_code == 409
+        assert missing.value.error == ERROR_ANALYSIS_BASIS_REQUIRED
+
+        with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
+            await _decide_with_current_basis(
                 conn,
                 ctx["slot_id"],
                 obligation_id="OBL-A",
@@ -473,7 +503,7 @@ async def test_stale_analysis_basis_is_rejected_even_with_active_session(review_
         assert excinfo.value.status_code == 409
         assert excinfo.value.error == ERROR_ANALYSIS_BASIS_STALE
 
-        accepted = await review_lifecycle_service.decide_obligation(
+        accepted = await _decide_with_current_basis(
             conn,
             ctx["slot_id"],
             obligation_id="OBL-A",
@@ -495,7 +525,7 @@ async def test_decisions_belong_to_the_session(review_db):
             conn, ctx["slot_id"], actor="reviewer-a"
         )
         old_session = started.session.review_session_id
-        await review_lifecycle_service.decide_obligation(
+        await _decide_with_current_basis(
             conn, ctx["slot_id"], obligation_id="OBL-A", decision="verified_ok",
             actor="reviewer-a", note="已逐项核对",
         )
@@ -523,7 +553,7 @@ async def test_rejected_decision_entry_points(review_db):
 
         # 还没开始复核 ⇒ 409 review_not_active
         with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
-            await review_lifecycle_service.decide_obligation(
+            await _decide_with_current_basis(
                 conn, ctx["slot_id"], obligation_id="OBL-A", decision="verified_ok",
                 actor="r", note="已核对，无问题",
             )
@@ -533,7 +563,7 @@ async def test_rejected_decision_entry_points(review_db):
 
         # 未知义务 ⇒ 404
         with pytest.raises(HTTPException) as excinfo404:
-            await review_lifecycle_service.decide_obligation(
+            await _decide_with_current_basis(
                 conn, ctx["slot_id"], obligation_id="OBL-NOPE", decision="verified_ok",
                 actor="r", note="已核对",
             )
@@ -541,19 +571,19 @@ async def test_rejected_decision_entry_points(review_db):
 
         # 非法决定值 ⇒ 400（路由层额外还有 422 的参数校验兜底）
         with pytest.raises(HTTPException) as excinfo400:
-            await review_lifecycle_service.decide_obligation(
+            await _decide_with_current_basis(
                 conn, ctx["slot_id"], obligation_id="OBL-A", decision="approved", actor="r"
             )
         assert excinfo400.value.status_code == 400
 
         # 决定之后完成；已完成 ⇒ 409 review_completed_locked
-        await review_lifecycle_service.decide_obligation(
+        await _decide_with_current_basis(
             conn, ctx["slot_id"], obligation_id="OBL-A", decision="verified_ok",
             actor="r", note="已核对，无问题",
         )
         await review_lifecycle_service.complete_review(conn, ctx["slot_id"], actor="r")
         with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
-            await review_lifecycle_service.decide_obligation(
+            await _decide_with_current_basis(
                 conn, ctx["slot_id"], obligation_id="OBL-A", decision="not_applicable",
                 actor="r", note="本材料不涉及该项",
             )
@@ -600,7 +630,7 @@ async def test_non_blocking_obligation_cannot_be_decided(review_db):
         )
         await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
         with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
-            await review_lifecycle_service.decide_obligation(
+            await _decide_with_current_basis(
                 conn, ctx["slot_id"], obligation_id="OBL-DONE", decision="verified_ok",
                 actor="r", note="已核对",
             )
@@ -623,7 +653,7 @@ async def test_concurrent_first_decisions_do_not_overwrite(review_db):
 
     async def _decide(actor: str, decision: str):
         async with _conn(schema, pool) as conn:
-            return await review_lifecycle_service.decide_obligation(
+            return await _decide_with_current_basis(
                 conn, ctx["slot_id"], obligation_id="OBL-A", decision=decision,
                 actor=actor, note=f"{actor} 的补核依据",
             )
@@ -656,11 +686,11 @@ async def test_stale_revision_update_is_rejected(review_db):
     async with _conn(schema, pool) as conn:
         ctx = await _make_reviewable_slot(conn, blocking_ids=["OBL-A"])
         await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="reviewer-a")
-        first = await review_lifecycle_service.decide_obligation(
+        first = await _decide_with_current_basis(
             conn, ctx["slot_id"], obligation_id="OBL-A", decision="verified_ok",
             actor="reviewer-a", note="已核对，无问题",
         )
-        updated = await review_lifecycle_service.decide_obligation(
+        updated = await _decide_with_current_basis(
             conn,
             ctx["slot_id"],
             obligation_id="OBL-A",
@@ -674,7 +704,7 @@ async def test_stale_revision_update_is_rejected(review_db):
 
         # 拿已经作废的 revision=1 再来 ⇒ 409 且答案没有变
         with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
-            await review_lifecycle_service.decide_obligation(
+            await _decide_with_current_basis(
                 conn,
                 ctx["slot_id"],
                 obligation_id="OBL-A",
@@ -686,7 +716,7 @@ async def test_stale_revision_update_is_rejected(review_db):
         assert excinfo.value.error == "obligation_decision_conflict"
         # 不带 revision 改写 ⇒ 同样 409
         with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
-            await review_lifecycle_service.decide_obligation(
+            await _decide_with_current_basis(
                 conn,
                 ctx["slot_id"],
                 obligation_id="OBL-A",
@@ -718,11 +748,11 @@ async def test_decision_audits_are_written_once_after_commit(review_db, monkeypa
     async with _conn(schema, pool) as conn:
         ctx = await _make_reviewable_slot(conn, blocking_ids=["OBL-A"])
         await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
-        await review_lifecycle_service.decide_obligation(
+        await _decide_with_current_basis(
             conn, ctx["slot_id"], obligation_id="OBL-A", decision="verified_ok",
             actor="r", note="已核对，无问题", evidence_reference="第 12 页",
         )
-        await review_lifecycle_service.decide_obligation(
+        await _decide_with_current_basis(
             conn,
             ctx["slot_id"],
             obligation_id="OBL-A",
@@ -767,7 +797,7 @@ async def test_resolved_decisions_require_evidence(review_db):
         ]
         for case in cases:
             with pytest.raises(HTTPException) as excinfo:
-                await review_lifecycle_service.decide_obligation(
+                await _decide_with_current_basis(
                     conn, ctx["slot_id"], obligation_id="OBL-A", actor="r", **case
                 )
             assert excinfo.value.status_code == 422, case
@@ -785,25 +815,25 @@ async def test_pending_and_supported_resolved_decisions_are_allowed(review_db):
         ctx = await _make_reviewable_slot(conn, blocking_ids=["OBL-A", "OBL-B", "OBL-C", "OBL-D"])
         await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
 
-        ok_only_evidence = await review_lifecycle_service.decide_obligation(
+        ok_only_evidence = await _decide_with_current_basis(
             conn, ctx["slot_id"], obligation_id="OBL-A",
             decision="verified_ok", actor="r", evidence_reference="表 8 合计行",
         )
         assert ok_only_evidence.decision.decision == "verified_ok"
 
-        issue_with_note = await review_lifecycle_service.decide_obligation(
+        issue_with_note = await _decide_with_current_basis(
             conn, ctx["slot_id"], obligation_id="OBL-B",
             decision="verified_issue", actor="r", note="确认：合计与分项之和不一致",
         )
         assert issue_with_note.decision.decision == "verified_issue"
 
-        na_with_note = await review_lifecycle_service.decide_obligation(
+        na_with_note = await _decide_with_current_basis(
             conn, ctx["slot_id"], obligation_id="OBL-C",
             decision="not_applicable", actor="r", note="本单位年度内无三公经费支出",
         )
         assert na_with_note.decision.decision == "not_applicable"
 
-        reset_pending = await review_lifecycle_service.decide_obligation(
+        reset_pending = await _decide_with_current_basis(
             conn, ctx["slot_id"], obligation_id="OBL-D",
             decision="pending", actor="r",  # pending 允许零依据（只是置回待处理）
         )
@@ -842,7 +872,7 @@ async def test_stale_job_claim_is_rejected_without_mutation(review_db):
                 conn, ctx["slot_id"], actor="r", job_uuid="job-which-is-not-current"
             )
         with pytest.raises(review_lifecycle_service.ReviewLifecycleError):
-            await review_lifecycle_service.decide_obligation(
+            await _decide_with_current_basis(
                 conn, ctx["slot_id"], obligation_id="OBL-A", decision="verified_ok",
                 actor="r", note="已核对", job_uuid="job-which-is-not-current",
             )
