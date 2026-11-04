@@ -8157,16 +8157,18 @@ class R33227_Narrative5_T5_NameConsistency(Rule):
                 table_key = re.sub(r"\s+", "", table_entry_name)
                 # T5 单元格抽断（表名是说明名的前缀）与页边界断词（说明名只剩
                 # 表名后缀）都不是名称错误，不能据此报不一致。
-                # 仅“行政运行/行政运行费”这类在完整词干后多写“费”的保留报告；
-                # “职业年金缴/缴费”是表内单元格断在下半段，仍按抽断跳过。
-                extra = narrative_name[len(table_key):] if narrative_name.startswith(table_key) else ""
+                # 字符串前后缀本身不是截断证据：先说清“是否真截断”，再逐字判错。
+                # 表内名是说明名的前缀时，只有同材料同编码的独立完整形态（其他
+                # 功能分类表/事实）才能证明 T5 单元格被抽断。
                 if (table_key and len(table_key) < len(narrative_name)
                         and narrative_name.startswith(table_key)
-                        and not (extra == "费" and table_key.endswith("行"))):
+                        and _independent_full_name_for_code(doc, code, table_key)):
                     continue
-                # 页边界把说明名称切成表名后缀：也是排版断词，不是少字。
+                # 说明名只剩表名后缀时，只有页边界断词证据（本页以该名称开头、
+                # 上一页以缺失前缀结尾）才按排版断词跳过；否则按少字报 low。
                 if (table_key and len(narrative_name) < len(table_key)
-                        and table_key.endswith(narrative_name)):
+                        and table_key.endswith(narrative_name)
+                        and _narrative_name_page_split(doc, mention, table_key)):
                     continue
                 dedupe_key = (mention.get("page"), normalize_text(narrative_name))
                 if dedupe_key in seen_names:
@@ -8254,6 +8256,56 @@ class R33227_Narrative5_T5_NameConsistency(Rule):
         issues.extend(_structure_class_name_issues(self, doc, table_entries))
         return issues
 
+
+
+def _independent_full_name_for_code(doc: Document, code: str, table_key: str) -> bool:
+    """同材料、同编码是否存在比 T5 条目更完整的独立名称。
+
+    只有独立来源（财政事实或解析产物的其他表/片段）给出“以表内名开头且更长”
+    的名称，才可认定 T5 单元格抽断；T5 自身重复出现不算独立证据。
+    """
+    key = str(code or "")
+    if not key or not table_key:
+        return False
+    names = set()
+    context = getattr(doc, "fact_context", None)
+    for fact in getattr(context, "facts", []) or []:
+        if str(getattr(fact, "subject_code", None) or "") == key and getattr(fact, "subject_name", None):
+            names.add(re.sub(r"\s+", "", str(fact.subject_name)))
+    artifact = getattr(doc, "parse_artifact", None)
+    for collection in ("logical_tables", "physical_fragments", "table_fragments"):
+        for table in getattr(artifact, collection, []) or []:
+            for row in getattr(table, "rows", []) or []:
+                if str(getattr(row, "code", "") or "") != key:
+                    continue
+                for cell in getattr(row, "cells", []) or []:
+                    text = re.sub(r"\s+", "", str(getattr(cell, "text", "") or ""))
+                    if text and not text.isdigit():
+                        names.add(text)
+    return any(name != table_key and name.startswith(table_key) and len(name) > len(table_key)
+               for name in names)
+
+
+def _narrative_name_page_split(doc: Document, mention: dict, table_key: str) -> bool:
+    """说明名被页边界切成表名后缀的独立证据。"""
+    narrative = re.sub(r"\s+", "", str(mention.get("name") or ""))
+    if not narrative or not table_key.endswith(narrative) or len(narrative) >= len(table_key):
+        return False
+    try:
+        page = int(str(mention.get("page")).strip())
+    except (TypeError, ValueError):
+        return False
+    pages = getattr(doc, "page_texts", None) or []
+    if not 1 <= page <= len(pages):
+        return False
+    current = re.sub(r"\s+", "", str(pages[page - 1] or ""))
+    if not current.startswith(narrative):
+        return False
+    missing = table_key[: -len(narrative)]
+    if page < 2:
+        return False
+    previous = re.sub(r"\s+", "", str(pages[page - 2] or ""))
+    return bool(previous and previous.endswith(missing))
 
 
 def _functional_table_name_span(doc: Document, page: int, code: str, name: str) -> str:
