@@ -89,10 +89,22 @@ def norm(text: Any) -> str:
     return re.sub(r"\s+", "", str(text or ""))
 
 
+def _canonical_amount(value: Any) -> str:
+    """金额数值规范化：100.00 / 100.000 / 1e2 都是 100。"""
+    text = str(value).replace(",", "").replace("，", "")
+    try:
+        number = Decimal(text)
+    except (InvalidOperation, ValueError):
+        return text
+    return format(number.normalize(), "f")
+
+
 def _identity(item: Dict[str, Any]) -> Dict[str, Any]:
     """实体身份：关系、事实/单元格、操作数、证据引文。
 
     相似度只用于检索候选；这里用可核验的身份字段判断是否仍是同一实体。
+    金额同时保留原文与规范化值：显示精度变化（100.00/100.000）不能证明
+    实体不同，但“纳入12项”这类小整数计数也不应当金额身份。
     """
     raw = item.get("_raw") or {}
     location = item.get("location") if isinstance(item.get("location"), dict) else {}
@@ -108,10 +120,12 @@ def _identity(item: Dict[str, Any]) -> Dict[str, Any]:
         for key in ("relation_id", "operand_id", "fact_uid", "source_cell_id"):
             if evidence.get(key):
                 cells.add(f"{key}:{evidence[key]}")
+    raw_amounts = set(_amount_tokens(item.get("message")))
     return {
         "relations": relations,
         "cells": cells,
-        "amounts": set(_amount_tokens(item.get("message"))),
+        "raw_amounts": raw_amounts,
+        "amounts": {_canonical_amount(value) for value in raw_amounts},
         "quotes": {norm(q) for q in item.get("quotes") or [] if norm(q)},
         "pages": set(cmp_pages(item)),
     }
@@ -132,16 +146,20 @@ def cmp_pages(item: Dict[str, Any]) -> List[int]:
 
 
 def _significant_amounts(values) -> set:
-    """金额量级 token；排除“纳入12项”“1处”这类小整数计数。"""
+    """金额量级 token；排除“纳入12项”“1处”这类小整数计数。
+
+    返回值已规范化：100.00 与 100.000 都是 100，显示精度变化不能证明
+    实体不同；小整数计数（12/1）仍被排除。
+    """
     result = set()
     for value in values:
         text = str(value)
         try:
-            number = Decimal(text)
+            number = Decimal(text.replace(",", "").replace("，", ""))
         except (InvalidOperation, ValueError):
             continue
         if "." in text or abs(number) >= 1000 or abs(number) < 1:
-            result.add(text)
+            result.add(_canonical_amount(text))
     return result
 
 
@@ -152,7 +170,7 @@ def _same_entity(baseline: Dict[str, Any], candidate: Dict[str, Any]):
         return bool(left["relations"] & right["relations"])
     if left["cells"] and right["cells"]:
         return bool(left["cells"] & right["cells"])
-    baseline_amounts = _significant_amounts(left["amounts"])
+    baseline_amounts = _significant_amounts(left["raw_amounts"])
     if baseline_amounts and right["amounts"]:
         overlap = baseline_amounts & right["amounts"]
         if not overlap:

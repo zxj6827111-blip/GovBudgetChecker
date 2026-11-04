@@ -23,9 +23,9 @@ from pathlib import Path
 import pymupdf
 
 RUN = Path("/Volumes/workSSD/software development/GovBudgetChecker/outputs/gold_b1_20261103/run_20261103T150928")
-OUT = RUN / "revisions/round2_annotation_revision"
+OUT = RUN / "revisions/round4_annotation_revision"
 ANNOTATIONS = RUN / "annotations"
-CHECKER = Path("/Volumes/workSSD/software development/GovBudgetChecker/outputs/unified_closeout_round3_20261104/tools/decimal_checks_v2.py")
+CHECKER = Path(__file__).with_name("decimal_checks_v2.py")
 PDFS = json.loads((RUN / "b1_pdfs.json").read_text(encoding="utf-8"))
 
 #: 初标里有整句 quote，但 Decimal 需要“单一数值+精确单位”的来源；这里只
@@ -43,6 +43,7 @@ ADDED_VALUES = {
     ("B1-2025-U01", "GS-N07"): [
         {"name": "公务用车费占比（精确片段）", "page": 21, "quote": "占97.11%", "unit": "%"},
         {"name": "出国费占比（精确片段）", "page": 21, "quote": "占0.00%", "unit": "%"},
+        {"name": "接待费占比（精确片段）", "page": 21, "quote": "公务接待费支出决算0.00 万元，占0.00%", "unit": "%"},
     ],
 }
 
@@ -154,7 +155,7 @@ def build_spec() -> dict:
             "expected": "6745.65", "expected_unit": "万元",
             "reported": "6745.63", "reported_unit": "万元",
             "reported_source": {"page": 24, "quote": "6,745.63", "unit": "万元",
-                                "row": "说明·基本支出", "column": "正文", "table": "六、基本支出说明"},
+                                "row": "说明·基本支出", "column": "正文", "table": "六、一般公共预算财政拨款基本支出决算情况说明"},
             "formula": "5,350.25 + 1,395.40 = 6,745.65；说明 6,745.63；差 0.02 > 多项包络 0.015（基础容差 0.01）",
             "applicable": True, "applicability_note": "",
         },
@@ -210,12 +211,12 @@ def build_spec() -> dict:
             "operands": [
                 operand("0.00", 21, "占0.00%", "%", "出国费占比", "正文", "七、财政拨款“三公”经费支出决算情况说明"),
                 operand("97.11", 21, "占97.11%", "%", "公务用车费占比", "正文", "七、财政拨款“三公”经费支出决算情况说明"),
-                operand("0.00", 21, "占0.00%", "%", "接待费占比", "正文", "七、财政拨款“三公”经费支出决算情况说明"),
+                {**operand("0.00", 21, "公务接待费支出决算0.00 万元，占0.00%", "%", "接待费占比", "正文", "七、财政拨款“三公”经费支出决算情况说明"), "quote_value_selector": "占"},
             ],
             "expected": "97.11", "expected_unit": "%",
             "reported": "100.00", "reported_unit": "%",
-            "reported_source": {"source_kind": "rule_constant", "unit": "%",
-                                "rule_basis": "清单 C-08：并列列示的各项占比合计须为 100%（±0.1 个百分点）"},
+            "reported_source": {"source_kind": "rule_constant",
+                                "rule_constant_id": "percent_sum_100", "unit": "%"},
             "formula": "0.00 + 97.11 + 0.00 = 97.11；应有合计 100.00；差 2.89 个百分点。说明：97.11 是 4.37/4.50 的完成预算比例，不是三公内部结构占比。",
             "applicable": True, "applicability_note": "",
         },
@@ -223,7 +224,7 @@ def build_spec() -> dict:
             "sample_id": "B1-2025-D01", "check_id": "GS-N07", "item": "出国费表vs说明",
             "kind": "amount", "n": 1,
             "operands": [
-                operand("457.66", 30, "457.66 万元", "万元", "说明金额（总体）", "正文", "七、“三公”经费支出决算情况说明"),
+                operand("457.66", 30, "457.66 万元", "万元", "说明金额（总体）", "正文", "七、财政拨款“三公”经费支出决算情况说明"),
             ],
             "expected": "457.66", "expected_unit": "万元",
             "reported": "457.69", "reported_unit": "万元",

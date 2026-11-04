@@ -36,6 +36,21 @@ _MONEY_TO_WAN = {
     "元": Decimal("0.0001"),
 }
 
+#: 冻结规则常量白名单：只有这里列出的常量才能作为“应有值”来源。
+#: 不允许任意 rule_basis 字符串把材料操作数/reported 伪装成常量。
+RULE_CONSTANTS = {
+    "percent_sum_100": {
+        "value": Decimal("100"),
+        "unit": "%",
+        "allowed_kinds": {"percent"},
+        "allowed_roles": {"reported"},
+        "basis": "清单 C-08：并列列示的各项占比合计须为 100%（±0.1 个百分点）",
+    },
+}
+
+#: 列身份词：值名里出现这些词时，声明的列必须与之匹配。
+_COLUMN_TOKENS = ("预算", "决算", "基本支出", "项目支出")
+
 
 def _dec(value) -> Optional[Decimal]:
     try:
@@ -73,34 +88,186 @@ def _decimals_of(text: str) -> Optional[int]:
 
 def _annotation_values(annotation: dict) -> Dict[str, List[dict]]:
     result: Dict[str, List[dict]] = {}
+    basic = annotation.get("basic") or {}
+    tables = basic.get("tables") or []
+    sections = basic.get("sections") or []
+    document_pages = basic.get("pages")
     for check in annotation.get("checks") or []:
         rows = []
         for item in check.get("items") or []:
             for value in item.get("values") or []:
                 if isinstance(value, dict):
-                    rows.append(value)
+                    record = dict(value)
+                    record["_item_label"] = str(item.get("label") or "")
+                    record["_tables"] = tables
+                    record["_sections"] = sections
+                    record["_document_pages"] = document_pages
+                    rows.append(record)
         result[check.get("check_id")] = rows
     return result
 
 
-def _match_source(source: Optional[dict], expected_value: Decimal, values: List[dict],
-                  declared_unit: str = "") -> Tuple[bool, str, str]:
-    """页码+引文必须存在；返回 (ok, 单位, 原因)，单位无法解析时 ok=False。
+def _norm_identity(text: Any) -> str:
+    return re.sub(r"[\s（）()【】\[\]、，,。；;：:·\-—_/]+", "", str(text or ""))
 
-    ``source_kind=rule_constant`` 只用于“应有值”本身不是原文数值的规则常量
-    （如并列占比合计 100%）；必须给出规则依据和单位，不能拿它替代材料数值。
+
+def _identity_tokens(text: str) -> List[str]:
+    tokens = re.split(r"[\s（）()【】\[\]、，,。；;：:·\-—_/]+", str(text or ""))
+    return [token for token in tokens
+            if token and (len(token) >= 2 or token.isdigit())]
+
+
+def _row_identity_score(row: str, value: dict) -> int:
+    """行身份分档：3=行名整体命中值名；2=全部 token 命中值名；
+    1=token 需借 item label 才能命中；0=不匹配。
+
+    分档用于同页同数多行时选唯一值：优先整体命中，避免“合计”行借
+    item label 里的“合计/基本支出”等字样误配到“小计/项目支出”行。
+    """
+    full = _norm_identity(row)
+    name = _norm_identity(value.get("name") or "")
+    combined = _norm_identity(
+        f"{value.get('_item_label') or ''} {value.get('name') or ''}")
+    if not full:
+        return 0
+    if full in name or name in full:
+        return 3
+    tokens = _identity_tokens(row)
+    if tokens and all(_norm_identity(token) in name for token in tokens):
+        return 2
+    if tokens and all(_norm_identity(token) in combined for token in tokens):
+        return 1
+    return 0
+
+
+def _row_identity_ok(row: str, value: dict) -> bool:
+    return _row_identity_score(row, value) > 0
+
+
+def _column_identity_ok(column: str, value: dict) -> bool:
+    column_text = str(column or "").strip()
+    if not column_text or column_text in {"正文", "合计"}:
+        return True
+    name = str(value.get("name") or "")
+    present = [token for token in _COLUMN_TOKENS if token in name]
+    if not present:
+        return True
+    return any(token in column_text for token in present)
+
+
+def _page_in_range(page: int, start: int, end: int) -> bool:
+    return isinstance(page, int) and isinstance(start, int) and start <= page <= end
+
+
+def _table_identity_ok(table: str, page: int, value: dict) -> Tuple[bool, str]:
+    """表/章节身份：名称匹配且页码落在该表/章节范围内。
+
+    表格用“下一张表的起始页 - 1”作为结束；章节常在同页开始多个小节，
+    正文来源不按下一节硬切，只要求页 >= 章节起始页（行/列身份另行约束）。
+    """
+    table_text = str(table or "").strip()
+    if not table_text:
+        return False, "缺少表/章节身份"
+    tables = value.get("_tables") or []
+    sections = value.get("_sections") or []
+    pages = value.get("_document_pages")
+    is_prose = table_text in {"正文", "说明"} or "说明" in table_text
+
+    def name_match(name: str) -> bool:
+        target = _norm_identity(table_text)
+        normalized = _norm_identity(name)
+        if not normalized or not target:
+            return False
+        if normalized in target or target in normalized:
+            return True
+        # 允许“七、三公经费…”与“七、财政拨款三公经费…”这类省略；
+        # 用最长公共子串覆盖目标的主要长度（至少 8 个汉字）。
+        from difflib import SequenceMatcher
+        match = SequenceMatcher(None, normalized, target).find_longest_match(
+            0, len(normalized), 0, len(target))
+        return match.size >= max(8, int(len(target) * 0.6))
+
+    def match_entries(entries: List[dict], prose: bool) -> bool:
+        ordered = sorted((entry for entry in entries
+                          if isinstance(entry, dict) and isinstance(entry.get("page"), int)),
+                         key=lambda entry: entry["page"])
+        for index, entry in enumerate(ordered):
+            if not name_match(entry.get("name")):
+                continue
+            if prose:
+                if _page_in_range(page, entry["page"],
+                                  pages if isinstance(pages, int) else entry["page"]):
+                    return True
+                continue
+            later = [candidate["page"] for candidate in ordered[index + 1:]
+                     if candidate["page"] > entry["page"]]
+            end = (min(later) - 1) if later else (
+                pages if isinstance(pages, int) else entry["page"])
+            if _page_in_range(page, entry["page"], end):
+                return True
+        return False
+
+    if is_prose:
+        if match_entries(sections, prose=True):
+            return True, ""
+        if match_entries(tables, prose=False):
+            return True, ""
+        return False, f"表/章节身份不匹配：{table_text} p{page}"
+    if match_entries(tables, prose=False):
+        return True, ""
+    if match_entries(sections, prose=True):
+        return True, ""
+    return False, f"表身份不匹配：{table_text} p{page}"
+
+
+def _source_identity_error(source: dict, value: dict) -> str:
+    row = str(source.get("row") or "").strip()
+    column = str(source.get("column") or "").strip()
+    table = str(source.get("table") or "").strip()
+    if not row:
+        return "缺少行身份"
+    if not column:
+        return "缺少列身份"
+    if not table:
+        return "缺少表/章节身份"
+    if not _row_identity_ok(row, value):
+        return f"行身份不匹配：{row}"
+    if not _column_identity_ok(column, value):
+        return f"列身份不匹配：{column}"
+    ok, reason = _table_identity_ok(table, source.get("page"), value)
+    if not ok:
+        return reason
+    return ""
+
+
+def _match_source(source: Optional[dict], expected_value: Decimal, values: List[dict],
+                  declared_unit: str = "", *, role: str = "operand",
+                  kind: str = "amount") -> Tuple[bool, str, str]:
+    """页码+引文+行列/表身份必须存在；返回 (ok, 单位, 原因)。
+
+    ``source_kind=rule_constant`` 只允许冻结规则白名单里的常量（目前仅
+    并列占比合计 100%），且只能用于 reported/percent；材料操作数不得使用。
+    材料来源必须通过 page+quote+数值+单位+table/row/column 身份核验。
     """
     if isinstance(source, dict) and source.get("source_kind") == "rule_constant":
-        basis = str(source.get("rule_basis") or "").strip()
-        unit = str(source.get("unit") or "").replace("％", "%")
+        constant_id = str(source.get("rule_constant_id") or "").strip()
+        constant = RULE_CONSTANTS.get(constant_id)
+        if constant is None:
+            return False, "", f"规则常量未在白名单：{constant_id or '缺少 rule_constant_id'}"
+        if role not in constant["allowed_roles"]:
+            return False, "", f"规则常量不允许用于 {role}"
+        if kind not in constant["allowed_kinds"]:
+            return False, "", f"规则常量不适用于表达式 {kind}"
+        unit = str(source.get("unit") or constant["unit"]).replace("％", "%")
         declared = str(declared_unit or "").replace("％", "%")
-        if not basis:
-            return False, "", "规则常量缺少 rule_basis"
-        if not unit:
-            return False, "", "规则常量缺少单位"
-        if declared and declared != unit:
-            return False, "", f"规则常量单位 {unit} ≠ 声明单位 {declared}"
-        return True, unit, ""
+        if unit != constant["unit"] or (declared and declared != constant["unit"]):
+            return False, "", f"规则常量单位 {unit} ≠ {constant['unit']}"
+        if expected_value != constant["value"]:
+            return False, "", f"规则常量值 {expected_value} ≠ {constant['value']}"
+        basis = str(source.get("rule_basis") or "").strip()
+        if basis and basis != constant["basis"]:
+            return False, "", "规则常量依据与冻结定义不一致"
+        return True, constant["unit"], ""
     if not isinstance(source, dict):
         return False, "", "缺少页码+引文来源"
     page, quote = source.get("page"), str(source.get("quote") or "")
@@ -110,13 +277,26 @@ def _match_source(source: Optional[dict], expected_value: Decimal, values: List[
                if value.get("page") == page and str(value.get("quote") or "") == quote]
     if not matched:
         return False, "", "引文未在 annotation 的页码/原文中找到"
-    numbers = _numbers(quote)
-    if len(numbers) != 1:
-        return False, "", "引文包含多个数值，无法唯一绑定"
-    if numbers[0] != expected_value:
-        return False, "", f"引文数值 {numbers[0]} ≠ 声明值 {expected_value}"
+    selector = str(source.get("quote_value_selector") or "").strip()
+    unit_scope = quote
+    if selector:
+        if selector not in quote:
+            return False, "", f"引文缺少数值选择标记：{selector}"
+        tail = quote.split(selector, 1)[1]
+        numbers = _numbers(tail)
+        if len(numbers) != 1:
+            return False, "", f"选择标记 {selector} 后的数值不唯一"
+        selected = numbers[0]
+        unit_scope = tail
+    else:
+        numbers = _numbers(quote)
+        if len(numbers) != 1:
+            return False, "", "引文包含多个数值，无法唯一绑定"
+        selected = numbers[0]
+    if selected != expected_value:
+        return False, "", f"引文数值 {selected} ≠ 声明值 {expected_value}"
     declared = str(declared_unit or "").replace("％", "%")
-    quote_unit = _unit_of(quote)
+    quote_unit = _unit_of(unit_scope)
     meta_units = {str(value.get("unit") or "").replace("％", "%")
                   for value in matched if value.get("unit")}
     if len(meta_units) > 1:
@@ -127,6 +307,31 @@ def _match_source(source: Optional[dict], expected_value: Decimal, values: List[
         return False, "", f"单位冲突：声明 {declared or '-'}、引文 {quote_unit or '-'}、表头 {meta_unit or '-'}"
     if not resolved:
         return False, "", "单位未绑定（声明/引文/表头均无单位）"
+    # 同页同数可能命中多行（如“合计 预算数”和“车小计 预算数”都写 7.40）；
+    # 必须用行列/表身份选出唯一一条，不能拿第一条代替。行身份按整体命中
+    # 优先于“借 item label 才命中”，避免合计行误配到小计/项目行。
+    viable = []
+    for value in matched:
+        if not _column_identity_ok(str(source.get("column") or ""), value):
+            continue
+        table_ok, _ = _table_identity_ok(str(source.get("table") or ""), page, value)
+        if not table_ok:
+            continue
+        score = _row_identity_score(str(source.get("row") or ""), value)
+        if score:
+            viable.append((score, value))
+    if not viable:
+        return False, "", _source_identity_error(source, matched[0]) or "行列身份不匹配"
+    best_score = max(score for score, _value in viable)
+    top = [value for score, value in viable if score == best_score]
+    top_names = [_norm_identity(value.get("name")) for value in top]
+    if len(set(top_names)) > 1:
+        # 同一单元格可能被标成“小计 预算数”和“公务用车…小计 预算数”
+        # 两种名字；只要这些名字互相包含，取最长（最具体）的一条，
+        # 不把同一格的两种写法当成两行冲突。
+        if not all(a in b or b in a for a in top_names for b in top_names):
+            return False, "", "同页同数命中多行，无法唯一定位"
+        top = [max(top, key=lambda value: len(_norm_identity(value.get("name"))))]
     return True, next(iter(resolved)), ""
 
 
@@ -184,7 +389,8 @@ def evaluate(row: dict, annotations: dict) -> dict:
             continue
         numbers.append(value)
         ok, unit, reason = _match_source(operand, value, values,
-                                         str(operand.get("unit") or ""))
+                                         str(operand.get("unit") or ""),
+                                         role="operand", kind=kind)
         if not ok:
             source_ok = False
             result["reasons"].append(f"操作数[{index}]：{reason}")
@@ -199,7 +405,7 @@ def evaluate(row: dict, annotations: dict) -> dict:
     if reported is not None:
         ok, reported_unit, reason = _match_source(
             row.get("reported_source"), reported, values,
-            str(row.get("reported_unit") or ""))
+            str(row.get("reported_unit") or ""), role="reported", kind=kind)
         if not ok:
             source_ok = False
             result["reasons"].append(f"reported：{reason}")
