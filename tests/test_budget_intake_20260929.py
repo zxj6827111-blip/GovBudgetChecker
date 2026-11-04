@@ -510,8 +510,9 @@ def test_yichuan_findings_stay_12(final_replays):
     checklist = sorted(i.rule for i in issues if i.rule in {"CMM-013", "V33-251"})
     assert checklist == ["V33-251"]
     # 批次1 年份角色修复新增一条真实完成率复算发现（97.64% vs 98%），
-    # 非清单项由 13 条增至 14 条。
-    assert len(issues) - len(checklist) == 14
+    # 非清单项由 13 条增至 14 条；2D 格式穷尽再增 4 条（CMM-010 小数位/千分位、
+    # CMM-002 半角逗号/冒号），均为原文可见的格式问题，不是回归。
+    assert len(issues) - len(checklist) == 18
 
 
 def test_wenlv_cascade_still_zero(final_replays):

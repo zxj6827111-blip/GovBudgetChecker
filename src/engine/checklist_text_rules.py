@@ -228,7 +228,11 @@ def _format_punctuation_issues(rule: Rule, doc: Document) -> List[Issue]:
                     before = flat[max(0, match.start() - 10):match.start()]
                     if not colon_prefix.search(before):
                         continue
-                hits.append((page, text, *flat_span(positions, match.start(), match.end())))
+                start, end = flat_span(positions, match.start(), match.end())
+                # 行末标点后只剩独立页码（页脚）时不是金额/正文标点。
+                if re.fullmatch(r"[ \t\r\n]*\d{1,4}[ \t\r\n]*", text[end:]):
+                    continue
+                hits.append((page, text, start, end))
         if not hits:
             continue
         page, text, start, end = _primary_hit(hits)
