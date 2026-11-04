@@ -83,6 +83,7 @@ from src.schemas.review_lifecycle import (
     BLOCKER_REVIEW_ALREADY_COMPLETED,
     BLOCKER_REVIEW_NOT_STARTED,
     ERROR_COMPLETION_BLOCKED,
+    ERROR_ANALYSIS_BASIS_STALE,
     ERROR_OBLIGATION_DECISION_CONFLICT,
     ERROR_OBLIGATION_DECISION_EVIDENCE_REQUIRED,
     ERROR_OBLIGATION_NOT_BLOCKING,
@@ -1607,6 +1608,7 @@ async def decide_obligation(
     evidence_reference: Optional[str] = None,
     expected_revision: Optional[int] = None,
     job_uuid: Optional[str] = None,
+    analysis_basis_token: Optional[str] = None,
 ) -> ObligationDecisionData:
     _require_autocommit(conn, operation="decide_obligation")
     """人工补核一条检查义务（WP3-B），写入绑定**当前活动会话**的数据库决定。
@@ -1663,8 +1665,19 @@ async def decide_obligation(
         # 就变得不成立（在事务内直接抛错会把纠正一起回滚掉）。
         await _invalidate_stale_sessions(conn, state, effects=effects, actor=actor)
 
-        active = state.active_session
-        if active is None:
+        # 客户端若携带读到的分析依据，必须与当前代际一致。这条检查发生在
+        # 会话失效处理之后、任何写库之前：新会话已经存在时，旧页面仍可能
+        # 发回旧 basis，此时不能把旧结论写进新会话（R2-06 负控）。
+        presented_basis = str(analysis_basis_token or "").strip()
+        basis_stale = bool(presented_basis) and presented_basis != str(state.basis_token or "")
+        active = None if basis_stale else state.active_session
+        if basis_stale:
+            rejection = ReviewLifecycleError(
+                409,
+                ERROR_ANALYSIS_BASIS_STALE,
+                "分析依据已更新：请刷新到当前分析版本后再写回复核结论",
+            )
+        elif active is None:
             if state.completed_session is not None:
                 # 复核完成后补核同样锁定（与"复核完成后问题不可再改"同源）。
                 # 要先改结论，先显式重新复核。

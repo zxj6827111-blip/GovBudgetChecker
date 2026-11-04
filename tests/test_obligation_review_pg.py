@@ -42,7 +42,10 @@ import pytest
 from fastapi import HTTPException
 
 from src.db.migrations import MIGRATIONS, run_migrations
-from src.schemas.review_lifecycle import ERROR_COMPLETION_BLOCKED
+from src.schemas.review_lifecycle import (
+    ERROR_ANALYSIS_BASIS_STALE,
+    ERROR_COMPLETION_BLOCKED,
+)
 from src.services import review_lifecycle_service, review_obligation_store
 
 pytestmark = pytest.mark.real_database
@@ -441,6 +444,45 @@ async def test_manual_decision_unblocks_completion(review_db):
     assert by_id["OBL-A"].basis == "测试依据"
     assert by_id["OBL-A"].checkers == []
     assert by_id["OBL-B"].decision == "verified_issue"
+
+
+async def test_stale_analysis_basis_is_rejected_even_with_active_session(review_db):
+    """R2-06：新会话已存在时，携带旧 analysis_basis_token 的写回必须 409。
+
+    旧页面可能仍停在上一代分析；只靠“有活动会话”不能证明请求读的是当前
+    代际。携带依据时与当前 basis 比对，不一致即拒；当前 basis 正控放行。
+    """
+    schema, pool = review_db
+    async with _conn(schema, pool) as conn:
+        ctx = await _make_reviewable_slot(conn, blocking_ids=["OBL-A"])
+        await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="reviewer-a")
+        state = await review_lifecycle_service.load_review_by_slot(conn, ctx["slot_id"])
+        current_basis = str(state.current_analysis.analysis_basis_token or "")
+        assert current_basis
+
+        with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
+            await review_lifecycle_service.decide_obligation(
+                conn,
+                ctx["slot_id"],
+                obligation_id="OBL-A",
+                decision="verified_ok",
+                actor="reviewer-a",
+                note="旧页面写回",
+                analysis_basis_token="old-job:revision-before-reanalyze",
+            )
+        assert excinfo.value.status_code == 409
+        assert excinfo.value.error == ERROR_ANALYSIS_BASIS_STALE
+
+        accepted = await review_lifecycle_service.decide_obligation(
+            conn,
+            ctx["slot_id"],
+            obligation_id="OBL-A",
+            decision="verified_ok",
+            actor="reviewer-a",
+            note="当前页面写回",
+            analysis_basis_token=current_basis,
+        )
+        assert accepted.decision.decision == "verified_ok"
 
 
 async def test_decisions_belong_to_the_session(review_db):
