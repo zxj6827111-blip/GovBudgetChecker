@@ -174,7 +174,12 @@ class CMM017_OrgNameConsistency(Rule):
                     (start + len(name)) if start >= 0 else len(name),
                     severity="warn", checklist_item="B-01", expected=canonical, actual=name,
                 ))
+        template_suffixes = ("（部门）", "(部门)", "（单位）", "(单位)", "部门", "单位")
         for name, page, text, start, end in mentions:
+            stripped = next((name[: -len(suffix)] for suffix in template_suffixes
+                             if name.endswith(suffix) and name[: -len(suffix)] == canonical), None)
+            if stripped is not None:
+                continue  # 规范全称后多“（部门）/（单位）”：模板标签，不按名称错报
             kind = _variant_kind(name, canonical)
             if not kind or name in reported:
                 continue
