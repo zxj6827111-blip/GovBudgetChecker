@@ -164,102 +164,148 @@ def _text_segments(needle: str) -> List[str]:
             if len(re.findall(r"[\u4e00-\u9fff]", segment)) >= 4]
 
 
-def _anchor_covered(item: Dict[str, Any], anchor: str, eval_lib,
-                    page: Optional[int] = None, amount_required: bool = True) -> bool:
-    """出现点覆盖：必须同时满足位置、金额/单位、名称/关系，不接受通用短语。
+#: 金额 token + 紧跟其后的精确单位。顺序保证“万元/亿元”先于“元”，
+#: 避免把“100.00万元”解析成单位“元”。
+_AMOUNT_UNIT_RE = re.compile(r"(?<![\d.,，])(\d[\d,]*(?:\.\d+)?)\s*(万元|亿元|元|%|％)?")
 
-    R-02：
-    - 锚点带金额时，锚点里的每个金额 token 必须逐字出现在候选条目中；
-      单位（万元/元/%）也必须一致；只共享“项目支出”“住房公积金”等名称
-      或只差一个金额的发现不能覆盖该出现点。
-    - 锚点不带金额时，允许等价长片段，但片段必须覆盖锚点的主要长度，
-      不能用一个短名称前缀代表整句。
-    - 传入 ``page`` 时，候选条目必须覆盖该页；单页/跨页由通用条款证明。
+
+def _amount_bindings(text: str) -> List[tuple]:
+    """[(数值, 精确单位)]；单位只认紧跟在数值后的那一个。
+
+    数值做 canonical 化（去千分位、去前导零），"06万元" 与 "6万元" 是同一
+    金额；这不改变 9.99 与 1,659.14 的区分。
     """
-    needle = eval_lib.norm(anchor)
-    if not needle:
-        return False
-    if page is not None and _pages(item) and page not in _pages(item):
-        return False
+    bindings = []
+    for match in _AMOUNT_UNIT_RE.finditer(text or ""):
+        unit = match.group(2) or ""
+        if unit == "％":
+            unit = "%"
+        raw = match.group(1).replace(",", "").replace("，", "")
+        integer, dot, fraction = raw.partition(".")
+        integer = integer.lstrip("0") or "0"
+        canonical = f"{integer}.{fraction}" if dot else integer
+        bindings.append((canonical, unit))
+    return bindings
+
+
+def _item_occurrences(item: Dict[str, Any]) -> List[tuple]:
+    """[(page, text)]：同一引用内部的文本只与它自己的 page 绑定。
+
+    R2-02：不再把不同页的 text/quotes/refs 汇总成一个语料池——页 6 的引文
+    不能借 finding.pages 覆盖页 5。只有证据引用、位置引用或单页条目才带页；
+    多页条目的顶层正文无法确定归属时页为 None（fail-closed）。
+    """
+    occurrences: List[tuple] = []
     location = item.get("location") if isinstance(item.get("location"), dict) else {}
-    occurrence_texts = []
     for key in ("locations", "table_refs", "fact_source_refs", "occurrences"):
         entries = location.get(key)
         if not isinstance(entries, (list, tuple)):
             continue
         for ref in entries:
-            if isinstance(ref, dict):
-                value = ref.get("text") or ref.get("span") or ref.get("quote")
-                if value:
-                    occurrence_texts.append(str(value))
-    corpus = " ".join([str(item.get("text") or ""), *[str(q) for q in item.get("quotes") or []],
-                       *occurrence_texts])
-    text = eval_lib.norm(corpus)
-    if needle in text:
-        return True
-    quotes = [eval_lib.norm(quote) for quote in [*(item.get("quotes") or []), *occurrence_texts] if quote]
-    anchor_amounts = _amount_tokens(needle)
-    if not anchor_amounts:
-        # 纯文本锚点：只接受覆盖 80% 以上的引文，或锚点本身的等价长片段。
-        for candidate in quotes:
-            if candidate and (candidate in needle or needle in candidate):
-                shorter, longer = sorted((len(candidate), len(needle)))
-                if longer and shorter / longer >= 0.8:
-                    return True
-        text_segments = _text_segments(needle)
-        for segment in text_segments:
-            if len(segment) >= max(4, int(len(needle) * 0.6)) and segment in text:
-                return True
-        if not amount_required and page is not None and page in _pages(item):
-            for segment in text_segments:
-                for start in range(0, max(1, len(segment) - 7)):
-                    window = segment[start:start + 8]
-                    if len(re.findall(r"[\u4e00-\u9fff]", window)) >= 6 and window in text:
-                        return True
+            if not isinstance(ref, dict):
+                continue
+            value = (ref.get("text") or ref.get("span") or ref.get("quote")
+                     or ref.get("text_snippet"))
+            if not value:
+                continue
+            raw_page = ref.get("page")
+            page = int(raw_page) if isinstance(raw_page, int) and raw_page > 0 else None
+            occurrences.append((page, str(value)))
+    for evidence in item.get("evidence") or []:
+        if not isinstance(evidence, dict):
+            continue
+        value = (evidence.get("quote") or evidence.get("text")
+                 or evidence.get("text_snippet"))
+        if not value:
+            continue
+        raw_page = evidence.get("page")
+        page = int(raw_page) if isinstance(raw_page, int) and raw_page > 0 else None
+        occurrences.append((page, str(value)))
+    pages = {int(p) for p in item.get("pages") or [] if isinstance(p, int)}
+    primary = location.get("page")
+    single = next(iter(pages)) if len(pages) == 1 else None
+    if single is None and isinstance(primary, int) and primary > 0:
+        single = primary
+    for value in [str(item.get("text") or "")] + [str(q) for q in item.get("quotes") or [] if q]:
+        if value:
+            occurrences.append((single, value))
+    return occurrences
+
+
+def _anchor_covered(item: Dict[str, Any], anchor: str, eval_lib,
+                    page: Optional[int] = None, amount_required: bool = True) -> bool:
+    """出现点覆盖：页、局部引文、金额、精确单位必须属于同一出现点。
+
+    R2-02 收紧（独立复核 20261104）：
+    - 传入 ``page`` 时必须存在绑定到该页的引用；缺页码/只有其他页的引文
+      不能证明带页码锚点。
+    - 金额锚点的每个数值必须在同一段引用内逐字命中，且紧跟的精确单位
+      一致；“元”不能被“万元”的子串关系满足。
+    - 金额不符后不再用“同页 + 名称片段”放行。名称/口径类契约必须由调用方
+      显式传 ``amount_required=False``，并且仍要求同页同段名称命中。
+    """
+    needle = eval_lib.norm(anchor)
+    if not needle:
         return False
-    # 金额锚点：金额 token 必须全部命中，单位不能换，名称片段必须在。
-    # 例外只给“名称缺陷 + 明确同页”的锚点：金标的名称出现点常带金额上下文，
-    # 但名称类 finding 不必复述金额；此时用页码绑定证明同一出现点，不能仅凭
-    # 名称文本（无页码）放行。
-    text_amounts = _amount_tokens(text)
+    occurrences = [(p, eval_lib.norm(t)) for p, t in _item_occurrences(item) if t]
+    if page is not None:
+        occurrences = [(p, t) for p, t in occurrences if p == page]
+    if not occurrences:
+        return False
+    anchor_bindings = _amount_bindings(needle)
     segments = _text_segments(needle)
-    amount_ok = bool(text_amounts) and all(token in text_amounts for token in anchor_amounts)
-    if not amount_ok:
-        # 名称/口径/标点类出现点：金额只是上下文，页码+名称即可证明同一处；
-        # 金额/格式类出现点仍要求金额逐字命中（amount_required=True）。
-        if not amount_required and page is not None and page in _pages(item) and segments:
+    if not anchor_bindings:
+        # 纯文本锚点：逐出现点匹配，不跨段拼接。
+        for _p, text in occurrences:
+            if needle in text:
+                return True
+        for _p, text in occurrences:
+            shorter, longer = sorted((len(text), len(needle)))
+            if text and (text in needle or needle in text) and longer and shorter / longer >= 0.8:
+                return True
             for segment in segments:
-                if segment in text:
+                if len(segment) >= max(4, int(len(needle) * 0.6)) and segment in text:
                     return True
-                # 表格注/章节句常被引文截断，判别词可能在句中：同页且任一
-                # 8 字窗口逐字命中即可证明是同一句。窗口必须至少 6 个汉字，
-                # 避免“万元/合计”这类泛词单凭窗口过关。
+        if not amount_required and page is not None:
+            for _p, text in occurrences:
+                for segment in segments:
+                    for start in range(0, max(1, len(segment) - 7)):
+                        window = segment[start:start + 8]
+                        if len(re.findall(r"[\u4e00-\u9fff]", window)) >= 6 and window in text:
+                            return True
+        return False
+    # 金额锚点：同一出现段内数值、精确单位、名称三项都要命中。
+    # 百分比是另一维度，作为金额缺陷的上下文时不强制复述；纯百分比锚点
+    # （如占比检查）仍要求全部百分比命中。
+    material = [item for item in anchor_bindings if item[1] != "%"]
+    if not material:
+        material = list(anchor_bindings)
+    for _p, text in occurrences:
+        units_by_number: Dict[str, set] = {}
+        for number, unit in _amount_bindings(text):
+            units_by_number.setdefault(number, set()).add(unit)
+        amount_ok = True
+        for number, unit in material:
+            if number not in units_by_number:
+                amount_ok = False
+                break
+            # 锚点带单位时必须精确一致；锚点未写单位时只绑定数值本身。
+            if unit and unit not in units_by_number[number]:
+                amount_ok = False
+                break
+        if amount_ok and (not segments or any(segment in text for segment in segments)):
+            return True
+        # 名称/口径类显式契约：候选不必复述金额，但必须同页同段命中名称。
+        # 这是唯一允许忽略金额的分支，且不会被金额/格式类调用方启用。
+        if not amount_required and page is not None and segments:
+            if any(segment in text for segment in segments):
+                return True
+            for segment in segments:
                 for start in range(0, max(1, len(segment) - 7)):
                     window = segment[start:start + 8]
                     if len(re.findall(r"[\u4e00-\u9fff]", window)) >= 6 and window in text:
                         return True
-            return False
-        if page is not None and page in _pages(item) and segments:
-            return any(segment in text for segment in segments)
-        return False
-    if "亿元" in needle:
-        required_unit = "亿元"
-    elif "万元" in needle:
-        required_unit = "万元"
-    elif "%" in needle or "％" in needle:
-        required_unit = "%"
-    elif "元" in needle:
-        required_unit = "元"
-    else:
-        required_unit = ""
-    if required_unit == "%":
-        if "%" not in text and "％" not in text:
-            return False
-    elif required_unit and required_unit not in text:
-        return False
-    if segments and not any(segment in text for segment in segments):
-        return False
-    return True
+    return False
 
 
 def _defect_anchor_entries(unit: Dict[str, Any], needles: Sequence[str] = ()) -> List[Dict[str, Any]]:
@@ -490,6 +536,13 @@ def run(args: argparse.Namespace) -> int:
         location = raw.get("location") if isinstance(raw.get("location"), dict) else {}
         if location:
             item["location"] = location
+        # 证据引用各自带 page：出现点绑定要按引用页，而不是汇总成全文。
+        evidence = raw.get("evidence") if isinstance(raw.get("evidence"), list) else []
+        if evidence and not item.get("evidence"):
+            item["evidence"] = evidence
+            for ref in evidence:
+                if isinstance(ref, dict) and isinstance(ref.get("page"), int) and ref["page"] > 0:
+                    pages.add(ref["page"])
         for key in ("locations", "table_refs", "occurrences", "pages"):
             entries = location.get(key)
             if isinstance(entries, list):
