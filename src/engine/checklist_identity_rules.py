@@ -397,6 +397,7 @@ class CMM018_ScopeTerminology(Rule):
                     f"当前封面为{'部门' if caption_scope == 'department' else '单位'}口径，应统一为“{expected_label}”。",
                     page, text, start, end, severity="warn", checklist_item="B-02", occurrences=len(hits),
                     locations=[{'page':p,'text':unique_quote(t,a,b),'start':a,'end':b} for p,t,a,b in hits],
+                    table_refs=[{'page':p,'span':unique_quote(t,a,b),'role':'相反口径表注'} for p,t,a,b in hits],
                 ))
 
         if contrast_hits and contrast and contrast.get("comprehensive_contrast"):

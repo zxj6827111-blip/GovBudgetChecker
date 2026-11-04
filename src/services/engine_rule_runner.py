@@ -91,6 +91,33 @@ class EngineRuleRunner:
             evidence_item["text"] = text
             evidence_item["text_snippet"] = text
         location = getattr(issue, "location", {}) or {}
+        # 同一问题命中多处原文时（如“本表反映单位”共 6 处），逐处给出真实引用，
+        # 不只用第一处冒充全部出现点；证据门逐条按各自页码核验。
+        refs = [
+            ref for ref in (location.get("table_refs") or [])
+            if isinstance(ref, dict) and str(ref.get("span") or "").strip()
+            and type(ref.get("page")) is int and ref["page"] > 0
+        ]
+        if len(refs) >= 2:
+            items: List[Dict[str, Any]] = []
+            seen: set = set()
+            for ref in refs:
+                key = (ref["page"], str(ref["span"]))
+                if key in seen:
+                    continue
+                seen.add(key)
+                item = {
+                    "page": ref["page"],
+                    "text": str(ref["span"]),
+                    "text_snippet": str(ref["span"]),
+                    "location_level": "exact_span",
+                    "verification_status": "unverified",
+                }
+                if ref.get("role"):
+                    item["role"] = ref["role"]
+                items.append(item)
+            if len(items) >= 2:
+                return items
         location_level = str(getattr(issue, "location_level", None) or "unresolved")
         if location_level not in {"exact_cell", "exact_span"}:
             location_level = str(location.get("location_level") or location_level)

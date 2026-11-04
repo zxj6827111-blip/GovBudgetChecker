@@ -201,11 +201,14 @@ def _format_punctuation_issues(rule: Rule, doc: Document) -> List[Issue]:
     """R22 / R9-半角冒号 / R28：中文语境半角标点与文号括号，按类聚合。"""
     colon = re.compile(r"(?<=[一-鿿）)]):(?!//)")
     half_comma = re.compile(r"(?<=[一-鿿])[,;]|[,;](?=[一-鿿])")
+    # 中文语境的句末半角句点：紧跟在汉字或百分号后，且不是小数/编号分隔。
+    half_period = re.compile(r"(?<=[一-鿿%％])\.(?![0-9A-Za-z])")
     doc_number = re.compile(r"[一-鿿]{1,12}[\[【（(]\s*(?:19|20)\d{2}\s*[\]】）)]\s*\d+号")
     issues: List[Issue] = []
     classes = {
         "half_colon": (colon, "中文语境使用半角冒号“:”，应使用全角“：”。"),
         "half_comma": (half_comma, "中文语境使用半角逗号/分号，应使用全角“，”/“；”。"),
+        "half_period": (half_period, "中文语境使用半角句点“.”，应使用全角“。”。"),
         "doc_number": (doc_number, "文号年份应使用六角括号“〔〕”，当前使用方括号/尖括号。"),
     }
     # 定义/释义段（名词解释、第四部分）与目录不参与标点格式检查：
@@ -436,13 +439,17 @@ class CMM010_AmountFormat(Rule):
                 ))
         if decimals:
             # 整篇统一按 4~6 位小数书写的材料逐处报会淹没其他问题，汇总成一条。
+            # 清单 C-15 把小数位不统一列为可复核的格式问题（low），不是纯提示；
+            # 逐处引用一并给出，避免只用第一处代表全部出现点。
             page, text, start, end = decimals[0]
             sample = text[start:end]
             issues.append(issue_at(
                 self, f"金额小数位不统一：全文共 {len(decimals)} 处万元金额超过两位小数（如“{sample}万元”），"
                 "应统一四舍五入保留两位小数。",
-                page, text, start, end, severity="info", checklist_item="C-15",
+                page, text, start, end, severity="low", checklist_item="C-15",
                 occurrences=len(decimals),
+                table_refs=[{"page": p, "span": unique_quote(t, a, b), "role": "occurrence"}
+                            for p, t, a, b in decimals],
             ))
         issues.extend(self._zero_one_decimal_issues(doc))
         issues.extend(self._missing_thousands_issues(doc))
@@ -547,11 +554,15 @@ class CMM011_AmountUnitWan(Rule):
                     continue
                 for match in _MISSING_UNIT_RE.finditer(chunk):
                     before = chunk[max(0, match.start() - 24):match.start()]
-                    if not _MISSING_UNIT_SUBJECT_RE.search(before):
+                    subject = _MISSING_UNIT_SUBJECT_RE.search(before)
+                    if not subject:
                         continue
                     if "." not in match.group(1):
                         continue
-                    start, end = flat_span(positions, paragraph.start() + match.start(),
+                    # 引文连同“支出/收入…”科目名一起给出：只引金额无法说明是
+                    # 哪一项漏了万元，也无法与金标的“科目+金额”出现点对齐。
+                    offset = paragraph.start() + match.start() - (subject.end() - subject.start())
+                    start, end = flat_span(positions, offset,
                                            paragraph.start() + match.end())
                     literal = text[start:end].strip()
                     issues.append(issue_at(
