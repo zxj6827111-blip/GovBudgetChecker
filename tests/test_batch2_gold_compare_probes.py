@@ -165,6 +165,37 @@ def todo_count_tamper(c: ProbeCase):
     assert code == 1 and verdicts["B13"] == "FAIL", (code, verdicts)
 
 
+@case("evidence_status_regression_rejected")
+def evidence_status_regression(c: ProbeCase):
+    """已有正式条目的证据从 complete 降级，不得靠允许字段静默通过。"""
+    path = c.status_path("GS-2022-01")
+    status = read_gz(path)
+    _bucket, item = first_formal(status)
+    item["evidence_status"] = "incomplete_rule_warning"
+    write_gz(path, status)
+    code, report = c.compare()
+    verdicts = {ch["id"]: ch["verdict"] for ch in report["checks"]}
+    assert code == 1 and verdicts["B15"] == "FAIL", (code, verdicts)
+
+
+@case("member_belongs_to_other_group_rejected")
+def member_belongs_to_other_group(c: ProbeCase):
+    """新增成员若本身归在另一个分组，不能同时冒充本组成员。"""
+    path = c.status_path("GS-2022-01")
+    status = read_gz(path)
+    items = [item for bucket in ("issues", "tips")
+             for item in status["review_report"].get(bucket) or []
+             if isinstance(item.get("location"), dict) and item["location"].get("pre_group_issue_id")]
+    if len(items) < 2:
+        return
+    host, victim = items[0], items[1]
+    host["location"].setdefault("member_issue_ids", []).append(str(victim["id"]))
+    write_gz(path, status)
+    code, report = c.compare()
+    verdicts = {ch["id"]: ch["verdict"] for ch in report["checks"]}
+    assert code == 1 and verdicts["B14"] == "FAIL", (code, verdicts)
+
+
 def main() -> int:
     failures = []
     for name, func in CASES:

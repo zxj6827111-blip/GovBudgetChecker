@@ -172,13 +172,25 @@ def _item_covers_anchor(item: Dict[str, Any], target: Dict[str, Any], docs, eval
 
 
 def _evidence_qualified(item: Dict[str, Any]) -> bool:
+    """正式命中必须显式证明证据合格，不能因 tier=F 或存在 quote 就默认完整。"""
     status = str(item.get("evidence_status") or "").strip()
-    if status and status != "complete":
+    if status != "complete":
         return False
     raw = item.get("evidence_verification") or {}
     if isinstance(raw, dict) and str(raw.get("status") or "") == "failed":
         return False
     return True
+
+
+def _worse_evidence(previous, current):
+    """同一实体在 review_report 与 result 两处表示中取更差证据状态（fail-closed）。"""
+    if previous is None:
+        return current
+
+    def rank(pair):
+        return (pair[0] == "complete", pair[1] == "verified")
+
+    return previous if rank(previous) <= rank(current) else current
 
 
 def match_addition(item: Dict[str, Any], targets: Sequence[Dict[str, Any]],
@@ -239,6 +251,16 @@ def run(args: argparse.Namespace) -> int:
 
     docs = gm.load_gold()
     items, _aux = gm.load_system(run_dir, docs)
+    # 冻结匹配器构造的条目行不带证据字段；从原始 status 实体补齐，供
+    # “正式命中必须证据合格”和证据回退检查使用（不改变匹配语义）。
+    new_raw_index = eval_lib.load_raw_index(run_dir)
+    for item in items:
+        raw = eval_lib.raw_item(new_raw_index, item) or {}
+        if isinstance(raw, dict):
+            if not str(item.get("evidence_status") or "").strip():
+                item["evidence_status"] = raw.get("evidence_status")
+            if not item.get("evidence_verification"):
+                item["evidence_verification"] = raw.get("evidence_verification")
     old_items = json.loads((baseline_analysis / "system_items.json").read_text(encoding="utf-8"))
     baseline_rows = {f"{row['doc']}|{row.get('raw_id')}": row for row in
                      json.loads((baseline_analysis / "final_rows.json").read_text(encoding="utf-8"))}
@@ -346,7 +368,6 @@ def run(args: argparse.Namespace) -> int:
         item["_all_pages"] = sorted(pages)
         return item
 
-    new_raw_index = eval_lib.load_raw_index(run_dir)
     satisfied: Dict[str, List[str]] = defaultdict(list)
     partial_targets: Dict[str, Dict[str, Any]] = {}
     unexpected_additions = []
@@ -460,11 +481,23 @@ def run(args: argparse.Namespace) -> int:
     reference_keys = {"pre_group_issue_id", "member_issue_ids", "merged_issue_ids"}
 
     class _ReferenceIndex:
-        """从冻结 status 建“问题/分组/成员”索引，引用必须能落到真实实体。"""
+        """从冻结 status 建“问题/分组/成员”索引，引用必须能落到真实实体。
+
+        成员分三档，避免“任意写一个 ID 就自动变成合法虚拟成员”：
+        - ``real``：本次输出里真实存在的问题；
+        - ``evidenced``：合并后未单独输出、但有 ``member_evidence`` 证明的成员；
+        - ``virtual``：只在成员列表里出现、没有独立证据的编号——只能在
+          基线原样保留时容忍，不能作为新增引用。
+        """
 
         def __init__(self, run_dir: Path):
             self.issues: Dict[Tuple[str, str], str] = {}
             self.groups: Dict[Tuple[str, str], set] = defaultdict(set)
+            self.real: set = set()
+            self.evidenced: set = set()
+            self.virtual: set = set()
+            self.group_of: Dict[Tuple[str, str], str] = {}
+            self.evidence: Dict[Tuple[str, str], Tuple[str, str]] = {}
             for path in sorted((run_dir / "status").glob("*.status.json.gz")):
                 doc = path.name.split(".")[0]
                 try:
@@ -479,22 +512,43 @@ def run(args: argparse.Namespace) -> int:
                     issue_id = str(obj["id"])
                     rule = str(obj.get("rule_id") or obj.get("code") or "")
                     self.issues[(doc, issue_id)] = rule
+                    self.real.add((doc, issue_id))
+                    self.evidence[(doc, issue_id)] = _worse_evidence(
+                        self.evidence.get((doc, issue_id)),
+                        (
+                            str(obj.get("evidence_status") or ""),
+                            str((obj.get("evidence_verification") or {}).get("status") or "")
+                            if isinstance(obj.get("evidence_verification"), dict) else "",
+                        ),
+                    )
                     location = obj.get("location")
                     if isinstance(location, dict) and location.get("pre_group_issue_id"):
-                        self.groups[(doc, str(location["pre_group_issue_id"]))].add(issue_id)
+                        group = str(location["pre_group_issue_id"])
+                        self.groups[(doc, group)].add(issue_id)
+                        self.group_of[(doc, issue_id)] = group
                     if isinstance(location, dict):
                         # 合并后未单独输出的成员只存在于 member_issue_ids /
-                        # member_evidence；登记为“虚拟成员”，用于存在性核验。
+                        # member_evidence；只有带成员证据的才登记为可新增的虚拟成员。
                         member_ids = location.get("member_issue_ids") or []
                         member_evidence = location.get("member_evidence") or []
                         for index, member in enumerate(member_ids):
-                            if not member or (doc, str(member)) in self.issues:
+                            if not member or (doc, str(member)) in self.real:
                                 continue
                             evidence = member_evidence[index] if index < len(member_evidence) else {}
-                            self.issues[(doc, str(member))] = str(
-                                evidence.get("rule_id") or "" ) if isinstance(evidence, dict) else ""
+                            backed = isinstance(evidence, dict) and bool(
+                                evidence.get("rule_id") or evidence.get("message") or evidence.get("evidence"))
+                            if backed:
+                                self.evidenced.add((doc, str(member)))
+                                self.issues[(doc, str(member))] = str(evidence.get("rule_id") or "")
+                            else:
+                                self.virtual.add((doc, str(member)))
+                                self.issues.setdefault((doc, str(member)), "")
                         for member in location.get("merged_issue_ids") or []:
-                            self.issues.setdefault((doc, str(member)), "")
+                            key = (doc, str(member))
+                            if key in self.real or key in self.evidenced:
+                                continue
+                            self.virtual.add(key)
+                            self.issues.setdefault(key, "")
 
                 for key in ("issues", "tips"):
                     for obj in report.get(key) or []:
@@ -509,6 +563,10 @@ def run(args: argparse.Namespace) -> int:
 
         def valid(self, doc: str, ref: str) -> bool:
             return (doc, ref) in self.issues or bool(self.groups.get((doc, ref)))
+
+        def member_verifiable(self, doc: str, ref: str) -> bool:
+            """成员是否有独立来源：真实问题或带成员证据的合并成员。"""
+            return (doc, ref) in self.real or (doc, ref) in self.evidenced
 
         def rule(self, doc: str, ref: str):
             if (doc, ref) in self.issues:
@@ -541,7 +599,8 @@ def run(args: argparse.Namespace) -> int:
     }
 
     def _reference_change_ok(doc: str, key: str, old_value: Any, new_value: Any, rule: str,
-                             old_item_id: str = "", new_item_id: str = "") -> bool:
+                             old_item_id: str = "", new_item_id: str = "",
+                             self_group: str = "") -> bool:
         old_refs = _reference_values(old_value)
         new_refs = _reference_values(new_value)
         if key == "pre_group_issue_id":
@@ -573,9 +632,20 @@ def run(args: argparse.Namespace) -> int:
                 return False
             if any(not new_ref_index.valid(doc, ref) for ref in new_refs):
                 return False
+            # 新增成员必须有独立来源：真实问题或带 member_evidence 的合并成员。
+            # 只在成员列表里写一个编号不能自动成为合法虚拟成员（J-05）。
+            for ref in new_refs:
+                if ref in old_refs:
+                    continue
+                if not new_ref_index.member_verifiable(doc, ref):
+                    return False
+                # 新增成员若本身归在另一分组，不能同时冒充本组成员。
+                if key == "member_issue_ids" and self_group:
+                    other = new_ref_index.group_of.get((doc, ref))
+                    if other and str(other) != str(self_group):
+                        return False
             # merged/member 组可跨规则合并（如 V33-005 与 V33-120 同差额），
-            # 这里要求每个成员真实存在；成员规则必须与组内主规则一致（merged
-            # 允许跨规则），不按证据指纹集合强制等价（成员正文可能因整改变化）。
+            # 成员规则不强制等价；存在性与新增来源已逐条核验。
             return True
         if key == "related_findings":
             old_list = old_value if isinstance(old_value, list) else []
@@ -620,33 +690,6 @@ def run(args: argparse.Namespace) -> int:
             return None
         return json.dumps(_strip_references(eval_lib._round_floats(entity)), ensure_ascii=False,
                           sort_keys=True, separators=(",", ":"), default=str)
-
-    def _same_rule_sequence(old_id: str, new_id: str) -> bool:
-        old_head, _, old_tail = old_id.rpartition("-")
-        new_head, _, new_tail = new_id.rpartition("-")
-        return bool(old_head) and old_head == new_head and old_tail.isdigit() and new_tail.isdigit()
-
-    def _renumber_ok(sid: str, old_value: Any, new_value: Any, tier: str = "") -> bool:
-        olds, news = _reference_values(old_value), _reference_values(new_value)
-        if len(olds) != len(news):
-            return False
-        for old_id, new_id in zip(olds, news):
-            if old_id == new_id:
-                continue
-            old_fp = _entity_fingerprint(old_raw_index, sid, old_id)
-            new_fp = _entity_fingerprint(new_raw_index, sid, new_id)
-            if old_fp is not None and new_fp is not None:
-                if old_fp != new_fp:
-                    # 提示/通知层的分组指针随输出顺序重排：同规则内顺序编号更替可接受。
-                    if tier in {"R", "N"} and _same_rule_sequence(old_id, new_id):
-                        continue
-                    return False
-                continue
-            # 组内/分组前编号可能不对应独立实体：只允许同一规则的顺序位移，
-            # 组内真实成员另由 merged/member 路径的实体指纹核验。
-            if not _same_rule_sequence(old_id, new_id):
-                return False
-        return True
 
     if getattr(args, "emit_reference_exceptions", None):
         entries = []
@@ -735,7 +778,8 @@ def run(args: argparse.Namespace) -> int:
                     # 也不允许 raw_path_allowlist 整字段放行。
                     if not _reference_change_ok(old["doc"], key, eval_lib.get_path(a, path),
                                                 eval_lib.get_path(b, path), str(old.get("rule") or ""),
-                                                str(old.get("raw_id") or ""), str(new.get("raw_id") or "")):
+                                                str(old.get("raw_id") or ""), str(new.get("raw_id") or ""),
+                                                str((raw_new.get("location") or {}).get("pre_group_issue_id") or "")):
                         unexplained.append(path)
                     else:
                         renumbered.append(path)
@@ -875,6 +919,7 @@ def run(args: argparse.Namespace) -> int:
             entity_conflicts.append(f"{old['doc']}|{new.get('raw_id')}:成员引用与 related_findings 不一致")
         new_view = eval_lib.reference_view(raw_new)
         old_view = eval_lib.reference_view(raw_old) if raw_old is not None else {}
+        self_group = str((raw_new.get("location") or {}).get("pre_group_issue_id") or "")
         for path, value in new_view.items():
             key = (path.rsplit(".", 1)[-1] if "." in path
                    else path.rstrip("/").split("/")[-1].split("[")[0])
@@ -884,7 +929,8 @@ def run(args: argparse.Namespace) -> int:
                 # 成员集合按集合核验，不能按展示顺序逐位比较。
                 if not _reference_change_ok(old["doc"], key, old_view.get(path), value,
                                             str(old.get("rule") or ""),
-                                            str(old.get("raw_id") or ""), str(new.get("raw_id") or "")):
+                                            str(old.get("raw_id") or ""), str(new.get("raw_id") or ""),
+                                            self_group):
                     entity_conflicts.append(
                         f"{old['doc']}|{new.get('raw_id')}:{path} 成员集合无法证明同源")
                 continue
@@ -892,10 +938,26 @@ def run(args: argparse.Namespace) -> int:
             # 引用（含原样保留）都必须落到真实实体，且成员集合等价；
             # 未知 ID、跨规则、成员冲突、同前缀顺移一律拒收。
             if not _reference_change_ok(old["doc"], key, old_value, value, str(old.get("rule") or ""),
-                                        str(old.get("raw_id") or ""), str(new.get("raw_id") or "")):
+                                        str(old.get("raw_id") or ""), str(new.get("raw_id") or ""),
+                                        self_group):
                 entity_conflicts.append(
                     f"{old['doc']}|{new.get('raw_id')}:{path}={value} 引用无法证明同源")
     add("B14", "跨表示引用一致且新引用不越界", not entity_conflicts, entity_conflicts[:50])
+
+    # ---- 证据状态不回退（防止把正式条目的证据降级藏在允许字段里）----
+    evidence_conflicts = []
+    for old, new, _how in pairs:
+        old_state = old_ref_index.evidence.get((old["doc"], str(old.get("raw_id") or "")))
+        new_state = new_ref_index.evidence.get((old["doc"], str(new.get("raw_id") or "")))
+        if not old_state or not new_state:
+            continue
+        if old_state[0] == "complete" and new_state[0] != "complete":
+            evidence_conflicts.append(
+                f"{old['doc']}|{new.get('raw_id')}:证据状态 {old_state[0]}->{new_state[0] or '缺失'}")
+        elif old_state[1] == "verified" and new_state[1] == "failed":
+            evidence_conflicts.append(
+                f"{old['doc']}|{new.get('raw_id')}:原文核验 verified->failed")
+    add("B15", "非目标条目证据状态不回退", not evidence_conflicts, evidence_conflicts[:50])
 
     overall = "FAIL" if any(c["verdict"] == "FAIL" for c in checks) else "PASS"
     summary = {
@@ -922,6 +984,7 @@ def run(args: argparse.Namespace) -> int:
         "tp_before": tp_before, "tp_after": tp_after,
         "reference_exceptions_sha256": exceptions_sha,
         "exception_conflicts": exception_conflicts,
+        "evidence_conflicts": evidence_conflicts,
         "checks": checks, "overall": overall,
     }
     (out / "batch2_gold_compare.json").write_text(
