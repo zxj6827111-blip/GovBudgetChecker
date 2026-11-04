@@ -236,7 +236,7 @@ def _format_punctuation_issues(rule: Rule, doc: Document) -> List[Issue]:
         issues.append(issue_at(
             rule, f"{message}全文共 {len(hits)} 处（如“{sample}”）。",
             page, text, start, end, severity="low", checklist_item="D-04", occurrences=len(hits),
-            table_refs=[{"page": p, "span": t[a:b], "role": "occurrence"} for p, t, a, b in hits],
+            table_refs=[{"page": p, "span": unique_quote(t, a, b), "role": "occurrence"} for p, t, a, b in hits],
         ))
     return issues
 
@@ -468,7 +468,7 @@ class CMM010_AmountFormat(Rule):
             self, f"金额或百分比小数位不统一：全文共 {len(hits)} 处未保留两位小数（如“{sample}”），"
             "金额与百分比均应统一保留两位小数。",
             page, text, start, end, severity="low", checklist_item="C-15", occurrences=len(hits),
-            table_refs=[{"page": p, "span": t[a:b], "role": "occurrence"} for p, t, a, b in hits],
+            table_refs=[{"page": p, "span": unique_quote(t, a, b), "role": "occurrence"} for p, t, a, b in hits],
         )]
 
     def _missing_thousands_issues(self, doc: Document) -> List[Issue]:
@@ -487,7 +487,7 @@ class CMM010_AmountFormat(Rule):
             self, f"金额未按半角逗号分千分位：全文共 {len(hits)} 处（如“{sample}”），"
             "应写作 1,234.56 万元。",
             page, text, start, end, severity="low", checklist_item="C-15", occurrences=len(hits),
-            table_refs=[{"page": p, "span": t[a:b], "role": "occurrence"} for p, t, a, b in hits],
+            table_refs=[{"page": p, "span": unique_quote(t, a, b), "role": "occurrence"} for p, t, a, b in hits],
         )]
 
 
