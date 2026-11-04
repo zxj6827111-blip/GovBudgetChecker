@@ -58,9 +58,19 @@ def test_unit_finding_does_not_close_amount_check():
 
 
 def test_amount_finding_can_still_close_same_amount_check():
-    row = _finding("V33-222")
+    row = _finding("V33-222", message="说明5金额与T5不一致（行政事业单位离退休）：表内差额 0.01 万元")
     assert obligation_covered_by_finding(_item(), row, visible_issue_ids={"finding-1"}) is True
     assert blocking_coverage_obligations([_item()], row, visible_issue_ids={"finding-1"}) == []
+
+
+def test_same_v33222_unit_subcheck_cannot_close_amount_check():
+    row = _finding(
+        "V33-222",
+        message="住房公积金金额单位口径错误：原文444.71元折合0.044471万元，表内444.71万元。",
+        check_relation_id="V33-222:unit",
+    )
+    assert obligation_covered_by_finding(_item(), row, visible_issue_ids={"finding-1"}) is False
+    assert blocking_coverage_obligations([_item()], row, visible_issue_ids={"finding-1"}) == [_item()]
 
 
 def test_name_only_obligation_still_covered_by_name_finding():
