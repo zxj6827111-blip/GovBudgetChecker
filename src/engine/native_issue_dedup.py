@@ -544,7 +544,9 @@ def deduplicate_native_issues(issues, doc=None, *, receipts=None):
         # 记录“未并组时该条会得到的报告 id”。旧链接/旧客户端仍可按它查询，
         # 但只在当前分析的问题集合内解析，不跨版本。
         rule = _rule(item)
-        if rule:
+        # V33-227 的每条名称差异都是独立问题，不参与跨规则合并；分组展示号
+        # 会随前序问题增删整体位移，写成引用既无必要也会制造假漂移。
+        if rule and rule != "V33-227":
             location = _location(item)
             location.setdefault("pre_group_issue_id", f"{rule}-{index + 1}")
             _set(item, "location", location)

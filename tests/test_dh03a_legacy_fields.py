@@ -175,7 +175,7 @@ def _finding_row():
                 "tags": ["V33-222"],
                 "severity": "medium",
                 "title": "说明款级科目名称不一致",
-                "message": "说明写“行政事业单位离退休”，表内为“行政事业单位养老支出”",
+                "message": "说明5金额与T5不一致（行政事业单位离退休）：表内差额 0.01 万元",
                 "location": {"actual_name": "行政事业单位离退休"},
             }
         ]

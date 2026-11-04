@@ -8149,7 +8149,6 @@ class R33227_Narrative5_T5_NameConsistency(Rule):
             if not mismatched_mentions:
                 continue
 
-            seen_names = set()
             for mention in mismatched_mentions:
                 narrative_name = mention["name"]
                 table_entry_name = str(table_entry.get("name") or "")
@@ -8169,11 +8168,6 @@ class R33227_Narrative5_T5_NameConsistency(Rule):
                         and table_key.endswith(narrative_name)
                         and _narrative_name_page_split(doc, mention, table_key)):
                     continue
-                dedupe_key = (mention.get("page"), normalize_text(narrative_name))
-                if dedupe_key in seen_names:
-                    continue
-                seen_names.add(dedupe_key)
-
                 raw_page = mention.get("page")
                 try:
                     mention_page = int(str(raw_page).strip())
@@ -8307,6 +8301,30 @@ def _narrative_name_page_split(doc: Document, mention: dict, table_key: str) -> 
     return bool(previous and previous.endswith(missing))
 
 
+def _append_name_refs(location: dict, doc, mention, narrative_page, table_page, code, name):
+    """把同一名称差异的其余出现点并入已有条目的引用列表。"""
+    refs = location.get("table_refs")
+    if not isinstance(refs, list):
+        refs = []
+    known = {(ref.get("page"), ref.get("span")) for ref in refs if isinstance(ref, dict)}
+    narrative_span = str(mention.get("source_span") or "")
+    if narrative_span and _span_unique_on_page(doc, narrative_page, narrative_span) \
+            and (narrative_page, narrative_span) not in known:
+        refs.append({"page": narrative_page, "span": narrative_span, "role": "说明5",
+                     "section": "说明5（一般公共预算财政拨款支出决算具体情况）",
+                     "row": location.get("row"), "field": "功能分类科目名称",
+                     "code": code, "subject": mention.get("name")})
+    table_span = _functional_table_name_span(doc, table_page, code, name)
+    if table_span and (table_page, table_span) not in known:
+        refs.append({"page": table_page, "span": table_span, "role": "T5",
+                     "table": "一般公共预算财政拨款支出决算表",
+                     "row": location.get("row"), "field": "功能分类科目名称",
+                     "code": code, "subject": name})
+    if refs:
+        location["table_refs"] = refs
+        location["pages"] = sorted({ref["page"] for ref in refs if isinstance(ref.get("page"), int)})
+
+
 def _location_has_bound_ref(location: dict) -> bool:
     refs = location.get("table_refs") if isinstance(location, dict) else None
     if not isinstance(refs, list):
@@ -8396,7 +8414,11 @@ def _structure_class_name_issues(rule, doc, table_entries):
                 and "基本支出" not in section[0] and "三公" not in section[0]]
     if not sections:
         return []
-    title, begin, end = sections[-1]
+    title, begin, _section_end = sections[-1]
+    _next = re.search(
+        r"(?:^|\n)\s*[一二三四五六七八九十]+、[^\n]{0,90}(?:说明|情况)",
+        merged[begin + len(title):] if begin + len(title) <= len(merged) else "")
+    end = (begin + len(title) + _next.start()) if _next else len(merged)
     scope = merged[begin:end]
     structure_at = scope.find("结构情况")
     if structure_at < 0:
