@@ -120,6 +120,68 @@ def distinctive_terms(detail: str) -> Set[str]:
     }
 
 
+#: 单位/名称/格式类措辞：即使规则编号属于金额族，也不能当作金额检查已完成。
+_NON_AMOUNT_MARKERS = (
+    "单位口径", "单位错误", "单位错", "折合", "名称不一致", "名称差异",
+    "科目名称", "漏字", "多字", "表名", "小数位", "千分位", "格式",
+)
+#: 明确指向金额复算/勾稽的措辞；无以上非金额措辞时才可作为金额覆盖。
+_AMOUNT_MARKERS = (
+    "金额", "差额", "合计", "不等于", "不一致", "相差", "完成率", "占比",
+    "预算数", "决算数", "复算", "勾稽", "加总",
+)
+#: 义务 detail/missing_operands 里表示“金额取数未完成”的措辞。
+_AMOUNT_OBLIGATION_MARKERS = (
+    "金额", "差额", "合计", "取数", "绑定", "复算", "完成率", "占比",
+    "决算数", "预算数", "加总",
+)
+
+
+def _requires_amount_evidence(item: Any) -> bool:
+    """义务是否在等一个金额子检查结果。
+
+    优先看 missing_operands 的金额列与 detail 语义；只有两者都没有时才回退
+    到 checker 家族（仅作兼容兜底，不单独作为覆盖依据）。
+    """
+    for operand in getattr(item, "missing_operands", None) or []:
+        if not isinstance(operand, dict):
+            continue
+        text = " ".join(str(operand.get(key) or "") for key in ("column", "role", "row_key"))
+        if any(marker in text for marker in _AMOUNT_OBLIGATION_MARKERS):
+            return True
+    detail = str(getattr(item, "detail", None) or "")
+    if any(marker in detail for marker in _AMOUNT_OBLIGATION_MARKERS):
+        return True
+    return False
+
+
+def _finding_amount_kind(finding: Dict[str, Any]) -> str:
+    """判断 finding 是金额结论、非金额结论还是无法判定。
+
+    先看 check_relation_id/sub_check_id 的实际子检查；没有显式子检查时按
+    正文措辞判定。无法判定返回 ``unknown``（金额义务下按不覆盖处理）。
+    """
+    location = _json_dict(finding.get("location"))
+    relation = str(finding.get("check_relation_id") or location.get("check_relation_id")
+                   or location.get("sub_check_id") or "").strip()
+    if relation:
+        tail = re.split(r"[:/]", relation)[-1].lower()
+        if any(token in tail for token in ("unit", "name", "format", "structure", "scope")):
+            return "non_amount"
+        if any(token in tail for token in ("amount", "total", "sum", "diff", "balance", "value")):
+            return "amount"
+    # 只用问题正文判定：标题/位置字段可能沿用“名称”类通用模板，不能把
+    # “金额不一致”正文误判成名称问题。
+    text = str(finding.get("message") or finding.get("text_snippet") or "")
+    if not text:
+        text = _finding_text(finding)
+    if any(marker in text for marker in _NON_AMOUNT_MARKERS):
+        return "non_amount"
+    if any(marker in text for marker in _AMOUNT_MARKERS):
+        return "amount"
+    return "unknown"
+
+
 def _finding_text(finding: Dict[str, Any]) -> str:
     """finding 里可能带科目/说明名的字段拼成一段可搜索文本。"""
     location = _json_dict(finding.get("location"))
@@ -162,6 +224,7 @@ def obligation_covered_by_finding(
     # U-7：义务含金额子检查时，只有金额族问题才可能覆盖；名称/单位类问题
     # 只合并展示，不得关闭、覆盖或隐藏未完成的金额检查。
     amount_checkers = checkers & _AMOUNT_CHECKERS
+    requires_amount = bool(amount_checkers) or _requires_amount_evidence(item)
     # DH-03a：新结果读冻结短语列表；只有历史结果没有该字段时才回退解析 detail。
     frozen_terms = getattr(item, "legacy_coverage_terms", None)
     if frozen_terms is None:
@@ -184,8 +247,9 @@ def obligation_covered_by_finding(
         matched = (checkers & tags) | ({rule_id} if rule_id in checkers else set())
         if not matched:
             continue
-        if amount_checkers and not (matched & _AMOUNT_CHECKERS):
-            # 名称/单位/结构类问题不覆盖金额子检查。
+        if requires_amount and _finding_amount_kind(finding) != "amount":
+            # 名称/单位/结构类问题不覆盖金额子检查；子检查性质不明时同样
+            # fail-closed，不能仅凭规则编号族把未完成金额检查关掉。
             continue
         text = _finding_text(finding)
         if any(term in text for term in terms):
