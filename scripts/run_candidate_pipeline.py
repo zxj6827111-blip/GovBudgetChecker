@@ -3,7 +3,7 @@
 
 只作为候选筛选线索；金标结论仍须回原文核验。
 """
-import argparse, gzip, json, os, shutil, sys, time
+import argparse, gzip, json, os, re, shutil, sys, time
 from pathlib import Path
 
 SRC = Path("/Volumes/workSSD/software development/GovBudgetChecker")
@@ -21,6 +21,10 @@ def main():
     ap.add_argument("--kit", required=True)
     ap.add_argument("--python", required=True)
     args = ap.parse_args()
+    sha = (args.sha256 or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", sha):
+        raise SystemExit("sha256 必须为 64 位十六进制（已 strip 尾随空白/CR）")
+    args.sha256 = sha
     out = Path(args.out).resolve()
     code_root = Path(args.code_root).resolve()
     kit = Path(args.kit).resolve()
