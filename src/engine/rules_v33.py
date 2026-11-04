@@ -8154,6 +8154,7 @@ class R33227_Narrative5_T5_NameConsistency(Rule):
                 if (table_key and len(table_key) < len(narrative_name)
                         and narrative_name.startswith(table_key)):
                     continue
+                # 页边界把说明名称切成表名后缀：也是排版断词，不是少字。
                 if (table_key and len(narrative_name) < len(table_key)
                         and table_key.endswith(narrative_name)):
                     continue
