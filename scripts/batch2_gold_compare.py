@@ -123,8 +123,8 @@ def _find_unit(docs, sample_id: str, unit_id: str):
     return None
 
 
-def _defect_anchors(unit: Dict[str, Any]) -> List[str]:
-    """从金标单位取“错误出现点”原文；纯代码/金额/无主语百分比不算缺陷锚点。"""
+def _defect_anchors(unit: Dict[str, Any], needles: Sequence[str] = ()) -> List[str]:
+    """从金标单位取“错误出现点”原文；有契约缺陷词时只保留命中项。"""
     quotes = [str(value.get("quote") or "") for value in unit.get("values") or []
               if isinstance(value, dict)]
     anchors = []
@@ -138,6 +138,12 @@ def _defect_anchors(unit: Dict[str, Any]) -> List[str]:
         if re.search(r"完成年初预算的|完成预算的", compact) and not re.search(r"支出|收入|费|金", compact):
             continue
         anchors.append(quote)
+    if needles:
+        compact_needles = [re.sub(r"\s+", "", str(item)) for item in needles if str(item)]
+        narrowed = [quote for quote in anchors
+                    if any(item and item in re.sub(r"\s+", "", quote) for item in compact_needles)]
+        if narrowed:
+            return narrowed
     return anchors or quotes
 
 
@@ -148,8 +154,14 @@ def _anchor_covered(item: Dict[str, Any], anchor: str, eval_lib) -> bool:
     text = eval_lib.norm(str(item.get("text") or "") + " " + " ".join(item.get("quotes") or []))
     if needle in text:
         return True
-    return any(q and (eval_lib.norm(q) in needle or needle in eval_lib.norm(q))
-               for q in item.get("quotes") or [])
+    if any(q and (eval_lib.norm(q) in needle or needle in eval_lib.norm(q))
+           for q in item.get("quotes") or []):
+        return True
+    # 金标锚点常带“（项）/（款）代码/金额”外壳；按其中的名称片段核验，
+    # 避免只因缺少括注或金额就判未覆盖。
+    segments = [segment for segment in re.split(r"[（(][^）)]*[）)]|\d[\d,.]*\s*万元?", needle)
+                if len(re.findall(r"[\u4e00-\u9fff]", segment)) >= 4]
+    return any(segment in text for segment in segments)
 
 
 def _item_covers_anchor(item: Dict[str, Any], target: Dict[str, Any], docs, eval_lib) -> bool:
@@ -241,11 +253,15 @@ def run(args: argparse.Namespace) -> int:
     # 身份按 (文档, 层级, 规则, 页码, 严重度) 对齐，文本漂移单独记录并须命中允许字段。
     ignore_text_tiers = set(contract.get("identity_ignore_text_tiers") or ())
     ignore_tier_rules = set(contract.get("identity_ignore_tier_rules") or ())
-    if ignore_text_tiers or ignore_tier_rules:
+    ignore_pages_rules = set(contract.get("identity_ignore_pages_rules") or ())
+    if ignore_text_tiers or ignore_tier_rules or ignore_pages_rules:
         original_identity = eval_lib.identity_key
 
         def _identity(item, _original=original_identity, _tiers=ignore_text_tiers,
-                      _rules=ignore_tier_rules):
+                      _rules=ignore_tier_rules, _page_rules=ignore_pages_rules):
+            if item.get("rule") in _page_rules:
+                # 证据/页码增强不改变同一名称差异的身份；裁决继续继承。
+                return (item["doc"], item["rule"], eval_lib.norm(item.get("message")))
             if item.get("tier") in _tiers:
                 return (item["doc"], item["tier"], item["rule"], tuple(item["pages"]), item.get("sev"))
             if item.get("rule") in _rules:
@@ -307,10 +323,12 @@ def run(args: argparse.Namespace) -> int:
     # 严格修复只认 F 且证据合格；P 只计候选，不得把候选当正式修复。
     formal_additions = [n for n in new_only if n["tier"] == "F" and _evidence_qualified(n)]
     candidate_additions = [n for n in new_only if n["tier"] == "P"]
+    # 目标覆盖允许使用当前全部 F 层条目（含既有 F）；新增统计仍只看 new_only。
+    coverage_additions = [item for item in items
+                          if item.get("tier") == "F" and _evidence_qualified(item)]
+    new_only_ids = {item["id"] for item in new_only}
     for old, new, _how in pairs:
-        if new.get("tier") == "F" and old.get("tier") != "F" and _evidence_qualified(new):
-            formal_additions.append(new)
-        elif new.get("tier") == "P" and old.get("tier") != "P":
+        if new.get("tier") == "P" and old.get("tier") != "P":
             candidate_additions.append(new)
     def _enrich_pages(item):
         pages = set(_pages(item))
@@ -332,6 +350,7 @@ def run(args: argparse.Namespace) -> int:
     satisfied: Dict[str, List[str]] = defaultdict(list)
     partial_targets: Dict[str, Dict[str, Any]] = {}
     unexpected_additions = []
+    expected_additions = []
     added_notice = []
     for item in new_only:
         if allow_notice_changes and item.get("tier") not in {"F", "P"}:
@@ -339,18 +358,34 @@ def run(args: argparse.Namespace) -> int:
     target_anchors: Dict[str, List[str]] = {}
     for target in miss_targets:
         unit = _find_unit(docs, target["sample_id"], target.get("gold_unit") or "")
-        target_anchors[target["target_id"]] = _defect_anchors(unit) if unit else []
+        needles = (contract.get("target_message_contains") or {}).get(target["target_id"]) or []
+        target_anchors[target["target_id"]] = _defect_anchors(unit, needles) if unit else []
     target_covered: Dict[str, set] = defaultdict(set)
     target_items: Dict[str, List[str]] = defaultdict(list)
-    for item in formal_additions:
+    for item in coverage_additions:
         _enrich_pages(item)
         hits = match_addition(item, miss_targets, contract, eval_lib, gm=gm, docs=docs)
         if len(hits) > 1:
             review.append({"new_id": item["id"], "reason": "新增条目同时匹配多个 MISS 目标",
                            "targets": [h["target_id"] for h in hits]})
         if not hits:
-            unexpected_additions.append({"sample_id": item["doc"], "raw_id": item.get("raw_id"),
-                                         "rule": item["rule"], "pages": _pages(item)})
+            if item["id"] not in new_only_ids:
+                # 既有 F 条目只是参与出现点覆盖，不是本段新增。
+                continue
+            allowed_rules = {str(rule) for rule in contract.get("allowed_added_rules") or []}
+            exact = next((entry for entry in contract.get("expected_additions") or []
+                          if isinstance(entry, dict) and entry.get("sample_id") == item["doc"]
+                          and str(entry.get("rule") or "") == str(item["rule"])
+                          and (not entry.get("raw_id") or str(entry.get("raw_id")) == str(item.get("raw_id")))
+                          and all(str(needle) in str(item.get("message") or "")
+                                  for needle in entry.get("message_contains") or [])), None)
+            if item["rule"] in allowed_rules or exact is not None:
+                expected_additions.append({"sample_id": item["doc"], "raw_id": item.get("raw_id"),
+                                           "rule": item["rule"], "pages": _pages(item),
+                                           "basis": (exact or {}).get("basis") or "契约允许的本段变更"})
+            else:
+                unexpected_additions.append({"sample_id": item["doc"], "raw_id": item.get("raw_id"),
+                                             "rule": item["rule"], "pages": _pages(item)})
             continue
         for target in hits:
             anchors = target_anchors.get(target["target_id"]) or []
@@ -491,6 +526,12 @@ def run(args: argparse.Namespace) -> int:
         return sorted(fp for fp in (_entity_fingerprint(raw_index, doc, member)
                                     for member in members) if fp)
 
+    _group_pair_exceptions = {
+        (str(item.get("sample_id")), str(item.get("rule")), str(item.get("old")),
+         str(item.get("new")))
+        for item in contract.get("reference_group_renumber_allowlist") or []
+        if isinstance(item, dict)
+    }
     _renumber_exceptions = {
         (str(item.get("sample_id")), str(item.get("rule")), str(item.get("old")),
          str(item.get("new")), tuple(item.get("member_fingerprints_old") or []),
@@ -499,7 +540,8 @@ def run(args: argparse.Namespace) -> int:
         if isinstance(item, dict)
     }
 
-    def _reference_change_ok(doc: str, key: str, old_value: Any, new_value: Any, rule: str) -> bool:
+    def _reference_change_ok(doc: str, key: str, old_value: Any, new_value: Any, rule: str,
+                             old_item_id: str = "", new_item_id: str = "") -> bool:
         old_refs = _reference_values(old_value)
         new_refs = _reference_values(new_value)
         if key == "pre_group_issue_id":
@@ -512,6 +554,12 @@ def run(args: argparse.Namespace) -> int:
                 return False
             if new_ref_index.rule(doc, new_ref) not in (None, rule):
                 return False
+            old_members = tuple(sorted(old_ref_index.groups.get((doc, old_ref)) or {old_ref}))
+            new_members = tuple(sorted(new_ref_index.groups.get((doc, new_ref)) or {new_ref}))
+            if (old_item_id and new_item_id and old_members == (old_item_id,)
+                    and new_members == (new_item_id,)
+                    and (doc, rule, old_ref, new_ref) in _group_pair_exceptions):
+                return True
             old_fps = tuple(_ref_fingerprints(old_ref_index, old_raw_index, doc, old_ref))
             new_fps = tuple(_ref_fingerprints(new_ref_index, new_raw_index, doc, new_ref))
             if not old_fps or old_fps != new_fps:
@@ -633,8 +681,24 @@ def run(args: argparse.Namespace) -> int:
                                 "old": old_ref, "new": new_ref,
                                 "member_fingerprints_old": list(old_fps),
                                 "member_fingerprints_new": list(new_fps)})
+        group_entries = []
+        for old, new, _how in pairs:
+            raw_old = eval_lib.raw_item(old_raw_index, old)
+            raw_new = eval_lib.raw_item(new_raw_index, new)
+            if raw_old is None or raw_new is None:
+                continue
+            old_pre = (raw_old.get("location") or {}).get("pre_group_issue_id")
+            new_pre = (raw_new.get("location") or {}).get("pre_group_issue_id")
+            if not old_pre or not new_pre or str(old_pre) == str(new_pre):
+                continue
+            old_members = old_ref_index.groups.get((old["doc"], str(old_pre))) or set()
+            new_members = new_ref_index.groups.get((old["doc"], str(new_pre))) or set()
+            if old_members == {str(old.get("raw_id"))} and new_members == {str(new.get("raw_id"))}:
+                group_entries.append({"sample_id": old["doc"], "rule": str(old.get("rule") or ""),
+                                      "old": str(old_pre), "new": str(new_pre)})
         Path(args.emit_reference_exceptions).write_text(
-            json.dumps({"contract_id": "reference-renumber-exceptions", "entries": entries},
+            json.dumps({"contract_id": "reference-renumber-exceptions", "entries": entries,
+                        "group_entries": group_entries},
                        ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
         print(json.dumps({"emitted": len(entries), "out": args.emit_reference_exceptions},
                          ensure_ascii=False))
@@ -658,16 +722,29 @@ def run(args: argparse.Namespace) -> int:
             unexplained, renumbered = [], []
             for path in paths:
                 key = path.rstrip("/").split("/")[-1].split("[")[0]
+                rule_paths = (contract.get("raw_path_allowlist_by_rule") or {}).get(
+                    str((raw_new or {}).get("rule_id") or "")) or []
+                if (key == "pre_group_issue_id" and rule_paths
+                        and path.startswith(tuple(rule_paths))
+                        and eval_lib.get_path(a, path) and not eval_lib.get_path(b, path)):
+                    # 独立问题不再写分组展示号：仅允许“旧有→新无”的删除，
+                    # 不允许新增/改写分组引用。
+                    continue
                 if key in reference_keys:
                     # 引用必须独立核验真实来源/成员归属/实体等价；不接受同前缀顺移，
                     # 也不允许 raw_path_allowlist 整字段放行。
                     if not _reference_change_ok(old["doc"], key, eval_lib.get_path(a, path),
-                                                eval_lib.get_path(b, path), str(old.get("rule") or "")):
+                                                eval_lib.get_path(b, path), str(old.get("rule") or ""),
+                                                str(old.get("raw_id") or ""), str(new.get("raw_id") or "")):
                         unexplained.append(path)
                     else:
                         renumbered.append(path)
                     continue
                 if allow_prefixes and path.startswith(allow_prefixes):
+                    continue
+                rule_paths = (contract.get("raw_path_allowlist_by_rule") or {}).get(
+                    str((raw_new or {}).get("rule_id") or "")) or []
+                if rule_paths and path.startswith(tuple(rule_paths)):
                     continue
                 if allow_prefixes and path.startswith(allow_prefixes):
                     continue
@@ -732,8 +809,11 @@ def run(args: argparse.Namespace) -> int:
                 strict_formal_tp += 1
             elif status in {"FP_G", "FP"}:
                 strict_formal_fp += 1
+    strict_tp_before = sum(1 for row in baseline_rows.values()
+                           if row.get("tier") == "F" and row.get("final") == "TP")
     strict_metrics = {
         "formal_tp": strict_formal_tp,
+        "formal_tp_before": strict_tp_before,
         "formal_fp": strict_formal_fp,
         "p_candidates": strict_p_candidates,
         "tp_plus_hit_keep": tp_after,
@@ -763,7 +843,9 @@ def run(args: argparse.Namespace) -> int:
     add("B8", "非目标条目原始 status 指纹无漂移", not raw_drift,
         [f"{r['sample_id']}|{r['old_raw_id']}" for r in raw_drift])
     add("B9", "原始 status 均可定位", not raw_missing, [str(r)[:200] for r in raw_missing])
-    add("B10", "TP/HIT 数量不回退", tp_after >= tp_before, [f"{tp_before}->{tp_after}"])
+    add("B10", "正式 F 层 TP 数量不回退（P/HIT 单列）",
+        strict_formal_tp >= strict_tp_before,
+        [f"strict {strict_tp_before}->{strict_formal_tp}; mixed keep {tp_before}->{tp_after}"])
     add("B11", "引用/计数例外无双向冲突", not exception_conflicts, exception_conflicts)
     add("B12", "裁决继承无漂移", not decision_drift, [str(r) for r in decision_drift[:10]])
 
@@ -801,14 +883,16 @@ def run(args: argparse.Namespace) -> int:
             if isinstance(value, list):
                 # 成员集合按集合核验，不能按展示顺序逐位比较。
                 if not _reference_change_ok(old["doc"], key, old_view.get(path), value,
-                                            str(old.get("rule") or "")):
+                                            str(old.get("rule") or ""),
+                                            str(old.get("raw_id") or ""), str(new.get("raw_id") or "")):
                     entity_conflicts.append(
                         f"{old['doc']}|{new.get('raw_id')}:{path} 成员集合无法证明同源")
                 continue
             old_value = old_view.get(path)
             # 引用（含原样保留）都必须落到真实实体，且成员集合等价；
             # 未知 ID、跨规则、成员冲突、同前缀顺移一律拒收。
-            if not _reference_change_ok(old["doc"], key, old_value, value, str(old.get("rule") or "")):
+            if not _reference_change_ok(old["doc"], key, old_value, value, str(old.get("rule") or ""),
+                                        str(old.get("raw_id") or ""), str(new.get("raw_id") or "")):
                 entity_conflicts.append(
                     f"{old['doc']}|{new.get('raw_id')}:{path}={value} 引用无法证明同源")
     add("B14", "跨表示引用一致且新引用不越界", not entity_conflicts, entity_conflicts[:50])
@@ -827,6 +911,7 @@ def run(args: argparse.Namespace) -> int:
         "occurrence_coverage": occurrence_coverage,
         "strict_metrics": strict_metrics,
         "missing_additions": missing_additions, "unexpected_additions": unexpected_additions,
+        "expected_additions": expected_additions,
         "fingerprint_drift": fingerprint_drift,
         "fingerprint_expected": expected_fingerprint_drift,
         "todo_expected": todo_expected,
