@@ -144,7 +144,7 @@ def _numbering_issues(rule, doc, merged, offsets):
         if "一般公共预算" not in title or "基本支出" in title:
             continue
         scope = merged[start:end]
-        markers = list(re.finditer(r"(?:^|\n)\s*(?P<num>\d{1,2})[、.．](?!\d)", scope))
+        markers = list(re.finditer(r"(?:^|\n)\s*(?P<num>\d{1,2})[ \t\u3000]*[、.．](?!\d)", scope))
         if len(markers) < 4:
             continue
         for previous, current in zip(markers, markers[1:], strict=False):
@@ -162,7 +162,7 @@ def _numbering_issues(rule, doc, merged, offsets):
                 f"说明条目序号由{first}跳到{second}，建议核对编号连续性；不能据此判定科目内容缺失。",
                 {"page": refs[0]["page"], "pages": sorted({ref["page"] for ref in refs}),
                  "section": title, "relation_type": "item_number_gap", "table_refs": refs},
-                "low", evidence_text="\n".join(ref["span"] for ref in refs)))
+                "info", evidence_text="\n".join(ref["span"] for ref in refs)))
     return issues
 
 

@@ -483,10 +483,12 @@ def test_finals_unresolved_total_le_11(final_replays):
                   if x['rule_id']=='V33-251')
         assert '未纳入合计' in item['detail']
         added+=1
-    # IR-12 读全“主体+2025 / 年度部门决算”封面后，原有未知主体阻断解除；应暴露原件真实完成率问题。
-    assert final_replays['shiquan']['summary']['rule_statuses']['V33-234'] == 'fail'
-    assert any(issue.rule == 'V33-234' and '312.55%' in issue.message
-               and '20.00' in issue.message and '62.51' in issue.message for issue in final_replays['shiquan']['issues'])
+    # 2C：石泉 p31 的 312.55% 条目在原文已写“主要原因：追加了图书购置经费…”，
+    # 仅因 PDF 软换行把“主\n要原因”断开而被旧规则误判未说明；原因识别去空白后
+    # 该条回到 pass，不再作为未完规则。
+    assert final_replays['shiquan']['summary']['rule_statuses']['V33-234'] == 'pass'
+    assert not any(issue.rule == 'V33-234' and '312.55%' in issue.message
+                   for issue in final_replays['shiquan']['issues'])
     # 年度模板 v3：冻结 page-data 没有已批准年度模板/独立人工写法依据。
     # 封面自身不能证明文种；逐条核实新增回执，不放宽原有规则阈值。
     for alias in ("golden", "yichuan", "wenlv", "shiquan"):

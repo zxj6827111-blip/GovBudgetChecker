@@ -2610,22 +2610,95 @@ def _extract_functional_name_index(rows: List[List[str]]) -> Dict[str, Dict[str,
                 },
             )
         elif re.fullmatch(r"\d{7}", code0):
-            class_code, section_code = code0[:3], code0[:5]
-            class_entry = entries.get(class_code) or {}
-            section_entry = entries.get(section_code) or {}
+            # 决算明细表常把类/款编码补零成 7 位（2010000=类201，2010300=款20103）；
+            # 按末位零位数还原层级，否则款名被当成项名，说明5的(款,项)定位整片失效。
+            if code0.endswith("0000"):
+                level, full_code = "类", code0[:3]
+            elif code0.endswith("00"):
+                level, full_code = "款", code0[:5]
+            else:
+                level, full_code = "项", code0
+            class_entry = entries.get(full_code[:3]) or {}
+            section_entry = entries.get(full_code[:5]) or {}
             entries.setdefault(
-                code0,
+                full_code,
                 {
                     "name": name,
-                    "level": "项",
-                    "code_display": _format_functional_code(code0),
-                    "row_text": f"{code0} {name}",
+                    "level": level,
+                    "code_display": _format_functional_code(full_code),
+                    "row_text": f"{full_code} {name}",
                     "class_name": class_entry.get("name", ""),
-                    "section_name": section_entry.get("name", ""),
-                    "item_name": name,
+                    "section_name": section_entry.get("name", "") if level == "项" else name,
+                    "item_name": name if level == "项" else "",
                 },
             )
     return entries
+
+
+def _name_edit_distance(left: str, right: str, limit: int = 3) -> int:
+    """小字符串编辑距离（带阈值剪枝），只用于名称定位，不用于一致性判定。"""
+    if left == right:
+        return 0
+    if abs(len(left) - len(right)) > limit:
+        return limit + 1
+    previous = list(range(len(right) + 1))
+    for i, char_left in enumerate(left, 1):
+        current = [i]
+        best = i
+        for j, char_right in enumerate(right, 1):
+            value = min(previous[j] + 1, current[j - 1] + 1,
+                        previous[j - 1] + (char_left != char_right))
+            current.append(value)
+            best = min(best, value)
+        if best > limit:
+            return limit + 1
+        previous = current
+    return previous[-1]
+
+
+def _narrative_name_key(name: str) -> str:
+    """定位键：去规范后缀、及/与、其它/其他，不改变原文名称。"""
+    key = normalize_text(name or "").replace("其它", "其他")
+    key = key.replace("及", "").replace("与", "")
+    for suffix in ("支出", "费用", "费"):
+        if len(key) > len(suffix) and key.endswith(suffix):
+            key = key[: -len(suffix)]
+            break
+    return key
+
+
+def _functional_names_similar(left: str, right: str) -> bool:
+    """说明名称与表内名称是否可定位为同一层级（只放行小差异）。"""
+    left_key, right_key = _narrative_name_key(left), _narrative_name_key(right)
+    if not left_key or not right_key:
+        return False
+    if left_key == right_key:
+        return True
+    shortest = min(len(left_key), len(right_key))
+    limit = 3 if shortest >= 8 else 2
+    return _name_edit_distance(left_key, right_key, limit) <= limit
+
+
+def _tolerant_functional_item_codes(
+    table_entries: Dict[str, Dict[str, str]], section_name: str, item_name: str
+) -> List[str]:
+    """精确(款,项)与精确项名都失败时，用两侧小差异定位唯一项级行。"""
+    candidates: List[str] = []
+    for code, entry in table_entries.items():
+        if entry.get("level") != "项":
+            continue
+        if not _functional_names_similar(item_name, entry.get("name", "")):
+            continue
+        if not _functional_names_similar(section_name, entry.get("section_name", "")):
+            continue
+        candidates.append(code)
+    if len(candidates) == 1:
+        return candidates
+    # 款名差异较大但项名小差异唯一时，仍允许定位；再由严格比对报告名称差异。
+    by_item = [code for code, entry in table_entries.items()
+               if entry.get("level") == "项"
+               and _functional_names_similar(item_name, entry.get("name", ""))]
+    return by_item if len(by_item) == 1 else []
 
 
 def _build_functional_item_name_index(
@@ -2717,6 +2790,17 @@ def _extract_final_functional_narrative_mentions(
                             item_full_code[:5],
                             item_full_code[:7],
                         )
+                    else:
+                        tolerant = _tolerant_functional_item_codes(
+                            table_entries, section_name, item_name
+                        )
+                        if len(tolerant) == 1:
+                            item_full_code = tolerant[0]
+                            matched_codes = (
+                                item_full_code[:3],
+                                item_full_code[:5],
+                                item_full_code[:7],
+                            )
 
             if not matched_codes:
                 continue
@@ -8063,6 +8147,17 @@ class R33227_Narrative5_T5_NameConsistency(Rule):
             seen_names = set()
             for mention in mismatched_mentions:
                 narrative_name = mention["name"]
+                table_entry_name = str(table_entry.get("name") or "")
+                table_key = re.sub(r"\s+", "", table_entry_name)
+                # T5 单元格抽断（表名是说明名的前缀）与页边界断词（说明名只剩
+                # 表名后缀）都不是名称错误，不能据此报不一致。
+                if (table_key and len(table_key) < len(narrative_name)
+                        and narrative_name.startswith(table_key)):
+                    continue
+                # 页边界把说明名称切成表名后缀：也是排版断词，不是少字。
+                if (table_key and len(narrative_name) < len(table_key)
+                        and table_key.endswith(narrative_name)):
+                    continue
                 dedupe_key = (mention.get("page"), normalize_text(narrative_name))
                 if dedupe_key in seen_names:
                     continue
@@ -8145,7 +8240,104 @@ class R33227_Narrative5_T5_NameConsistency(Rule):
                     )
                 )
 
+        issues.extend(_structure_class_name_issues(self, doc, table_entries))
         return issues
+
+
+
+def _structure_class_name_issues(rule, doc, table_entries):
+    """结构段“名称（类）金额”按金额唯一绑定到表内类级行，名称不同则报告。
+
+    结构与 T5 的类级行是金额一一对应的：金额唯一命中时，说明侧名称与表内
+    名称不一致就是名称错误（张冠李戴/多字少字），不是取数不足。多候选或
+    金额无法唯一命中时保持沉默，交其他规则/人工。
+    """
+    context = getattr(doc, "fact_context", None)
+    if context is None or getattr(doc, "parse_artifact", None) is None:
+        return []
+    merged, offsets = _txt_fund_merged_pages(doc)
+    sections = [section for section in _nar_repeat_sections(merged, doc, offsets)
+                if "一般公共预算" in section[0] and "支出决算" in section[0]
+                and "基本支出" not in section[0] and "三公" not in section[0]]
+    if not sections:
+        return []
+    title, begin, end = sections[-1]
+    scope = merged[begin:end]
+    structure_at = scope.find("结构情况")
+    if structure_at < 0:
+        return []
+    detail_at = scope.find("支出决算具体情况", structure_at)
+    if detail_at < 0:
+        detail_at = len(scope)
+    scope_start = begin + structure_at
+    structure = merged[scope_start:begin + detail_at]
+    facts = [f for f in getattr(context, "facts", []) or []
+             if getattr(f, "table_code", None) == "FIN_05_general_public_expenditure"
+             and getattr(f, "indicator", None) == "total_actual"
+             and len(str(getattr(f, "subject_code", "") or "")) == 3
+             and getattr(f, "normalized_value", None) is not None]
+    if not facts:
+        return []
+    amount_re = re.compile(
+        r"(?P<name>[\u4e00-\u9fff]{2,40}?)\s*(?:[（(]类(?:代码\d{3})?[）)])?\s*"
+        r"(?P<amount>\d[\d,]*(?:\.\d+)?)\s*(?P<unit>万元|元|亿元)\s*[，,]?\s*占")
+    issues = []
+    # 页/行软换行会切断“卫生健康”（卫生|健康），匹配前去掉空白并保留原位置映射，
+    # 否则名称会被截成后半段，制造“说明写健康”的假差异。
+    compact_chars, compact_positions = [], []
+    for index, char in enumerate(structure):
+        if not char.isspace():
+            compact_chars.append(char)
+            compact_positions.append(index)
+    compact_structure = "".join(compact_chars)
+    for match in amount_re.finditer(compact_structure):
+        try:
+            amount = Decimal(match.group("amount").replace(",", ""))
+        except ArithmeticError:
+            continue
+        unit = match.group("unit")
+        if unit == "元":
+            amount /= Decimal(10000)
+        elif unit == "亿元":
+            amount *= Decimal(10000)
+        hits = [f for f in facts
+                if abs(f.normalized_value - amount) <= Decimal("0.01")]
+        if len(hits) != 1:
+            continue
+        fact = hits[0]
+        narrative_name = match.group("name").strip()
+        table_name = str(fact.subject_name or "").strip()
+        table_key = re.sub(r"\s+", "", table_name)
+        if not table_name or _functional_name_identical(table_key, narrative_name):
+            continue
+        # 页边界把类名切成后缀（“…社/障和就业支出”）：这是排版断词，不是少字。
+        if (len(narrative_name) < len(table_key) and table_key.endswith(narrative_name)
+                and not table_key.startswith(narrative_name)):
+            continue
+        # T5 类名抽断（表名是说明名的前缀）也不是说明侧错误。
+        if len(table_key) < len(narrative_name) and narrative_name.startswith(table_key):
+            continue
+        code = str(fact.subject_code)
+        page = _txt_fund_page_for(offsets, scope_start + compact_positions[match.start()])
+        issues.append(rule._issue(
+            f"说明5类级科目名称与T5不一致（{code}）：表格“{table_name}”，说明“{narrative_name}”",
+            {
+                "page": page,
+                "section": "说明5（一般公共预算财政拨款支出结构情况）",
+                "table": "一般公共预算财政拨款支出决算表",
+                "row": code,
+                "code": code,
+                "code_level": "类",
+                "expected_name": table_name,
+                "actual_name": narrative_name,
+                "source_of_truth": "T5",
+                "field": "功能分类科目名称",
+            },
+            severity="warn",
+            evidence_text=(f"编码：{code}\n表格名称：{table_name}\n说明名称：{narrative_name}\n"
+                           f"说明片段：{match.group(0)}"),
+        ))
+    return issues
 
 
 # ==================================================================================
@@ -9065,14 +9257,16 @@ def _completion_rate_has_reason(
     segment: str, match: re.Match[str], *, tail: str = ""
 ) -> bool:
     window_start = max(0, match.start() - 80)
-    window_end = min(len(segment), match.end() + 160)
-    window = segment[window_start:window_end]
+    window_end = min(len(segment), match.end() + 400)
+    # PDF 软换行会断开“主要原因”等词（实样“主\n要原因”）；原因识别去空白，
+    # 不改原文引文，只避免把已写原因误判为未写。
+    window = re.sub(r"\s+", "", segment[window_start:window_end])
     if _FINAL_COMPLETION_REASON_RE.search(window):
         return True
     # MR-P5b：句子在页尾被截断（段尾即页尾）时，原因句可能续在下一页开头，
     # 续看下页起始避免误报「未说明原因」（宜川 p35→p36 实证）。
     if tail and match.end() >= len(segment) - 60:
-        if _FINAL_COMPLETION_REASON_RE.search(tail[:240]):
+        if _FINAL_COMPLETION_REASON_RE.search(re.sub(r"\s+", "", tail[:240])):
             return True
     return False
 _FINAL_ITEM_OPENING_AMOUNT_RE = re.compile(

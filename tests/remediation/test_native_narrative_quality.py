@@ -25,7 +25,8 @@ def test_actual_specific_reason_and_rounding_difference_are_not_flagged():
 def test_item_gap_is_not_reported_as_missing_subject_content():
     document = doc("1、甲\n2、乙\n3、丙\n5、丁")
     issues = check_quality(R33234_NarrativePercentConsistency(), document)
-    assert len(issues) == 1 and issues[0].severity == "low"
+    # 2C：序号跳号只是提示，不占正式层；仍保留“不能据此判定科目内容缺失”的边界。
+    assert len(issues) == 1 and issues[0].severity == "info"
     assert "不能据此判定科目内容缺失" in issues[0].message
 
 

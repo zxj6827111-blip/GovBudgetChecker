@@ -183,9 +183,10 @@ def test_unresolved_total_le_15(replays):
         item = replays[alias]["unresolved"]["V33-251"]
         assert "未纳入合计" in item["detail"] and label in item["detail"]
         planned_missing += 1
-    assert replays['shiquan']['summary']['rule_statuses']['V33-234'] == 'fail'
-    assert any(issue.rule == 'V33-234' and '312.55%' in issue.message
-               and '20.00' in issue.message and '62.51' in issue.message for issue in replays['shiquan']['issues'])
+    # 2C：软换行断开的“主要原因”已可识别，312.55% 条目不再误报未说明原因。
+    assert replays['shiquan']['summary']['rule_statuses']['V33-234'] == 'pass'
+    assert not any(issue.rule == 'V33-234' and '312.55%' in issue.message
+                   for issue in replays['shiquan']['issues'])
     # v3 封面不能用封面或未验收的标题风格自证；冻结夹具不带年度模板快照。
     # 2026-11-01：body_year 改为按页 ±20 字窗口识别标题，跨行的
     # “2025\n年度决算表”不再漏计；yichuan/shiquan 的年度锚点已能独立成立，
