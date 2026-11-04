@@ -191,11 +191,12 @@ def _amount_bindings(text: str) -> List[tuple]:
 def _item_occurrences(item: Dict[str, Any]) -> List[tuple]:
     """[(page, text)]：同一引用内部的文本只与它自己的 page 绑定。
 
-    R2-02：不再把不同页的 text/quotes/refs 汇总成一个语料池——页 6 的引文
-    不能借 finding.pages 覆盖页 5。只有证据引用、位置引用或单页条目才带页；
-    多页条目的顶层正文无法确定归属时页为 None（fail-closed）。
+    R3-02：显式页码引用优先；只要存在 evidence/table_refs/locations 引用，
+    顶层 text/quotes 不再被统一重绑到 ``location.page``（多页条目尤其如此），
+    只作为无页归属的摘要保留。无显式引用时，单页条目才把顶层正文绑到该页；
+    多页条目的顶层正文保持 None（fail-closed）。
     """
-    occurrences: List[tuple] = []
+    explicit: List[tuple] = []
     location = item.get("location") if isinstance(item.get("location"), dict) else {}
     for key in ("locations", "table_refs", "fact_source_refs", "occurrences"):
         entries = location.get(key)
@@ -210,7 +211,7 @@ def _item_occurrences(item: Dict[str, Any]) -> List[tuple]:
                 continue
             raw_page = ref.get("page")
             page = int(raw_page) if isinstance(raw_page, int) and raw_page > 0 else None
-            occurrences.append((page, str(value)))
+            explicit.append((page, str(value)))
     for evidence in item.get("evidence") or []:
         if not isinstance(evidence, dict):
             continue
@@ -220,29 +221,53 @@ def _item_occurrences(item: Dict[str, Any]) -> List[tuple]:
             continue
         raw_page = evidence.get("page")
         page = int(raw_page) if isinstance(raw_page, int) and raw_page > 0 else None
-        occurrences.append((page, str(value)))
+        explicit.append((page, str(value)))
+    top_texts = [str(item.get("text") or "")] + [str(q) for q in item.get("quotes") or [] if q]
+    top_texts = [value for value in top_texts if value]
+    if explicit:
+        # 已有明确页码引用：顶层摘要不参与带页锚点，避免“页 6 的精确引文
+        # 借 location.page=5 覆盖页 5”。
+        return explicit + [(None, value) for value in top_texts]
     pages = {int(p) for p in item.get("pages") or [] if isinstance(p, int)}
     primary = location.get("page")
     single = next(iter(pages)) if len(pages) == 1 else None
-    if single is None and isinstance(primary, int) and primary > 0:
+    if single is None and not pages and isinstance(primary, int) and primary > 0:
         single = primary
-    for value in [str(item.get("text") or "")] + [str(q) for q in item.get("quotes") or [] if q]:
-        if value:
-            occurrences.append((single, value))
-    return occurrences
+    return [(single, value) for value in top_texts]
+
+
+#: 同一局部关系的切分边界：名称和金额必须在同一个 clause 内配对，
+#: 不能在整段里分别找到名称和数字就放行。
+_CLAUSE_SPLIT_RE = re.compile(r"[；;。，,\n]")
+
+
+def _clauses(text: str) -> List[str]:
+    return [clause for clause in _CLAUSE_SPLIT_RE.split(text or "") if clause]
+
+
+def _clause_amount_ok(clause: str, material: Sequence[tuple]) -> bool:
+    units_by_number: Dict[str, set] = {}
+    for number, unit in _amount_bindings(clause):
+        units_by_number.setdefault(number, set()).add(unit)
+    for number, unit in material:
+        if number not in units_by_number:
+            return False
+        if unit and unit not in units_by_number[number]:
+            return False
+    return True
 
 
 def _anchor_covered(item: Dict[str, Any], anchor: str, eval_lib,
                     page: Optional[int] = None, amount_required: bool = True) -> bool:
     """出现点覆盖：页、局部引文、金额、精确单位必须属于同一出现点。
 
-    R2-02 收紧（独立复核 20261104）：
-    - 传入 ``page`` 时必须存在绑定到该页的引用；缺页码/只有其他页的引文
-      不能证明带页码锚点。
-    - 金额锚点的每个数值必须在同一段引用内逐字命中，且紧跟的精确单位
-      一致；“元”不能被“万元”的子串关系满足。
-    - 金额不符后不再用“同页 + 名称片段”放行。名称/口径类契约必须由调用方
-      显式传 ``amount_required=False``，并且仍要求同页同段名称命中。
+    R3-02 收紧（第三轮复核 2026-11-04）：
+    - 金额锚点按 clause 绑定：名称片段与金额/单位必须在同一局部关系内，
+      不能在整段里分别搜索；候选“项目支出10万元；基本支出100万元”
+      不能覆盖“项目支出100万元”。
+    - 显式页码引用优先，顶层 quotes 不再被 ``location.page`` 统一重绑。
+    - 金额不符后不允许名称回退；名称/口径类必须由调用方显式
+      ``amount_required=False``，且仍要求同页同 clause 名称命中。
     """
     needle = eval_lib.norm(anchor)
     if not needle:
@@ -255,56 +280,50 @@ def _anchor_covered(item: Dict[str, Any], anchor: str, eval_lib,
     anchor_bindings = _amount_bindings(needle)
     segments = _text_segments(needle)
     if not anchor_bindings:
-        # 纯文本锚点：逐出现点匹配，不跨段拼接。
+        # 纯文本锚点：完整引文逐出现点命中；片段匹配也只在单个 clause 内。
         for _p, text in occurrences:
             if needle in text:
                 return True
         for _p, text in occurrences:
-            shorter, longer = sorted((len(text), len(needle)))
-            if text and (text in needle or needle in text) and longer and shorter / longer >= 0.8:
-                return True
-            for segment in segments:
-                if len(segment) >= max(4, int(len(needle) * 0.6)) and segment in text:
+            for clause in _clauses(text):
+                shorter, longer = sorted((len(clause), len(needle)))
+                if clause and (clause in needle or needle in clause) \
+                        and longer and shorter / longer >= 0.8:
                     return True
-        if not amount_required and page is not None:
-            for _p, text in occurrences:
                 for segment in segments:
-                    for start in range(0, max(1, len(segment) - 7)):
-                        window = segment[start:start + 8]
-                        if len(re.findall(r"[\u4e00-\u9fff]", window)) >= 6 and window in text:
-                            return True
+                    if len(segment) >= max(4, int(len(needle) * 0.6)) and segment in clause:
+                        return True
+                if not amount_required and page is not None:
+                    for segment in segments:
+                        for start in range(0, max(1, len(segment) - 7)):
+                            window = segment[start:start + 8]
+                            if len(re.findall(r"[\u4e00-\u9fff]", window)) >= 6 and window in clause:
+                                return True
         return False
-    # 金额锚点：同一出现段内数值、精确单位、名称三项都要命中。
+    # 金额锚点：同一 clause 内数值、精确单位、名称三项都要命中。
     # 百分比是另一维度，作为金额缺陷的上下文时不强制复述；纯百分比锚点
     # （如占比检查）仍要求全部百分比命中。
     material = [item for item in anchor_bindings if item[1] != "%"]
     if not material:
         material = list(anchor_bindings)
     for _p, text in occurrences:
-        units_by_number: Dict[str, set] = {}
-        for number, unit in _amount_bindings(text):
-            units_by_number.setdefault(number, set()).add(unit)
-        amount_ok = True
-        for number, unit in material:
-            if number not in units_by_number:
-                amount_ok = False
-                break
-            # 锚点带单位时必须精确一致；锚点未写单位时只绑定数值本身。
-            if unit and unit not in units_by_number[number]:
-                amount_ok = False
-                break
-        if amount_ok and (not segments or any(segment in text for segment in segments)):
+        # 完整锚点原文在，直接视为同一出现点（保留合法长引文正控）。
+        if needle in text:
             return True
-        # 名称/口径类显式契约：候选不必复述金额，但必须同页同段命中名称。
-        # 这是唯一允许忽略金额的分支，且不会被金额/格式类调用方启用。
-        if not amount_required and page is not None and segments:
-            if any(segment in text for segment in segments):
-                return True
-            for segment in segments:
-                for start in range(0, max(1, len(segment) - 7)):
-                    window = segment[start:start + 8]
-                    if len(re.findall(r"[\u4e00-\u9fff]", window)) >= 6 and window in text:
-                        return True
+        for clause in _clauses(text):
+            if _clause_amount_ok(clause, material):
+                if not segments or any(segment in clause for segment in segments):
+                    return True
+            # 名称/口径类显式契约：候选不必复述金额，但必须同页同 clause
+            # 命中名称；金额/格式类调用方不会启用这个分支。
+            if not amount_required and segments:
+                if any(segment in clause for segment in segments):
+                    return True
+                for segment in segments:
+                    for start in range(0, max(1, len(segment) - 7)):
+                        window = segment[start:start + 8]
+                        if len(re.findall(r"[\u4e00-\u9fff]", window)) >= 6 and window in clause:
+                            return True
     return False
 
 

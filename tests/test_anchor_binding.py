@@ -64,6 +64,27 @@ def test_multi_page_refs_bind_each_occurrence():
     assert not cmp._anchor_covered(payload, "项目支出100.00万元", ev, page=6)
 
 
+def test_multipage_primary_cannot_reassign_other_page_quote():
+    # 多页条目即使带 location.page=5，页 6 的精确引文也不能覆盖页 5。
+    payload = item("项目支出10.00万元", ["项目支出10.00万元"], [5, 6],
+                   refs=[ref(6, "项目支出100.00万元")])
+    payload["location"]["page"] = 5
+    assert not cmp._anchor_covered(payload, "项目支出100.00万元", ev, page=5)
+
+
+def test_neighbor_amount_cannot_cover_local_relation():
+    # 名称与金额必须同一局部关系：不能拿“基本支出”的 100 万元覆盖“项目支出”。
+    payload = item("项目支出10.00万元；基本支出100.00万元",
+                   ["项目支出10.00万元；基本支出100.00万元"], [5])
+    assert not cmp._anchor_covered(payload, "项目支出100.00万元", ev, page=5)
+
+
+def test_local_relation_same_clause_positive():
+    payload = item("项目支出100.00万元；基本支出10.00万元",
+                   ["项目支出100.00万元；基本支出10.00万元"], [5])
+    assert cmp._anchor_covered(payload, "项目支出100.00万元", ev, page=5)
+
+
 def test_same_name_other_page_cannot_cover():
     assert not cmp._anchor_covered(item("行政运行费", ["行政运行费"], [10]),
                                    "行政运行费（项）13,265.31", ev, page=11)
