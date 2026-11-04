@@ -334,12 +334,25 @@ def _defect_anchor_entries(unit: Dict[str, Any], needles: Sequence[str] = ()) ->
                         for value in unit.get("values") or [] if isinstance(value, dict)]
 
 
-def _item_covers_anchor(item: Dict[str, Any], target: Dict[str, Any], docs, eval_lib) -> bool:
+#: 名称/口径/标点类检查：候选可以不重复金额，但仍须同页同段命中名称。
+#: 金额/格式类检查不在此列，不得用名称放行。
+_NAME_ONLY_CHECKS = {
+    "GS-N05", "GS-S01", "GS-S03", "GS-S04", "free:R21",
+    "free:R22", "free:R24", "free:R28", "free:R9-半角冒号",
+}
+
+
+def _item_covers_anchor(item: Dict[str, Any], target: Dict[str, Any], docs, eval_lib,
+                        amount_required: bool = True,
+                        needles: Sequence[str] = ()) -> bool:
     unit = _find_unit(docs, target["sample_id"], target.get("gold_unit") or "")
     if unit is None:
         return True  # 无金标单位数据时退回页码/原文匹配
-    return any(_anchor_covered(item, entry["quote"], eval_lib, entry.get("page"))
-               for entry in _defect_anchor_entries(unit))
+    # 名称/口径类目标由调用方显式传 amount_required=False；金额/格式类仍要求
+    # 同一出现点内的金额与精确单位。
+    return any(_anchor_covered(item, entry["quote"], eval_lib, entry.get("page"),
+                               amount_required=amount_required)
+               for entry in _defect_anchor_entries(unit, needles))
 
 
 def _evidence_qualified(item: Dict[str, Any]) -> bool:
@@ -396,7 +409,10 @@ def match_addition(item: Dict[str, Any], targets: Sequence[Dict[str, Any]],
                 continue
             if target["pages"] and not (set(_pages(item)) & set(target["pages"])):
                 continue
-            if _item_covers_anchor(item, target, docs, eval_lib):
+            if _item_covers_anchor(item, target, docs, eval_lib,
+                                   amount_required=(target.get("check_key") or "")
+                                   not in _NAME_ONLY_CHECKS,
+                                   needles=needles):
                 hits.append(target)
             continue
         if target["pages"] and not (set(_pages(item)) & set(target["pages"])):
@@ -406,7 +422,10 @@ def match_addition(item: Dict[str, Any], targets: Sequence[Dict[str, Any]],
             continue
         if not _quote_matches(item, contract.get("target_quotes", {}).get(target["target_id"], []), eval_lib):
             continue
-        if not _item_covers_anchor(item, target, docs, eval_lib):
+        if not _item_covers_anchor(item, target, docs, eval_lib,
+                                   amount_required=(target.get("check_key") or "")
+                                   not in _NAME_ONLY_CHECKS,
+                                   needles=needles):
             continue
         hits.append(target)
     return hits
@@ -597,10 +616,7 @@ def run(args: argparse.Namespace) -> int:
             continue
         for target in hits:
             anchors = target_anchors.get(target["target_id"]) or []
-            name_only = (target.get("check_key") or "") in {
-                "GS-N05", "GS-S01", "GS-S03", "GS-S04", "free:R21",
-                "free:R22", "free:R24", "free:R28", "free:R9-半角冒号",
-            }
+            name_only = (target.get("check_key") or "") in _NAME_ONLY_CHECKS
             covered = {index for index, anchor in enumerate(anchors)
                        if _anchor_covered(item, anchor["quote"], eval_lib, anchor.get("page"),
                                           amount_required=not name_only)}
