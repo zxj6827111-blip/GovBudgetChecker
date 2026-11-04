@@ -165,7 +165,7 @@ def _text_segments(needle: str) -> List[str]:
 
 
 def _anchor_covered(item: Dict[str, Any], anchor: str, eval_lib,
-                    page: Optional[int] = None) -> bool:
+                    page: Optional[int] = None, amount_required: bool = True) -> bool:
     """出现点覆盖：必须同时满足位置、金额/单位、名称/关系，不接受通用短语。
 
     R-02：
@@ -181,10 +181,23 @@ def _anchor_covered(item: Dict[str, Any], anchor: str, eval_lib,
         return False
     if page is not None and _pages(item) and page not in _pages(item):
         return False
-    text = eval_lib.norm(str(item.get("text") or "") + " " + " ".join(item.get("quotes") or []))
+    location = item.get("location") if isinstance(item.get("location"), dict) else {}
+    occurrence_texts = []
+    for key in ("locations", "table_refs", "fact_source_refs", "occurrences"):
+        entries = location.get(key)
+        if not isinstance(entries, (list, tuple)):
+            continue
+        for ref in entries:
+            if isinstance(ref, dict):
+                value = ref.get("text") or ref.get("span") or ref.get("quote")
+                if value:
+                    occurrence_texts.append(str(value))
+    corpus = " ".join([str(item.get("text") or ""), *[str(q) for q in item.get("quotes") or []],
+                       *occurrence_texts])
+    text = eval_lib.norm(corpus)
     if needle in text:
         return True
-    quotes = [eval_lib.norm(quote) for quote in item.get("quotes") or [] if quote]
+    quotes = [eval_lib.norm(quote) for quote in [*(item.get("quotes") or []), *occurrence_texts] if quote]
     anchor_amounts = _amount_tokens(needle)
     if not anchor_amounts:
         # 纯文本锚点：只接受覆盖 80% 以上的引文，或锚点本身的等价长片段。
@@ -193,9 +206,16 @@ def _anchor_covered(item: Dict[str, Any], anchor: str, eval_lib,
                 shorter, longer = sorted((len(candidate), len(needle)))
                 if longer and shorter / longer >= 0.8:
                     return True
-        for segment in _text_segments(needle):
+        text_segments = _text_segments(needle)
+        for segment in text_segments:
             if len(segment) >= max(4, int(len(needle) * 0.6)) and segment in text:
                 return True
+        if not amount_required and page is not None and page in _pages(item):
+            for segment in text_segments:
+                for start in range(0, max(1, len(segment) - 7)):
+                    window = segment[start:start + 8]
+                    if len(re.findall(r"[\u4e00-\u9fff]", window)) >= 6 and window in text:
+                        return True
         return False
     # 金额锚点：金额 token 必须全部命中，单位不能换，名称片段必须在。
     # 例外只给“名称缺陷 + 明确同页”的锚点：金标的名称出现点常带金额上下文，
@@ -205,6 +225,20 @@ def _anchor_covered(item: Dict[str, Any], anchor: str, eval_lib,
     segments = _text_segments(needle)
     amount_ok = bool(text_amounts) and all(token in text_amounts for token in anchor_amounts)
     if not amount_ok:
+        # 名称/口径/标点类出现点：金额只是上下文，页码+名称即可证明同一处；
+        # 金额/格式类出现点仍要求金额逐字命中（amount_required=True）。
+        if not amount_required and page is not None and page in _pages(item) and segments:
+            for segment in segments:
+                if segment in text:
+                    return True
+                # 表格注/章节句常被引文截断，判别词可能在句中：同页且任一
+                # 8 字窗口逐字命中即可证明是同一句。窗口必须至少 6 个汉字，
+                # 避免“万元/合计”这类泛词单凭窗口过关。
+                for start in range(0, max(1, len(segment) - 7)):
+                    window = segment[start:start + 8]
+                    if len(re.findall(r"[\u4e00-\u9fff]", window)) >= 6 and window in text:
+                        return True
+            return False
         if page is not None and page in _pages(item) and segments:
             return any(segment in text for segment in segments)
         return False
@@ -454,6 +488,8 @@ def run(args: argparse.Namespace) -> int:
         pages = set(_pages(item))
         raw = eval_lib.raw_item(new_raw_index, item) or {}
         location = raw.get("location") if isinstance(raw.get("location"), dict) else {}
+        if location:
+            item["location"] = location
         for key in ("locations", "table_refs", "occurrences", "pages"):
             entries = location.get(key)
             if isinstance(entries, list):
@@ -508,8 +544,13 @@ def run(args: argparse.Namespace) -> int:
             continue
         for target in hits:
             anchors = target_anchors.get(target["target_id"]) or []
+            name_only = (target.get("check_key") or "") in {
+                "GS-N05", "GS-S01", "GS-S03", "GS-S04", "free:R21",
+                "free:R22", "free:R24", "free:R28", "free:R9-半角冒号",
+            }
             covered = {index for index, anchor in enumerate(anchors)
-                       if _anchor_covered(item, anchor["quote"], eval_lib, anchor.get("page"))}
+                       if _anchor_covered(item, anchor["quote"], eval_lib, anchor.get("page"),
+                                          amount_required=not name_only)}
             target_covered[target["target_id"]] |= covered
             target_items[target["target_id"]].append(item["id"])
     missing_additions = []
