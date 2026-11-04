@@ -224,9 +224,23 @@ class CMM021_TableTitleNormative(Rule):
             cores = _BUDGET_CORES
         else:
             names, cores = list(_FINAL_TABLE_NAMES), _FINAL_CORES
+        # R-02/R-05：目录表题也是表名出现点；只扫表页会漏掉目录与正文
+        # 不一致（E-06/A-05）。目录行去掉“七、”等中文序号后按同一规范比对。
+        toc_titles: List[Tuple[int, str, int, int, str]] = []
+        for toc_page, toc_text in iter_pages(doc, skip_toc=False):
+            if not is_toc_page(toc_text):
+                continue
+            offset = 0
+            for line in str(toc_text or "").split("\n"):
+                start, offset = offset, offset + len(line) + 1
+                norm = _title_norm(line)
+                if norm.endswith("表") and re.search(r"(?:预算|决算)", norm) and len(norm) <= 64:
+                    toc_titles.append((toc_page, toc_text, start, start + len(line), norm))
+        titles = list(dict.fromkeys([*titles, *toc_titles]))
         mismatches: List[Tuple[int, str, int, int, str, str]] = []
         for page, text, start, end, norm in titles:
-            body = re.sub(r"^20\d{2}年度?", "", norm)
+            body = re.sub(r"^[一二三四五六七八九十]+、", "", norm)
+            body = re.sub(r"^20\d{2}年度?", "", body)
             index = next((i for i, core in reversed(list(enumerate(cores))) if core in _title_norm(body)), None)
             artifact = getattr(doc, "parse_artifact", None)
             if kind == "final" and artifact is not None:
@@ -260,6 +274,10 @@ class CMM021_TableTitleNormative(Rule):
         combined = [*extra, issue_at(
             self, f"表名与规范表名不一致：{detail}{more}。",
             page, text, start, end, severity="warn", checklist_item="E-06", occurrences=len(mismatches),
+            locations=[{"page": p, "text": text[s:s + (e - s)], "start": s, "end": e}
+                       for p, text, s, e, _b, _e in mismatches],
+            table_refs=[{"page": p, "span": text[s:s + (e - s)], "role": "表题"}
+                        for p, text, s, e, _b, _e in mismatches],
         )]
         if pending: raise RuleDeferred(self.code, detail="；".join(pending), partial_issues=combined)
         return combined

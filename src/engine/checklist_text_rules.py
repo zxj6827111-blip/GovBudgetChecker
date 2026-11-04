@@ -561,7 +561,12 @@ class CMM011_AmountUnitWan(Rule):
                         continue
                     # 引文连同“支出/收入…”科目名一起给出：只引金额无法说明是
                     # 哪一项漏了万元，也无法与金标的“科目+金额”出现点对齐。
-                    offset = paragraph.start() + match.start() - (subject.end() - subject.start())
+                    # 科目名常是“自然资源海洋气象等支出”这类长词，subject
+                    # 只命中末尾“支出”，需要继续向前并入连续汉字。
+                    prefix = re.search(r"[\u4e00-\u9fff]{2,20}$", before[:subject.start()])
+                    extend = (subject.end() - subject.start()) + (
+                        len(prefix.group(0)) if prefix else 0)
+                    offset = paragraph.start() + match.start() - extend
                     start, end = flat_span(positions, offset,
                                            paragraph.start() + match.end())
                     literal = text[start:end].strip()

@@ -328,7 +328,9 @@ class CMM018_ScopeTerminology(Rule):
         effective_scope = confirmed_scope or scope
         bare_cover = (_cover_scope(doc) == "unit" and "部门" not in page1 and "单位" not in page1
                       and not confirmed_scope)
-        term_scope = "unit" if (bare_cover and effective_scope == "department") else effective_scope
+        # R2（封面优先级）：封面明确为无“部门”的年度决算时，正文用语按单位
+        # 口径核对，不因正文/表注多数写成“部门”而跳过“本部门”扫描。
+        term_scope = "unit" if bare_cover else effective_scope
         if term_scope in _SCOPE_WRONG_TERMS:
             label = "部门" if term_scope == "department" else "单位"
             for term, pattern in _SCOPE_WRONG_TERMS[term_scope]:
