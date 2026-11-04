@@ -8110,7 +8110,6 @@ class R33227_Narrative5_T5_NameConsistency(Rule):
 
     def apply(self, doc: Document) -> List[Issue]:
         issues: List[Issue] = []
-        emitted: List[tuple] = []
 
         _ensure_table_anchors(doc)
         table_name = "一般公共预算财政拨款支出决算表"
@@ -8231,6 +8230,9 @@ class R33227_Narrative5_T5_NameConsistency(Rule):
                         location["table_refs"] = source_refs
                         location["page"] = source_refs[0]["page"]
                         location["pages"] = sorted({ref["page"] for ref in source_refs})
+                if not _location_has_bound_ref(location):
+                    _attach_name_evidence_refs(doc, location, mention, mention_page,
+                                               table_row_page, code, table_entry.get("name") or "")
 
                 evidence_text = (
                     f"编码：{row_label}\n"
@@ -8241,18 +8243,15 @@ class R33227_Narrative5_T5_NameConsistency(Rule):
                 suffix_only = _functional_name_matches(table_entry["name"], narrative_name)
                 # 表格名称在格内折行（“一般公共服务\n支出”），提示语里按原文连写。
                 shown_table_name = re.sub(r"\s+", "", table_entry["name"])
-                issue = self._issue(
+                issues.append(self._issue(
                     f"说明5{level}级科目名称与T5不一致（{row_label}）："
                     f"表格“{shown_table_name}”，说明“{narrative_name}”"
                     + ("（名称多/少“支出/决算”等字）" if suffix_only else ""),
                     location,
                     severity="low" if suffix_only else "warn",
                     evidence_text=evidence_text,
-                )
-                issues.append(issue)
-                emitted.append((issue, table_entry, mention, table_row_page))
+                ))
 
-        _promote_single_kuan_name_issue(self, doc, emitted, issues)
         issues.extend(_structure_class_name_issues(self, doc, table_entries))
         return issues
 
@@ -8308,6 +8307,52 @@ def _narrative_name_page_split(doc: Document, mention: dict, table_key: str) -> 
     return bool(previous and previous.endswith(missing))
 
 
+def _location_has_bound_ref(location: dict) -> bool:
+    refs = location.get("table_refs") if isinstance(location, dict) else None
+    if not isinstance(refs, list):
+        return False
+    return any(isinstance(ref, dict) and (
+        ref.get("file_hash") or ref.get("bbox") or ref.get("source_cell_id")
+        or ref.get("name_source_cell_id") or ref.get("evidence_id")
+    ) for ref in refs)
+
+
+def _span_unique_on_page(doc: Document, page: int, span: str) -> bool:
+    texts = getattr(doc, "page_texts", None) or []
+    if not isinstance(page, int) or not 1 <= page <= len(texts) or not span:
+        return False
+    from src.engine.native_narrative_checks import _Text
+    compact = _Text.from_pages([texts[page - 1]]).compact
+    needle = "".join(normalized for char in str(span)
+                     for normalized in unicodedata.normalize("NFKC", char)
+                     if not normalized.isspace())
+    return bool(needle) and compact.count(needle) == 1
+
+
+def _attach_name_evidence_refs(doc, location, mention, narrative_page, table_page, code, name):
+    """给名称差异补说明侧/表侧真实原文引用，保证正式层证据可核验。
+
+    说明侧用整条三级名称原文；表侧优先用同页唯一的“编码+名称/名称”片段。
+    两侧都取不到唯一原文时保持原样（不伪造引用）。
+    """
+    refs = []
+    narrative_span = str(mention.get("source_span") or "")
+    if narrative_span and _span_unique_on_page(doc, narrative_page, narrative_span):
+        refs.append({"page": narrative_page, "span": narrative_span, "role": "说明5",
+                     "section": "说明5（一般公共预算财政拨款支出决算具体情况）",
+                     "row": location.get("row"), "field": "功能分类科目名称",
+                     "code": code, "subject": mention.get("name")})
+    table_span = _functional_table_name_span(doc, table_page, code, name)
+    if table_span:
+        refs.append({"page": table_page, "span": table_span, "role": "T5",
+                     "table": "一般公共预算财政拨款支出决算表",
+                     "row": location.get("row"), "field": "功能分类科目名称",
+                     "code": code, "subject": name})
+    if refs:
+        location["table_refs"] = refs
+        location["pages"] = sorted({ref["page"] for ref in refs})
+
+
 def _functional_table_name_span(doc: Document, page: int, code: str, name: str) -> str:
     """在 T5 物理页上取唯一的“编码+名称”（或名称）原文片段。"""
     texts = getattr(doc, "page_texts", None) or []
@@ -8333,60 +8378,6 @@ def _functional_table_name_span(doc: Document, page: int, code: str, name: str) 
             return text[positions[start]:positions[start + len(needle) - 1] + 1]
     return ""
 
-
-def _promote_single_kuan_name_issue(rule, doc, emitted, issues) -> None:
-    """单条“款名完全不同”的名称差异追加一条证据已绑定的正式条目。
-
-    旧 P 级条目保留原样（金标裁决继承与 TP 不因证据改写而回退）；新增条目
-    带说明侧原文引用，用于证据守卫可核验的正式层。只处理文档内仅此一条
-    V33-227、款级、两侧名称互不包含/不构成子序列的高置信场景。
-    """
-    if len(emitted) != 1:
-        return
-    issue, table_entry, mention, table_page = emitted[0]
-    location = getattr(issue, "location", None)
-    if not isinstance(location, dict) or location.get("code_level") != "款":
-        return
-    # 已由 functional_name_refs 绑定到原件单元格的条目本身已是正式层，
-    # 不再追加第二个同缺陷条目，避免同一名称差异重复出两条。
-    existing_refs = location.get("table_refs") or []
-    if any(ref.get("file_hash") or ref.get("bbox") or ref.get("source_cell_id")
-           or ref.get("name_source_cell_id") or ref.get("evidence_id")
-           for ref in existing_refs if isinstance(ref, dict)):
-        return
-    table_key = re.sub(r"\s+", "", str(table_entry.get("name") or ""))
-    narrative_key = re.sub(r"\s+", "", str(mention.get("name") or ""))
-    if not table_key or not narrative_key:
-        return
-    if table_key in narrative_key or narrative_key in table_key:
-        return
-    # 插入“（室）”这类只多几个字的差异不是完全不同的款名，保持原分级。
-    def _is_subsequence(short: str, long: str) -> bool:
-        iterator = iter(long)
-        return all(char in iterator for char in short)
-    if _is_subsequence(narrative_key, table_key) or _is_subsequence(table_key, narrative_key):
-        return
-    try:
-        page = int(str(mention.get("page")).strip())
-    except (TypeError, ValueError):
-        return
-    span = str(mention.get("source_span") or "")
-    if not span:
-        return
-    new_location = dict(location)
-    new_location["table_refs"] = [
-        {"page": page, "span": span, "role": "说明5",
-         "section": "说明5（一般公共预算财政拨款支出决算具体情况）",
-         "row": location.get("row"), "field": "功能分类科目名称",
-         "code": location.get("code"), "subject": mention.get("name")},
-    ]
-    new_location["pages"] = sorted({page, table_page})
-    issues.append(rule._issue(
-        issue.message + "；已按说明原文与表内同编码款名逐字复核。",
-        new_location,
-        severity=issue.severity,
-        evidence_text=issue.evidence_text,
-    ))
 
 
 def _structure_class_name_issues(rule, doc, table_entries):
@@ -8463,20 +8454,28 @@ def _structure_class_name_issues(rule, doc, table_entries):
             continue
         code = str(fact.subject_code)
         page = _txt_fund_page_for(offsets, scope_start + compact_positions[match.start()])
+        location = {
+            "page": page,
+            "section": "说明5（一般公共预算财政拨款支出结构情况）",
+            "table": "一般公共预算财政拨款支出决算表",
+            "row": code,
+            "code": code,
+            "code_level": "类",
+            "expected_name": table_name,
+            "actual_name": narrative_name,
+            "source_of_truth": "T5",
+            "field": "功能分类科目名称",
+        }
+        span = match.group(0)
+        if _span_unique_on_page(doc, page, span):
+            location["table_refs"] = [{"page": page, "span": span, "role": "说明5结构段",
+                                       "section": location["section"], "row": code,
+                                       "field": "功能分类科目名称", "code": code,
+                                       "subject": narrative_name}]
+            location["pages"] = [page]
         issues.append(rule._issue(
             f"说明5类级科目名称与T5不一致（{code}）：表格“{table_name}”，说明“{narrative_name}”",
-            {
-                "page": page,
-                "section": "说明5（一般公共预算财政拨款支出结构情况）",
-                "table": "一般公共预算财政拨款支出决算表",
-                "row": code,
-                "code": code,
-                "code_level": "类",
-                "expected_name": table_name,
-                "actual_name": narrative_name,
-                "source_of_truth": "T5",
-                "field": "功能分类科目名称",
-            },
+            location,
             severity="warn",
             evidence_text=(f"编码：{code}\n表格名称：{table_name}\n说明名称：{narrative_name}\n"
                            f"说明片段：{match.group(0)}"),
