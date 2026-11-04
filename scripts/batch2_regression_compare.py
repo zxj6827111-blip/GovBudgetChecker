@@ -84,6 +84,9 @@ def field_diff(before: Any, after: Any, fields: Optional[Sequence[str]] = None) 
         a, b = left.get(path, MISSING), right.get(path, MISSING)
         if canonical(a) == canonical(b):
             continue
+        # 新增可选字段在旧记录中缺失、新记录为 null：视为等价，不算业务变化。
+        if (a is MISSING and b is None) or (a is None and b is MISSING):
+            continue
         if fields and not any(path == f or path.startswith(f + "/") for f in fields):
             continue
         diffs.append((path, a, b))
@@ -273,10 +276,15 @@ def main() -> int:
             unexplained.append(f"{diff['sample_id']}:{diff['kind']}:{diff.get('field','')}")
             continue
         hits = classify(diff, classes)
-        if len(hits) == 1:
-            explained.append({**diff, "class_id": hits[0]["id"]})
-            used_classes[hits[0]["id"]] += 1
-        elif len(hits) > 1:
+        if hits:
+            top_priority = max(hit.get("priority", 0) for hit in hits)
+            top_hits = [hit for hit in hits if hit.get("priority", 0) == top_priority]
+        else:
+            top_hits = []
+        if len(top_hits) == 1:
+            explained.append({**diff, "class_id": top_hits[0]["id"]})
+            used_classes[top_hits[0]["id"]] += 1
+        elif len(top_hits) > 1:
             unexplained.append(f"{diff['sample_id']}:{diff['kind']}:{diff.get('field','')}:匹配多个允许类")
         else:
             unexplained.append(f"{diff['sample_id']}:{diff['kind']}:{diff.get('field','')}")
