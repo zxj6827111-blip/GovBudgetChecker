@@ -80,3 +80,18 @@ def test_unresolved_count_mismatch_is_not_treated_as_pure_format_defect():
     receipt = _receipt([("t3:r0c3", "2.359.46", 9, "fact_unbound")], {"fact_unbound": 4})
     material, technical = _classify_blocked_tables(receipt, receipt["mapping_incomplete_tables"])
     assert not material and len(technical) == 1
+
+
+def test_cross_process_text_recovers_cell_level_material_reason():
+    """规则在子进程登记的结构化事实不会跨进程，父进程须能从文本恢复。"""
+    from src.engine.diagnostic_fields import rule_level_entry
+
+    detail = ("原件金额格式非法：第9页FIN_03_expenditure 3 个金额格原文「2.359.46」"
+              "无法解析为数值，数值不确定，需回原件补正；依赖勾稽保持材料阻断；"
+              "结构：阻断 第9页FIN_03_expenditure:a191b44bee5bb1e8:r0c3（单元格未绑定唯一事实）")
+    entry = rule_level_entry(detail, rule_id="V33-241")
+    assert entry["reason_codes"] == ["cell_unbound"]
+    assert entry["blocked_by"][0]["dimension"] == "cell"
+    assert entry["blocked_by"][0]["ref"] == "第9页FIN_03_expenditure:a191b44bee5bb1e8:r0c3"
+    final = finalize(entry)
+    assert final["next_action"] == "human_confirm"

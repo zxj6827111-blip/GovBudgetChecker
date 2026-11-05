@@ -411,8 +411,28 @@ def _section_page(doc: Any, text: str) -> Optional[int]:
 _TABLE_REF_RE = re.compile(r"第(\d+)页([A-Za-z_][A-Za-z0-9_]*)")
 
 
+_FORMAT_CELL_REF_RE = re.compile(r"第(\d+)页([A-Za-z_][A-Za-z0-9_]*):([A-Za-z0-9_:.\-]+)")
+
+
 def rule_level_entry(text: Any, rule_id: Any = None, doc: Any = None) -> Dict[str, Any]:
     value = str(text or "")
+    # 原件金额格式非法（材料缺陷）：规则在子进程里登记的结构化事实不会跨进程，
+    # 父进程只能从文本恢复。这里按“第N页表代码:格ID”恢复单元格级阻断，
+    # 并保留 material 侧首选动作；不能降级成整表映射失败。
+    if "原件金额格式非法" in value:
+        cells = _FORMAT_CELL_REF_RE.findall(value)
+        if cells:
+            return {
+                "reason_codes": ["cell_unbound"],
+                "blocked_by": [
+                    {"dimension": "cell", "ref": f"第{page}页{table}:{cell}",
+                     "reason_code": "cell_unbound"}
+                    for page, table, cell in cells
+                ],
+                "missing_operands": [],
+                "candidates": [],
+                "preferred_action": "human_confirm",
+            }
     # 来源表映射失败：文本本身带“第N页表代码”，阻断位置直接取它，不降级成模糊规则级。
     if "来源表映射/读取未完成" in value:
         blockers = [
