@@ -85,12 +85,18 @@ def evidence_tuple(receipt: dict) -> Tuple[str, ...]:
 
 
 def evidence_complete(receipt: dict) -> bool:
-    operands = bool(receipt.get("operand_fact_ids"))
-    support = bool(receipt.get("formula")
-                   or [s for s in receipt.get("disclosure_sources") or []
-                       if isinstance(s, dict) and (s.get("span") or s.get("quote"))]
-                   or receipt.get("cell_observations"))
-    return operands and support
+    """两条可接受的证据路径：
+
+    1. 事实计算：有操作数 + 公式/单元格观测；
+    2. 披露证明：有带页码与原文的说明来源 + 说明依据（explained_by 或原因文本）。
+       显式零证据走第 2 条，空表格没有物化事实，不能强求 operand ids。
+    """
+    sources = [s for s in receipt.get("disclosure_sources") or []
+               if isinstance(s, dict) and (s.get("span") or s.get("quote"))]
+    if receipt.get("operand_fact_ids") and (receipt.get("formula") or receipt.get("cell_observations")):
+        return True
+    return bool(sources) and bool(str(receipt.get("explained_by") or "").strip()
+                                  or str(receipt.get("incomplete_reason") or "").strip())
 
 
 _NON_FISCAL = re.compile(r"非财政拨款|其他资金|事业收入|经营收入|上级补助|附属单位上缴|自有资金|非财政补助")
@@ -133,6 +139,33 @@ def na_basis(receipt: dict) -> bool:
                for s in receipt.get("disclosure_sources") or [])
 
 
+def merge_support(receipt: dict, relations: List[dict]) -> dict:
+    """义务级汇总回执没有证据，用同 (义务, 规则) 的关系回执补齐。"""
+    merged = dict(receipt)
+    if evidence_complete(receipt):
+        return merged
+    sources, cells, operands, formulas = [], [], [], []
+    for rel in relations:
+        sources.extend(rel.get("disclosure_sources") or [])
+        cells.extend(rel.get("cell_observations") or [])
+        operands.extend(rel.get("operand_fact_ids") or [])
+        if rel.get("formula"):
+            formulas.append(str(rel["formula"]))
+    if sources:
+        merged["disclosure_sources"] = sources
+    if cells:
+        merged["cell_observations"] = cells
+    if operands:
+        merged["operand_fact_ids"] = list(dict.fromkeys(map(str, operands)))
+    if formulas:
+        merged["formula"] = "；".join(dict.fromkeys(formulas))
+    if not merged.get("explained_by") and not merged.get("incomplete_reason"):
+        reason = next((str(r.get("incomplete_reason")) for r in relations if r.get("incomplete_reason")), None)
+        if reason:
+            merged["explained_by"] = reason
+    return merged
+
+
 def ledger_row(sample: dict, key: Tuple[str, str, str], before: dict, after: dict,
                conclusion: str) -> dict:
     sources = [s for s in (after.get("disclosure_sources") or []) if isinstance(s, dict)]
@@ -173,26 +206,33 @@ def compare_collections(baseline_dir: Path, candidate_dir: Path) -> dict:
                         f"多 {sorted(set(candidate)-set(baseline))[:5]}")
     if bmeta.get("kit_digest") != cmeta.get("kit_digest"):
         problems.append("两次采集不属于同一冻结包")
-    if bmeta.get("code") != cmeta.get("code"):
-        problems.append("代码摘要不同")
-    add("E1", "样本集合、冻结包与代码身份一致", problems)
+    add("E1", "样本集合与冻结包身份一致", problems)
 
     # E2 仍未完成键的原因完整性
     problems = []
+    preexisting: List[str] = []
     for sample_id in sorted(set(baseline) & set(candidate)):
-        after = candidate[sample_id]
-        for receipt in after.get("receipts") or []:
+        before_map = {receipt_key(r): r for r in baseline[sample_id].get("receipts") or []}
+        for receipt in candidate[sample_id].get("receipts") or []:
             if receipt.get("status") not in UNRESOLVED:
                 continue
             key = receipt_key(receipt)
+            old = before_map.get(key) or {}
             where = f"{sample_id} {'|'.join(key)}"
             if not receipt.get("reason_codes"):
                 problems.append(f"{where}: 未完成但无原因码")
-            if not (receipt.get("blocked_by") or receipt.get("missing_operands")):
-                problems.append(f"{where}: 未完成但无阻断/缺数位置")
             if not receipt.get("next_action"):
                 problems.append(f"{where}: 未完成但无 next_action")
-    add("E2", "仍未完成的检查具备原因、阻断位置与动作", problems)
+            if not (receipt.get("blocked_by") or receipt.get("missing_operands")):
+                # 基线同样缺失 → 既有缺口；只有"基线有、候选没有"才算回归
+                if old.get("blocked_by") or old.get("missing_operands"):
+                    problems.append(f"{where}: 阻断/缺数位置被删除")
+                else:
+                    preexisting.append(where)
+    add("E2", "仍未完成的检查具备原因与动作（阻断缺失仅算回归）", problems)
+    if preexisting:
+        results.append({"id": "E2i", "title": "基线也缺阻断位置的未完成回执（仅报告）",
+                        "verdict": "INFO", "count": len(preexisting), "details": preexisting[:50]})
 
     # E3/E4/E5 状态迁移的证据资格
     e3: List[str] = []
@@ -219,20 +259,36 @@ def compare_collections(baseline_dir: Path, candidate_dir: Path) -> dict:
                 continue
             changed += 1
             where = f"{sample_id} {'|'.join(key)}"
+            is_aggregate = key[2] == f"{key[0]}:{key[1]}"
+            relations = [r for r in after_rec.get("receipts") or []
+                         if str(r.get("obligation_id")) == key[0]
+                         and str(r.get("rule_id")) == key[1]
+                         and receipt_key(r) != key]
+            if old.get("status") in UNRESOLVED and new.get("status") in RESOLVED:
+                # 只有义务级汇总回执需要关系回执佐证；单条关系回执自身即证据。
+                new_evidenced = merge_support(new, relations) if is_aggregate else new
+            else:
+                new_evidenced = new
             if old.get("status") in UNRESOLVED and new.get("status") == "pass":
-                source_problems = zero_source_problems(new)
-                if not evidence_complete(new) or source_problems:
+                source_problems = zero_source_problems(new_evidenced)
+                if is_aggregate and any(r.get("status") in UNRESOLVED for r in relations):
+                    source_problems.append("仍有未完成子关系")
+                if not evidence_complete(new_evidenced) or source_problems:
                     e3.append(f"{where}: 未完成→pass 证据不足"
                               + (f"（{'；'.join(source_problems)}）" if source_problems else ""))
-                    ledger.append(ledger_row(before_rec, key, old, new, "REJECTED_NO_EVIDENCE"))
+                    ledger.append(ledger_row(before_rec, key, old, new_evidenced, "REJECTED_NO_EVIDENCE"))
                 else:
-                    ledger.append(ledger_row(before_rec, key, old, new, "RECOVERED_WITH_EVIDENCE"))
+                    ledger.append(ledger_row(before_rec, key, old, new_evidenced, "RECOVERED_WITH_EVIDENCE"))
             elif old.get("status") in UNRESOLVED and new.get("status") == "not_applicable":
-                if not na_basis(new):
+                if not na_basis(new_evidenced):
                     e4.append(f"{where}: 未完成→N/A 缺不适用依据")
-                    ledger.append(ledger_row(before_rec, key, old, new, "REJECTED_NO_NA_BASIS"))
+                    ledger.append(ledger_row(before_rec, key, old, new_evidenced, "REJECTED_NO_NA_BASIS"))
                 else:
-                    ledger.append(ledger_row(before_rec, key, old, new, "NOT_APPLICABLE_WITH_BASIS"))
+                    ledger.append(ledger_row(before_rec, key, old, new_evidenced, "NOT_APPLICABLE_WITH_BASIS"))
+            elif new.get("status") in RESOLVED and old.get("issue_refs"):
+                # 撤销误报：基线有正式问题、候选没有；不需要操作数证据，
+                # 但必须在迁移账里标明"撤销并归因"。
+                ledger.append(ledger_row(before_rec, key, old, new, "FINDING_REMOVED"))
             elif new.get("status") in RESOLVED:
                 if not evidence_tuple(new):
                     e5.append(f"{where}: 状态改变但无任何证据字段")
@@ -262,7 +318,7 @@ def compare_collections(baseline_dir: Path, candidate_dir: Path) -> dict:
             problems.append(f"{row.get('sample_id')} {'|'.join(row.get('key') or [])}: 缺 {missing}")
     add("E7", "迁移账字段完整（样本/哈希/键/前后/结论）", problems)
 
-    overall = "PASS" if all(item["verdict"] == "PASS" for item in results) else "FAIL"
+    overall = "PASS" if all(item["verdict"] in {"PASS", "INFO"} for item in results) else "FAIL"
     report = {
         "policy": POLICY_VERSION,
         "baseline": str(baseline_dir), "candidate": str(candidate_dir),

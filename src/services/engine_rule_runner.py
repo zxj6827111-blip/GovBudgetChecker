@@ -494,7 +494,16 @@ class EngineRuleRunner:
                     self._stats["total_findings"] += len(findings)
 
                     detail_str = str(signal.detail or signal)
+                    # 表格准入延期在此做二次分类：rule_identity.py 保持冻结原样，
+                    # 材料格式缺陷/空表与技术映射失败在这里分开并登记结构化事实。
+                    from src.engine.table_admission_policy import reclassify_admission_deferral
+
+                    rewritten = reclassify_admission_deferral(document, str(rule_id), detail_str)
+                    if rewritten:
+                        detail_str = rewritten
                     unresolved = list(getattr(signal, "unresolved_reasons", []) or [])
+                    unresolved = [rewritten if rewritten and item == str(signal.detail or signal) else item
+                                  for item in unresolved]
                     if not unresolved and detail_str:
                         unresolved = [detail_str]
 
