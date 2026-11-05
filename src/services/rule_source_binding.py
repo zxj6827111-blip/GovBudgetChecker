@@ -357,7 +357,7 @@ def bind_rule_sources(result, *, page_texts, source_file_hash, artifact=None, fa
                     artifact, page_texts, source_file_hash)
                 from src.engine.native_empty_operands import valid_blank_observation
                 for observation in location.get('native_blank_sources') or []:
-                    if not isinstance(observation, dict) or not valid_blank_observation(artifact, fact_context, observation):
+                    if not isinstance(observation, dict) or not valid_blank_observation(artifact, fact_context, observation, page_texts):
                         errors.append('native_blank_source_not_current_or_unverified')
                 # Literal narrative claims are part of the proof too. Retain
                 # them alongside the denominator/numerator cell evidence.

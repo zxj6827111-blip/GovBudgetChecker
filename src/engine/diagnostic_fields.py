@@ -229,8 +229,14 @@ def _policy_rank(code: str) -> tuple:
     return (priority, code)
 
 
-def choose_next_action(reason_codes: Iterable[str], blocked_by: Iterable[Mapping[str, Any]] = ()) -> str:
-    """按验收工具的同一口径确定主原因，再取 policy 建议的首个允许动作。"""
+def choose_next_action(reason_codes: Iterable[str], blocked_by: Iterable[Mapping[str, Any]] = (),
+                       preferred: Any = None) -> str:
+    """按验收工具的同一口径确定主原因，再取 policy 建议的首个允许动作。
+
+    ``preferred`` 只在该动作仍属于 policy 允许集合时生效：它用于表达
+    “同一原因下用户该先做什么”的语义差异（例如原件格式非法优先回原件
+    补正，而不是重跑系统），不改变冻结的 allowed_actions。
+    """
     codes = [str(code) for code in reason_codes if str(code)]
     if not codes:
         return "human_confirm"
@@ -240,6 +246,8 @@ def choose_next_action(reason_codes: Iterable[str], blocked_by: Iterable[Mapping
     else:
         primary = min(codes, key=_policy_rank)
     allowed = allowed_actions(primary)
+    if preferred and str(preferred) in allowed:
+        return str(preferred)
     for action in _RECOMMENDED.get(primary, allowed):
         if action in allowed:
             return action
@@ -279,7 +287,7 @@ def finalize(entry: Mapping[str, Any], *, rule_id: Any = None, sub_check_id: Any
         raise ValueError("operand_missing 必须给出 missing_operands")
     if "operand_ambiguous" in codes and len(result["candidates"]) < 2:
         raise ValueError("operand_ambiguous 必须给出至少两个候选位置")
-    result["next_action"] = choose_next_action(codes, blocked_by)
+    result["next_action"] = choose_next_action(codes, blocked_by, entry.get("preferred_action"))
     probe = dict(result)
     probe.update(rule_id=rule_id, sub_check_id=sub_check_id, obligation_id=obligation_id)
     result["root_cause_key"] = root_cause_key(probe)
@@ -701,7 +709,8 @@ def blocker(*, dimension: str, ref: str, reason_code: str) -> Dict[str, Any]:
 def record_gap(doc: Any, texts: Any, *, reason_codes: Sequence[str],
                missing_operands: Sequence[Mapping[str, Any]] = (),
                candidates: Sequence[Mapping[str, Any]] = (),
-               blocked_by: Sequence[Mapping[str, Any]] = ()) -> None:
+               blocked_by: Sequence[Mapping[str, Any]] = (),
+               preferred_action: Any = None) -> None:
     """登记一条取数缺口；字段组合由 finalize 校验，不合法则不登记（不影响结论）。"""
     entry = {
         "reason_codes": [str(code) for code in reason_codes],
@@ -709,6 +718,8 @@ def record_gap(doc: Any, texts: Any, *, reason_codes: Sequence[str],
         "missing_operands": [dict(item) for item in missing_operands],
         "candidates": [dict(item) for item in candidates],
     }
+    if preferred_action:
+        entry["preferred_action"] = str(preferred_action)
     try:
         finalize(entry)
     except ValueError:

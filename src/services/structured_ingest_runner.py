@@ -17,6 +17,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 from src.db.connection import DatabaseConnection
 from src.db.migrations import run_migrations
 from src.schemas.organization import Organization
+from src.services.cell_number_text import invalid_number_text as _invalid_number_text
 from src.services.fiscal_fact_materializer import FiscalFactMaterializer
 from src.services.fiscal_table_rules import NINE_TABLE_RULES
 from src.services.org_storage import get_org_storage
@@ -756,45 +757,9 @@ def _cell_ref(cell: Dict[str, Any]) -> Dict[str, Any]:
     return {key: cell.get(key) for key in ("source_cell_id", "page", "bbox", "raw_text", "reason")}
 
 
-_DECIMAL_POINT_RE = re.compile(r"[.．]")
-
 #: 只有“这一格取值本身不可解析”能由数字格式解释；列归属、身份冲突、
 #: 标签缺失各有独立原因，不能因为归类格式缺陷就一并消失。
 _FORMAT_EXPLAINED_REASONS = frozenset({"fact_unbound"})
-
-#: 单元格末尾可能带单位；判断“是否单个数字词”时要先剥掉，
-#: 否则 ``2.359.46 万元`` 会被误当成两个词。
-_TRAILING_UNIT_RE = re.compile(r"^(.*?)\s*(?:万\s*元|亿\s*元|千\s*元|元)$")
-
-
-def _single_amount_lexeme(text: Any) -> bool:
-    """整个格内容是否只有一个数字词（允许带单位）。
-
-    ``1.00\\n2.00``、``1.00 2.00`` 是两个金额被拼到一起，属提取/合并异常，
-    不能据此断定纸面印了一个错数。
-    """
-    value = str(text or "").strip()
-    if not value or "\n" in value or "\r" in value:
-        return False
-    match = _TRAILING_UNIT_RE.match(value)
-    if match:
-        value = match.group(1).strip()
-    return bool(value) and not re.search(r"\s", value)
-
-
-def _invalid_number_text(text: Any) -> bool:
-    """原件金额原文是否“单个数字词但小数点重复”。
-
-    真实反例：第 9 份物理页 9 的三个基本支出格印成 ``2.359.46``。它既不是
-    合法数值，也不能由系统改名成 2359.46——只能作为原件格式缺陷保留原文。
-    但两个金额被换行/空格拼在一起是提取异常，不是原件错数。
-    """
-    value = str(text or "").strip()
-    if not value or not any(ch.isdigit() for ch in value):
-        return False
-    if not _single_amount_lexeme(value):
-        return False
-    return len(_DECIMAL_POINT_RE.findall(value)) > 1
 
 
 def _reading_review_items(reading_quality: Dict[str, Any]) -> List[Dict[str, Any]]:
