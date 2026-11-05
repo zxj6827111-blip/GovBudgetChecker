@@ -383,7 +383,17 @@ def _match_source(source: Optional[dict], expected_value: Decimal, values: List[
         else:
             viable.append((1, value))
     if not viable:
-        return False, "", _source_identity_error(source, matched[0]) or "行列身份不匹配"
+        # 用“通过声明项最多”的候选报告具体是哪一项身份冲突，避免把列冲突
+        # 误报成行冲突（不同候选的行名本来就可能不同）。
+        best_value, best_score = matched[0], -1
+        for value in matched:
+            score = 0
+            score += 1 if (not row or _row_identity_ok(row, value)) else 0
+            score += 1 if (not column or _column_identity_ok(column, value, table)) else 0
+            score += 1 if (not table or _table_identity_ok(table, page, value)[0]) else 0
+            if score > best_score:
+                best_value, best_score = value, score
+        return False, "", _source_identity_error(source, best_value) or "行列身份不匹配"
     best_score = max(score for score, _value in viable)
     top = [value for score, value in viable if score == best_score]
     top_names = [_norm_identity(value.get("name")) for value in top]
