@@ -182,7 +182,7 @@ export function QualityPage() {
         </div>
       ) : null}
 
-      <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         <Metric
           label="处理成功率"
           value={formatRatioPercentText(processingSuccessRate)}

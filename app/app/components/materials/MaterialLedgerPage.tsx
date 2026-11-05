@@ -128,7 +128,7 @@ function LegacyMaterialLedgerPage() {
 
       {!response.loading && !response.error && summary ? (
         <>
-          <div className="mt-5 grid grid-cols-2 gap-4 md:grid-cols-4 xl:grid-cols-4">
+          <div className="mt-5 grid grid-cols-2 gap-4 lg:grid-cols-4">
             {kpis.map((kpi) => (
               <Metric key={kpi.key} label={kpi.label} value={kpi.value} data-testid={kpi.testId} />
             ))}
