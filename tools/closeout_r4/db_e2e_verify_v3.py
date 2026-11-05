@@ -134,7 +134,8 @@ async def main() -> int:
         # 4) 合法写回 + re-read
         decision = await client.put(
             f"/api/reviews/{slot_id}/obligations/{obligation_id}", headers=admin,
-            json={"decision": "verified_ok", "note": "R-06 首次写回", "job_uuid": job_id},
+            json={"decision": "verified_ok", "note": "R-06 首次写回", "job_uuid": job_id,
+                  "analysis_basis_token": basis_old},
         )
         check(decision.status_code == 200, f"首次写回失败：{decision.status_code} {decision.text[:300]}")
         dump(out / "05_decision_first.json", decision.json())
@@ -205,7 +206,8 @@ async def main() -> int:
         check(bool(new_revision), "重分析未产生新 revision")
         stale_write = await client.put(
             f"/api/reviews/{slot_id}/obligations/{obligation_id}", headers=admin,
-            json={"decision": "verified_issue", "note": "旧会话写回探针", "job_uuid": job_id},
+            json={"decision": "verified_issue", "note": "旧会话写回探针", "job_uuid": job_id,
+                  "analysis_basis_token": basis_old},
         )
         check(stale_write.status_code in {409, 403}, f"旧会话写回未被拒：{stale_write.status_code} {stale_write.text[:300]}")
         dump(out / "08_stale_session_rejected.json", {"status": stale_write.status_code,
@@ -408,7 +410,7 @@ async def main() -> int:
         lock = await client.put(
             f"/api/reviews/{slot_id}/obligations/{obligation2}", headers=admin,
             json={"decision": "verified_issue", "note": "乐观锁探针", "job_uuid": job_id,
-                  "expected_revision": 999},
+                  "analysis_basis_token": basis_new, "expected_revision": 999},
         )
         check(lock.status_code == 409, f"错误 decision revision 未被拒：{lock.status_code}")
         dump(out / "20_decision_lock.json", {"status": lock.status_code, "body": lock.text[:500]})
