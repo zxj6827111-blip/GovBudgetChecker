@@ -16,6 +16,7 @@ from __future__ import annotations
 import csv
 import importlib.util
 import json
+import os
 import re
 from decimal import Decimal
 from pathlib import Path
@@ -23,7 +24,8 @@ from pathlib import Path
 import pymupdf
 
 RUN = Path("/Volumes/workSSD/software development/GovBudgetChecker/outputs/gold_b1_20261103/run_20261103T150928")
-OUT = RUN / "revisions/round5_annotation_revision"
+OUT = Path(os.environ.get("B1_REVISION_DIR",
+                          str(RUN / "revisions/round6_annotation_revision")))
 ANNOTATIONS = RUN / "annotations"
 CHECKER = Path(__file__).with_name("decimal_checks_v2.py")
 PDFS = json.loads((RUN / "b1_pdfs.json").read_text(encoding="utf-8"))

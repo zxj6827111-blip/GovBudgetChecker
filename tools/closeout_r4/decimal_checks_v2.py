@@ -48,8 +48,11 @@ RULE_CONSTANTS = {
     },
 }
 
-#: 列身份词：值名里出现这些词时，声明的列必须与之匹配。
-_COLUMN_TOKENS = ("预算", "决算", "基本支出", "项目支出")
+#: 列身份维度（R5-01）：预算/决算、基本/项目、收入来源、合计口径。
+#: 不能靠共享一个词或列名字串包含消解其它维度的冲突。
+_SOURCE_COLUMNS = ("非财政拨款收入", "财政拨款收入", "事业收入", "其他收入",
+                   "上级补助收入", "附属单位上缴收入", "经营收入", "本年收入合计")
+_TOTAL_TOKENS = ("合计", "小计", "总计")
 #: 正文来源不是表格列，不参与列身份核验。
 _PROSE_COLUMNS = {"正文", "说明"}
 #: 科目/经济分类编码：至少 4 位，避免把“表7”“第8项”当成编码。
@@ -176,11 +179,61 @@ def _row_identity_ok(row: str, value: dict) -> bool:
     return _row_identity_score(row, value) > 0
 
 
-def _column_identity_ok(column: str, value: dict, table: str = "") -> bool:
-    """列身份：显式 value.column 优先；否则用 name 里的列词/名称比对。
+def _period_of(text: str) -> str:
+    """预算/决算口径；同时出现两词时视为未声明（表名另有后缀判定）。"""
+    text = str(text or "")
+    budget, final = "预算" in text, "决算" in text
+    if budget and not final:
+        return "预算"
+    if final and not budget:
+        return "决算"
+    return ""
 
-    R4-02：名称缺失、列词冲突、以及名称完全无法证明该列存在时一律拒绝；
-    只有表本身能证明该列（如“基本支出决算表”里的“决算数”）才放行。
+
+def _table_period(table: str) -> str:
+    """表名后缀口径；不把“一般公共预算”里的“预算”当成列口径。"""
+    text = str(table or "").strip()
+    if text.endswith("决算表") or "决算情况说明" in text:
+        return "决算"
+    if text.endswith("预算表") or "预算情况说明" in text:
+        return "预算"
+    return ""
+
+
+def _expenditure_of(text: str) -> str:
+    text = str(text or "")
+    basic, project = "基本支出" in text, "项目支出" in text
+    if basic and not project:
+        return "基本支出"
+    if project and not basic:
+        return "项目支出"
+    return ""
+
+
+def _source_of(text: str) -> str:
+    text = str(text or "")
+    for label in _SOURCE_COLUMNS:
+        if label in text:
+            return label
+    return ""
+
+
+def _total_of(text: str) -> str:
+    text = str(text or "")
+    for token in _TOTAL_TOKENS:
+        if token in text:
+            return token
+    return ""
+
+
+def _column_identity_ok(column: str, value: dict, table: str = "") -> bool:
+    """列身份按维度分别核验，任一显式冲突即拒绝。
+
+    R5-01（第五轮复核 2026-11-04）：
+    - 不再用列名字串包含或任意维度交集放行；
+    - 预算/决算、基本/项目、收入来源、合计口径分别核验；
+    - 值名不带口径时，只由表名后缀证明预算/决算；
+    - 无法证明的列 fail-closed，不默认为通过。
     """
     column_text = str(column or "").strip()
     normalized = _norm_identity(column_text)
@@ -188,26 +241,46 @@ def _column_identity_ok(column: str, value: dict, table: str = "") -> bool:
         return True
     explicit = _norm_identity(value.get("column") or "")
     if explicit:
-        return explicit == normalized or explicit in normalized or normalized in explicit
-    name = _norm_identity(value.get("name") or "")
-    if not name:
+        # value 自带列身份时按规范化全名比对，不做子串包含。
+        return explicit == normalized
+    name_text = str(value.get("name") or "")
+    if not _norm_identity(name_text):
         return False
-    if normalized in name or name in normalized:
-        return True
-    column_tokens = {token for token in _COLUMN_TOKENS if token in column_text}
-    name_tokens = {token for token in _COLUMN_TOKENS if token in name}
-    if column_tokens and name_tokens:
-        return bool(column_tokens & name_tokens)
-    if name_tokens:
+
+    column_period = _period_of(column_text)
+    name_period = _period_of(name_text)
+    if column_period:
+        if name_period:
+            if column_period != name_period:
+                return False
+        else:
+            table_period = _table_period(table)
+            if not table_period or table_period != column_period:
+                return False
+    elif name_period:
+        table_period = _table_period(table)
+        if table_period and table_period != name_period:
+            return False
+
+    column_expenditure = _expenditure_of(column_text)
+    if column_expenditure:
+        if _expenditure_of(name_text) != column_expenditure:
+            return False
+
+    column_source = _source_of(column_text)
+    name_source = _source_of(name_text)
+    if column_source:
+        if column_source == "本年收入合计":
+            if not _total_of(name_text):
+                return False
+        elif not name_source or name_source != column_source:
+            return False
+
+    column_total = _total_of(column_text)
+    if column_total and not _total_of(name_text):
         return False
-    if column_tokens:
-        table_text = str(table or "").strip()
-        if "决算表" in table_text and "预算" not in column_tokens:
-            return "决算" in column_tokens
-        if "预算表" in table_text and "决算" not in column_tokens:
-            return "预算" in column_tokens
-        return False
-    return False
+
+    return any((column_period, column_expenditure, column_source, column_total))
 
 
 def _page_in_range(page: int, start: int, end: int) -> bool:
