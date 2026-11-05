@@ -23,10 +23,20 @@ from pathlib import Path
 import pymupdf
 
 RUN = Path("/Volumes/workSSD/software development/GovBudgetChecker/outputs/gold_b1_20261103/run_20261103T150928")
-OUT = RUN / "revisions/round4_annotation_revision"
+OUT = RUN / "revisions/round5_annotation_revision"
 ANNOTATIONS = RUN / "annotations"
 CHECKER = Path(__file__).with_name("decimal_checks_v2.py")
 PDFS = json.loads((RUN / "b1_pdfs.json").read_text(encoding="utf-8"))
+
+#: T06 表5（基本支出决算表）打印合计与页；用于和打印的人员/公用合计闭合。
+T06_TABLE5 = {
+    "B1-2024-D02": {"total": "6745.63", "page": 14},
+    "B1-2025-D01": {"total": "106625.87", "page": 17},
+}
+#: 打印的人员经费合计/公用经费合计所在页。
+T06_PRINTED_PAGES = {"B1-2024-D02": 16, "B1-2025-D01": 19}
+PRINTED_TOTAL_RE = re.compile(
+    r"人员经费合计\s*([\d,]+\.\d{2})\s*公用经费合计\s*([\d,]+\.\d{2})")
 
 #: 初标里有整句 quote，但 Decimal 需要“单一数值+精确单位”的来源；这里只
 #: 增加原文中真实存在的精确片段，不修改任何原有数值/判定。
@@ -406,8 +416,26 @@ def verify_pdf_quotes(spec: dict) -> dict:
 T06_LEAF_RE = re.compile(r"(\d{3})\s*(\d{2})\s+([^\d]+?)\s+([\d,]+\.\d{2})")
 
 
+def parse_printed_totals() -> dict:
+    """从原件读打印的人员经费合计/公用经费合计，作为独立证据保存。"""
+    printed: dict = {}
+    for sid, page in T06_PRINTED_PAGES.items():
+        doc = pymupdf.open(PDFS[sid])
+        text = re.sub(r"\s+", " ", doc[page - 1].get_text())
+        match = PRINTED_TOTAL_RE.search(text)
+        if match is None:
+            raise SystemExit(f"未能在 {sid} p{page} 读到打印的人员/公用经费合计")
+        printed[sid] = {
+            "page": page,
+            "人员经费合计": match.group(1).replace(",", ""),
+            "公用经费合计": match.group(2).replace(",", ""),
+        }
+    return printed
+
+
 def build_t06_items() -> dict:
     """从基本支出表原页解析 T06 非零末级项（真实编码/名称/页/列/数值）。"""
+    printed = parse_printed_totals()
     data: dict = {}
     for sid, pages in (("B1-2024-D02", [15, 16]), ("B1-2025-D01", [18, 19])):
         doc = pymupdf.open(PDFS[sid])
@@ -432,6 +460,8 @@ def build_t06_items() -> dict:
                 })
         nonzero = [item for item in items if Decimal(item["value"]) != 0]
         data[sid] = {"printed_count": len(items), "nonzero_count": len(nonzero)}
+        # R4-03：printed_total 与 leaf_sum 分开存，不能用叶项和替换原件合计。
+        data[sid]["printed"] = printed[sid]
         for column in ("人员经费", "公用经费"):
             rows = [item for item in nonzero if item["column"] == column]
             data[sid][column] = {
@@ -443,6 +473,143 @@ def build_t06_items() -> dict:
     (OUT / "t06_items.json").write_text(
         json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     return data
+
+
+def build_identity_audit(spec: dict, annotations: dict, checker) -> dict:
+    """逐条记录来源身份：声明行列/表、同页同数候选、核验结果与原因。
+
+    R4-02：只引用 annotation 里已有的 name/label/page/quote，不补造行列元数据。
+    """
+    entries = []
+    for row in spec["rows"]:
+        payload = annotations.get(row["sample_id"]) or {}
+        values = checker._annotation_values(payload).get(row["check_id"], [])
+        sources = [("operand", index, op) for index, op in enumerate(row.get("operands") or [])]
+        if row.get("reported_source") is not None:
+            sources.append(("reported", None, row.get("reported_source")))
+        for role, index, source in sources:
+            if not isinstance(source, dict) or source.get("source_kind") == "rule_constant":
+                entries.append({
+                    "sample_id": row["sample_id"], "check_id": row["check_id"],
+                    "item": row.get("item"), "role": role, "index": index,
+                    "source_kind": (source or {}).get("source_kind") or "material",
+                    "declared": {}, "candidates": [], "source_ok": True,
+                    "reason": "规则常量白名单来源",
+                })
+                continue
+            expected = checker._dec(
+                row.get("reported") if role == "reported" else source.get("value"))
+            ok, unit, reason = checker._match_source(
+                source, expected, values, str(source.get("unit") or ""),
+                role=role, kind=row.get("kind") or "amount")
+            candidates = [{
+                "name": value.get("name"), "page": value.get("page"),
+                "quote": value.get("quote"), "unit": value.get("unit"),
+                "item_label": value.get("_item_label"),
+            } for value in values
+                if value.get("page") == source.get("page")
+                and str(value.get("quote") or "") == str(source.get("quote") or "")]
+            entries.append({
+                "sample_id": row["sample_id"], "check_id": row["check_id"],
+                "item": row.get("item"), "role": role, "index": index,
+                "source_kind": "material",
+                "declared": {key: source.get(key) for key in
+                             ("page", "quote", "unit", "row", "column", "table")},
+                "candidates": candidates,
+                "source_ok": bool(ok), "matched_unit": unit, "reason": reason,
+            })
+    report = {
+        "total": len(entries),
+        "material_sources": sum(1 for entry in entries if entry["source_kind"] == "material"),
+        "rule_constant_sources": sum(1 for entry in entries if entry["source_kind"] != "material"),
+        "all_source_ok": all(entry["source_ok"] for entry in entries),
+        "note": "身份只用 anchor 的 name/label 与来源声明的 row/column/table 核验；"
+                "编码必须在 value 的 name/label 中出现，空名称/未知列不放行。",
+        "entries": entries,
+    }
+    (OUT / "decimal_identity_audit.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    return report
+
+
+def _rounding_verdict(part: Decimal, total: Decimal, count: int) -> dict:
+    """单项 0.01；多项 (n+1)*0.005；返回该链路自己的容差与判定。"""
+    difference = abs(part - total)
+    tolerance = Decimal("0.01") if count <= 1 else (Decimal(count) + 1) * Decimal("0.005")
+    if difference <= tolerance:
+        return {"difference": str(difference), "tolerance": str(tolerance),
+                "within_tolerance": True,
+                "verdict": "PASS" if difference <= Decimal("0.01") else "PASS_ROUNDING"}
+    return {"difference": str(difference), "tolerance": str(tolerance),
+            "within_tolerance": False, "verdict": "PENDING_REVIEW"}
+
+
+def t06_closure_chains(t06: dict, printed: dict | None = None) -> list:
+    """T06 三条闭合链路：叶项→公用合计、打印人员+公用→表5、全叶项→表5。
+
+    每条链路只用自己的实际操作数、差额和冻结包络判定；打印合计与叶项和
+    分别保存，不得互相替换。
+    """
+    printed = printed or parse_printed_totals()
+    chains = []
+    for sid in sorted(t06):
+        data, totals = t06[sid], printed[sid]
+        table5 = Decimal(T06_TABLE5[sid]["total"])
+        people_printed = Decimal(totals["人员经费合计"])
+        public_printed = Decimal(totals["公用经费合计"])
+        people_leaf = Decimal(data["人员经费"]["sum"])
+        public_leaf = Decimal(data["公用经费"]["sum"])
+        leaf_total = people_leaf + public_leaf
+        printed_total = people_printed + public_printed
+        base = {"sample_id": sid, "target": "T06", "table": "一般公共预算财政拨款基本支出决算表"}
+
+        verdict = _rounding_verdict(public_leaf, public_printed, data["公用经费"]["count"])
+        chains.append({
+            **base, "page": totals["page"], "level": "叶项→公用合计",
+            "code": "leaf_pub_vs_printed",
+            "total": str(public_printed), "part1_name": "公用经费非零末级项求和",
+            "part1": str(public_leaf), "part2_name": "差额(叶项-打印)", "part2": verdict["difference"],
+            "n_leaves": data["公用经费"]["count"],
+            "operand_count": data["公用经费"]["count"],
+            "tolerance": verdict["tolerance"], "within_tolerance": verdict["within_tolerance"],
+            "formula": f"{public_leaf} - {public_printed} = {verdict['difference']}；"
+                       f"{data['公用经费']['count']} 个非零末级项包络 {verdict['tolerance']}",
+            "verdict": verdict["verdict"],
+            "explanation": "公用经费叶项求和与原件打印合计分开核对；"
+                           "差额由末级项显示舍入解释，不能用叶项和替换打印合计。",
+        })
+
+        verdict = _rounding_verdict(printed_total, table5, 2)
+        chains.append({
+            **base, "page": T06_TABLE5[sid]["page"], "level": "打印人员+公用→表5",
+            "code": "printed_sum_vs_table5",
+            "total": str(table5), "part1_name": "打印人员经费合计",
+            "part1": str(people_printed), "part2_name": "打印公用经费合计",
+            "part2": str(public_printed), "n_leaves": 0, "operand_count": 2,
+            "tolerance": verdict["tolerance"], "within_tolerance": verdict["within_tolerance"],
+            "formula": f"{people_printed} + {public_printed} = {printed_total}；"
+                       f"表5 {table5}；差 {verdict['difference']}；两项打印合计包络 {verdict['tolerance']}",
+            "verdict": verdict["verdict"],
+            "explanation": "两项打印合计相加减表5：0.02 超过两项包络 0.015，"
+                           "不能单独据此写 PASS；是否舍入差由全叶项链和冻结口径裁定，"
+                           "此链路保留为待复核，不用派生值替换打印数。",
+        })
+
+        verdict = _rounding_verdict(leaf_total, table5, data["nonzero_count"])
+        chains.append({
+            **base, "page": T06_TABLE5[sid]["page"], "level": "全叶项→表5",
+            "code": "leaf_total_vs_table5",
+            "total": str(table5), "part1_name": "全部非零末级项求和",
+            "part1": str(leaf_total), "part2_name": "差额(叶项-表5)", "part2": verdict["difference"],
+            "n_leaves": data["nonzero_count"], "operand_count": data["nonzero_count"],
+            "tolerance": verdict["tolerance"], "within_tolerance": verdict["within_tolerance"],
+            "formula": f"{leaf_total} - {table5} = {verdict['difference']}；"
+                       f"{data['nonzero_count']} 个非零末级项包络 {verdict['tolerance']}",
+            "verdict": verdict["verdict"],
+            "explanation": "全末级项直接对表5；这条链路是冻结口径里舍入结论的依据，"
+                           "与打印合计链路分开记录。",
+        })
+    return chains
 
 
 def build_closure_evidence() -> dict:
@@ -527,32 +694,10 @@ def build_closure_evidence() -> dict:
          "leaf_items": ["2050802"], "n_leaves": 1,
          "formula": "1,991.96 = 1,991.96",
          "verdict": "PASS", "explanation": "20508 款项一致。"},
-        {"sample_id": "B1-2024-D02", "target": "T06", "page": 16, "level": "基本支出",
-         "table": "一般公共预算财政拨款基本支出决算表",
-         "code": "人员+公用",
-         "total": "6745.63", "part1_name": "人员经费合计",
-         "part1": t06["B1-2024-D02"]["人员经费"]["sum"],
-         "part2_name": "公用经费合计",
-         "part2": t06["B1-2024-D02"]["公用经费"]["sum"],
-         "leaf_items": [item["code"] for item in t06["B1-2024-D02"]["人员经费"]["items"]
-                        + t06["B1-2024-D02"]["公用经费"]["items"]],
-         "n_leaves": t06["B1-2024-D02"]["nonzero_count"],
-         "formula": f"{t06['B1-2024-D02']['人员经费']['sum']} + {t06['B1-2024-D02']['公用经费']['sum']} = 6,745.65；表5 基本支出合计 6,745.63；差 0.02；{t06['B1-2024-D02']['nonzero_count']} 个非零末级项包络 (n+1)×0.005=0.18",
-         "verdict": "PASS_ROUNDING",
-         "explanation": f"T06 是表内基本支出=人员+公用；人员经费 {t06['B1-2024-D02']['人员经费']['count']} 项、公用经费 {t06['B1-2024-D02']['公用经费']['count']} 项，共 {t06['B1-2024-D02']['nonzero_count']} 个非零末级项，包络 0.18，0.02 在内。N06 是说明内部人员+公用 vs 说明总额，两项包络 0.015（基础 0.01），0.02 判 defect；两者不重复计。"},
-        {"sample_id": "B1-2025-D01", "target": "T06", "page": 19, "level": "基本支出",
-         "table": "一般公共预算财政拨款基本支出决算表",
-         "code": "人员+公用",
-         "total": "106625.87", "part1_name": "人员经费合计",
-         "part1": t06["B1-2025-D01"]["人员经费"]["sum"],
-         "part2_name": "公用经费合计",
-         "part2": t06["B1-2025-D01"]["公用经费"]["sum"],
-         "leaf_items": [item["code"] for item in t06["B1-2025-D01"]["人员经费"]["items"]
-                        + t06["B1-2025-D01"]["公用经费"]["items"]],
-         "n_leaves": t06["B1-2025-D01"]["nonzero_count"],
-         "formula": f"{t06['B1-2025-D01']['人员经费']['sum']} + {t06['B1-2025-D01']['公用经费']['sum']} = 106,625.89；表5 106,625.87；差 0.02；{t06['B1-2025-D01']['nonzero_count']} 个非零末级项包络 (n+1)×0.005=0.18",
-         "verdict": "PASS_ROUNDING",
-         "explanation": f"T06 表内差 0.02 在 {t06['B1-2025-D01']['nonzero_count']} 个非零末级项包络 0.18 内。旧注释的“24 个末级项”是 T03 支出表项行数，不是 T06 基本支出表叶项数；本行以 t06_items.json 的真实编码/页/列/数值为准。"},
+    ]
+    # R4-03：T06 用打印合计，不拿叶项和替换原件数字；三条链路各自判定。
+    relations.extend(t06_closure_chains(t06))
+    relations.extend([
         {"sample_id": "B1-2024-D02", "target": "N06", "page": 24, "level": "说明vs表",
          "code": "基本支出", "total": "6745.63", "part1_name": "人员经费",
          "part1": "5350.25", "part2_name": "公用经费", "part2": "1395.40",
@@ -573,8 +718,19 @@ def build_closure_evidence() -> dict:
          "formula": "4.37 ÷ 4.37 = 100.00%；正文写 97.11%；0.00+97.11+0.00 = 97.11 ≠ 100",
          "verdict": "DEFECT",
          "explanation": "p21 结构占比误用预算数 4.50 作分母，保留 GS-N07 defect。"},
-    ]
-    return {"version": "b1-closure-20261104", "note": "T03/T06 统一口径：T03=支出表行 合计=基本+项目，包络按末级项数 (n+1)*0.005；T06=基本支出表 人员+公用=基本支出合计，以 t06_items.json 的真实非零末级项为准（两份均 35 项，包络 0.18）；旧“24 项”是 T03 支出表项行数，已纠正。N06=说明内部人员+公用 vs 说明总额，两项包络 0.015（基础容差 0.01）。",
+    ])
+    return {"version": "b1-closure-round5-20261104",
+            "note": "T03/T06 统一口径：T03=支出表行 合计=基本+项目，包络按末级项数 (n+1)*0.005；"
+                    "T06 分开保存 printed_total（原件打印人员/公用合计）与 leaf_sum（非零末级项求和），"
+                    "三条链路各自判定：叶项→公用合计（22 项包络 0.115）、打印人员+公用→表5"
+                    "（2 项包络 0.015，0.02 超出，保留 PENDING_REVIEW）、全叶项→表5"
+                    "（35 项包络 0.18，0.02 在内）。T06 最终舍入结论按冻结口径的全叶项链成立，"
+                    "但不再用叶项和替换打印合计。N06=说明内部人员+公用 vs 说明总额，两项包络 0.015。",
+            "printed_vs_leaf": {
+                sid: {"printed": t06[sid]["printed"],
+                      "leaf_sum": {column: t06[sid][column]["sum"]
+                                   for column in ("人员经费", "公用经费")}}
+                for sid in t06},
             "relations": relations}
 
 
@@ -588,8 +744,13 @@ def build_target_status() -> list:
         },
         "T06": {
             "status": "NOT_FOUND", "effective_screened": "2", "candidate_sample": "",
-            "note": "原 INCOMPLETE 0/6 修订为 NOT_FOUND 2/6：B1-2024-D02、B1-2025-D01 的 GS-T06 逐项证据均在，差均为 0.02，分别为 B1-2024-D02 35 项包络 0.18、B1-2025-D01 35 项包络 0.18（旧“24 项”是 T03 支出表项行数，已纠正）；筛选日志未登记属过程缺口，不否定已存在 annotation 证据。",
-            "change_basis": "closure_evidence.csv T06 两行 + t06_items.json（真实编码/页/列/数值）",
+            "note": "原 INCOMPLETE 0/6 修订为 NOT_FOUND 2/6：B1-2024-D02、B1-2025-D01 的 GS-T06 逐项证据均在。"
+                    "R4-03 更正：原件打印人员/公用合计分别为 B1-2024-D02 5,350.25/1,395.40、"
+                    "B1-2025-D01 89,230.64/17,395.21，叶项和另存；打印人员+公用与表5 差 0.02"
+                    "（两项包络 0.015 超出，单列为待复核链），全叶项与表5 差 0.02（35 项包络 0.18 内）。"
+                    "T06 舍入结论按冻结口径的全叶项链成立，但没有用派生值替换打印合计；"
+                    "旧“24 项”是 T03 支出表项行数，已纠正。",
+            "change_basis": "closure_evidence.csv T06 三条链 + t06_items.json（printed 与 leaf_sum 分列）",
         },
     }
     for row in original:
@@ -642,19 +803,24 @@ def main() -> int:
     audit = verify_pdf_quotes(spec)
     (OUT / "decimal_evidence_audit.json").write_text(
         json.dumps(audit, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    identity = build_identity_audit(spec, annotations, checker)
     closure = build_closure_evidence()
     (OUT / "closure_evidence.json").write_text(
         json.dumps(closure, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     with (OUT / "closure_evidence.csv").open("w", encoding="utf-8-sig", newline="") as handle:
         fields = ["sample_id", "target", "page", "level", "code", "table", "total",
                   "part1_name", "part1", "part2_name", "part2", "n_leaves",
+                  "operand_count", "tolerance", "within_tolerance",
                   "formula", "verdict", "explanation"]
         writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(closure["relations"])
     status_rows = build_target_status()
     print(json.dumps({"decimal_counts": counts, "audit_all_found": audit["all_found"],
-                      "audit_items": audit["total"], "closure": len(closure["relations"]),
+                      "audit_items": audit["total"],
+                      "identity_all_ok": identity["all_source_ok"],
+                      "identity_sources": identity["total"],
+                      "closure": len(closure["relations"]),
                       "targets": len(status_rows)},
                      ensure_ascii=False, indent=2))
     return 0

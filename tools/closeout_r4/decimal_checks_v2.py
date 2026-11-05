@@ -50,6 +50,10 @@ RULE_CONSTANTS = {
 
 #: 列身份词：值名里出现这些词时，声明的列必须与之匹配。
 _COLUMN_TOKENS = ("预算", "决算", "基本支出", "项目支出")
+#: 正文来源不是表格列，不参与列身份核验。
+_PROSE_COLUMNS = {"正文", "说明"}
+#: 科目/经济分类编码：至少 4 位，避免把“表7”“第8项”当成编码。
+_CODE_RE = re.compile(r"\d{4,7}")
 
 
 def _dec(value) -> Optional[Decimal]:
@@ -117,24 +121,52 @@ def _identity_tokens(text: str) -> List[str]:
             if token and (len(token) >= 2 or token.isdigit())]
 
 
+def _identity_text(value: dict) -> str:
+    """现有 label/name/显式字段里可追溯的身份文本（不臆造来源）。"""
+    parts = [value.get("row"), value.get("code"), value.get("subject_code"),
+             value.get("name"), value.get("_item_label")]
+    return " ".join(str(part) for part in parts if part)
+
+
 def _row_identity_score(row: str, value: dict) -> int:
     """行身份分档：3=行名整体命中值名；2=全部 token 命中值名；
     1=token 需借 item label 才能命中；0=不匹配。
 
-    分档用于同页同数多行时选唯一值：优先整体命中，避免“合计”行借
-    item label 里的“合计/基本支出”等字样误配到“小计/项目支出”行。
+    R4-02（第四轮复核 2026-11-04）：
+    - 声明行里的科目/经济分类编码必须能在 value 的显式字段、name 或
+      item label 中找到，防止 2140101→2140106 被通用列名吞掉；
+    - name 为空时不再用空字符串包含关系拿最高分；
+    - value 自带显式 row 时，声明行必须与之相符，不能靠 name 兜底。
     """
     full = _norm_identity(row)
-    name = _norm_identity(value.get("name") or "")
-    combined = _norm_identity(
-        f"{value.get('_item_label') or ''} {value.get('name') or ''}")
     if not full:
         return 0
-    if full in name or name in full:
+    declared_codes = _CODE_RE.findall(str(row or ""))
+    identity = _identity_text(value)
+    for code in declared_codes:
+        if not re.search(rf"(?<!\d){re.escape(code)}(?!\d)", identity):
+            return 0
+    row_text = _CODE_RE.sub(" ", str(row or ""))
+    remaining = _norm_identity(row_text)
+    explicit = _norm_identity(value.get("row") or "")
+    if explicit:
+        if explicit == full or explicit == remaining:
+            return 3
+        if remaining and (explicit in remaining or remaining in explicit):
+            return 3
+        return 0
+    name = _norm_identity(value.get("name") or "")
+    if not name:
+        return 0
+    if not remaining:
+        # 声明行只有编码，且编码已在 value/label 中核对。
         return 3
-    tokens = _identity_tokens(row)
+    if remaining in name or name in remaining:
+        return 3
+    tokens = _identity_tokens(row_text)
     if tokens and all(_norm_identity(token) in name for token in tokens):
         return 2
+    combined = _norm_identity(f"{value.get('_item_label') or ''} {value.get('name') or ''}")
     if tokens and all(_norm_identity(token) in combined for token in tokens):
         return 1
     return 0
@@ -144,15 +176,38 @@ def _row_identity_ok(row: str, value: dict) -> bool:
     return _row_identity_score(row, value) > 0
 
 
-def _column_identity_ok(column: str, value: dict) -> bool:
+def _column_identity_ok(column: str, value: dict, table: str = "") -> bool:
+    """列身份：显式 value.column 优先；否则用 name 里的列词/名称比对。
+
+    R4-02：名称缺失、列词冲突、以及名称完全无法证明该列存在时一律拒绝；
+    只有表本身能证明该列（如“基本支出决算表”里的“决算数”）才放行。
+    """
     column_text = str(column or "").strip()
-    if not column_text or column_text in {"正文", "合计"}:
+    normalized = _norm_identity(column_text)
+    if not normalized or normalized in _PROSE_COLUMNS:
         return True
-    name = str(value.get("name") or "")
-    present = [token for token in _COLUMN_TOKENS if token in name]
-    if not present:
+    explicit = _norm_identity(value.get("column") or "")
+    if explicit:
+        return explicit == normalized or explicit in normalized or normalized in explicit
+    name = _norm_identity(value.get("name") or "")
+    if not name:
+        return False
+    if normalized in name or name in normalized:
         return True
-    return any(token in column_text for token in present)
+    column_tokens = {token for token in _COLUMN_TOKENS if token in column_text}
+    name_tokens = {token for token in _COLUMN_TOKENS if token in name}
+    if column_tokens and name_tokens:
+        return bool(column_tokens & name_tokens)
+    if name_tokens:
+        return False
+    if column_tokens:
+        table_text = str(table or "").strip()
+        if "决算表" in table_text and "预算" not in column_tokens:
+            return "决算" in column_tokens
+        if "预算表" in table_text and "决算" not in column_tokens:
+            return "预算" in column_tokens
+        return False
+    return False
 
 
 def _page_in_range(page: int, start: int, end: int) -> bool:
@@ -230,7 +285,7 @@ def _source_identity_error(source: dict, value: dict) -> str:
         return ""
     if row and not _row_identity_ok(row, value):
         return f"行身份不匹配：{row}"
-    if column and not _column_identity_ok(column, value):
+    if column and not _column_identity_ok(column, value, table):
         return f"列身份不匹配：{column}"
     if table:
         ok, reason = _table_identity_ok(table, source.get("page"), value)
@@ -314,7 +369,7 @@ def _match_source(source: Optional[dict], expected_value: Decimal, values: List[
     table = str(source.get("table") or "").strip()
     viable = []
     for value in matched:
-        if column and not _column_identity_ok(column, value):
+        if column and not _column_identity_ok(column, value, table):
             continue
         if table:
             table_ok, _ = _table_identity_ok(table, page, value)
