@@ -2091,6 +2091,34 @@ def _cmm007_scale(cleaned: str) -> int:
     return len(cleaned.split(".", 1)[1]) if "." in cleaned else 0
 
 
+#: 复算基期三态：显示精度决定能否把“差一点”当成数学上的零。
+_CMM007_BASE_EXACT_ZERO = "exact_zero"
+_CMM007_BASE_NONZERO = "nonzero"
+_CMM007_BASE_INDETERMINATE = "indeterminate"
+
+
+def _cmm007_base_state(derived_prior: Decimal, display_envelope: Decimal) -> str:
+    """把“复算基期是否为零”分成精确零 / 确定非零 / 显示精度不足三态。
+
+    真实反例（2026-11-04 复审，第 5 份）：本期 0 万元、减少 0.08 万元、
+    下降 100%，复算基期 0.08 万元。当期显示的 ``0`` 是 0 位小数，半步长
+    0.5，旧口径 ``|基期| <= 包络`` 把 0.08 判成“零基数”，与同一 finding
+    的 location.derived_prior=0.08 自相矛盾。
+
+    合同反例：本期 1.08、增加 1（整数显示）、基期 0.08、增长 1250%；
+    只把包络换成增减额精度（0.5）同样会把 0.08 判成零。
+
+    因此：**容差内不等于数学上的零**。只有精确等于 0 才是零基数；
+    超出显示包络是确定非零；落在包络内但非零是精度不足——既不能报
+    “零基数”，也不能当作已核实。
+    """
+    if derived_prior == 0:
+        return _CMM007_BASE_EXACT_ZERO
+    if abs(derived_prior) > display_envelope:
+        return _CMM007_BASE_NONZERO
+    return _CMM007_BASE_INDETERMINATE
+
+
 def _cmm007_canon(name: str) -> str:
     """指标身份归一：去前缀/后缀后必须仍有业务项名，否则为空（拒绝绑定）。"""
     text = _CMM007_IND_PREFIX_RE.sub("", _txt_fund_norm(name))
@@ -2256,8 +2284,9 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
             )
             pct_text = _cmm007_clean_amount(match.group("pct"))
             pct_verb = _cmm007_verb_direction(match.group("pverb"))
+            base_state = _cmm007_base_state(derived_prior, amount_envelope)
 
-            if abs(derived_prior) <= amount_envelope:
+            if base_state == _CMM007_BASE_EXACT_ZERO:
                 # R26（2026-11-03）：基数与分子都是 0 时写“0%”“0.00%”不是缺陷；
                 # 只有分子不为 0 却写百分比才无定义。
                 numerator_zero = abs(delta_wan) <= compute_dynamic_envelope(
@@ -2312,6 +2341,29 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
             # 原始金额端点计算可实现极值；正文值落在区间内（或与复算值差 ≤0.1pp）
             # 即不报。
             if self._declared_within_recompute_range(declared, current_wan, delta_wan, direction):
+                continue
+            if base_state == _CMM007_BASE_INDETERMINATE:
+                # 基期落在显示包络内但非精确零：既不能断言“零基数”，也不能
+                # 按一个可能为 0 的分母给出确定结论 → 转人工复核，不报正式错误。
+                issues.append(
+                    self._issue(
+                        f"同比基期精度不足（{canon}）：本期 {current['amount']}"
+                        f" {current['unit']}、{match.group('verb')} {delta_text} {delta_unit}，"
+                        f"复算基期 {_txt_fund_display(derived_prior)} 万元，落在显示舍入范围"
+                        f" ±{_txt_fund_display(amount_envelope)} 万元内，无法确认基期是否为零，"
+                        f"声明「{re.sub(r'[（]，,]','',match.group('pverb'))}{match.group('pct')}%」"
+                        "也无从复核——三个数字是否成立需回底稿确认，不能按零基数或按"
+                        "确定基期下结论。",
+                        self._location(
+                            sections, offsets, match, canon, current, delta_text,
+                            delta_unit, direction, derived_prior, year,
+                            recomputed=_txt_fund_display(recomputed),
+                            base_precision="indeterminate",
+                        ),
+                        severity="manual_review",
+                        evidence_text=self._evidence(match, current),
+                    )
+                )
                 continue
             severity = "error" if diff > Decimal("1.0") else "warn"
             issues.append(
@@ -2484,6 +2536,7 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
         direction_conflict: bool = False,
         recomputed: Optional[str] = None,
         explicit_prior: Optional[str] = None,
+        base_precision: Optional[str] = None,
     ) -> Dict[str, Any]:
         unit_page = _txt_fund_page_for(offsets, match.start())
         section_title, _ = _nar_repeat_section_of(sections, match.start())
@@ -2520,6 +2573,8 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
         }
         if recomputed is not None:
             location["recomputed_percent"] = recomputed
+        if base_precision is not None:
+            location["base_precision"] = base_precision
         if explicit_prior is not None:
             location["explicit_prior"] = explicit_prior
         return location
