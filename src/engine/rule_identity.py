@@ -163,121 +163,14 @@ def enforce_legacy_table_admission(document, rule_id):
             from .rules_v33 import R33240_Table2_IncomeAdvancedCheck
 
             partial = missing_header_findings(R33240_Table2_IncomeAdvancedCheck(), document)
-        receipt = cached[1]
-        material, technical = _classify_blocked_tables(receipt, blocked)
-        message = _table_block_message(receipt, material, technical)
-        if material and not technical:
-            _register_material_format_gap(document, material, message)
-        raise RuleDeferred(rule_id, message, partial_issues=partial)
-
-
-def _cells_by_fragment(receipt: dict) -> dict:
-    """未绑定金额格在回执的两层结构里都可能出现。
-
-    ``build_table_import_receipt`` 返回的是外层回执，逐格明细挂在
-    ``reading_quality.unbound_money_cells``；持久化的 reading_import 则把
-    部分字段摊平。两处都取，避免因结构层级差异漏掉真实格。
-    """
-    cells = list(receipt.get("unbound_money_cells") or [])
-    cells += list((receipt.get("reading_quality") or {}).get("unbound_money_cells") or [])
-    grouped: dict = {}
-    for cell in cells:
-        grouped.setdefault(cell.get("fragment_uid"), []).append(cell)
-    return grouped
-
-
-def _classify_blocked_tables(receipt: dict, blocked: list) -> tuple:
-    """把阻断表分成“只为原件值非法”和“确有技术/映射冲突”两组。
-
-    判定条件必须全部成立才算材料缺陷：该表所有未绑定格都是单个数词且原文
-    小数点重复、原因恰为 ``fact_unbound``、且与上游计数一致。任何一条不满足
-    （身份冲突、列未映射、标签缺失、算术冲突、计数不吻合）都按技术冲突处理，
-    不借格式归类放行。
-    """
-    from src.services.cell_number_text import invalid_number_text
-
-    grouped = _cells_by_fragment(receipt)
-    material: list = []
-    technical: list = []
-    for table in blocked:
-        cells = grouped.get(table.get("fragment_uid"), [])
-        reasons = {str(k): int(v) for k, v in (table.get("reasons") or {}).items()}
-        format_cells = [
-            cell for cell in cells
-            if invalid_number_text(cell.get("raw_text"))
-            and str(cell.get("reason") or "") == "fact_unbound"
-        ]
-        format_only = (
-            bool(format_cells)
-            and len(format_cells) == len(cells)
-            and set(reasons) == {"fact_unbound"}
-            and reasons.get("fact_unbound") == len(format_cells)
+        raise RuleDeferred(
+            rule_id,
+            "来源表映射/读取未完成："
+            + "；".join(
+                f"第{table['page']}页{table['table_code']} {table['reasons']}" for table in blocked
+            ),
+            partial_issues=partial,
         )
-        if format_only:
-            material.append((table, format_cells))
-        else:
-            technical.append(table)
-    return material, technical
-
-
-def _cell_pages(table: dict, cells: list) -> list:
-    pages = {cell.get("page") for cell in cells if isinstance(cell.get("page"), int)}
-    return sorted(pages) or [table["page"]]
-
-
-def _table_block_message(receipt: dict, material: list, technical: list) -> str:
-    """区分“原件值非法（材料补正）”与“真实绑定/读取失败（技术处理）”。
-
-    第 9 份真实形态：物理页 9 三个基本支出格原文 ``2.359.46``，旧口径一律
-    说成“第 8 页映射/读取未完成”，用户收到的指引与复核项里的“原件格式
-    缺陷”互相矛盾。这里按单元格原因分类并落到真实格所在页；两者并存时
-    分别列出，不互相吞掉。
-    """
-    grouped = _cells_by_fragment(receipt)
-    parts: list = []
-    for table, cells in material:
-        refs = "、".join(f"第{page}页{table['table_code']}" for page in _cell_pages(table, cells))
-        raws = sorted({str(cell.get("raw_text") or "") for cell in cells})
-        parts.append(
-            f"原件金额格式非法：{refs} {len(cells)} 个金额格原文「{'」「'.join(raws)}」"
-            "无法解析为数值，数值不确定，需回原件补正；依赖勾稽保持材料阻断"
-        )
-    for table in technical:
-        cells = grouped.get(table.get("fragment_uid"), [])
-        refs = "、".join(f"第{page}页{table['table_code']}" for page in _cell_pages(table, cells))
-        parts.append(f"来源表映射/读取未完成：{refs} {table['reasons']}")
-    return "；".join(parts)
-
-
-def _register_material_format_gap(document, material: list, message: str) -> None:
-    """把材料格式缺陷登记成单元格级结构化事实（不是整表技术故障）。
-
-    原因码只从冻结表里选：``cell_unbound`` 的允许动作含人工确认/系统重读，
-    比 ``table_mapping_incomplete``（只允许 tech_fix）更符合“回原件补正”。
-    阻断位置指向真实格 ID 与物理页，供义务、复核与导出保持同一来源。
-    """
-    from .diagnostic_fields import record_gap, table_missing_operand
-
-    blocked_by: list = []
-    missing: list = []
-    for table, cells in material:
-        for cell in cells:
-            page = cell.get("page") if isinstance(cell.get("page"), int) else table["page"]
-            ref = f"第{page}页{table['table_code']}:{cell.get('source_cell_id') or cell.get('row')}"
-            blocked_by.append({"dimension": "cell", "ref": ref, "reason_code": "cell_unbound"})
-            missing.append(table_missing_operand(
-                table_code=str(table["table_code"]),
-                role="金额格原文非法，数值不确定",
-                page=page,
-                row_key=cell.get("source_cell_id") or cell.get("row"),
-                column="金额",
-            ))
-    if not blocked_by:
-        return
-    record_gap(document, [message], reason_codes=["cell_unbound"],
-               missing_operands=missing, blocked_by=blocked_by,
-               preferred_action="human_confirm")
-
 
 
 @contextmanager

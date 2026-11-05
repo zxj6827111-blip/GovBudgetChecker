@@ -433,6 +433,21 @@ def rule_level_entry(text: Any, rule_id: Any = None, doc: Any = None) -> Dict[st
                 "candidates": [],
                 "preferred_action": "human_confirm",
             }
+    # 空表/缺表（材料侧）：父进程从文本恢复 table_missing，并保留人工确认动作。
+    if "原件表格无可用金额数据" in value:
+        tables = re.findall(r"第(\d+)页([A-Za-z_][A-Za-z0-9_]*)", value)
+        if tables:
+            return {
+                "reason_codes": ["table_missing"],
+                "blocked_by": [
+                    {"dimension": "instance_uid", "ref": f"第{page}页{table}",
+                     "reason_code": "table_missing"}
+                    for page, table in tables
+                ],
+                "missing_operands": [],
+                "candidates": [],
+                "preferred_action": "human_confirm",
+            }
     # 来源表映射失败：文本本身带“第N页表代码”，阻断位置直接取它，不降级成模糊规则级。
     if "来源表映射/读取未完成" in value:
         blockers = [
