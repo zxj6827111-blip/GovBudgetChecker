@@ -224,19 +224,18 @@ def _source_identity_error(source: dict, value: dict) -> str:
     row = str(source.get("row") or "").strip()
     column = str(source.get("column") or "").strip()
     table = str(source.get("table") or "").strip()
-    if not row:
-        return "缺少行身份"
-    if not column:
-        return "缺少列身份"
-    if not table:
-        return "缺少表/章节身份"
-    if not _row_identity_ok(row, value):
+    if not any((row, column, table)):
+        # 未声明行列/表身份：page+quote+数值+单位且唯一命中即为来源证明；
+        # 一旦声明了任一身份字段，就必须匹配，不能拿“没写”绕过冲突。
+        return ""
+    if row and not _row_identity_ok(row, value):
         return f"行身份不匹配：{row}"
-    if not _column_identity_ok(column, value):
+    if column and not _column_identity_ok(column, value):
         return f"列身份不匹配：{column}"
-    ok, reason = _table_identity_ok(table, source.get("page"), value)
-    if not ok:
-        return reason
+    if table:
+        ok, reason = _table_identity_ok(table, source.get("page"), value)
+        if not ok:
+            return reason
     return ""
 
 
@@ -310,16 +309,24 @@ def _match_source(source: Optional[dict], expected_value: Decimal, values: List[
     # 同页同数可能命中多行（如“合计 预算数”和“车小计 预算数”都写 7.40）；
     # 必须用行列/表身份选出唯一一条，不能拿第一条代替。行身份按整体命中
     # 优先于“借 item label 才命中”，避免合计行误配到小计/项目行。
+    row = str(source.get("row") or "").strip()
+    column = str(source.get("column") or "").strip()
+    table = str(source.get("table") or "").strip()
     viable = []
     for value in matched:
-        if not _column_identity_ok(str(source.get("column") or ""), value):
+        if column and not _column_identity_ok(column, value):
             continue
-        table_ok, _ = _table_identity_ok(str(source.get("table") or ""), page, value)
-        if not table_ok:
-            continue
-        score = _row_identity_score(str(source.get("row") or ""), value)
-        if score:
+        if table:
+            table_ok, _ = _table_identity_ok(table, page, value)
+            if not table_ok:
+                continue
+        if row:
+            score = _row_identity_score(row, value)
+            if not score:
+                continue
             viable.append((score, value))
+        else:
+            viable.append((1, value))
     if not viable:
         return False, "", _source_identity_error(source, matched[0]) or "行列身份不匹配"
     best_score = max(score for score, _value in viable)
