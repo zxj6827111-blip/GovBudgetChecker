@@ -2141,10 +2141,11 @@ def build_check_receipts(
         instance = instance_by_id.get(obligation_id)
         if not instance:
             continue
-        key, action = min(pairs, key=lambda item: item[0])
+        key, _action = min(pairs, key=lambda item: item[0])
         instance["root_cause_key"] = key
-        if action:
-            instance["next_action"] = action
+        # 动作不再按“根因键最小的那条回执”覆盖：汇总阶段已按主原因码
+        # 继承了与材料/技术分类一致的动作，按任意回执覆盖会让
+        # “原因码是 cell_unbound、动作却是 tech_fix”自相矛盾。
 
     # 关系级回执置于义务级回执之后，逐关系可追溯（AC-04 验收要求）
     receipt_items.extend(relation_receipts)
