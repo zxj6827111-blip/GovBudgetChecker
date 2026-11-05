@@ -4,6 +4,10 @@ import type { FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { Badge, Button, Card, Td, Th } from "@/components/ui";
+
+const FIELD_CLASS = "w-full rounded-md border border-border bg-white text-sm text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 px-3 py-2";
+
 type UserRecord = {
   username: string;
   is_admin: boolean;
@@ -343,7 +347,7 @@ export default function UserManagementPanel({
     disabled = false,
     testIdPrefix = "admin-users-org",
   ) => (
-    <div className="max-h-44 overflow-y-auto rounded-lg border border-slate-200 bg-white">
+    <div className="max-h-44 overflow-y-auto rounded-md border border-border bg-white">
       {organizations.length ? (
         organizations.map((org) => {
           const checked = selectedIds.includes(org.id);
@@ -358,7 +362,7 @@ export default function UserManagementPanel({
                 checked={checked}
                 disabled={disabled}
                 onChange={() => onChange(toggleOrganizationId(selectedIds, org.id))}
-                className="mt-1 rounded border-slate-300 text-slate-900 focus:ring-slate-400"
+                className="mt-1"
               />
               <span className="min-w-0">
                 <span className="block truncate text-sm text-slate-800">{org.name}</span>
@@ -375,11 +379,11 @@ export default function UserManagementPanel({
 
   if (loading) {
     return embedded ? (
-      <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">
+      <div className="rounded-card border border-border bg-white p-6 text-sm text-slate-600 shadow-soft">
         正在加载用户管理...
       </div>
     ) : (
-      <div className="flex min-h-[320px] items-center justify-center rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+      <div className="flex min-h-[320px] items-center justify-center rounded-card border border-border bg-white p-8 shadow-soft">
         <div className="text-slate-600">正在加载用户管理...</div>
       </div>
     );
@@ -387,7 +391,7 @@ export default function UserManagementPanel({
 
   if (!isAdmin) {
     return (
-      <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+      <div className="rounded-card border border-border bg-white p-8 shadow-soft">
         <h2 className="text-xl font-semibold text-slate-900">无访问权限</h2>
         <p className="mt-2 text-sm text-slate-600">当前账号不是管理员，无法访问用户管理功能。</p>
       </div>
@@ -395,34 +399,31 @@ export default function UserManagementPanel({
   }
 
   return (
-    <div className="space-y-6" data-testid="admin-users-panel">
+    <div className="space-y-5" data-testid="admin-users-panel">
       {showSummaryHeader ? (
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <Card>
           <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
             <div>
-              <h2 className="text-lg font-semibold text-slate-900">用户与权限</h2>
-              <p className="mt-1 text-sm text-slate-600">
+              <h2 className="text-sm font-semibold text-slate-900">用户与权限</h2>
+              <p className="mt-1 text-xs text-slate-500">
                 当前管理员：{me?.username || "admin"}，共 {users.length} 个账号
               </p>
             </div>
-            <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
-              支持组织范围、启停、重置密码和删除
-            </div>
+            <Badge>支持组织范围、启停、重置密码和删除</Badge>
           </div>
-        </div>
+        </Card>
       ) : null}
 
-      <div className="grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h3 className="text-lg font-medium text-slate-900">添加用户</h3>
-          <p className="mt-1 text-sm text-slate-500">创建系统账号，并按需授予管理员或组织访问范围。</p>
-          <form className="mt-4 space-y-3" onSubmit={createUser}>
+      {/* 分栏按视口断点判断：两层侧栏占去约 530px，xl 下表格只剩不到 300px，所以到 2xl 才并排。 */}
+      <div className="grid gap-5 2xl:grid-cols-[360px_minmax(0,1fr)] 2xl:items-start">
+        <Card title="添加用户" desc="创建系统账号，并按需授予管理员或组织访问范围。">
+          <form className="grid gap-3 md:grid-cols-2 2xl:grid-cols-1" onSubmit={createUser}>
             <input
               data-testid="admin-users-new-username"
               value={newUsername}
               onChange={(event) => setNewUsername(event.target.value)}
               placeholder="用户名"
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+              className={FIELD_CLASS}
               disabled={submitting}
               autoComplete="username"
             />
@@ -432,7 +433,7 @@ export default function UserManagementPanel({
               onChange={(event) => setNewPassword(event.target.value)}
               type="password"
               placeholder={`密码（至少 ${MIN_PASSWORD_LENGTH} 位）`}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+              className={FIELD_CLASS}
               disabled={submitting}
               autoComplete="new-password"
             />
@@ -448,7 +449,7 @@ export default function UserManagementPanel({
             </label>
             {!newUserAdmin ? <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" data-testid="admin-users-new-readonly" checked={newUserReadOnly} onChange={event => setNewUserReadOnly(event.target.checked)} disabled={submitting} />主管只读账号（仅查看授权范围）</label> : null}
             {!newUserAdmin ? (
-              <div className="space-y-2">
+              <div className="space-y-2 md:col-span-2 2xl:col-span-1">
                 <div className="text-sm font-medium text-slate-700">可访问组织范围</div>
                 {renderOrganizationPicker(
                   newUserOrganizationIds,
@@ -461,50 +462,49 @@ export default function UserManagementPanel({
                 </div>
               </div>
             ) : (
-              <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+              <div className="rounded-md bg-surface-100 px-3 py-2 text-xs text-slate-600 md:col-span-2 2xl:col-span-1">
                 管理员默认可访问全部组织。
               </div>
             )}
-            <button
-              type="submit"
-              data-testid="admin-users-create"
-              disabled={submitting}
-              className="w-full rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
-            >
-              {submitting ? "创建中..." : "创建用户"}
-            </button>
+            <div className="md:col-span-2 2xl:col-span-1">
+              <Button
+                type="submit"
+                data-testid="admin-users-create"
+                disabled={submitting}
+                className="w-full md:w-auto 2xl:w-full"
+              >
+                {submitting ? "创建中..." : "创建用户"}
+              </Button>
+            </div>
           </form>
-        </div>
+        </Card>
 
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           {error ? (
-            <div data-testid="admin-users-error" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <div data-testid="admin-users-error" className="rounded-card border border-danger-200 bg-danger-50 px-4 py-3 text-sm text-danger-700">
               {error}
             </div>
           ) : null}
           {message ? (
-            <div data-testid="admin-users-message" className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+            <div data-testid="admin-users-message" className="rounded-card border border-success-200 bg-success-50 px-4 py-3 text-sm text-success-700">
               {message}
             </div>
           ) : null}
 
-          <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <div className="border-b border-slate-200 px-6 py-4">
-              <h3 className="text-lg font-medium text-slate-900">用户列表</h3>
-            </div>
+          <Card title="用户列表" bodyClassName="p-0">
             <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-slate-200 text-sm">
-                <thead className="bg-slate-50">
+              <table className="min-w-full text-sm">
+                <thead>
                   <tr>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">用户名</th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">角色</th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">状态</th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">组织范围</th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">创建时间</th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">操作</th>
+                    <Th className="px-3">用户名</Th>
+                    <Th className="px-3">角色</Th>
+                    <Th className="px-3">状态</Th>
+                    <Th className="px-3">组织范围</Th>
+                    <Th className="px-3">创建时间</Th>
+                    <Th className="px-3">操作</Th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+                <tbody>
                   {users.map((item) => {
                     const isBusy = busyUsername === item.username;
                     const isCurrent = item.username === me?.username;
@@ -512,115 +512,119 @@ export default function UserManagementPanel({
 
                     return (
                       <tr key={item.username} data-testid={`admin-users-row-${item.username}`}>
-                        <td className="px-4 py-3 text-slate-800">{item.username}</td>
-                        <td className="px-4 py-3">
-                          <span className={`rounded-full px-2 py-1 text-xs ${item.is_admin ? "bg-indigo-100 text-indigo-700" : "bg-slate-100 text-slate-700"}`}>
+                        <Td className="px-3 text-slate-800">{item.username}</Td>
+                        <Td className="px-3">
+                          <Badge tone={item.is_admin ? "processing" : "neutral"} className="whitespace-nowrap">
                             {item.is_read_only ? "主管只读" : item.is_admin ? "管理员" : "审核工作人员"}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">
-                          <span className={`rounded-full px-2 py-1 text-xs ${item.is_active ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>
+                          </Badge>
+                        </Td>
+                        <Td className="px-3">
+                          <Badge tone={item.is_active ? "done" : "review"} className="whitespace-nowrap">
                             {item.is_active ? "已启用" : "已禁用"}
-                          </span>
-                        </td>
-                        <td className="min-w-56 px-4 py-3 text-slate-600">
+                          </Badge>
+                        </Td>
+                        <Td className="min-w-36 px-3 text-slate-600">
                           {item.is_admin ? (
                             <span className="text-sm text-slate-700">全部组织</span>
                           ) : (
                             <div className="space-y-2">
                               <div className="text-sm">{describeOrganizationScope(item.organization_ids)}</div>
                               {editingScope ? (
-                                <div className="w-72 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                                <div className="w-72 rounded-md border border-border bg-surface-100 p-3">
                                   {renderOrganizationPicker(scopeDraft, setScopeDraft, isBusy, `admin-users-scope-org-${item.username}`)}
                                   <div className="mt-3 flex gap-2">
-                                    <button
-                                      type="button"
+                                    <Button
+                                      size="sm"
                                       data-testid={`admin-users-scope-save-${item.username}`}
                                       disabled={isBusy}
                                       onClick={() => saveScopeEditor(item.username)}
-                                      className="rounded bg-slate-900 px-3 py-1.5 text-xs font-medium text-white disabled:bg-slate-400"
                                     >
                                       保存范围
-                                    </button>
-                                    <button
-                                      type="button"
+                                    </Button>
+                                    <Button
+                                      variant="secondary"
+                                      size="sm"
                                       data-testid={`admin-users-scope-cancel-${item.username}`}
                                       disabled={isBusy}
                                       onClick={() => {
                                         setScopeEditorUsername(null);
                                         setScopeDraft([]);
                                       }}
-                                      className="rounded border border-slate-300 px-3 py-1.5 text-xs text-slate-700 disabled:opacity-60"
                                     >
                                       取消
-                                    </button>
+                                    </Button>
                                   </div>
                                 </div>
                               ) : null}
                             </div>
                           )}
-                        </td>
-                        <td className="px-4 py-3 text-slate-600">{formatTimestamp(item.created_at)}</td>
-                        <td className="px-4 py-3">
+                        </Td>
+                        <Td className="px-3 text-slate-600">{formatTimestamp(item.created_at)}</Td>
+                        <Td className="min-w-[220px] px-3">
                           <div className="flex flex-wrap gap-2">
-                            <button
-                              type="button"
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              className="whitespace-nowrap"
                               data-testid={`admin-users-role-${item.username}`}
                               disabled={isBusy}
                               onClick={() => updateUser(item.username, { is_admin: !item.is_admin, ...(item.is_read_only ? { is_read_only: false } : {}) }, `${item.username} 的角色已更新`)}
-                              className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 disabled:opacity-60"
                             >
                               {item.is_admin ? "取消管理员" : "设为管理员"}
-                            </button>
-                            {!item.is_admin ? <button type="button" disabled={isBusy} data-testid={`admin-users-readonly-${item.username}`} onClick={() => updateUser(item.username, { is_read_only: !item.is_read_only }, `${item.username} 的只读权限已更新，请重新登录`)} className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 disabled:opacity-60">{item.is_read_only ? "改为工作人员" : "设为主管只读"}</button> : null}
-                            <button
-                              type="button"
+                            </Button>
+                            {!item.is_admin ? <Button variant="secondary" size="sm" className="whitespace-nowrap" disabled={isBusy} data-testid={`admin-users-readonly-${item.username}`} onClick={() => updateUser(item.username, { is_read_only: !item.is_read_only }, `${item.username} 的只读权限已更新，请重新登录`)}>{item.is_read_only ? "改为工作人员" : "设为主管只读"}</Button> : null}
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              className="whitespace-nowrap"
                               data-testid={`admin-users-active-${item.username}`}
                               disabled={isBusy}
                               onClick={() => updateUser(item.username, { is_active: !item.is_active }, `${item.username} 的状态已更新`)}
-                              className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 disabled:opacity-60"
                             >
                               {item.is_active ? "禁用" : "启用"}
-                            </button>
+                            </Button>
                             {!item.is_admin ? (
-                              <button
-                                type="button"
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                className="whitespace-nowrap"
                                 data-testid={`admin-users-scope-open-${item.username}`}
                                 disabled={isBusy}
                                 onClick={() => openScopeEditor(item)}
-                                className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 disabled:opacity-60"
                               >
                                 设置范围
-                              </button>
+                              </Button>
                             ) : null}
-                            <button
-                              type="button"
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              className="whitespace-nowrap"
                               data-testid={`admin-users-password-${item.username}`}
                               disabled={isBusy}
                               onClick={() => resetUserPassword(item.username)}
-                              className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 disabled:opacity-60"
                             >
                               重置密码
-                            </button>
-                            <button
-                              type="button"
+                            </Button>
+                            <Button
+                              variant="secondary"
+                              size="sm"
                               data-testid={`admin-users-delete-${item.username}`}
                               disabled={isBusy || isCurrent}
                               onClick={() => removeUser(item.username)}
-                              className="rounded border border-red-300 px-2 py-1 text-xs text-red-700 disabled:opacity-60"
+                              className="whitespace-nowrap border-danger-200 text-danger-700 hover:bg-danger-50"
                               title={isCurrent ? "不能删除当前登录用户" : ""}
                             >
                               删除
-                            </button>
+                            </Button>
                           </div>
-                        </td>
+                        </Td>
                       </tr>
                     );
                   })}
                 </tbody>
               </table>
             </div>
-          </div>
+          </Card>
         </div>
       </div>
     </div>

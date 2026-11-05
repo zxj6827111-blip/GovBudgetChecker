@@ -12,6 +12,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 
+import { Button, Card, Metric } from "@/components/ui";
 import { getSeverityMeta } from "@/lib/issueSeverity";
 import { cn } from "@/lib/utils";
 
@@ -98,6 +99,8 @@ type AnalysisJobDetail = AnalysisJobSummary & {
   };
 };
 
+const FIELD_CLASS = "rounded-md border border-border bg-white text-sm text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 px-3 py-2";
+
 function formatDate(value?: string | null) {
   if (!value) {
     return "--";
@@ -134,15 +137,15 @@ function statusMeta(status?: string) {
   switch ((status || "").toLowerCase()) {
     case "done":
     case "completed":
-      return { label: "已完成", className: "bg-emerald-100 text-emerald-700" };
+      return { label: "已完成", className: "bg-success-100 text-success-700" };
     case "processing":
     case "running":
-      return { label: "处理中", className: "bg-blue-100 text-blue-700" };
+      return { label: "处理中", className: "bg-primary-100 text-primary-700" };
     case "queued":
-      return { label: "排队中", className: "bg-amber-100 text-amber-700" };
+      return { label: "排队中", className: "bg-warning-100 text-warning-700" };
     case "error":
     case "failed":
-      return { label: "失败", className: "bg-red-100 text-red-700" };
+      return { label: "失败", className: "bg-danger-100 text-danger-700" };
     default:
       return { label: status || "未知", className: "bg-slate-100 text-slate-700" };
   }
@@ -196,17 +199,17 @@ function FindingColumn({
   emptyText: string;
 }) {
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="flex items-center gap-3 border-b border-slate-200 px-5 py-4">
-        <div className={cn("rounded-xl p-2", accent)}>{icon}</div>
+    <section className="rounded-card border border-border bg-white shadow-soft">
+      <div className="flex items-center gap-3 border-b border-border px-5 py-4">
+        <div className={cn("rounded-md p-2", accent)}>{icon}</div>
         <div>
-          <h3 className="text-base font-semibold text-slate-900">{title}</h3>
-          <p className="text-sm text-slate-500">共 {items.length} 条</p>
+          <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
+          <p className="text-xs text-slate-500">共 {items.length} 条</p>
         </div>
       </div>
       <div className="max-h-[34rem] space-y-3 overflow-y-auto p-4">
         {items.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+          <div className="rounded-md border border-dashed border-border bg-surface-100 px-4 py-6 text-center text-sm text-slate-500">
             {emptyText}
           </div>
         ) : (
@@ -216,7 +219,7 @@ function FindingColumn({
             return (
               <article
                 key={item.id || `${title}-${index}`}
-                className="rounded-xl border border-slate-200 bg-slate-50/80 p-4"
+                className="rounded-md border border-border bg-surface-100 p-4"
               >
                 <div className="flex flex-wrap items-center gap-2">
                   <span className={cn("rounded-full px-2.5 py-1 text-xs font-medium", meta.className)}>
@@ -236,7 +239,7 @@ function FindingColumn({
                 </p>
                 <div className="mt-3 text-xs text-slate-500">{buildLocationText(item)}</div>
                 {item.suggestion ? (
-                  <div className="mt-3 rounded-lg bg-white px-3 py-2 text-xs text-slate-600">
+                  <div className="mt-3 rounded-md bg-white px-3 py-2 text-xs text-slate-600">
                     建议：{item.suggestion}
                   </div>
                 ) : null}
@@ -378,31 +381,31 @@ export default function AnalysisResultsPanel() {
   const status = statusMeta(detail?.status || selectedSummary?.status);
 
   return (
-    <div className="space-y-6" data-testid="admin-analysis-panel">
-      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+    <div className="space-y-5" data-testid="admin-analysis-panel">
+      <Card>
+        <div className="flex flex-col gap-4 2xl:flex-row 2xl:items-end 2xl:justify-between">
           <div>
-            <h2 className="text-xl font-semibold text-slate-900">分析结果中心</h2>
-            <p className="mt-1 text-sm text-slate-600">
+            <h2 className="text-sm font-semibold text-slate-900">分析结果中心</h2>
+            <p className="mt-1 text-xs text-slate-500">
               查看数据库中的分析任务、AI 结果、规则结果与结构化入库信息。
             </p>
           </div>
           <form onSubmit={handleSearchSubmit} className="flex flex-col gap-3 md:flex-row">
-            <div className="relative min-w-[240px]">
+            <div className="relative min-w-[240px] md:flex-1">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <input
                 data-testid="admin-analysis-search"
                 value={searchDraft}
                 onChange={(event) => setSearchDraft(event.target.value)}
                 placeholder="搜索任务 ID、文件名或单位名"
-                className="w-full rounded-xl border border-slate-300 py-2 pl-9 pr-3 text-sm outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                className={cn(FIELD_CLASS, "w-full pl-9")}
               />
             </div>
             <select
               data-testid="admin-analysis-status"
               value={statusFilter}
               onChange={(event) => setStatusFilter(event.target.value)}
-              className="rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+              className={FIELD_CLASS}
             >
               <option value="">全部状态</option>
               <option value="done">已完成</option>
@@ -414,129 +417,123 @@ export default function AnalysisResultsPanel() {
               data-testid="admin-analysis-mode"
               value={modeFilter}
               onChange={(event) => setModeFilter(event.target.value)}
-              className="rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+              className={FIELD_CLASS}
             >
               <option value="">全部模式</option>
               <option value="dual">dual</option>
               <option value="legacy">legacy</option>
             </select>
-            <button
-              type="submit"
-              data-testid="admin-analysis-submit"
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
-            >
+            <Button type="submit" data-testid="admin-analysis-submit" className="shrink-0 whitespace-nowrap">
               <Search className="h-4 w-4" />
               查询
-            </button>
+            </Button>
           </form>
         </div>
-      </div>
+      </Card>
 
       {error ? (
-        <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+        <div className="flex items-start gap-3 rounded-card border border-warning-200 bg-warning-50 px-4 py-3 text-sm text-warning-800">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
           <span>{error}</span>
         </div>
       ) : null}
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="text-xs text-slate-500">任务总数</div><div className="mt-2 text-2xl font-semibold text-slate-900">{listSummary?.total ?? jobs.length}</div></div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="text-xs text-slate-500">已完成</div><div className="mt-2 text-2xl font-semibold text-emerald-600">{listSummary?.done ?? 0}</div></div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="text-xs text-slate-500">处理中</div><div className="mt-2 text-2xl font-semibold text-blue-600">{(listSummary?.processing ?? 0) + (listSummary?.queued ?? 0)}</div></div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="text-xs text-slate-500">失败任务</div><div className="mt-2 text-2xl font-semibold text-rose-600">{listSummary?.error ?? 0}</div></div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="text-xs text-slate-500">AI Findings</div><div className="mt-2 text-2xl font-semibold text-slate-900">{listSummary?.ai_findings_total ?? 0}</div></div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="text-xs text-slate-500">Rule Findings</div><div className="mt-2 text-2xl font-semibold text-slate-900">{listSummary?.rule_findings_total ?? 0}</div></div>
+      <div className="grid gap-4 sm:grid-cols-3 xl:grid-cols-6">
+        <Metric label="任务总数" value={listSummary?.total ?? jobs.length} />
+        <Metric label="已完成" tone="success" value={listSummary?.done ?? 0} />
+        <Metric label="处理中" tone="primary" value={(listSummary?.processing ?? 0) + (listSummary?.queued ?? 0)} />
+        <Metric label="失败任务" tone="danger" value={listSummary?.error ?? 0} />
+        <Metric label="AI 问题" value={listSummary?.ai_findings_total ?? 0} />
+        <Metric label="规则问题" value={listSummary?.rule_findings_total ?? 0} />
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
-        <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-            <div>
-              <h3 className="text-base font-semibold text-slate-900">任务列表</h3>
-              <p className="text-sm text-slate-500">按最近更新时间排序</p>
-            </div>
-            <button
-              type="button"
+      <div className="grid gap-5 xl:grid-cols-[300px_minmax(0,1fr)]">
+        <Card
+          title="任务列表"
+          desc="按最近更新时间排序"
+          bodyClassName="max-h-[52rem] overflow-y-auto p-3"
+          action={
+            <Button
+              variant="secondary"
+              size="sm"
               data-testid="admin-analysis-refresh"
               onClick={() => setReloadToken((current) => current + 1)}
-              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-600 transition hover:bg-slate-50"
             >
               <RefreshCw className={cn("h-3.5 w-3.5", loadingList ? "animate-spin" : "")} />
               刷新
-            </button>
-          </div>
-          <div className="max-h-[52rem] overflow-y-auto p-3">
-            {loadingList ? (
-              <div className="flex items-center justify-center gap-2 px-4 py-10 text-sm text-slate-500">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                正在加载任务列表...
-              </div>
-            ) : jobs.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">
-                当前没有可展示的分析任务。
-              </div>
-            ) : (
-              jobs.map((item) => {
-                const isSelected = item.job_uuid === selectedJobUuid;
-                const itemStatus = statusMeta(item.status);
-                return (
-                  <button
-                    key={item.job_uuid}
-                    type="button"
-                    data-testid={`admin-analysis-job-${item.job_uuid}`}
-                    onClick={() => setSelectedJobUuid(item.job_uuid)}
-                    className={cn(
-                      "mb-3 w-full rounded-2xl border px-4 py-4 text-left transition",
-                      isSelected
-                        ? "border-slate-900 bg-slate-900 text-white shadow-lg"
-                        : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50",
-                    )}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-semibold">{getJobTitle(item)}</div>
-                        <div className={cn("mt-1 truncate text-xs", isSelected ? "text-slate-300" : "text-slate-500")}>
-                          {getJobSubtitle(item)}
-                        </div>
+            </Button>
+          }
+        >
+          {loadingList ? (
+            <div className="flex items-center justify-center gap-2 px-4 py-10 text-sm text-slate-500">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              正在加载任务列表...
+            </div>
+          ) : jobs.length === 0 ? (
+            <div className="rounded-md border border-dashed border-border bg-surface-100 px-4 py-10 text-center text-sm text-slate-500">
+              当前没有可展示的分析任务。
+            </div>
+          ) : (
+            jobs.map((item) => {
+              const isSelected = item.job_uuid === selectedJobUuid;
+              const itemStatus = statusMeta(item.status);
+              return (
+                <button
+                  key={item.job_uuid}
+                  type="button"
+                  data-testid={`admin-analysis-job-${item.job_uuid}`}
+                  onClick={() => setSelectedJobUuid(item.job_uuid)}
+                  className={cn(
+                    "mb-3 w-full rounded-md border px-4 py-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400",
+                    isSelected
+                      ? "border-primary-300 bg-primary-50"
+                      : "border-border bg-white hover:border-slate-300 hover:bg-slate-50",
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold text-slate-900">{getJobTitle(item)}</div>
+                      <div className="mt-1 truncate text-xs text-slate-500">
+                        {getJobSubtitle(item)}
                       </div>
-                      <span className={cn("rounded-full px-2 py-1 text-[11px] font-medium", isSelected ? "bg-white/15 text-white" : itemStatus.className)}>
-                        {itemStatus.label}
-                      </span>
                     </div>
-                    <div className={cn("mt-4 grid grid-cols-3 gap-2 text-center text-xs", isSelected ? "text-slate-200" : "text-slate-600")}>
-                      <div className="rounded-xl bg-black/5 px-2 py-2"><div className="font-semibold">{item.ai_findings_count}</div><div className="mt-1 text-[11px] opacity-80">AI</div></div>
-                      <div className="rounded-xl bg-black/5 px-2 py-2"><div className="font-semibold">{item.rule_findings_count}</div><div className="mt-1 text-[11px] opacity-80">Rule</div></div>
-                      <div className="rounded-xl bg-black/5 px-2 py-2"><div className="font-semibold">{item.merged_findings_count}</div><div className="mt-1 text-[11px] opacity-80">Merged</div></div>
-                    </div>
-                    <div className={cn("mt-3 text-xs", isSelected ? "text-slate-300" : "text-slate-500")}>
-                      更新时间：{formatDate(item.completed_at || item.updated_at || item.created_at)}
-                    </div>
-                  </button>
-                );
-              })
-            )}
-          </div>
-        </section>
+                    <span className={cn("shrink-0 whitespace-nowrap rounded-full px-2 py-1 text-[11px] font-medium", itemStatus.className)}>
+                      {itemStatus.label}
+                    </span>
+                  </div>
+                  <div className="mt-4 grid grid-cols-3 gap-2 text-center text-xs text-slate-600">
+                    <div className="rounded-md bg-slate-100 px-2 py-2"><div className="font-semibold">{item.ai_findings_count}</div><div className="mt-1 text-[11px] opacity-80">AI</div></div>
+                    <div className="rounded-md bg-slate-100 px-2 py-2"><div className="font-semibold">{item.rule_findings_count}</div><div className="mt-1 text-[11px] opacity-80">规则</div></div>
+                    <div className="rounded-md bg-slate-100 px-2 py-2"><div className="font-semibold">{item.merged_findings_count}</div><div className="mt-1 text-[11px] opacity-80">合并后</div></div>
+                  </div>
+                  <div className="mt-3 text-xs text-slate-500">
+                    更新时间：{formatDate(item.completed_at || item.updated_at || item.created_at)}
+                  </div>
+                </button>
+              );
+            })
+          )}
+        </Card>
 
-        <section className="space-y-6">
+        <section className="min-w-0 space-y-5">
           {!selectedJobUuid ? (
-            <div className="flex min-h-[24rem] flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white px-6 text-center text-slate-500 shadow-sm">
+            <div className="flex min-h-[24rem] flex-col items-center justify-center rounded-card border border-dashed border-slate-300 bg-white px-6 text-center text-slate-500 shadow-soft">
               <Database className="mb-4 h-10 w-10 text-slate-300" />
-              <h3 className="text-lg font-medium text-slate-700">请选择一条分析任务</h3>
+              <h3 className="text-sm font-semibold text-slate-700">请选择一条分析任务</h3>
               <p className="mt-2 max-w-md text-sm">左侧列表会展示已入库的分析任务，点击后即可查看 AI、规则和结构化结果。</p>
             </div>
           ) : loadingDetail ? (
-            <div className="flex min-h-[24rem] items-center justify-center gap-3 rounded-2xl border border-slate-200 bg-white text-slate-500 shadow-sm">
+            <div className="flex min-h-[24rem] items-center justify-center gap-3 rounded-card border border-border bg-white text-slate-500 shadow-soft">
               <Loader2 className="h-5 w-5 animate-spin" />
               正在加载结果详情...
             </div>
           ) : detail ? (
             <>
-              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                  <div>
+              <Card>
+                <div className="flex flex-col gap-4 2xl:flex-row 2xl:items-start 2xl:justify-between">
+                  <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="text-xl font-semibold text-slate-900">{getJobTitle(detail)}</h3>
+                      <h3 className="text-base font-semibold text-slate-900">{getJobTitle(detail)}</h3>
                       <span className={cn("rounded-full px-2.5 py-1 text-xs font-medium", status.className)}>
                         {status.label}
                       </span>
@@ -553,46 +550,46 @@ export default function AnalysisResultsPanel() {
                       <div>完成时间：{formatDate(detail.completed_at || detail.updated_at)}</div>
                     </div>
                     {detail.error_message ? (
-                      <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                      <div className="mt-4 rounded-md border border-danger-200 bg-danger-50 px-4 py-3 text-sm text-danger-700">
                         失败原因：{detail.error_message}
                       </div>
                     ) : null}
                   </div>
-                  <div className="grid min-w-[280px] grid-cols-2 gap-3">
-                    <div className="rounded-2xl bg-slate-50 px-4 py-3"><div className="text-xs text-slate-500">AI Findings</div><div className="mt-2 text-xl font-semibold text-slate-900">{detail.ai_findings_count}</div></div>
-                    <div className="rounded-2xl bg-slate-50 px-4 py-3"><div className="text-xs text-slate-500">Rule Findings</div><div className="mt-2 text-xl font-semibold text-slate-900">{detail.rule_findings_count}</div></div>
-                    <div className="rounded-2xl bg-slate-50 px-4 py-3"><div className="text-xs text-slate-500">Merged</div><div className="mt-2 text-xl font-semibold text-slate-900">{detail.merged_findings_count}</div></div>
-                    <div className="rounded-2xl bg-slate-50 px-4 py-3"><div className="text-xs text-slate-500">总耗时</div><div className="mt-2 text-xl font-semibold text-slate-900">{formatDuration(detail.result_meta?.elapsed_ms?.total || detail.elapsed_total_ms)}</div></div>
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 2xl:min-w-[280px] 2xl:grid-cols-2">
+                    <div className="rounded-md bg-surface-100 px-4 py-3"><div className="text-xs text-slate-500">AI 问题</div><div className="mt-2 text-lg font-semibold text-slate-900">{detail.ai_findings_count}</div></div>
+                    <div className="rounded-md bg-surface-100 px-4 py-3"><div className="text-xs text-slate-500">规则问题</div><div className="mt-2 text-lg font-semibold text-slate-900">{detail.rule_findings_count}</div></div>
+                    <div className="rounded-md bg-surface-100 px-4 py-3"><div className="text-xs text-slate-500">合并后</div><div className="mt-2 text-lg font-semibold text-slate-900">{detail.merged_findings_count}</div></div>
+                    <div className="rounded-md bg-surface-100 px-4 py-3"><div className="text-xs text-slate-500">总耗时</div><div className="mt-2 text-lg font-semibold text-slate-900">{formatDuration(detail.result_meta?.elapsed_ms?.total || detail.elapsed_total_ms)}</div></div>
                   </div>
                 </div>
+              </Card>
+
+              <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
+                <div className="rounded-card border border-border bg-white p-4 shadow-soft"><div className="text-xs text-slate-500">结构化状态</div><div className="mt-2 text-base font-semibold text-slate-900">{detail.structured_ingest?.status || detail.structured_ingest_status || "--"}</div></div>
+                <div className="rounded-card border border-border bg-white p-4 shadow-soft"><div className="text-xs text-slate-500">文档版本 ID</div><div className="mt-2 text-base font-semibold text-slate-900">{detail.structured_ingest?.document_version_id || detail.structured_document_version_id || "--"}</div></div>
+                <div className="rounded-card border border-border bg-white p-4 shadow-soft"><div className="text-xs text-slate-500">PS Report ID</div><div className="mt-2 break-all text-sm font-semibold text-slate-900">{detail.structured_ingest?.ps_sync?.report_id || detail.structured_report_id || "--"}</div></div>
+                <div className="rounded-card border border-border bg-white p-4 shadow-soft"><div className="text-xs text-slate-500">结构化 Facts</div><div className="mt-2 text-base font-semibold text-slate-900">{detail.structured_ingest?.facts_count ?? "--"}</div></div>
               </div>
 
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="text-xs text-slate-500">结构化状态</div><div className="mt-2 text-lg font-semibold text-slate-900">{detail.structured_ingest?.status || detail.structured_ingest_status || "--"}</div></div>
-                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="text-xs text-slate-500">文档版本 ID</div><div className="mt-2 text-lg font-semibold text-slate-900">{detail.structured_ingest?.document_version_id || detail.structured_document_version_id || "--"}</div></div>
-                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="text-xs text-slate-500">PS Report ID</div><div className="mt-2 break-all text-sm font-semibold text-slate-900">{detail.structured_ingest?.ps_sync?.report_id || detail.structured_report_id || "--"}</div></div>
-                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="text-xs text-slate-500">结构化 Facts</div><div className="mt-2 text-lg font-semibold text-slate-900">{detail.structured_ingest?.facts_count ?? "--"}</div></div>
-              </div>
-
-              <div className="grid gap-6 xl:grid-cols-2">
+              <div className="grid gap-5 2xl:grid-cols-2">
                 <FindingColumn
-                  title="AI Findings"
-                  icon={<Brain className="h-5 w-5 text-indigo-600" />}
-                  accent="bg-indigo-50"
+                  title="AI 发现的问题"
+                  icon={<Brain className="h-5 w-5 text-primary-600" />}
+                  accent="bg-primary-50"
                   items={aiFindings}
-                  emptyText="当前任务没有 AI Findings。"
+                  emptyText="当前任务没有 AI 发现的问题。"
                 />
                 <FindingColumn
-                  title="Rule Findings"
-                  icon={<ShieldCheck className="h-5 w-5 text-emerald-600" />}
-                  accent="bg-emerald-50"
+                  title="规则发现的问题"
+                  icon={<ShieldCheck className="h-5 w-5 text-success-600" />}
+                  accent="bg-success-50"
                   items={ruleFindings}
-                  emptyText="当前任务没有 Rule Findings。"
+                  emptyText="当前任务没有规则发现的问题。"
                 />
               </div>
             </>
           ) : (
-            <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-16 text-center text-sm text-slate-500 shadow-sm">
+            <div className="rounded-card border border-dashed border-slate-300 bg-white px-6 py-16 text-center text-sm text-slate-500 shadow-soft">
               当前任务暂时没有可展示的详情。
             </div>
           )}
