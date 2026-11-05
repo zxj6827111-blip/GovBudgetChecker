@@ -1381,6 +1381,13 @@ def make_fact_receipt(
     """
     from src.schemas.parse_artifact import CheckReceipt
 
+    # 已结案回执不承载“未完成原因”：pass/not_applicable 却写着 incomplete_reason
+    # 会被诊断范围判定当成待诊断条目（验收包 T1/T11）。说明改挂 explained_by，
+    # 证据与文案都不丢。
+    if status in {"pass", "not_applicable"} and incomplete_reason:
+        explained_by = explained_by or incomplete_reason
+        incomplete_reason = None
+
     operand_ids = list(dict.fromkeys(str(item) for item in operand_fact_ids if str(item)))
     if evaluation_basis is None or fact_migration_status is None:
         if operand_ids:
