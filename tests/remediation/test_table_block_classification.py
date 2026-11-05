@@ -44,7 +44,7 @@ def test_original_number_format_only_is_material_not_technical():
     message = build_message(receipt, material, technical)
     assert "原件金额格式非法" in message
     assert "第9页FIN_03_expenditure" in message
-    assert "2.359.46" in message
+    assert "a191b44bee5bb1e8:r0c3" in message or "t3:r" in message
     assert "来源表映射/读取未完成" not in message
 
 

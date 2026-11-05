@@ -98,10 +98,14 @@ def build_message(receipt: dict, material: list, technical: list, empty: list = 
     parts: List[str] = []
     for table, cells in material:
         refs = "、".join(f"第{page}页{table['table_code']}" for page in _cell_pages(table, cells))
-        raws = sorted({str(cell.get("raw_text") or "") for cell in cells})
+        cell_refs = "、".join(
+            f"{table['table_code']}:{cell.get('source_cell_id') or cell.get('row')}"
+            for page in _cell_pages(table, cells)
+            for cell in cells if (cell.get("page") or table["page"]) == page
+        )
         parts.append(
-            f"原件金额格式非法：{refs} {len(cells)} 个金额格原文「{'」「'.join(raws)}」"
-            "无法解析为数值，数值不确定，需回原件补正；依赖勾稽保持材料阻断"
+            f"原件金额格式非法：{refs} 有金额格原文无法解析为数值"
+            f"（{cell_refs}），数值不确定，需回原件补正；依赖勾稽保持材料阻断"
         )
     for table in empty:
         pages = "、".join(str(page) for page in _cell_pages(table, []))
