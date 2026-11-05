@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { Button } from "@/components/ui";
+
 type OrganizationNode = {
   id: string;
   name: string;
@@ -192,13 +194,13 @@ function filterTree(nodes: OrganizationNode[], query: string): OrganizationNode[
 function getNodeBadge(node: OrganizationNode) {
   if (Number(node.issue_count ?? 0) > 0) {
     return {
-      className: "border-red-100 bg-red-50 text-red-600",
+      className: "border-danger-100 bg-danger-50 text-danger-600",
       text: `问题 ${node.issue_count}`,
     };
   }
   if (Number(node.job_count ?? 0) > 0) {
     return {
-      className: "border-slate-200 bg-slate-50 text-slate-600",
+      className: "border-border bg-slate-50 text-slate-600",
       text: `报告 ${node.job_count}`,
     };
   }
@@ -585,10 +587,10 @@ export default function OrganizationTree({
       <div key={node.id}>
         <div
           data-testid={`organization-tree-node-${node.id}`}
-          className={`group m-1.5 flex cursor-pointer items-center justify-between rounded-xl border px-4 py-3 transition-all duration-200 ${
+          className={`group m-1.5 flex cursor-pointer items-center justify-between rounded-md border px-3 py-2.5 transition-colors ${
             isSelected
-              ? "border-indigo-100 bg-indigo-50/80 shadow-sm"
-              : "border-transparent hover:bg-white hover:shadow-sm"
+              ? "border-primary-200 bg-primary-50"
+              : "border-transparent hover:bg-slate-50"
           }`}
           style={{ marginLeft: depth === 0 ? undefined : depth * 12 }}
           onClick={() => onSelect(node)}
@@ -603,8 +605,8 @@ export default function OrganizationTree({
                   toggleExpanded(node.id);
                 }
               }}
-              className={`flex h-5 w-5 flex-shrink-0 items-center justify-center rounded text-gray-400 transition-colors ${
-                hasChildren ? "hover:bg-gray-100 hover:text-gray-600" : "cursor-default"
+              className={`flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors ${
+                hasChildren ? "hover:bg-slate-100 hover:text-slate-600" : "cursor-default"
               }`}
               aria-label={hasChildren ? `${isExpanded ? "收起" : "展开"}${node.name}` : `${node.name} 无下级组织`}
             >
@@ -619,23 +621,23 @@ export default function OrganizationTree({
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                 </svg>
               ) : (
-                <span className="inline-block h-2 w-2 rounded-full bg-gray-200" />
+                <span className="inline-block h-2 w-2 rounded-full bg-slate-200" />
               )}
             </button>
             <div
               className={`h-6 w-1.5 rounded-full transition-all duration-200 ${
-                isSelected ? "bg-indigo-600" : "bg-transparent group-hover:bg-gray-200"
+                isSelected ? "bg-primary-600" : "bg-transparent group-hover:bg-slate-200"
               }`}
             />
             <div className="min-w-0">
               <div
                 className={`truncate text-sm tracking-tight ${
-                  isSelected ? "font-semibold text-indigo-900" : "font-medium text-gray-700"
+                  isSelected ? "font-semibold text-primary-800" : "font-medium text-slate-700"
                 }`}
               >
                 {node.name}
               </div>
-              <div className="mt-0.5 text-[11px] text-gray-400">{levelLabel}</div>
+              <div className="mt-0.5 text-[11px] text-slate-400">{levelLabel}</div>
             </div>
           </div>
 
@@ -663,7 +665,7 @@ export default function OrganizationTree({
                     setModalInputValue(node.name);
                   }}
                   data-testid={`organization-tree-edit-${node.id}`}
-                  className="rounded-md p-1 text-gray-400 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
+                  className="rounded-md p-1 text-slate-400 transition-colors hover:bg-primary-50 hover:text-primary-600"
                   title={`编辑${levelLabel}名称`}
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -677,7 +679,7 @@ export default function OrganizationTree({
                     void handleDeleteOrg(node);
                   }}
                   data-testid={`organization-tree-delete-${node.id}`}
-                  className="rounded-md p-1 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-500"
+                  className="rounded-md p-1 text-slate-400 transition-colors hover:bg-danger-50 hover:text-danger-500"
                   title={`删除${levelLabel}`}
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -698,9 +700,9 @@ export default function OrganizationTree({
 
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
-      <div className="space-y-3 border-b border-gray-200 p-3">
+      <div className="space-y-3 border-b border-border p-3">
         <div className="flex items-center justify-between">
-          <h3 className="flex items-center font-semibold text-gray-700">
+          <h3 className="flex items-center text-sm font-semibold text-slate-900">
             组织视图
             {isAdmin ? (
               <button
@@ -711,7 +713,7 @@ export default function OrganizationTree({
                 }}
                 data-testid="organization-tree-create-department"
                 disabled={!canCreateDepartment}
-                className="ml-2 rounded p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-50"
+                className="ml-2 rounded-md p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
                 title={!canCreateDepartment ? "部门下请新增单位；请选择市、区或全部组织后新建部门" : createDepartmentParent ? `在“${createDepartmentParent.name}”下新建部门` : "新建顶层部门"}
               >
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -726,7 +728,7 @@ export default function OrganizationTree({
               onClick={toggleAllExpanded}
               disabled={expandableNodeIds.length === 0}
               data-testid="organization-tree-toggle-all"
-              className="rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-500 transition-colors hover:border-gray-300 hover:bg-gray-50 hover:text-gray-700 disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-md border border-border px-2 py-1 text-xs text-slate-500 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
               title={allExpandableNodesExpanded ? "收起所有下级组织" : "展开所有下级组织"}
             >
               {allExpandableNodesExpanded ? "收起" : "展开"}
@@ -734,7 +736,7 @@ export default function OrganizationTree({
             <button
               type="button"
               onClick={() => onSelect(null)}
-              className="rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-500 transition-colors hover:border-gray-300 hover:bg-gray-50 hover:text-gray-700"
+              className="rounded-md border border-border px-2 py-1 text-xs text-slate-500 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700"
               title="查看全部组织"
             >
               全部
@@ -743,54 +745,52 @@ export default function OrganizationTree({
         </div>
 
         {!hideUtilityActions ? (
-          <div className="grid grid-cols-2 gap-2">
+          <div className={onGlobalBatchUpload ? "grid grid-cols-2 gap-2" : "grid gap-2"}>
             {onGlobalBatchUpload ? (
               <button
                 type="button"
                 onClick={onGlobalBatchUpload}
                 disabled={!isAdmin}
-                className="rounded-xl border border-indigo-200 bg-gradient-to-br from-indigo-50 to-blue-50 px-3 py-2 text-left transition-all hover:border-indigo-300 hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
+                className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-left transition-colors hover:border-primary-300 hover:bg-primary-100 disabled:cursor-not-allowed disabled:opacity-60"
                 title={isAdmin ? "上传全区 PDF 文档（批量）" : "仅管理员可操作"}
               >
-                <div className="flex items-center gap-1.5 text-[13px] font-semibold text-indigo-700">
-                  <svg className="h-4 w-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <div className="flex items-center gap-1.5 text-[13px] font-semibold text-primary-700">
+                  <svg className="h-4 w-4 text-primary-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M12 11v8m0 0l-3-3m3 3l3-3" />
                   </svg>
                   批量上传
                 </div>
-                <div className="mt-1 text-[11px] text-indigo-600">上传多个 PDF 并自动匹配组织</div>
+                <div className="mt-1 text-[11px] text-primary-600">上传多个 PDF 并自动匹配组织</div>
               </button>
-            ) : (
-              <div />
-            )}
+            ) : null}
 
             <button
               type="button"
               onClick={() => setShowImporter(true)}
               disabled={!isAdmin}
               data-testid="organization-tree-import-button"
-              className="rounded-xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-teal-50 px-3 py-2 text-left transition-all hover:border-emerald-300 hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
+              className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-left transition-colors hover:border-primary-300 hover:bg-primary-100 disabled:cursor-not-allowed disabled:opacity-60"
               title={isAdmin ? "导入部门和单位名称模板（CSV / XLSX）" : "仅管理员可操作"}
             >
-              <div className="flex items-center gap-1.5 text-[13px] font-semibold text-emerald-700">
-                <svg className="h-4 w-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div className="flex items-center gap-1.5 text-[13px] font-semibold text-primary-700">
+                <svg className="h-4 w-4 text-primary-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M12 11v8m0 0l-3-3m3 3l3-3" />
                 </svg>
                 导入组织
               </div>
-              <div className="mt-1 text-[11px] text-emerald-600">导入部门/单位名称</div>
+              <div className="mt-1 text-[11px] text-primary-600">导入部门/单位名称</div>
             </button>
           </div>
         ) : null}
       </div>
 
-      <div className="border-b border-gray-100 px-3 py-2">
+      <div className="border-b border-slate-100 px-3 py-2">
         <input
           value={searchQuery}
           onChange={(event) => setSearchQuery(event.target.value)}
           data-testid="organization-tree-search"
           placeholder="搜索部门或单位"
-          className="w-full rounded-md border border-gray-200 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          className="w-full rounded-md border border-border bg-white text-sm text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 px-3 py-1.5"
         />
       </div>
 
@@ -799,20 +799,20 @@ export default function OrganizationTree({
         data-testid="organization-tree-scroll"
       >
         {loading ? (
-          <div className="py-8 text-center text-gray-400">
-            <div className="mx-auto mb-2 h-6 w-6 animate-spin rounded-full border-2 border-gray-300 border-t-indigo-500" />
+          <div className="py-8 text-center text-slate-400">
+            <div className="mx-auto mb-2 h-6 w-6 animate-spin rounded-full border-2 border-slate-300 border-t-primary-500" />
             正在加载...
           </div>
         ) : error ? (
-          <div className="py-8 text-center text-red-500">{error}</div>
+          <div className="py-8 text-center text-danger-500">{error}</div>
         ) : filteredTree.length === 0 ? (
-          <div className="py-8 text-center text-gray-400">
+          <div className="py-8 text-center text-slate-400">
             <p className="mb-2">{normalizedSearchQuery ? "没有匹配的组织" : "暂无组织数据"}</p>
             {isAdmin ? (
               <button
                 type="button"
                 onClick={() => setShowImporter(true)}
-                className="text-indigo-600 underline"
+                className="text-primary-600 underline"
               >
                 去导入组织
               </button>
@@ -828,18 +828,18 @@ export default function OrganizationTree({
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
           data-testid="organization-tree-importer"
         >
-          <div className="w-96 rounded-lg bg-white p-6 shadow-xl">
-            <h3 className="mb-4 text-lg font-semibold">导入组织结构</h3>
-            <p className="mb-4 text-sm text-gray-500">
+          <div className="w-96 rounded-card bg-white p-6 shadow-dialog">
+            <h3 className="mb-4 text-base font-semibold text-slate-900">导入组织结构</h3>
+            <p className="mb-4 text-sm text-slate-500">
               支持 Excel（.xlsx）和 CSV 文件。
               <br />
               可使用以下模板：
               <br />
-              <code className="bg-gray-100 px-1 text-xs">department_name + unit_name</code>
+              <code className="bg-slate-100 px-1 text-xs">department_name + unit_name</code>
               <br />
               或
               <br />
-              <code className="bg-gray-100 px-1 text-xs">name + level + parent</code>
+              <code className="bg-slate-100 px-1 text-xs">name + level + parent</code>
             </p>
             <input
               type="file"
@@ -851,16 +851,12 @@ export default function OrganizationTree({
                   void handleImport(file);
                 }
               }}
-              className="mb-4 w-full rounded border p-2"
+              className="mb-4 w-full rounded-md border border-border p-2 text-sm"
             />
             <div className="flex justify-end">
-              <button
-                type="button"
-                onClick={() => setShowImporter(false)}
-                className="rounded px-4 py-2 text-gray-600 transition-colors hover:bg-gray-100"
-              >
+              <Button variant="ghost" onClick={() => setShowImporter(false)}>
                 取消
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -868,8 +864,8 @@ export default function OrganizationTree({
 
       {modalType ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="w-80 rounded-lg bg-white p-6 shadow-xl">
-            <h3 className="mb-4 text-lg font-semibold">
+          <div className="w-80 rounded-card bg-white p-6 shadow-dialog">
+            <h3 className="mb-4 text-base font-semibold text-slate-900">
               {modalType === "create"
                 ? createDepartmentParent
                   ? `新建“${createDepartmentParent.name}”下级部门`
@@ -883,7 +879,7 @@ export default function OrganizationTree({
               onChange={(event) => setModalInputValue(event.target.value)}
               data-testid="organization-tree-modal-input"
               placeholder={modalType === "create" ? "请输入部门名称..." : "请输入组织名称..."}
-              className="mb-4 w-full rounded border border-gray-300 p-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="mb-4 w-full rounded-md border border-border bg-white text-sm text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 px-3 py-2"
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   if (modalType === "create") {
@@ -895,8 +891,8 @@ export default function OrganizationTree({
               }}
             />
             <div className="flex justify-end space-x-2">
-              <button
-                type="button"
+              <Button
+                variant="ghost"
                 onClick={() => {
                   if (!isSubmitting) {
                     setModalType(null);
@@ -904,13 +900,11 @@ export default function OrganizationTree({
                     setModalInputValue("");
                   }
                 }}
-                className="rounded px-4 py-2 text-gray-600 transition-colors hover:bg-gray-100"
                 disabled={isSubmitting}
               >
                 取消
-              </button>
-              <button
-                type="button"
+              </Button>
+              <Button
                 onClick={() => {
                   if (modalType === "create") {
                     void handleCreateOrg();
@@ -920,10 +914,9 @@ export default function OrganizationTree({
                 }}
                 disabled={!modalInputValue.trim() || isSubmitting}
                 data-testid="organization-tree-modal-submit"
-                className="rounded bg-indigo-600 px-4 py-2 text-white transition-colors hover:bg-indigo-700 disabled:opacity-50"
               >
                 {isSubmitting ? "提交中..." : "确定"}
-              </button>
+              </Button>
             </div>
           </div>
         </div>

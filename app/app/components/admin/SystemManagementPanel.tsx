@@ -1,11 +1,13 @@
 "use client";
 
 import {
+  CalendarDays,
   Database,
   FileCog,
   FileText,
   FolderTree,
   KeyRound,
+  LayoutTemplate,
   Loader2,
   Plus,
   RefreshCw,
@@ -15,7 +17,7 @@ import {
   UploadCloud,
   UserCog,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import BatchUploadModal from "@/components/BatchUploadModal";
 import OrganizationTree from "@/components/OrganizationTree";
@@ -31,7 +33,11 @@ import AnalysisResultsPanel from "@/components/admin/AnalysisResultsPanel";
 import UserManagementPanel from "@/components/admin/UserManagementPanel";
 import AIModelSettingsPanel from "@/components/admin/AIModelSettingsPanel";
 import { useAIAnalysisOptions } from "@/components/AIAnalysisOptions";
+import AnnualTemplatePanel from "@/components/settings/AnnualTemplatePanel";
+import DisclosureCalendarPanel from "@/components/settings/DisclosureCalendarPanel";
+import { Badge, Button, Card } from "@/components/ui";
 import type { OrganizationRecord } from "@/lib/uiAdapters";
+import { cn } from "@/lib/utils";
 
 type AdminSection =
   | "overview"
@@ -41,6 +47,8 @@ type AdminSection =
   | "analysis"
   | "rules"
   | "mappings"
+  | "templates"
+  | "calendar"
   | "settings";
 
 type OrganizationSelection = {
@@ -128,12 +136,12 @@ const SECTIONS: Array<{
   { id: "analysis", label: "分析结果", description: "AI 与规则分析结果入库查看", icon: FileText },
   { id: "rules", label: "规则包与口径", description: "规则包版本、启用状态和说明", icon: KeyRound },
   { id: "mappings", label: "材料类型与字段映射", description: "材料类型、字段别名和表格映射", icon: SlidersHorizontal },
+  { id: "templates", label: "模板管理", description: "年度模板版本与适用关系", icon: LayoutTemplate },
+  { id: "calendar", label: "年度公开时限", description: "预算、决算公开截止日", icon: CalendarDays },
   { id: "settings", label: "大模型与系统参数", description: "大模型配置、系统参数和导出模板", icon: FileCog },
 ];
 
-function cn(...items: Array<string | false | null | undefined>): string {
-  return items.filter(Boolean).join(" ");
-}
+const FIELD_CLASS = "w-full rounded-md border border-border bg-white text-sm text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 px-3 py-2";
 
 async function postJson<T>(url: string, body: Record<string, unknown>) {
   const response = await fetch(url, {
@@ -183,23 +191,6 @@ function orgLevelLabel(level?: string | null): string {
   return level === "department" ? "部门" : level === "unit" ? "单位" : "组织";
 }
 
-function Card({
-  title,
-  children,
-  className,
-}: {
-  title?: string;
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <section className={cn("rounded-md border border-slate-200 bg-white shadow-sm", className)}>
-      {title ? <div className="border-b border-slate-100 px-5 py-4 text-lg font-black text-slate-900">{title}</div> : null}
-      {children}
-    </section>
-  );
-}
-
 function NoticeBanner({ notice, testId }: { notice: Notice | null; testId?: string }) {
   if (!notice) {
     return null;
@@ -208,10 +199,10 @@ function NoticeBanner({ notice, testId }: { notice: Notice | null; testId?: stri
     <div
       data-testid={testId}
       className={cn(
-        "rounded-md border px-4 py-3 text-sm font-semibold",
-        notice.tone === "success" && "border-emerald-200 bg-emerald-50 text-emerald-800",
-        notice.tone === "error" && "border-red-200 bg-red-50 text-red-800",
-        notice.tone === "info" && "border-blue-200 bg-blue-50 text-blue-800",
+        "rounded-md border px-4 py-3 text-sm font-medium",
+        notice.tone === "success" && "border-success-200 bg-success-50 text-success-800",
+        notice.tone === "error" && "border-danger-200 bg-danger-50 text-danger-800",
+        notice.tone === "info" && "border-info-200 bg-info-50 text-info-800",
       )}
     >
       {notice.message}
@@ -229,9 +220,9 @@ function ResultMetrics({
   return (
     <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6" data-testid={testId}>
       {metrics.map((item) => (
-        <div key={item.label} className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3">
+        <div key={item.label} className="rounded-md border border-border bg-slate-50 px-4 py-3">
           <div className="text-xs text-slate-500">{item.label}</div>
-          <div className="mt-2 text-lg font-black text-slate-900">{item.value}</div>
+          <div className="mt-2 text-lg font-semibold text-slate-900">{item.value}</div>
         </div>
       ))}
     </div>
@@ -250,8 +241,8 @@ function ResultList({
   const [showAll, setShowAll] = useState(false);
   const rows = showAll ? items : items.slice(0, 8);
   return (
-    <div className="rounded-md border border-slate-200 bg-white">
-      <div className="border-b border-slate-200 px-4 py-3 text-sm font-black text-slate-900">
+    <div className="rounded-md border border-border bg-white">
+      <div className="border-b border-border px-4 py-3 text-sm font-semibold text-slate-900">
         {title}
       </div>
       <div className="space-y-3 p-4">
@@ -259,8 +250,8 @@ function ResultList({
           <div className="text-sm text-slate-500">{emptyText}</div>
         ) : (
           rows.map((item, index) => (
-            <div key={`${title}-${index}`} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-sm">
-              <div className="font-bold text-slate-900">
+            <div key={`${title}-${index}`} className="rounded-md border border-border bg-slate-50 px-3 py-3 text-sm">
+              <div className="font-medium text-slate-900">
                 {String(item.filename || item.job_id || item.organization_name || item.scope_name || item.department_name || "未命名项目")}
               </div>
               <div className="mt-1 text-slate-600">
@@ -313,38 +304,34 @@ function OverviewSection({
     { id: "analysis", icon: FileText, title: "分析结果", desc: "查看 AI、规则与结构化入库结果。", metric: "结果查询" },
     { id: "rules", icon: KeyRound, title: "规则包与口径", desc: "维护规则包说明、版本和启用状态。", metric: "配置留档" },
     { id: "mappings", icon: SlidersHorizontal, title: "材料类型与字段映射", desc: "维护材料类型、字段别名和表格映射。", metric: "配置留档" },
+    { id: "templates", icon: LayoutTemplate, title: "模板管理", desc: "维护年度模板版本和适用关系。", metric: "年度模板" },
+    { id: "calendar", icon: CalendarDays, title: "年度公开时限", desc: "记录预算、决算公开截止日。", metric: "公开截止日" },
     { id: "settings", icon: FileCog, title: "大模型与系统参数", desc: "配置模型和导出模板。", metric: "模型配置" },
   ];
 
   return (
-    <div className="space-y-5">
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {cards.map((card) => {
-          const Icon = card.icon;
-          return (
-            <button
-              key={card.id}
-              type="button"
-              data-testid={`admin-overview-card-${card.id}`}
-              onClick={() => setSection(card.id)}
-              className="min-h-[148px] rounded-md border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:border-blue-200 hover:bg-blue-50/40"
-            >
-              <div className="flex items-start gap-4">
-                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-blue-600 text-white">
-                  <Icon className="h-5 w-5" />
-                </span>
-                <span>
-                  <span className="block text-lg font-black text-slate-950">{card.title}</span>
-                  <span className="mt-2 block text-sm leading-6 text-slate-600">{card.desc}</span>
-                  <span className="mt-3 inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">
-                    {card.metric}
-                  </span>
-                </span>
-              </div>
-            </button>
-          );
-        })}
-      </div>
+    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+      {cards.map((card) => {
+        const Icon = card.icon;
+        return (
+          <button
+            key={card.id}
+            type="button"
+            data-testid={`admin-overview-card-${card.id}`}
+            onClick={() => setSection(card.id)}
+            className="flex items-start gap-3 rounded-card border border-border bg-white p-4 text-left shadow-soft transition-colors hover:border-primary-200 hover:bg-primary-50/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 focus-visible:ring-offset-2"
+          >
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-primary-50 text-primary-700">
+              <Icon className="h-4 w-4" aria-hidden="true" />
+            </span>
+            <span className="min-w-0">
+              <span className="block text-sm font-semibold text-slate-900">{card.title}</span>
+              <span className="mt-1 block text-xs leading-5 text-slate-500">{card.desc}</span>
+              <Badge className="mt-2">{card.metric}</Badge>
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -507,8 +494,8 @@ function OrganizationSection({
   return (
     <div className="space-y-4">
       <NoticeBanner notice={notice} testId="admin-organization-notice" />
-      <div className="grid items-start gap-5 xl:grid-cols-[460px_minmax(0,1fr)]">
-        <div className="h-[calc(100vh-260px)] min-h-[640px] overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm">
+      <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="h-[calc(100vh-260px)] min-h-[640px] overflow-hidden rounded-card border border-border bg-white shadow-soft">
           <OrganizationTree
             isAdmin
             fallbackOrganizations={organizations}
@@ -518,61 +505,56 @@ function OrganizationSection({
             onChanged={refreshOrganizationTree}
           />
         </div>
-        <div className="space-y-4">
-          <Card title="组织管理入口">
-            <div className="p-5" data-testid="admin-org-panel">
-              <p className="text-sm leading-6 text-slate-600">左侧组织树已经接回真实的创建、改名、删除和导入能力。</p>
-              <div className="mt-4 flex flex-wrap gap-3">
-                <button
-                  type="button"
-                  onClick={() => void handleCreateDepartment()}
-                  data-testid="admin-org-create-department"
-                  disabled={!canCreateDepartment}
-                  title={!canCreateDepartment ? "部门下请新增单位；请选择市、区或全部组织后新建部门" : createDepartmentParent ? `在“${createDepartmentParent.name}”下新建部门` : "新建顶层部门"}
-                  className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <Plus className="h-4 w-4" />
-                  {createDepartmentParent ? "新建下级部门" : "新建部门"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleCreateUnit()}
-                  disabled={!selectedOrg || selectedOrg.level !== "department"}
-                  data-testid="admin-org-create-unit"
-                  className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <Plus className="h-4 w-4" />
-                  新增下属单位
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleDeleteOrganization()}
-                  disabled={!selectedOrg}
-                  data-testid="admin-org-delete-current"
-                  className="inline-flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-4 py-2.5 text-sm font-bold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <Trash2 className="h-4 w-4" />
-                  删除当前组织
-                </button>
-              </div>
-              {selectedOrg ? (
-                <div className="mt-4 rounded-md bg-slate-50 p-4 text-sm text-slate-600" data-testid="admin-org-selection">
-                  <div className="font-black text-slate-900" data-testid="admin-org-selected-name">
-                    {selectedOrg.name}
-                  </div>
-                  <div className="mt-2">当前层级：{orgLevelLabel(selectedOrg.level)}</div>
-                </div>
-              ) : (
-                <div
-                  className="mt-4 rounded-md border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-sm text-slate-500"
-                  data-testid="admin-org-selection-empty"
-                >
-                  先从左侧选择一个部门或单位。
-                </div>
-              )}
+        <Card title="组织管理">
+          <div data-testid="admin-org-panel">
+            <p className="text-sm leading-6 text-slate-600">在左侧组织树中可以新建、改名、删除和导入组织；选中部门或单位后，也可以在这里操作。</p>
+            <div className="mt-4 flex flex-wrap gap-3">
+              <Button
+                onClick={() => void handleCreateDepartment()}
+                data-testid="admin-org-create-department"
+                disabled={!canCreateDepartment}
+                title={!canCreateDepartment ? "部门下请新增单位；请选择市、区或全部组织后新建部门" : createDepartmentParent ? `在“${createDepartmentParent.name}”下新建部门` : "新建顶层部门"}
+              >
+                <Plus className="h-4 w-4" />
+                {createDepartmentParent ? "新建下级部门" : "新建部门"}
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => void handleCreateUnit()}
+                disabled={!selectedOrg || selectedOrg.level !== "department"}
+                data-testid="admin-org-create-unit"
+              >
+                <Plus className="h-4 w-4" />
+                新增下属单位
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => void handleDeleteOrganization()}
+                disabled={!selectedOrg}
+                data-testid="admin-org-delete-current"
+                className="border-danger-200 text-danger-700 hover:bg-danger-50"
+              >
+                <Trash2 className="h-4 w-4" />
+                删除当前组织
+              </Button>
             </div>
-          </Card>
-        </div>
+            {selectedOrg ? (
+              <div className="mt-4 rounded-md bg-surface-100 p-4 text-sm text-slate-600" data-testid="admin-org-selection">
+                <div className="font-semibold text-slate-900" data-testid="admin-org-selected-name">
+                  {selectedOrg.name}
+                </div>
+                <div className="mt-2">当前层级：{orgLevelLabel(selectedOrg.level)}</div>
+              </div>
+            ) : (
+              <div
+                className="mt-4 rounded-md border border-dashed border-slate-300 bg-surface-100 px-4 py-5 text-sm text-slate-500"
+                data-testid="admin-org-selection-empty"
+              >
+                先从左侧选择一个部门或单位。
+              </div>
+            )}
+          </div>
+        </Card>
       </div>
     </div>
   );
@@ -781,98 +763,84 @@ function OperationsSection({ onRefresh }: { onRefresh?: () => Promise<void> | vo
     <div className="space-y-5">
       <NoticeBanner notice={notice} testId="admin-operations-notice" />
       <Card title="全库报告接入">
-        <div className="flex flex-wrap items-start justify-between gap-4 p-5">
-          <p className="max-w-2xl text-sm leading-6 text-slate-600">保留真实上传入口，上传后会走现有的匹配、结构化与审校流程。</p>
-          <button
-            type="button"
-            data-testid="admin-operations-open-upload"
-            onClick={() => setIsUploadModalOpen(true)}
-            className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-700"
-          >
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <p className="max-w-2xl text-sm leading-6 text-slate-600">上传 PDF 后，系统会自动完成组织匹配、结构化和审校。</p>
+          <Button data-testid="admin-operations-open-upload" onClick={() => setIsUploadModalOpen(true)}>
             <UploadCloud className="h-4 w-4" />
             打开上传面板
-          </button>
+          </Button>
         </div>
       </Card>
 
       <div className="grid gap-4 xl:grid-cols-2">
         <Card title="按组织批量重分析">
-          <div className="p-5">
-            <p className="text-sm leading-6 text-slate-600">触发各组织当前最新报告重新分析，并显示实时状态。</p>
-            <ReanalyzeAiToggle
-              checked={aiOptions.enabled}
-              onChange={aiOptions.setEnabled}
-              disabled={isRunningReanalyzeAll || !aiOptions.capabilities?.enabled}
-              className="mt-4 bg-white"
-              testId="admin-reanalyze-ai-toggle"
-              description={aiOptions.error || (aiOptions.capabilities?.enabled
-                ? aiOptions.enabled
-                  ? "本次批量重分析将使用系统当前启用的模型；取消勾选后仅执行本地检查。"
-                  : "模型已配置，但本次默认关闭；勾选后批量重分析会调用大模型。"
-                : "当前没有可用的大模型配置，重分析将仅执行本地检查。")}
-            />
-            <button
-              type="button"
-              data-testid="admin-operations-reanalyze-all"
-              onClick={() => void runReanalyzeAll()}
-              disabled={isRunningReanalyzeAll}
-              className="mt-5 inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 disabled:opacity-60"
-            >
-              <RefreshCw className={cn("h-4 w-4", isRunningReanalyzeAll && "animate-spin")} />
-              {isRunningReanalyzeAll ? "执行中..." : "开始重分析"}
-            </button>
-          </div>
+          <p className="text-sm leading-6 text-slate-600">触发各组织当前最新报告重新分析，并显示实时状态。</p>
+          <ReanalyzeAiToggle
+            checked={aiOptions.enabled}
+            onChange={aiOptions.setEnabled}
+            disabled={isRunningReanalyzeAll || !aiOptions.capabilities?.enabled}
+            className="mt-4 bg-white"
+            testId="admin-reanalyze-ai-toggle"
+            description={aiOptions.error || (aiOptions.capabilities?.enabled
+              ? aiOptions.enabled
+                ? "本次批量重分析将使用系统当前启用的模型；取消勾选后仅执行本地检查。"
+                : "模型已配置，但本次默认关闭；勾选后批量重分析会调用大模型。"
+              : "当前没有可用的大模型配置，重分析将仅执行本地检查。")}
+          />
+          <Button
+            variant="secondary"
+            data-testid="admin-operations-reanalyze-all"
+            onClick={() => void runReanalyzeAll()}
+            disabled={isRunningReanalyzeAll}
+            className="mt-5"
+          >
+            <RefreshCw className={cn("h-4 w-4", isRunningReanalyzeAll && "animate-spin")} />
+            {isRunningReanalyzeAll ? "执行中..." : "开始重分析"}
+          </Button>
         </Card>
 
         <Card title="修复缺失关联">
-          <div className="p-5">
-            <p className="text-sm leading-6 text-slate-600">为“待确认归属”的历史报告补充组织关联。先预览并核对建议，再正式保存。</p>
-            <div className="mt-5 flex flex-wrap gap-3">
-              <button type="button" data-testid="admin-operations-repair-preview" onClick={() => void previewRepairLinks(true)} disabled={isRepairingLinks} className="rounded-md border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-700 disabled:opacity-60">
-                预览修复
-              </button>
-              <button type="button" data-testid="admin-operations-repair-execute" onClick={() => void previewRepairLinks(false)} disabled={isRepairingLinks || repairPreview?.dry_run !== true || !repairPreview.candidate_count} className="rounded-md bg-blue-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60">
-                正式修复
-              </button>
-            </div>
+          <p className="text-sm leading-6 text-slate-600">为“待确认归属”的历史报告补充组织关联。先预览并核对建议，再正式保存。</p>
+          <div className="mt-5 flex flex-wrap gap-3">
+            <Button variant="secondary" data-testid="admin-operations-repair-preview" onClick={() => void previewRepairLinks(true)} disabled={isRepairingLinks}>
+              预览修复
+            </Button>
+            <Button data-testid="admin-operations-repair-execute" onClick={() => void previewRepairLinks(false)} disabled={isRepairingLinks || repairPreview?.dry_run !== true || !repairPreview.candidate_count}>
+              正式修复
+            </Button>
           </div>
         </Card>
 
         <Card title="组织重新匹配">
-          <div className="p-5">
-            <p className="text-sm leading-6 text-slate-600">组织导入后，为“待确认归属”报告重新匹配；已有归属的报告会跳过。预览不会保存归属。</p>
-            <div className="mt-5 flex flex-wrap gap-3">
-              <button type="button" data-testid="admin-operations-rematch-preview" onClick={() => void previewRematchOrganizations(true)} disabled={isRematching} className="rounded-md border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-700 disabled:opacity-60">
-                预览匹配
-              </button>
-              <button type="button" data-testid="admin-operations-rematch-execute" onClick={() => void previewRematchOrganizations(false)} disabled={isRematching || rematchPreview?.dry_run !== true || !rematchPreview.candidate_count} className="rounded-md bg-blue-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60">
-                正式执行
-              </button>
-            </div>
+          <p className="text-sm leading-6 text-slate-600">组织导入后，为“待确认归属”报告重新匹配；已有归属的报告会跳过。预览不会保存归属。</p>
+          <div className="mt-5 flex flex-wrap gap-3">
+            <Button variant="secondary" data-testid="admin-operations-rematch-preview" onClick={() => void previewRematchOrganizations(true)} disabled={isRematching}>
+              预览匹配
+            </Button>
+            <Button data-testid="admin-operations-rematch-execute" onClick={() => void previewRematchOrganizations(false)} disabled={isRematching || rematchPreview?.dry_run !== true || !rematchPreview.candidate_count}>
+              正式执行
+            </Button>
           </div>
         </Card>
 
         <Card title="清理旧结构化版本">
-          <div className="border border-red-100 bg-red-50 p-5">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <p className="max-w-xl text-sm leading-6 text-red-700">只清理数据库中的旧结构化版本，先预览再确认执行。</p>
-              <button
-                type="button"
-                data-testid="admin-operations-cleanup-preview"
-                onClick={() => void previewCleanup()}
-                disabled={isLoadingCleanupPreview}
-                className="rounded-md bg-red-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60"
-              >
-                {isLoadingCleanupPreview ? "生成中..." : "开始预览"}
-              </button>
-            </div>
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <p className="max-w-xl text-sm leading-6 text-danger-700">只清理数据库中的旧结构化版本，先预览再确认执行。</p>
+            <Button
+              variant="danger"
+              data-testid="admin-operations-cleanup-preview"
+              onClick={() => void previewCleanup()}
+              disabled={isLoadingCleanupPreview}
+            >
+              {isLoadingCleanupPreview ? "生成中..." : "开始预览"}
+            </Button>
           </div>
         </Card>
       </div>
 
       {repairPreview ? (
         <Card title="缺失关联修复结果">
-          <div className="space-y-4 p-5">
+          <div className="space-y-4">
             <ResultMetrics testId="admin-operations-repair-results" metrics={[
               { label: "候选记录", value: repairPreview.candidate_count ?? 0 },
               { label: "已修复", value: repairPreview.repaired_count ?? 0 },
@@ -892,7 +860,7 @@ function OperationsSection({ onRefresh }: { onRefresh?: () => Promise<void> | vo
 
       {rematchPreview ? (
         <Card title="组织重匹配结果">
-          <div className="space-y-4 p-5">
+          <div className="space-y-4">
             <ResultMetrics testId="admin-operations-rematch-results" metrics={[
               { label: "候选记录", value: rematchPreview.candidate_count ?? 0 },
               { label: "已更新", value: rematchPreview.updated_count ?? 0 },
@@ -1090,17 +1058,16 @@ function ConfigPanel({
   };
 
   return (
-    <Card title={title}>
-      <div className="space-y-4 p-5" data-testid={`admin-config-panel-${collection}`}>
-        <p className="text-sm leading-6 text-slate-600">{description}</p>
+    <Card title={title} desc={description}>
+      <div className="space-y-4" data-testid={`admin-config-panel-${collection}`}>
         <NoticeBanner notice={notice} testId={`admin-config-notice-${collection}`} />
-        <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
-          <div className="rounded-md border border-slate-200">
-            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-              <span className="text-sm font-black text-slate-900">配置列表</span>
-              <button type="button" data-testid={`admin-config-new-${collection}`} onClick={resetForm} className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-700">
+        <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+          <div className="rounded-md border border-border">
+            <div className="flex items-center justify-between border-b border-border px-4 py-3">
+              <span className="text-sm font-semibold text-slate-900">配置列表</span>
+              <Button variant="secondary" size="sm" data-testid={`admin-config-new-${collection}`} onClick={resetForm}>
                 新建
-              </button>
+              </Button>
             </div>
             <div className="max-h-[520px] overflow-y-auto p-3">
               {loading ? (
@@ -1109,33 +1076,31 @@ function ConfigPanel({
                   正在加载配置...
                 </div>
               ) : items.length === 0 ? (
-                <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">
+                <div className="rounded-md border border-dashed border-border bg-surface-100 px-4 py-10 text-center text-sm text-slate-500">
                   暂无配置记录。
                 </div>
               ) : (
                 <div className="space-y-3">
                   {items.map((item) => (
-                    <article key={item.id} data-testid={`admin-config-item-${collection}-${item.id}`} className={cn("rounded-md border p-4", selectedId === item.id ? "border-blue-300 bg-blue-50" : "border-slate-200 bg-white")}>
+                    <article key={item.id} data-testid={`admin-config-item-${collection}-${item.id}`} className={cn("rounded-md border p-4", selectedId === item.id ? "border-primary-300 bg-primary-50" : "border-border bg-white")}>
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
-                          <div className="font-black text-slate-900">{item.name}</div>
+                          <div className="text-sm font-semibold text-slate-900">{item.name}</div>
                           <div className="mt-1 text-sm text-slate-600">{item.description || "没有说明"}</div>
                           <div className="mt-2 text-xs text-slate-500">更新：{formatDate(item.updated_at)} / {item.updated_by}</div>
                         </div>
-                        <span className={cn("rounded-full px-2.5 py-1 text-xs font-bold", item.enabled ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600")}>
-                          {item.enabled ? "启用" : "停用"}
-                        </span>
+                        <Badge tone={item.enabled ? "done" : "neutral"}>{item.enabled ? "启用" : "停用"}</Badge>
                       </div>
-                      <pre className="mt-3 max-h-36 overflow-auto rounded-md bg-slate-950 p-3 text-xs leading-5 text-slate-100">
+                      <pre className="mt-3 max-h-36 overflow-auto rounded-md border border-border bg-surface-100 p-3 text-xs leading-5 text-slate-700">
                         {JSON.stringify(item.data, null, 2)}
                       </pre>
                       <div className="mt-3 flex flex-wrap gap-2">
-                        <button type="button" data-testid={`admin-config-edit-${collection}-${item.id}`} onClick={() => editItem(item)} className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-700">
+                        <Button variant="secondary" size="sm" data-testid={`admin-config-edit-${collection}-${item.id}`} onClick={() => editItem(item)}>
                           编辑
-                        </button>
-                        <button type="button" data-testid={`admin-config-delete-${collection}-${item.id}`} onClick={() => void deleteItem(item)} disabled={saving} className="rounded-md border border-red-200 px-3 py-1.5 text-xs font-bold text-red-700 disabled:opacity-60">
+                        </Button>
+                        <Button variant="secondary" size="sm" data-testid={`admin-config-delete-${collection}-${item.id}`} onClick={() => void deleteItem(item)} disabled={saving} className="border-danger-200 text-danger-700 hover:bg-danger-50">
                           删除
-                        </button>
+                        </Button>
                       </div>
                     </article>
                   ))}
@@ -1144,15 +1109,15 @@ function ConfigPanel({
             </div>
           </div>
 
-          <div className="rounded-md border border-slate-200 p-4">
-            <h3 className="text-base font-black text-slate-900">{selected ? "编辑配置" : "新建配置"}</h3>
+          <div className="rounded-md border border-border p-4">
+            <h3 className="text-sm font-semibold text-slate-900">{selected ? "编辑配置" : "新建配置"}</h3>
             <div className="mt-4 space-y-3">
               <input
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 data-testid={`admin-config-name-${collection}`}
                 placeholder="配置名称"
-                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500"
+                className={FIELD_CLASS}
               />
               <textarea
                 value={descriptionValue}
@@ -1160,9 +1125,9 @@ function ConfigPanel({
                 data-testid={`admin-config-description-${collection}`}
                 placeholder="配置说明"
                 rows={3}
-                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500"
+                className={FIELD_CLASS}
               />
-              <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+              <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
                 <input type="checkbox" data-testid={`admin-config-enabled-${collection}`} checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
                 启用
               </label>
@@ -1172,22 +1137,21 @@ function ConfigPanel({
                 data-testid={`admin-config-data-${collection}`}
                 rows={14}
                 spellCheck={false}
-                className="w-full rounded-md border border-slate-300 bg-slate-950 px-3 py-2 font-mono text-xs leading-5 text-slate-100 outline-none focus:border-blue-500"
+                className={cn(FIELD_CLASS, "bg-surface-100 font-mono text-xs leading-5")}
               />
               <div className="flex gap-2">
-                <button
-                  type="button"
+                <Button
                   data-testid={`admin-config-save-${collection}`}
                   onClick={() => void saveItem()}
                   disabled={saving}
-                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2.5 text-sm font-black text-white disabled:opacity-60"
+                  className="flex-1"
                 >
                   {saving ? "保存中..." : "保存配置"}
-                </button>
+                </Button>
                 {selected ? (
-                  <button type="button" data-testid={`admin-config-cancel-${collection}`} onClick={resetForm} className="rounded-md border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-700">
+                  <Button variant="secondary" data-testid={`admin-config-cancel-${collection}`} onClick={resetForm}>
                     取消
-                  </button>
+                  </Button>
                 ) : null}
               </div>
             </div>
@@ -1233,61 +1197,33 @@ export default function SystemManagementPanel({
     }
   }, []);
 
-  const activeMeta = useMemo(
-    () => SECTIONS.find((section) => section.id === activeSection) ?? SECTIONS[0],
-    [activeSection],
-  );
-
   return (
-    <div className="grid min-h-[760px] grid-cols-[280px_minmax(0,1fr)] gap-5" data-testid="admin-system-management">
-      <aside className="self-start rounded-md border border-slate-200 bg-white shadow-sm">
-        <div className="border-b border-slate-100 p-5">
-          <div className="text-xs font-black uppercase tracking-[0.18em] text-blue-600">Admin Console</div>
-          <h2 className="mt-3 text-2xl font-black text-slate-950">系统管理</h2>
-          <p className="mt-2 text-sm leading-6 text-slate-600">后台运维、组织维护、权限配置与配置留档。</p>
-        </div>
-        <nav className="space-y-1 p-3">
-          {SECTIONS.map((section) => {
-            const Icon = section.icon;
-            const isActive = activeSection === section.id;
-            return (
-              <button
-                key={section.id}
-                type="button"
-                data-testid={`admin-section-${section.id}`}
-                onClick={() => setActiveSection(section.id)}
-                className={cn(
-                  "flex w-full items-start gap-3 rounded-md px-3 py-3 text-left transition",
-                  isActive ? "bg-blue-50 text-blue-900 ring-1 ring-blue-100" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900",
-                )}
-              >
-                <span className={cn("rounded-md p-2", isActive ? "bg-white text-blue-600" : "bg-slate-100 text-slate-500")}>
-                  <Icon className="h-4 w-4" />
-                </span>
-                <span>
-                  <span className="block text-sm font-black">{section.label}</span>
-                  <span className="mt-1 block text-xs leading-5 text-slate-500">{section.description}</span>
-                </span>
-              </button>
-            );
-          })}
-        </nav>
-      </aside>
+    <div className="grid gap-5 lg:grid-cols-[208px_minmax(0,1fr)] lg:items-start" data-testid="admin-system-management">
+      <nav aria-label="系统设置分区" className="space-y-0.5 rounded-card border border-border bg-white p-2 shadow-soft">
+        {SECTIONS.map((section) => {
+          const Icon = section.icon;
+          const isActive = activeSection === section.id;
+          return (
+            <button
+              key={section.id}
+              type="button"
+              title={section.description}
+              aria-current={isActive ? "true" : undefined}
+              data-testid={`admin-section-${section.id}`}
+              onClick={() => setActiveSection(section.id)}
+              className={cn(
+                "flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400",
+                isActive ? "bg-primary-100 text-primary-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900",
+              )}
+            >
+              <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <span className="min-w-0 truncate">{section.label}</span>
+            </button>
+          );
+        })}
+      </nav>
 
-      <main className="min-w-0 space-y-5">
-        <header className="rounded-md border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <div className="text-xs font-black uppercase tracking-[0.18em] text-blue-600">{activeMeta.label}</div>
-              <h1 className="mt-2 text-3xl font-black text-slate-950">{activeMeta.label}</h1>
-              <p className="mt-3 text-sm leading-6 text-slate-600">{activeMeta.description}</p>
-            </div>
-            <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">
-              新系统管理内置页面
-            </div>
-          </div>
-        </header>
-
+      <div className="min-w-0 space-y-5">
         {activeSection === "overview" ? <OverviewSection organizations={organizations} organizationsStatus={organizationsStatus} setSection={setActiveSection} /> : null}
         {activeSection === "organization" ? (
           <OrganizationSection organizations={organizations} onRefresh={onRefresh} />
@@ -1311,8 +1247,10 @@ export default function SystemManagementPanel({
             placeholder={{ material_type: "dept_budget", aliases: ["部门预算"], field_mappings: [] }}
           />
         ) : null}
+        {activeSection === "templates" ? <AnnualTemplatePanel /> : null}
+        {activeSection === "calendar" ? <DisclosureCalendarPanel /> : null}
         {activeSection === "settings" ? <SettingsTemplatesSection /> : null}
-      </main>
+      </div>
     </div>
   );
 }

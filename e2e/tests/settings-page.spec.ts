@@ -79,6 +79,15 @@ async function installSettingsMocks(page: Page, options: SettingsMockOptions) {
               created_at: 1750000000,
               updated_at: 1750000000,
             },
+            // 非管理员的徽章文字更长、操作按钮更多，是表格宽度的最坏情况。
+            {
+              username: "reviewer01",
+              is_admin: false,
+              is_active: true,
+              organization_ids: ["org-edu"],
+              created_at: 1750000000,
+              updated_at: 1750000000,
+            },
           ],
         }),
       });
@@ -111,6 +120,53 @@ test.describe("Settings page (Task 8.4)", () => {
     // UserManagementPanel 是 SystemManagementPanel 内嵌的既有能力
     await expect(page.getByTestId("admin-users-panel")).toBeVisible();
   });
+
+  test("REGRESSION: one page title, template and calendar panels behind their own sections", async ({ page }) => {
+    await page.context().addCookies([sessionCookie]);
+    await installSettingsMocks(page, { isAdmin: true });
+    await page.goto("/settings");
+
+    await expect(page.getByTestId("admin-system-management")).toBeVisible();
+    // 曾有 3 个 H1：页面标题、年度公开时限、分区大标题。
+    await expect(page.locator("h1")).toHaveCount(1);
+    await expect(page.locator("h1")).toHaveText("系统设置");
+
+    // 这两块曾堆在管理区上方，把管理区推到第一屏以外。
+    await expect(page.getByTestId("annual-template-panel")).toHaveCount(0);
+    await expect(page.getByTestId("gbc-disclosure-calendar")).toHaveCount(0);
+
+    await page.getByTestId("admin-section-templates").click();
+    await expect(page.getByTestId("annual-template-panel")).toBeVisible();
+    await expect(page.getByTestId("gbc-disclosure-calendar")).toHaveCount(0);
+
+    await page.getByTestId("admin-section-calendar").click();
+    await expect(page.getByTestId("gbc-disclosure-calendar")).toBeVisible();
+    await expect(page.getByTestId("annual-template-panel")).toHaveCount(0);
+  });
+
+  for (const width of [1280, 1440]) {
+    test(`REGRESSION: user table is not squeezed at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.context().addCookies([sessionCookie]);
+      await installSettingsMocks(page, { isAdmin: true });
+      await page.goto("/settings?section=users");
+
+      const row = page.getByTestId("admin-users-row-admin");
+      await expect(row).toBeVisible();
+
+      // 曾因和表单并排，表格 590px 只分到 450px（1280 宽时 290px）。
+      const fit = await row.evaluate((element) => {
+        const table = element.closest("table") as HTMLTableElement;
+        const wrapper = table.parentElement as HTMLElement;
+        return { table: table.scrollWidth, wrapper: wrapper.clientWidth };
+      });
+      expect(fit.table).toBeLessThanOrEqual(fit.wrapper);
+
+      // 曾把“管理员”挤成一字一行。
+      const badgeBox = await row.getByText("管理员", { exact: true }).boundingBox();
+      expect(badgeBox?.height ?? Number.POSITIVE_INFINITY).toBeLessThan(40);
+    });
+  }
 
   test("REGRESSION: non-admin is redirected away from /settings", async ({ page }) => {
     await page.context().addCookies([sessionCookie]);
