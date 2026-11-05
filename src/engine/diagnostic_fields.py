@@ -548,11 +548,13 @@ def aggregate(diagnostics: Sequence[Mapping[str, Any]], *, rule_id: Any = None,
     }
     preferences: Dict[str, str] = {}
     for diag in diagnostics:
-        action = diag.get("preferred_action")
-        if not action:
+        action = diag.get("preferred_action") or diag.get("next_action")
+        codes_in_diag = [str(code) for code in (diag.get("reason_codes") or []) if str(code)]
+        if not action or len(codes_in_diag) != 1:
+            # 只有“本条诊断恰好只讲一个原因”时才继承它的动作，避免混合
+            # 诊断把义务级路由带偏。
             continue
-        for code in diag.get("reason_codes") or []:
-            preferences.setdefault(str(code), str(action))
+        preferences.setdefault(codes_in_diag[0], str(action))
     if result["reason_codes"]:
         primary = _primary_code(result["reason_codes"], blocked)
         result["next_action"] = choose_next_action(

@@ -1774,7 +1774,7 @@ def _attach_structured_diagnostics(
         if not rule_id or not raw.get("reason_codes"):
             continue
         diagnostic = {key: raw.get(key) for key in (
-            "reason_codes", "blocked_by", "missing_operands", "candidates",
+            "reason_codes", "blocked_by", "missing_operands", "candidates", "next_action",
         )}
         targets = ([str(raw.get("obligation_id"))] if raw.get("obligation_id")
                    else [key for key in obligation_ids_for_rule(rule_id) if key in selected_ids])
