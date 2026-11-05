@@ -758,15 +758,41 @@ def _cell_ref(cell: Dict[str, Any]) -> Dict[str, Any]:
 
 _DECIMAL_POINT_RE = re.compile(r"[.．]")
 
+#: 只有“这一格取值本身不可解析”能由数字格式解释；列归属、身份冲突、
+#: 标签缺失各有独立原因，不能因为归类格式缺陷就一并消失。
+_FORMAT_EXPLAINED_REASONS = frozenset({"fact_unbound"})
+
+#: 单元格末尾可能带单位；判断“是否单个数字词”时要先剥掉，
+#: 否则 ``2.359.46 万元`` 会被误当成两个词。
+_TRAILING_UNIT_RE = re.compile(r"^(.*?)\s*(?:万\s*元|亿\s*元|千\s*元|元)$")
+
+
+def _single_amount_lexeme(text: Any) -> bool:
+    """整个格内容是否只有一个数字词（允许带单位）。
+
+    ``1.00\\n2.00``、``1.00 2.00`` 是两个金额被拼到一起，属提取/合并异常，
+    不能据此断定纸面印了一个错数。
+    """
+    value = str(text or "").strip()
+    if not value or "\n" in value or "\r" in value:
+        return False
+    match = _TRAILING_UNIT_RE.match(value)
+    if match:
+        value = match.group(1).strip()
+    return bool(value) and not re.search(r"\s", value)
+
 
 def _invalid_number_text(text: Any) -> bool:
-    """原件金额原文是否“看起来是金额但小数点重复”。
+    """原件金额原文是否“单个数字词但小数点重复”。
 
     真实反例：第 9 份物理页 9 的三个基本支出格印成 ``2.359.46``。它既不是
     合法数值，也不能由系统改名成 2359.46——只能作为原件格式缺陷保留原文。
+    但两个金额被换行/空格拼在一起是提取异常，不是原件错数。
     """
     value = str(text or "").strip()
     if not value or not any(ch.isdigit() for ch in value):
+        return False
+    if not _single_amount_lexeme(value):
         return False
     return len(_DECIMAL_POINT_RE.findall(value)) > 1
 
@@ -827,8 +853,23 @@ def _reading_review_items(reading_quality: Dict[str, Any]) -> List[Dict[str, Any
         # 原件数字格式缺陷（真实反例：第 9 份物理页 9 三个基本支出格印成
         # “2.359.46”，小数点重复）不是列映射失败：数值根本不可解析。必须
         # 保留原文、物理页和 bbox 单独报告，不得静默改成 2359.46 或靠行和凑平。
-        invalid = [c for c in cells if _invalid_number_text(c.get("raw_text"))]
+        # 但只有“取值不可解析”（fact_unbound）能由格式解释：身份冲突、列未
+        # 映射、标签缺失等独立原因必须继续走 mapping 通道。
+        invalid = [c for c in cells
+                   if _invalid_number_text(c.get("raw_text"))
+                   and str(c.get("reason") or "") in _FORMAT_EXPLAINED_REASONS]
         mapped = [c for c in cells if c not in invalid]
+        remaining_reasons: Dict[str, int] = {}
+        if invalid:
+            # 以**仍然留在 mapping 通道的格**为准重算原因，而不是拿上游整表
+            # 计数硬减：上游 unresolved_money_cell_count 可能大于本表实际列出的
+            # 格数，硬减会造出没有对应格的“幽灵原因”。
+            for cell in mapped:
+                key = str(cell.get("reason") or "")
+                if key:
+                    remaining_reasons[key] = remaining_reasons.get(key, 0) + 1
+            if table["arithmetic_conflicts"]:
+                remaining_reasons["column_arithmetic_conflict"] = 1
         if invalid:
             invalid_pages = sorted({c["page"] for c in invalid if isinstance(c.get("page"), int)})
             items.append({
@@ -846,8 +887,9 @@ def _reading_review_items(reading_quality: Dict[str, Any]) -> List[Dict[str, Any
                     f"（如「{invalid[0].get('raw_text')}」，小数点重复），属原件数字格式缺陷；"
                     "这些格不形成金额事实，依赖它们的勾稽保持材料阻断，需回原件补正"),
                 "recommended_action": "correct_original_number_format"})
-        if not mapped and not table["arithmetic_conflicts"]:
-            # 只剩格式缺陷格：没有“列映射”可查，避免把材料问题报成系统读取问题。
+        if not mapped and not table["arithmetic_conflicts"] and not remaining_reasons:
+            # 只剩格式缺陷格、且没有别的独立原因：没有“列映射”可查，
+            # 避免把材料问题报成系统读取问题。
             continue
         arithmetic = "；合计与分项在多行系统性对不上，列映射可能错位" if table["arithmetic_conflicts"] else ""
         cell_pages = sorted({c["page"] for c in mapped if isinstance(c.get("page"), int)})
@@ -856,7 +898,7 @@ def _reading_review_items(reading_quality: Dict[str, Any]) -> List[Dict[str, Any
             "type": "table_mapping_incomplete", "severity": "warn", "table_code": table["table_code"],
             "page_number": table["page"],
             "page_numbers": sorted({table["page"], *cell_pages}),
-            "reason": ",".join(sorted(table["reasons"])) or "column_arithmetic_conflict",
+            "reason": ",".join(sorted(remaining_reasons or table["reasons"])) or "column_arithmetic_conflict",
             "cells": [_cell_ref(c) for c in mapped],
             "message": (f"第 {page_label} 页《{table['title'] or table['table_code']}》映射不完整："
                         f"{len(mapped) if invalid else table['unresolved_money_cell_count']} 个金额格"

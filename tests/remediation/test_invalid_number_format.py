@@ -9,9 +9,9 @@
 from src.services.structured_ingest_runner import _reading_review_items
 
 
-def _cell(uid, page, raw, fragment="t3", table="FIN_03_expenditure"):
+def _cell(uid, page, raw, fragment="t3", table="FIN_03_expenditure", reason="fact_unbound"):
     return {"source_cell_id": uid, "page": page, "bbox": [398.04, 90.36, 468.96, 113.88],
-            "raw_text": raw, "reason": "fact_unbound", "fragment_uid": fragment,
+            "raw_text": raw, "reason": reason, "fragment_uid": fragment,
             "table_code": table}
 
 
@@ -81,3 +81,55 @@ def test_normal_decimals_are_not_mistaken_for_format_defects():
     items = _reading_review_items(quality)
     assert [i["type"] for i in items] == ["table_mapping_incomplete"]
     assert len(items[0]["cells"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-04 独立复审 RF-01：分类准入与独立原因保留
+# ---------------------------------------------------------------------------
+
+def test_two_amounts_joined_by_newline_are_an_extraction_anomaly():
+    """``1.00\\n2.00`` 是两个金额被拼到一起，不是纸面印了一个错数。"""
+    quality = {
+        "gaps": [],
+        "mapping_incomplete_tables": [_table(count=1)],
+        "unbound_money_cells": [_cell("t3:r0c3", 9, "1.00\n2.00")],
+    }
+    items = _reading_review_items(quality)
+    assert not [i for i in items if i["type"] == "invalid_number_format"]
+    assert [i["type"] for i in items] == ["table_mapping_incomplete"]
+
+
+def test_space_joined_amounts_are_not_a_single_bad_lexeme():
+    quality = {
+        "gaps": [],
+        "mapping_incomplete_tables": [_table(count=1)],
+        "unbound_money_cells": [_cell("t3:r0c3", 9, "1.00 2.00")],
+    }
+    items = _reading_review_items(quality)
+    assert not [i for i in items if i["type"] == "invalid_number_format"]
+
+
+def test_trailing_unit_does_not_split_a_single_lexeme():
+    quality = {
+        "gaps": [],
+        "mapping_incomplete_tables": [_table(count=1)],
+        "unbound_money_cells": [_cell("t3:r0c3", 9, "2.359.46 万元")],
+    }
+    items = _reading_review_items(quality)
+    assert [i["type"] for i in items] == ["invalid_number_format"]
+
+
+def test_independent_binding_conflict_survives_format_classification():
+    """格式错误与身份冲突可以并存：归类格式缺陷不得删掉独立待办。"""
+    quality = {
+        "gaps": [],
+        "mapping_incomplete_tables": [{
+            **_table(count=1), "reasons": {"fact_binding_conflict": 1}}],
+        "unbound_money_cells": [
+            _cell("t3:r0c3", 9, "2.359.46", reason="fact_binding_conflict")],
+    }
+    items = _reading_review_items(quality)
+    types = [i["type"] for i in items]
+    assert "invalid_number_format" not in types
+    assert types == ["table_mapping_incomplete"]
+    assert items[0]["reason"] == "fact_binding_conflict"
