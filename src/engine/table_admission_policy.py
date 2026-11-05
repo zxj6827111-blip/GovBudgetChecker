@@ -38,8 +38,17 @@ def cells_by_fragment(receipt: dict) -> Dict[Any, List[dict]]:
     """
     cells = list(receipt.get("unbound_money_cells") or [])
     cells += list((receipt.get("reading_quality") or {}).get("unbound_money_cells") or [])
-    grouped: Dict[Any, List[dict]] = {}
+    seen = set()
+    unique: List[dict] = []
     for cell in cells:
+        key = (cell.get("fragment_uid"), cell.get("source_cell_id"), cell.get("page"),
+               cell.get("raw_text"), cell.get("reason"))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(cell)
+    grouped: Dict[Any, List[dict]] = {}
+    for cell in unique:
         grouped.setdefault(cell.get("fragment_uid"), []).append(cell)
     return grouped
 
@@ -77,7 +86,8 @@ def classify_blocked_tables(receipt: dict, blocked: list) -> Tuple[list, list, l
         )
         if format_only:
             material.append((table, format_cells))
-        elif not cells and not reasons and not table.get("unresolved_money_cell_count"):
+        elif (not cells and not reasons and not table.get("unresolved_money_cell_count")
+              and not table.get("arithmetic_conflicts")):
             # 没有任何未绑定格、也没有任何逐格原因，却被标为映射不完整：
             # 这是“表里没有可用金额事实”（空表/缺表），属材料侧，不是系统
             # 读取故障。第 4/1 份的 p11/p12 空表与缺表即此形态。

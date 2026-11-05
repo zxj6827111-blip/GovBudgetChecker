@@ -104,7 +104,16 @@ _LEVEL = re.compile(r"(?:决算|预算)(?:数)?(?:为|是)?\s*(\d[\d,]*(?:\.\d+)
 _DELTA = re.compile(r"(?:增加|减少|增长|下降)")
 
 
-def zero_source_problems(receipt: dict) -> List[str]:
+_STAGE_HINT = re.compile(r"(年初预算|决算)")
+
+
+def stage_from_key(receipt: dict) -> str:
+    """真实回执的阶段写在 sub_check_id 里（three_public:决算:…）。"""
+    match = _STAGE_HINT.search(str(receipt.get("sub_check_id") or ""))
+    return match.group(1) if match else ""
+
+
+def zero_source_problems(receipt: dict, expected_stage: str = "") -> List[str]:
     """零/结案证据的语义资格：资金范围、阶段、水平值、矛盾。"""
     problems: List[str] = []
     quotes = [str(s.get("span") or s.get("quote") or "")
@@ -120,7 +129,7 @@ def zero_source_problems(receipt: dict) -> List[str]:
     parsed = {float(v) for v in levels}
     if any(v == 0 for v in parsed) and any(v != 0 for v in parsed):
         problems.append("同一指标同时出现 0 与非零水平值")
-    expected_stage = str((receipt.get("operand_sources") or {}).get("stage") or "")
+    expected_stage = expected_stage or str((receipt.get("operand_sources") or {}).get("stage") or "")
     if expected_stage:
         word = "决算" if expected_stage in {"决算", "final"} else "预算"
         other = "预算" if word == "决算" else "决算"
@@ -270,7 +279,12 @@ def compare_collections(baseline_dir: Path, candidate_dir: Path) -> dict:
             else:
                 new_evidenced = new
             if old.get("status") in UNRESOLVED and new.get("status") == "pass":
-                source_problems = zero_source_problems(new_evidenced)
+                if is_aggregate:
+                    source_problems = zero_source_problems(new_evidenced)
+                    for rel in relations:
+                        source_problems.extend(zero_source_problems(rel, stage_from_key(rel)))
+                else:
+                    source_problems = zero_source_problems(new, stage_from_key(new))
                 if is_aggregate and any(r.get("status") in UNRESOLVED for r in relations):
                     source_problems.append("仍有未完成子关系")
                 if not evidence_complete(new_evidenced) or source_problems:
