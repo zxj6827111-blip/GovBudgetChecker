@@ -126,6 +126,25 @@ def derive_formal_layers(status: dict, sample_id: str) -> Dict[str, list]:
     return layers
 
 
+def evidence_digest(issue: dict) -> str:
+    payload = json.dumps({"evidence": issue.get("evidence") or [],
+                          "location": issue.get("location"),
+                          "bbox": issue.get("bbox")}, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def unknown_relation_refs(issue: dict, receipt_keys: set) -> List[str]:
+    refs = []
+    crid = str(issue.get("check_relation_id") or "")
+    if not crid:
+        return refs
+    rule = str(issue.get("rule_id") or "")
+    sub = crid[len(rule) + 1:] if crid.startswith(rule + ":") else None
+    if sub is None or (rule, sub) not in receipt_keys:
+        refs.append(crid)
+    return refs
+
+
 def formal_identity(issue: dict) -> Tuple:
     """稳定身份：规则 + 严重度 + 去序号标题/正文 + 页码。"""
     title = _ORDINAL.sub("", str(issue.get("title") or ""))
@@ -253,6 +272,12 @@ def na_basis(receipt: dict, expected_stage: str, fact_ids: set,
                      str(receipt.get("formula") or "")])
     if not any(marker in text for marker in ZERO_BASIS_MARKERS):
         return False, ["不适用依据未引用具体适用条件（无支出/未安排/原文明确等）"]
+    grounded = any(isinstance(s, dict) and (s.get("span") or s.get("quote"))
+                   for s in receipt.get("disclosure_sources") or [])
+    if not grounded:
+        # 只有文字、没有任何可接地的来源 → 依据不足（真实迁移 N/A 全部带来源，
+        # 该收紧不影响本批真实迁移）。
+        return False, ["不适用依据没有可接地的来源引文"]
     problems = zero_source_problems(receipt, expected_stage, fact_ids, pdf_pages)
     return (not problems), problems
 
@@ -263,7 +288,8 @@ def na_basis(receipt: dict, expected_stage: str, fact_ids: set,
 
 def compare_formal_findings(sample_id: str, base_layers: Dict[str, list],
                             cand_layers: Dict[str, list],
-                            transitions_by_rule: Dict[str, List[dict]]) -> Tuple[List[str], List[dict]]:
+                            transitions_by_rule: Dict[str, List[dict]],
+                            receipt_keys: set) -> Tuple[List[str], List[dict], List[dict]]:
     problems: List[str] = []
     ledger: List[dict] = []
     base_ids = {formal_identity(i) for i in base_layers["formal"]}
@@ -300,8 +326,10 @@ def compare_formal_findings(sample_id: str, base_layers: Dict[str, list],
                        "rule_id": identity[0], "signature": formal_signature(added),
                        "conclusion": "REJECTED_NEW_FINDING"})
     # 序号/展示调整：身份一致但 id 或 pre_group_issue_id 不同
+    info_rows: List[dict] = []
     for issue in cand_layers["formal"]:
         identity = formal_identity(issue)
+        unknown_refs = unknown_relation_refs(issue, receipt_keys)
         if identity in base_ids:
             old = [i for i in base_layers["formal"] if formal_identity(i) == identity][0]
             if old.get("id") != issue.get("id") or old.get("pre_group_issue_id") != issue.get("pre_group_issue_id"):
@@ -309,7 +337,16 @@ def compare_formal_findings(sample_id: str, base_layers: Dict[str, list],
                                "rule_id": identity[0], "signature": formal_signature(issue),
                                "old_signature": formal_signature(old),
                                "conclusion": "DISPLAY_RENUMBERING"})
-    return problems, ledger
+            if evidence_digest(issue) != evidence_digest(old):
+                info_rows.append({"sample_id": sample_id, "key": list(identity),
+                                  "conclusion": "EVIDENCE_DIGEST_CHANGED",
+                                  "signature": formal_signature(issue)})
+        if unknown_refs:
+            info_rows.append({"sample_id": sample_id, "key": list(identity),
+                              "conclusion": "UNKNOWN_RELATION_REF", "refs": unknown_refs})
+            if identity not in base_ids:
+                problems.append(f"{sample_id} {identity[0]}: 新增正式问题引用未知关系 {unknown_refs[0]}")
+    return problems, ledger, info_rows
 
 
 # ---------------------------------------------------------------------------
@@ -523,6 +560,7 @@ def compare_collections(baseline_dir: Path, candidate_dir: Path,
     # EF-01：正式问题层比较（派生自原始 status）
     formal_problems: List[str] = []
     formal_ledger: List[dict] = []
+    formal_info: List[dict] = []
     for sample_id in sorted(set(baseline) & set(candidate)):
         try:
             base_layers = derive_formal_layers(baseline[sample_id]["status"], sample_id)
@@ -530,20 +568,25 @@ def compare_collections(baseline_dir: Path, candidate_dir: Path,
         except AdapterError as exc:
             formal_problems.append(str(exc))
             continue
-        sample_problems, sample_ledger = compare_formal_findings(
-            sample_id, base_layers, cand_layers, transitions_by_rule)
+        receipt_keys = {(str(r.get("rule_id")), str(r.get("sub_check_id") or ""))
+                        for r in candidate[sample_id]["record"].get("receipts") or []}
+        sample_problems, sample_ledger, sample_info = compare_formal_findings(
+            sample_id, base_layers, cand_layers, transitions_by_rule, receipt_keys)
         formal_problems.extend(sample_problems)
         formal_ledger.extend(sample_ledger)
+        formal_info.extend(sample_info)
         sealed = {"sample_id": sample_id,
                   "status_sha256": baseline[sample_id].get("status_sha256"),
                   "adapter_version": ADAPTER_VERSION,
                   "counts": {k: len(v) for k, v in base_layers.items()}}
         Path("./_sealed_tmp").mkdir(exist_ok=True)
     add("E8", "正式问题层逐条比较（消失必须归因，新增必须拒绝）", formal_problems)
+    results.append({"id": "E8i", "title": "未知关系引用与证据摘要变化（逐键列明，待裁决）",
+                    "verdict": "INFO", "count": len(formal_info), "details": formal_info[:200]})
 
     # E9 同候选双跑：完整语义投影（独立函数，见 reproducibility）
 
-    overall = "PASS" if all(item["verdict"] == "PASS" for item in results) else "FAIL"
+    overall = "PASS" if all(item["verdict"] in {"PASS", "INFO"} for item in results) else "FAIL"
     report = {"policy": POLICY_VERSION, "adapter": ADAPTER_VERSION,
               "baseline": str(baseline_dir), "candidate": str(candidate_dir),
               "samples": len(set(baseline) & set(candidate)),
