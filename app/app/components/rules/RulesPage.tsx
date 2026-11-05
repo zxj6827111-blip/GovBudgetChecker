@@ -31,6 +31,14 @@ import {
 
 const ENTRIES_PAGE_SIZE = 50;
 
+/**
+ * 版本号是标识符，不是数量：真实值 v3_3_all_in_one 按 KPI 的 28px 粗体约 219px 宽，
+ * 窄列放不下。这里降到 text-xl，行高用 leading-9 与数字 KPI 保持同高，同一行不错位。
+ */
+function VersionValue({ children }: { children: string }) {
+  return <span className="block text-xl leading-9">{children}</span>;
+}
+
 export function RulesPage() {
   const [version, setVersion] = useState<RulesVersionResponse | null>(null);
   const [versionFailed, setVersionFailed] = useState(false);
@@ -117,17 +125,17 @@ export function RulesPage() {
         </div>
       ) : null}
 
-      <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Metric
           label="规则集版本"
-          value={version ? formatRulesValueText(version.ruleset_version) : null}
+          value={version ? <VersionValue>{formatRulesValueText(version.ruleset_version)}</VersionValue> : null}
           desc={`规则文件：${version ? formatRulesValueText(version.rules_file) : "未识别到"}`}
           tone="primary"
           data-testid="gbc-rules-ruleset-version"
         />
         <Metric
           label="规则修订号"
-          value={version ? formatRulesValueText(version.metadata_version) : null}
+          value={version ? <VersionValue>{formatRulesValueText(version.metadata_version)}</VersionValue> : null}
           desc="规则文件 metadata.version（修订版次）"
           tone="info"
           data-testid="gbc-rules-metadata-version"
@@ -141,7 +149,7 @@ export function RulesPage() {
         />
         <Metric
           label="引擎版本"
-          value={version ? formatRulesValueText(version.engine_version) : null}
+          value={version ? <VersionValue>{formatRulesValueText(version.engine_version)}</VersionValue> : null}
           desc="provenance.ENGINE_VERSION（仓库声明版本，与 finding 留痕同源）"
           tone="success"
           data-testid="gbc-rules-engine-version"

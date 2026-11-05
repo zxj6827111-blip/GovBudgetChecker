@@ -46,7 +46,7 @@ export function Metric({
         {corner ? <span className="text-xs text-slate-400">{corner}</span> : null}
       </div>
       <div
-        className={cn("mt-2 text-kpi-value", isEmpty ? "text-slate-400" : METRIC_TONE_VALUE_CLASSES[tone])}
+        className={cn("mt-2 break-words text-kpi-value", isEmpty ? "text-slate-400" : METRIC_TONE_VALUE_CLASSES[tone])}
         aria-label={isEmpty ? "暂无数据" : undefined}
       >
         {isEmpty ? "—" : value}
