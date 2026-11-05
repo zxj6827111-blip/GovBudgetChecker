@@ -48,11 +48,11 @@ def to_jsonable(value: Any, *, path: str = "$") -> Any:
     if isinstance(value, Decimal):
         # 精确十进制文本；不经过 float。非有限 Decimal 在 JSON 中无表示。
         if not value.is_finite():
-            raise NonFiniteNumberError(f"{path}: 非有限十进制数 {value!r} 不能写入分析结果")
+            raise NonFiniteNumberError(f"{path}: 非有限十进制数不能写入分析结果")
         return str(value)
     if isinstance(value, float):
         if not math.isfinite(value):
-            raise NonFiniteNumberError(f"{path}: 非有限浮点数 {value!r} 不能写入分析结果")
+            raise NonFiniteNumberError(f"{path}: 非有限浮点数不能写入分析结果")
         return value
     if isinstance(value, dict):
         return {
