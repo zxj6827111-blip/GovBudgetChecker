@@ -229,6 +229,14 @@ def _policy_rank(code: str) -> tuple:
     return (priority, code)
 
 
+def _primary_code(codes: Sequence[str], blocked_by: Iterable[Mapping[str, Any]] = ()) -> str:
+    """主原因码：优先取最上游阻断点，否则按冻结优先级取最小。"""
+    point = primary_blocker(list(blocked_by or ()))
+    if point is not None and str(point.get("reason_code")) in codes:
+        return str(point["reason_code"])
+    return min(codes, key=_policy_rank)
+
+
 def choose_next_action(reason_codes: Iterable[str], blocked_by: Iterable[Mapping[str, Any]] = (),
                        preferred: Any = None) -> str:
     """按验收工具的同一口径确定主原因，再取 policy 建议的首个允许动作。
@@ -240,11 +248,7 @@ def choose_next_action(reason_codes: Iterable[str], blocked_by: Iterable[Mapping
     codes = [str(code) for code in reason_codes if str(code)]
     if not codes:
         return "human_confirm"
-    point = primary_blocker(list(blocked_by or ()))
-    if point is not None and str(point.get("reason_code")) in codes:
-        primary = str(point["reason_code"])
-    else:
-        primary = min(codes, key=_policy_rank)
+    primary = _primary_code(codes, blocked_by)
     allowed = allowed_actions(primary)
     if preferred and str(preferred) in allowed:
         return str(preferred)
@@ -542,7 +546,19 @@ def aggregate(diagnostics: Sequence[Mapping[str, Any]], *, rule_id: Any = None,
         "missing_operands": missing,
         "candidates": candidates,
     }
-    result["next_action"] = choose_next_action(result["reason_codes"], blocked)
+    preferences: Dict[str, str] = {}
+    for diag in diagnostics:
+        action = diag.get("preferred_action")
+        if not action:
+            continue
+        for code in diag.get("reason_codes") or []:
+            preferences.setdefault(str(code), str(action))
+    if result["reason_codes"]:
+        primary = _primary_code(result["reason_codes"], blocked)
+        result["next_action"] = choose_next_action(
+            result["reason_codes"], blocked, preferences.get(primary))
+    else:
+        result["next_action"] = choose_next_action(result["reason_codes"], blocked)
     probe = dict(result)
     probe.update(rule_id=rule_id, sub_check_id=sub_check_id, obligation_id=obligation_id)
     result["root_cause_key"] = root_cause_key(probe)
