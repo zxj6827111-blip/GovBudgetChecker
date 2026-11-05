@@ -374,6 +374,16 @@ def build_review_report(payload: Mapping[str, Any]) -> Dict[str, Any]:
                 "status": item.get("status"),
                 "reason": item.get("reason_label") or item.get("reason"),
                 "detail": item.get("detail") or item.get("gap_note"),
+                # DH-02：结构化卡点原样进入约定导出块，不在这里翻译或推断。
+                "reason_codes": list(item.get("reason_codes") or []),
+                "blocked_by": [dict(value) for value in item.get("blocked_by") or []],
+                "missing_operands": [dict(value) for value in item.get("missing_operands") or []],
+                "candidates": [dict(value) for value in item.get("candidates") or []],
+                "next_action": item.get("next_action"),
+                "root_cause_key": item.get("root_cause_key"),
+                # DH-03a：旧兼容字段原样进入导出块；只作 UI 提示。
+                "legacy_same_source_keys": list(item.get("legacy_same_source_keys") or []),
+                "legacy_coverage_terms": list(item.get("legacy_coverage_terms") or []),
             }
         )
 

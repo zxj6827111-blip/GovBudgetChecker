@@ -18,6 +18,7 @@ from src.db.migrations import run_migrations
 from src.schemas.issues import ACTIVE_JOB_STATUSES, normalize_job_status
 from src.services import review_slot_sync
 from src.services.document_profile_resolver import resolve_document_profile
+from src.services.json_canonical import dumps_canonical
 
 logger = logging.getLogger(__name__)
 
@@ -333,7 +334,7 @@ def compute_analysis_result_fingerprint(payload: Dict[str, Any]) -> str:
         content["document_scope_resolution"] = meta["document_scope_resolution"]
     if meta.get('fact_snapshot'):
         content['fact_snapshot'] = meta['fact_snapshot']
-    canonical = json.dumps(content, ensure_ascii=False, sort_keys=True, default=str)
+    canonical = dumps_canonical(content, sort_keys=True)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
@@ -650,7 +651,7 @@ def _parse_timestamp(raw: Any) -> Optional[datetime]:
 
 
 def _to_json(payload: Any) -> str:
-    return json.dumps(payload, ensure_ascii=False, default=str)
+    return dumps_canonical(payload)
 
 
 async def list_persisted_analysis_jobs(

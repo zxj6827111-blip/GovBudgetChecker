@@ -29,14 +29,21 @@ def _pick(doc, facts, indicator, names, *, allow_native_blank=False):
             term = blank_term(doc, facts[0].table_code, indicator, names=names)
             if term is not None:
                 return term, None
-        return None, f'{indicator}/{"或".join(names)}原始操作数缺失或不唯一'
+        reason = f'{indicator}/{"或".join(names)}原始操作数缺失或不唯一'
+        from .native_table_arithmetic import record_operand_gap
+        record_operand_gap(doc, facts, candidates, reason, indicator=indicator, code=None,
+                           name='或'.join(names), stage='决算')
+        return None, reason
     fact = candidates[0]
     reason = operand_rejection_reason(fact, doc.fact_context.org_name)
     if (reason or fact.fiscal_year != doc.fact_context.fiscal_year
             or _canonical_budget_stage(fact.budget_stage) != '决算'
             or fact.unit not in ('元', '万元', '亿元')
             or not fact.extra_dims.get('evidence_refs')):
-        return None, reason or '操作数年度、单位、阶段或原始证据未确认'
+        reason = reason or '操作数年度、单位、阶段或原始证据未确认'
+        from .native_table_arithmetic import record_operand_rejection
+        record_operand_rejection(doc, fact, reason, indicator=indicator, stage='决算')
+        return None, reason
     return fact, None
 
 

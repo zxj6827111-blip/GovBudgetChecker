@@ -184,6 +184,34 @@ def test_amount_decimals_are_aggregated_once() -> None:
     assert any("百分比小数位" in i.message for i in issues)
 
 
+def test_integer_yuan_amount_is_decimal_format() -> None:
+    """正文整数“0 元/100元”也要保留两位；不能只查“万元”整数。"""
+    doc = _doc(["封面", "采购金额0 元。机关运行经费100元。"])
+    issues = CMM010_AmountFormat().apply(doc)
+    small = [i for i in issues if "小数位不统一" in i.message]
+    assert len(small) == 1, _messages(issues)
+    spans = [ref["span"] for ref in small[0].location.get("table_refs") or []]
+    assert any("0 元" in span for span in spans), spans
+    assert any("100元" in span for span in spans), spans
+
+
+def test_thousands_separator_with_yuan_on_next_line() -> None:
+    """正文“7750.99\\n元”是金额，单位换行不构成豁免。"""
+    doc = _doc(["封面", "年初预算为7750.99\n元，支出决算为7606.75 万元。"])
+    issues = CMM010_AmountFormat().apply(doc)
+    thousands = [i for i in issues if "千分位" in i.message]
+    assert thousands, _messages(issues)
+    spans = [ref["span"] for ref in thousands[0].location.get("table_refs") or []]
+    assert any("7750.99" in span for span in spans), spans
+
+
+def test_bare_table_number_without_unit_is_not_a_thousands_hit() -> None:
+    """无单位表格数值/编码不是金额，不能按千分位或小数位误报。"""
+    doc = _doc(["封面", "310107 7750.99 2024"], tables=[[], [[[["310107", "7750.99", "2024"]]]]])
+    issues = CMM010_AmountFormat().apply(doc)
+    assert not [i for i in issues if "千分位" in i.message], _messages(issues)
+
+
 # ---- CMM-011 万元单位（C-14） -----------------------------------------------
 
 

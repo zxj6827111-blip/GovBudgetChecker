@@ -10,7 +10,7 @@ from src.services.fiscal_table_rules import NINE_TABLE_RULES, normalize_text
 from src.services.input_processing_identity import content_hash
 from src.services.ocr_qualification import qualification
 from src.services.source_reconstruction import native_source_conflict
-from src.services.table_import_receipt import source_cell_id
+from src.services.cell_identity import source_cell_id
 
 
 def _same_grid_cell(a, b):

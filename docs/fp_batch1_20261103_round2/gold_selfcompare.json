@@ -1,0 +1,551 @@
+{
+  "a": "/Volumes/workSSD/software development/GovBudgetChecker/outputs/fp_batch1_20261103/round2/gold/run1",
+  "b": "/Volumes/workSSD/software development/GovBudgetChecker/outputs/fp_batch1_20261103/round2/gold/run2",
+  "frozen_volatile_fields": [
+    "created_at",
+    "id"
+  ],
+  "paths_differing_after_frozen_volatile": {
+    "/analysis_revision": 33,
+    "/pipeline_budget/active_elapsed_seconds": 32,
+    "/pipeline_budget/elapsed_seconds": 32,
+    "/pipeline_budget/started_at": 33,
+    "/result/meta/finished_at": 33,
+    "/result/meta/started_at": 33,
+    "/review_report/analysis_revision": 33,
+    "/review_report/issues[]/analysis_revision": 130,
+    "/ts": 33
+  },
+  "per_sample": {
+    "GS-2022-01": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/review_report/issues[]/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 37,
+      "todo_diff": []
+    },
+    "GS-2022-02": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/review_report/issues[]/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 61,
+      "todo_diff": []
+    },
+    "GS-2022-03": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/review_report/issues[]/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 75,
+      "todo_diff": []
+    },
+    "GS-2022-04": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/review_report/issues[]/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 29,
+      "todo_diff": []
+    },
+    "GS-2022-05": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/review_report/issues[]/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 48,
+      "todo_diff": []
+    },
+    "GS-2022-06": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/review_report/issues[]/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 49,
+      "todo_diff": []
+    },
+    "GS-2022-07": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 11,
+      "todo_diff": []
+    },
+    "GS-2022-08": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/review_report/issues[]/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 55,
+      "todo_diff": []
+    },
+    "GS-2023-01": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/review_report/issues[]/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 73,
+      "todo_diff": []
+    },
+    "GS-2023-02": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/review_report/issues[]/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 28,
+      "todo_diff": []
+    },
+    "GS-2023-03": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 20,
+      "todo_diff": []
+    },
+    "GS-2023-04": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/review_report/issues[]/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 34,
+      "todo_diff": []
+    },
+    "GS-2023-05": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/review_report/issues[]/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 80,
+      "todo_diff": []
+    },
+    "GS-2023-06": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/review_report/issues[]/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 44,
+      "todo_diff": []
+    },
+    "GS-2023-07": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/review_report/issues[]/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 40,
+      "todo_diff": []
+    },
+    "GS-2023-08": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/review_report/issues[]/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 27,
+      "todo_diff": []
+    },
+    "GS-2024-01": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/review_report/issues[]/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 45,
+      "todo_diff": []
+    },
+    "GS-2024-02": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/review_report/issues[]/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 48,
+      "todo_diff": []
+    },
+    "GS-2024-03": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/review_report/issues[]/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 45,
+      "todo_diff": []
+    },
+    "GS-2024-04": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/review_report/issues[]/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 58,
+      "todo_diff": []
+    },
+    "GS-2024-05": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 20,
+      "todo_diff": []
+    },
+    "GS-2024-06": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/review_report/issues[]/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 129,
+      "todo_diff": []
+    },
+    "GS-2024-07": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/review_report/issues[]/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 73,
+      "todo_diff": []
+    },
+    "GS-2024-08": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/review_report/issues[]/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 21,
+      "todo_diff": []
+    },
+    "GS-2025-01": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/review_report/issues[]/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 56,
+      "todo_diff": []
+    },
+    "GS-2025-02": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/review_report/issues[]/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 33,
+      "todo_diff": []
+    },
+    "GS-2025-03": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/review_report/issues[]/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 33,
+      "todo_diff": []
+    },
+    "GS-2025-04": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/review_report/issues[]/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 26,
+      "todo_diff": []
+    },
+    "GS-2025-05": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/review_report/issues[]/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 33,
+      "todo_diff": []
+    },
+    "GS-2025-06": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/review_report/issues[]/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 57,
+      "todo_diff": []
+    },
+    "GS-2025-07": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/review_report/issues[]/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 12,
+      "todo_diff": []
+    },
+    "GS-2025-08": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 29,
+      "todo_diff": []
+    },
+    "GS-2025-09": {
+      "content_diff_after_clock_strip": [],
+      "diff_paths_after_frozen_volatile": [
+        "/analysis_revision",
+        "/pipeline_budget/active_elapsed_seconds",
+        "/pipeline_budget/elapsed_seconds",
+        "/pipeline_budget/started_at",
+        "/result/meta/finished_at",
+        "/result/meta/started_at",
+        "/review_report/analysis_revision",
+        "/review_report/issues[]/analysis_revision",
+        "/ts"
+      ],
+      "raw_diff_count": 46,
+      "todo_diff": []
+    }
+  },
+  "samples_a": 33,
+  "samples_b": 33,
+  "totals": {
+    "differing": 0,
+    "identical_after_frozen_volatile": 0,
+    "identical_after_frozen_volatile_and_clock": 33
+  },
+  "unexplained_path_patterns": {}
+}

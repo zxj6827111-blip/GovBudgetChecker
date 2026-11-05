@@ -512,6 +512,9 @@ def test_obligation_covered_by_same_finding_is_not_a_duplicate_todo():
     """同源正式问题已经报出来的，不再要求补核；问题本身仍留在问题清单。"""
     item = _obligation_item("OBL-TXT-T5", status="insufficient_data")
     item.detail = "说明中的款“行政事业单位离退休”在表内找不到同名科目"
+    # DH-03a：新结果的同源覆盖只读冻结短语列表（生产方按旧算法从 detail 冻结）。
+    item.legacy_coverage_terms = ["行政事业单位离退休"]
+    item.legacy_same_source_keys = []
     item.checkers = ["V33-222", "V33-227"]
     finding = {
         "id": "finding-1",
@@ -543,15 +546,16 @@ def test_obligation_covered_by_same_finding_is_not_a_duplicate_todo():
         coverage_blocking_total=1,
         coverage_items=[item],
     )
-    assert review_lifecycle_service._blocking_obligations(state) == []
-    assert review_lifecycle_service._unhandled_obligations(state) == []
+    # U-7：名称问题只合并展示，金额子检查未完成 → 义务仍阻塞、仍进待办。
+    assert review_lifecycle_service._blocking_obligations(state) == [item]
+    assert review_lifecycle_service._unhandled_obligations(state) == [item]
     block = review_lifecycle_service._obligation_review_block(state)
-    assert block.items == []
-    assert block.pending_total == 0
-    assert block.covered_total == 1
-    # 去重只去掉补核副本，不替人处理问题本身：pending_findings 仍然存在。
+    assert [entry.obligation_id for entry in block.items] == [item.obligation_id]
+    assert block.pending_total == 1
+    assert block.covered_total == 0
+    # 问题本身仍按问题流程处理：pending_findings 与 blocking_obligations 同时存在。
     codes = [blocker.code for blocker in review_lifecycle_service.evaluate_completion_gate(state).blockers]
-    assert "blocking_obligations" not in codes
+    assert "blocking_obligations" in codes
     assert "pending_findings" in codes
 
 

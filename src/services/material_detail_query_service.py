@@ -1030,6 +1030,13 @@ def _string_list(value: Any) -> List[str]:
     return [str(item) for item in value if str(item or "").strip()]
 
 
+def _optional_string_list(value: Any) -> Optional[List[str]]:
+    """历史结果缺字段保持 None（允许旧匹配器回退）；新结果 [] 原样保留。"""
+    if value is None:
+        return None
+    return _string_list(value)
+
+
 def _evidence_pointer(
     finding: Dict[str, Any],
 ) -> Tuple[Optional[int], Optional[List[float]], Optional[str]]:
@@ -1201,6 +1208,14 @@ def build_coverage(raw: Any) -> CoverageBlock:
                 blocks_gate=bool(row.get("blocks_gate")),
                 requires_ai=bool(row.get("requires_ai")),
                 input_gaps=_string_list(row.get("input_gaps")),
+                reason_codes=_string_list(row.get("reason_codes")),
+                blocked_by=[dict(value) for value in _json_list(row.get("blocked_by")) if isinstance(value, dict)],
+                missing_operands=[dict(value) for value in _json_list(row.get("missing_operands")) if isinstance(value, dict)],
+                candidates=[dict(value) for value in _json_list(row.get("candidates")) if isinstance(value, dict)],
+                next_action=_text_or_none(row.get("next_action")),
+                root_cause_key=_text_or_none(row.get("root_cause_key")),
+                legacy_same_source_keys=_optional_string_list(row.get("legacy_same_source_keys")),
+                legacy_coverage_terms=_optional_string_list(row.get("legacy_coverage_terms")),
             )
         )
 

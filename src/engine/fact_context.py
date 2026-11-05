@@ -28,7 +28,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from src.schemas.parse_artifact import EvidenceRef, FiscalFact, ParseArtifact
 
@@ -1164,10 +1164,8 @@ def apply_table_column_mapping_overlays(
             json.dumps(mappings, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
         artifact.config_fingerprint = f"{base_config}:column-mapping-v1:{mapping_digest}"
-        artifact.parse_run_uid = hashlib.sha256("|".join((
-            artifact.source_file_hash, artifact.parser_fingerprint,
-            artifact.config_fingerprint, artifact.ocr_model_fingerprint or "",
-        )).encode()).hexdigest()[:32]
+        from src.services.input_processing_identity import refresh_parse_identity
+        refresh_parse_identity(artifact)
     return report
 
 
@@ -1367,6 +1365,14 @@ def make_fact_receipt(
     cell_observations: Sequence[Dict[str, Any]] = (),
     disclosure_sources: Sequence[Dict[str, Any]] = (),
     reason_codes: Sequence[str] = (),
+    blocked_by: Sequence[Dict[str, Any]] = (),
+    missing_operands: Sequence[Dict[str, Any]] = (),
+    candidates: Sequence[Dict[str, Any]] = (),
+    diagnostics: Sequence[Mapping[str, Any]] = (),
+    amount_subcheck_status: Optional[str] = None,
+    explained_by: Optional[str] = None,
+    residual_difference_wan: Optional[str] = None,
+    cascade_of: Optional[str] = None,
 ) -> Dict[str, Any]:
     """构造一条关系级 CheckReceipt（dict 形态，规则直接写入 doc.fact_receipts）。
 
@@ -1387,6 +1393,20 @@ def make_fact_receipt(
             default_migration_status = "not_applicable" if status == "not_applicable" else "pending"
         evaluation_basis = evaluation_basis or default_basis
         fact_migration_status = fact_migration_status or default_migration_status
+    if status in {"insufficient_data", "parse_error", "execution_error"} and incomplete_reason:
+        # DH-03b：未完成原因改用结构化文案；未完成事实本身不变。
+        from src.engine.diagnostic_fields import render_reason_text
+
+        incomplete_reason = render_reason_text(
+            incomplete_reason,
+            {
+                "reason_codes": list(reason_codes),
+                "blocked_by": list(blocked_by),
+                "missing_operands": list(missing_operands),
+                "candidates": list(candidates),
+            },
+            fallback=incomplete_reason,
+        )
     receipt = CheckReceipt(
         rule_id=str(rule_id),
         sub_check_id=str(sub_check_id),
@@ -1397,6 +1417,13 @@ def make_fact_receipt(
         operand_sources={str(key): str(value) for key, value in (operand_sources or {}).items()},
         cell_observations=[dict(item) for item in cell_observations],
         disclosure_sources=[dict(item) for item in disclosure_sources],
+        blocked_by=[dict(item) for item in blocked_by if isinstance(item, Mapping)],
+        missing_operands=[dict(item) for item in missing_operands if isinstance(item, Mapping)],
+        candidates=[dict(item) for item in candidates if isinstance(item, Mapping)],
+        next_action=next((str(item.get("next_action")) for item in diagnostics
+                          if isinstance(item, Mapping) and item.get("next_action")), None),
+        root_cause_key=next((str(item.get("root_cause_key")) for item in diagnostics
+                             if isinstance(item, Mapping) and item.get("root_cause_key")), None),
         formula=formula,
         tolerance=dict(
             tolerance
@@ -1415,5 +1442,9 @@ def make_fact_receipt(
         evaluation_basis=evaluation_basis,
         fact_migration_status=fact_migration_status,
         reason_codes=[str(item) for item in reason_codes if str(item)],
+        amount_subcheck_status=amount_subcheck_status,
+        explained_by=explained_by,
+        residual_difference_wan=residual_difference_wan,
+        cascade_of=cascade_of,
     )
     return receipt.to_dict()

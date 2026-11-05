@@ -83,6 +83,8 @@ from src.schemas.review_lifecycle import (
     BLOCKER_REVIEW_ALREADY_COMPLETED,
     BLOCKER_REVIEW_NOT_STARTED,
     ERROR_COMPLETION_BLOCKED,
+    ERROR_ANALYSIS_BASIS_REQUIRED,
+    ERROR_ANALYSIS_BASIS_STALE,
     ERROR_OBLIGATION_DECISION_CONFLICT,
     ERROR_OBLIGATION_DECISION_EVIDENCE_REQUIRED,
     ERROR_OBLIGATION_NOT_BLOCKING,
@@ -811,6 +813,17 @@ def _obligation_review_block(state: ReviewState) -> "ObligationReviewBlock":
                 evidence_reference=(
                     _opt_text(row.get("evidence_reference")) if row else None
                 ),
+                # DH-02：结构化卡点从账本覆盖条目原样透传，不在复核层重算。
+                reason_codes=list(getattr(item, "reason_codes", []) or []),
+                blocked_by=[dict(value) for value in getattr(item, "blocked_by", []) or []],
+                missing_operands=[dict(value) for value in getattr(item, "missing_operands", []) or []],
+                candidates=[dict(value) for value in getattr(item, "candidates", []) or []],
+                next_action=getattr(item, "next_action", None),
+                root_cause_key=getattr(item, "root_cause_key", None),
+                # DH-03a：旧兼容字段原样透传；只作提示，不参与关闭/待办/门禁。
+                # 历史结果没有字段时保持 None，让旧匹配器仍可按 detail 回退。
+                legacy_same_source_keys=getattr(item, "legacy_same_source_keys", None),
+                legacy_coverage_terms=getattr(item, "legacy_coverage_terms", None),
             )
         )
     return ObligationReviewBlock(
@@ -1596,6 +1609,7 @@ async def decide_obligation(
     evidence_reference: Optional[str] = None,
     expected_revision: Optional[int] = None,
     job_uuid: Optional[str] = None,
+    analysis_basis_token: Optional[str] = None,
 ) -> ObligationDecisionData:
     _require_autocommit(conn, operation="decide_obligation")
     """人工补核一条检查义务（WP3-B），写入绑定**当前活动会话**的数据库决定。
@@ -1652,8 +1666,28 @@ async def decide_obligation(
         # 就变得不成立（在事务内直接抛错会把纠正一起回滚掉）。
         await _invalidate_stale_sessions(conn, state, effects=effects, actor=actor)
 
-        active = state.active_session
-        if active is None:
+        # 客户端必须携带读到的分析依据。缺失/空值不能跳过代际保护：
+        # 新会话已经激活时，旧页面请求与当前请求在字段上无法区分，只有
+        # basis 能证明它读的是哪一代分析。先拒收，再谈旧页面刷新（R3-01）。
+        presented_basis = str(analysis_basis_token or "").strip()
+        if not presented_basis:
+            basis_error = ReviewLifecycleError(
+                409,
+                ERROR_ANALYSIS_BASIS_REQUIRED,
+                "缺少分析依据：请刷新到当前分析版本后再写回复核结论",
+            )
+        elif presented_basis != str(state.basis_token or ""):
+            basis_error = ReviewLifecycleError(
+                409,
+                ERROR_ANALYSIS_BASIS_STALE,
+                "分析依据已更新：请刷新到当前分析版本后再写回复核结论",
+            )
+        else:
+            basis_error = None
+        active = None if basis_error is not None else state.active_session
+        if basis_error is not None:
+            rejection = basis_error
+        elif active is None:
             if state.completed_session is not None:
                 # 复核完成后补核同样锁定（与"复核完成后问题不可再改"同源）。
                 # 要先改结论，先显式重新复核。

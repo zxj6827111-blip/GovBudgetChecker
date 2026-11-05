@@ -17,6 +17,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 from src.db.connection import DatabaseConnection
 from src.db.migrations import run_migrations
 from src.schemas.organization import Organization
+from src.services.cell_number_text import invalid_number_text as _invalid_number_text
 from src.services.fiscal_fact_materializer import FiscalFactMaterializer
 from src.services.fiscal_table_rules import NINE_TABLE_RULES
 from src.services.org_storage import get_org_storage
@@ -29,7 +30,11 @@ from src.services.parse_artifact_store import (
 )
 from src.services.pdf_parser import PARSER_FINGERPRINT, PDFParser
 from src.schemas.parse_artifact import ParseArtifact, ParsedTable
-from src.services.input_processing_identity import artifact_content_hash, journal_cache_conflict, processing_config_fingerprint
+from src.services.input_processing_identity import (
+    artifacts_share_semantic_identity,
+    journal_cache_conflict,
+    processing_config_fingerprint,
+)
 from src.services.analysis_fact_snapshot import (verify_persisted_facts, make_snapshot, persist_snapshot)
 from src.services.ps_schema_sync import PSSharedSchemaSync
 from src.services.table_recognizer import TableRecognizer
@@ -217,6 +222,7 @@ async def run_structured_ingest(
     raw_fact_context: Any = None,
     effective_fact_context: Any = None,
     analysis_revision: str = "",
+    execution_manifest: Optional[Dict[str, Any]] = None,
     candidate_only: bool = False,
 ) -> Dict[str, Any]:
     """结构化入库主链路。
@@ -350,7 +356,9 @@ async def run_structured_ingest(
             ingest_stage = "unified_cache_readback"
             cached_artifact = await load_parse_artifact(conn, cached_run_id)
             if parse_artifact is not None:
-                if artifact_content_hash(parse_artifact) != artifact_content_hash(cached_artifact):
+                # 只以语义产物+解析输入判定冲突；诊断代码/审计清单差异不能
+                # 让同一语义产物在两个 v31 运行之间互相拒绝。
+                if not artifacts_share_semantic_identity(parse_artifact, cached_artifact):
                     journal = journal_cache_conflict(job_id, parse_artifact, cached_artifact)
                     raise ValueError("cache_key_conflict: cached artifact differs from supplied current artifact; evidence=" + journal)
                 # 主链已执行规则的产物不能被旧run替换；同内容的新尝试有独立run身份。
@@ -384,8 +392,9 @@ async def run_structured_ingest(
 
         ingest_stage = "unified_artifact_readback"
         stored_artifact = await load_parse_artifact(conn, parse_run_id)
-        if stored_artifact.to_dict() != parse_artifact.to_dict():
-            raise RuntimeError("unified artifact readback differs from complete parser output")
+        if (stored_artifact.parse_run_uid != parse_artifact.parse_run_uid
+                or not artifacts_share_semantic_identity(stored_artifact, parse_artifact)):
+            raise RuntimeError("unified artifact readback differs from parser semantic output")
 
         # 旧表兼容写入：由统一解析对象适配产出，不再重开 PDF（ZC-01 / SYS-01）
         ingest_stage = "legacy_table_write"
@@ -440,7 +449,8 @@ async def run_structured_ingest(
             ingest_stage = "analysis_fact_snapshot"
             snapshot = make_snapshot(job_uuid=job_id, revision_id=analysis_revision,
                 artifact=parse_artifact, raw_context=raw_fact_context,
-                effective_context=effective_fact_context)
+                effective_context=effective_fact_context,
+                execution_manifest=execution_manifest)
             snapshot_summary = await persist_snapshot(conn, snapshot=snapshot, parse_run_id=parse_run_id)
         if storage_tx is not None:
             await storage_tx.commit()
@@ -747,6 +757,11 @@ def _cell_ref(cell: Dict[str, Any]) -> Dict[str, Any]:
     return {key: cell.get(key) for key in ("source_cell_id", "page", "bbox", "raw_text", "reason")}
 
 
+#: 只有“这一格取值本身不可解析”能由数字格式解释；列归属、身份冲突、
+#: 标签缺失各有独立原因，不能因为归类格式缺陷就一并消失。
+_FORMAT_EXPLAINED_REASONS = frozenset({"fact_unbound"})
+
+
 def _reading_review_items(reading_quality: Dict[str, Any]) -> List[Dict[str, Any]]:
     """读取回执 → 待复核项：读取缺口按页汇总，未绑定金额格按表汇总。
 
@@ -800,16 +815,59 @@ def _reading_review_items(reading_quality: Dict[str, Any]) -> List[Dict[str, Any
             loose.setdefault((cell.get("table_code") or "", cell.get("page")), []).append(cell)
     for table in tables:
         cells = cells_by_table[table["fragment_uid"]]
+        # 原件数字格式缺陷（真实反例：第 9 份物理页 9 三个基本支出格印成
+        # “2.359.46”，小数点重复）不是列映射失败：数值根本不可解析。必须
+        # 保留原文、物理页和 bbox 单独报告，不得静默改成 2359.46 或靠行和凑平。
+        # 但只有“取值不可解析”（fact_unbound）能由格式解释：身份冲突、列未
+        # 映射、标签缺失等独立原因必须继续走 mapping 通道。
+        invalid = [c for c in cells
+                   if _invalid_number_text(c.get("raw_text"))
+                   and str(c.get("reason") or "") in _FORMAT_EXPLAINED_REASONS]
+        mapped = [c for c in cells if c not in invalid]
+        remaining_reasons: Dict[str, int] = {}
+        if invalid:
+            # 以**仍然留在 mapping 通道的格**为准重算原因，而不是拿上游整表
+            # 计数硬减：上游 unresolved_money_cell_count 可能大于本表实际列出的
+            # 格数，硬减会造出没有对应格的“幽灵原因”。
+            for cell in mapped:
+                key = str(cell.get("reason") or "")
+                if key:
+                    remaining_reasons[key] = remaining_reasons.get(key, 0) + 1
+            if table["arithmetic_conflicts"]:
+                remaining_reasons["column_arithmetic_conflict"] = 1
+        if invalid:
+            invalid_pages = sorted({c["page"] for c in invalid if isinstance(c.get("page"), int)})
+            items.append({
+                "id": f"reading:number-format:{table['fragment_uid']}",
+                "type": "invalid_number_format", "severity": "warn",
+                "table_code": table["table_code"],
+                "page_number": invalid_pages[0] if invalid_pages else table["page"],
+                "page_numbers": invalid_pages or [table["page"]],
+                "bbox": _union_box([c["bbox"] for c in invalid]),
+                "reason": "invalid_number_format",
+                "cells": [_cell_ref(c) for c in invalid],
+                "message": (
+                    f"第 {_page_ranges(invalid_pages) if invalid_pages else table['page']} 页"
+                    f"《{table['title'] or table['table_code']}》有 {len(invalid)} 个金额原文无法解析为数值"
+                    f"（如「{invalid[0].get('raw_text')}」，小数点重复），属原件数字格式缺陷；"
+                    "这些格不形成金额事实，依赖它们的勾稽保持材料阻断，需回原件补正"),
+                "recommended_action": "correct_original_number_format"})
+        if not mapped and not table["arithmetic_conflicts"] and not remaining_reasons:
+            # 只剩格式缺陷格、且没有别的独立原因：没有“列映射”可查，
+            # 避免把材料问题报成系统读取问题。
+            continue
         arithmetic = "；合计与分项在多行系统性对不上，列映射可能错位" if table["arithmetic_conflicts"] else ""
+        cell_pages = sorted({c["page"] for c in mapped if isinstance(c.get("page"), int)})
+        page_label = _page_ranges(cell_pages) if cell_pages and table["page"] not in cell_pages else table["page"]
         items.append({"id": f"reading:mapping:{table['fragment_uid']}",
             "type": "table_mapping_incomplete", "severity": "warn", "table_code": table["table_code"],
             "page_number": table["page"],
-            "page_numbers": sorted({table["page"], *(c["page"] for c in cells if isinstance(c.get("page"), int))}),
-            "reason": ",".join(sorted(table["reasons"])) or "column_arithmetic_conflict",
-            "cells": [_cell_ref(c) for c in cells],
-            "message": (f"第 {table['page']} 页《{table['title'] or table['table_code']}》映射不完整："
-                        f"{table['unresolved_money_cell_count']} 个金额格没有对应到列含义{arithmetic}，"
-                        "相关检查不能视为已完成"),
+            "page_numbers": sorted({table["page"], *cell_pages}),
+            "reason": ",".join(sorted(remaining_reasons or table["reasons"])) or "column_arithmetic_conflict",
+            "cells": [_cell_ref(c) for c in mapped],
+            "message": (f"第 {page_label} 页《{table['title'] or table['table_code']}》映射不完整："
+                        f"{len(mapped) if invalid else table['unresolved_money_cell_count']} 个金额格"
+                        f"没有对应到列含义{arithmetic}，相关检查不能视为已完成"),
             "recommended_action": "inspect_table_column_mapping"})
     # 不属于任何映射不完整表的金额（如逻辑视图丢失的原物理格），按表种 + 页汇总。
     for (table_code, page), cells in sorted(loose.items(), key=lambda item: (item[0][0], item[0][1] or 0)):

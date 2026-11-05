@@ -111,21 +111,47 @@ def _unrepresented_source_codes(artifact, table, row_codes, measure_start):
     return list(dict.fromkeys(missing))
 
 
+def _gap(doc, text, *, codes, blockers=(), missing=(), candidates=()):
+    """DH-02：登记表/行/列/格级卡点；字段不合法时静默跳过，不影响结论。"""
+    from .diagnostic_fields import record_gap
+
+    record_gap(doc, text, reason_codes=list(codes), blocked_by=list(blockers),
+               missing_operands=list(missing), candidates=list(candidates))
+
+
+def _table_blocker(title, reason_code, ref):
+    from .diagnostic_fields import blocker
+
+    return blocker(dimension='instance_uid', ref=f'{title}:{ref}', reason_code=reason_code)
+
+
 def _table_view(doc, table_code, *, include_income_sources=False):
     artifact, context = getattr(doc, 'parse_artifact', None), getattr(doc, 'fact_context', None)
     title = DETAIL_TABLES[table_code]
     if context is None or artifact is None:
-        return None, f'{title}缺少当前版本财政事实或解析产物'
+        reason = f'{title}缺少当前版本财政事实或解析产物'
+        _gap(doc, reason, codes=['table_missing'],
+             blockers=[_table_blocker(title, 'table_missing', 'no-artifact')])
+        return None, reason
     if context.file_hash != artifact.source_file_hash or context.parse_run_uid != artifact.parse_run_uid:
-        return None, f'{title}财政事实与当前解析产物版本不一致'
+        reason = f'{title}财政事实与当前解析产物版本不一致'
+        _gap(doc, reason, codes=['table_mapping_incomplete'],
+             blockers=[_table_blocker(title, 'table_mapping_incomplete', 'parse-version')])
+        return None, reason
     instances = [(i, _fragment_for_instance(artifact, i)) for i in artifact.logical_tables
                  if i.table_code == table_code]
     instances = [(i, t) for i, t in instances if t is not None and t.extraction_method != 'page_text_fallback']
     if len(instances) != 1:
-        return None, f'{title}未找到唯一完整表实例'
+        reason = f'{title}未找到唯一完整表实例'
+        _gap(doc, reason, codes=['table_missing'],
+             blockers=[_table_blocker(title, 'table_missing', f'{len(instances)}个候选实例')])
+        return None, reason
     instance, table = instances[0]
     if instance.identity_conflict:
-        return None, f'{title}续表身份冲突：{"；".join(instance.conflict_reasons)}'
+        reason = f'{title}续表身份冲突：{"；".join(instance.conflict_reasons)}'
+        _gap(doc, reason, codes=['table_mapping_incomplete'],
+             blockers=[_table_blocker(title, 'table_mapping_incomplete', 'identity-conflict')])
+        return None, reason
     mappings = _column_mappings_for_instance(instance, table)
     # This rule owns the total/basic/project roles. The remaining income and
     # expenditure components have dedicated horizontal arithmetic rules.
@@ -137,7 +163,11 @@ def _table_view(doc, table_code, *, include_income_sources=False):
                       'operational_income', 'subsidiary_income', 'other_income'})
     mappings = [m for m in mappings if m.get('canonical_measure') in roles]
     if not mappings or not any(m['canonical_measure'] == 'total_actual' for m in mappings):
-        return None, f'{title}本年合计金额列身份未绑定'
+        reason = f'{title}本年合计金额列身份未绑定'
+        from .diagnostic_fields import blocker
+        _gap(doc, reason, codes=['column_identity_unconfirmed'],
+             blockers=[blocker(dimension='column', ref=f'{title}:total_actual', reason_code='column_identity_unconfirmed')])
+        return None, reason
     start = min(int(m['source_col_idx']) for m in mappings)
     source_cells = {(c.row_idx, c.col_idx): c for c in table.cells}
     code_rows, issues = {}, []
@@ -151,7 +181,12 @@ def _table_view(doc, table_code, *, include_income_sources=False):
             # Repeated actual headers have no numeric amount cells; unknown
             # amount rows cannot be omitted from a complete sum.
             if any(c is not None and c.numeric_value is not None and not c.is_header for c in measure_cells):
-                issues.append(f'{title}第{row_idx + 1}行金额科目编码未唯一识别')
+                issue_text = f'{title}第{row_idx + 1}行金额科目编码未唯一识别'
+                issues.append(issue_text)
+                from .diagnostic_fields import blocker
+                _gap(doc, issue_text, codes=['row_level_unresolved'],
+                     blockers=[blocker(dimension='row', ref=f'{title}:第{row_idx + 1}行',
+                                       reason_code='row_level_unresolved')])
             continue
         signature = tuple(re.sub(r'\s+', '', str(value or '')) for value in row)
         if code in code_rows:
@@ -160,17 +195,70 @@ def _table_view(doc, table_code, *, include_income_sources=False):
             # 这种重复不携带第二个业务项，按一行参与合计；整行不一致的重复仍是
             # 身份歧义，必须转人工，不能挑一行当答案。
             if row_signatures[code] != signature:
-                issues.append(f'{title}科目{code}存在重复行身份')
+                issue_text = f'{title}科目{code}存在重复行身份'
+                issues.append(issue_text)
+                from .diagnostic_fields import blocker
+                _gap(doc, issue_text, codes=['row_identity_duplicate'],
+                     blockers=[blocker(dimension='row', ref=f'{title}:科目{code}',
+                                       reason_code='row_identity_duplicate')])
             continue
         row_signatures[code] = signature
         code_rows[code] = row_idx
     issues += _unrepresented_source_codes(artifact, table, code_rows, start)
     if not code_rows or 'total' not in code_rows:
-        issues.append(f'{title}未找到唯一合计行')
+        issue_text = f'{title}未找到唯一合计行'
+        issues.append(issue_text)
+        from .diagnostic_fields import blocker
+        _gap(doc, issue_text, codes=['row_code_missing'],
+             blockers=[blocker(dimension='row', ref=f'{title}:合计行', reason_code='row_code_missing')])
     if issues:
-        return None, '；'.join(issues)
+        reason = '；'.join(issues)
+        for issue_text in issues:
+            if '未进入完整逻辑表' in issue_text:
+                code = issue_text.rsplit('科目', 1)[-1].split('未进入', 1)[0]
+                _gap(doc, issue_text, codes=['table_mapping_incomplete'],
+                     blockers=[_table_blocker(title, 'table_mapping_incomplete', f'科目{code}')])
+        return None, reason
     facts = [f for f in context.facts if f.table_code == table_code and f.instance_uid == instance.instance_uid]
     return (instance, table, mappings, source_cells, code_rows, facts), None
+
+
+def _record_cell_gap(doc, table, cell, candidates, reason, *, code, indicator):
+    """科目行的事实缺失/多候选：位置来自原格或候选事实。"""
+    from .diagnostic_fields import blocker, table_candidate
+
+    table_code = getattr(table, 'table_code', None)
+    if not table_code:
+        # 表格对象缺表代码时不登记：位置无法成立，不能编造。
+        return
+    title = getattr(table, 'title', None) or str(table_code)
+
+    if len(candidates) > 1:
+        locations, seen = [], set()
+        for fact in candidates:
+            for ref in (fact.extra_dims or {}).get('evidence_refs', []) or []:
+                cell_id, page = ref.get('source_cell_id'), ref.get('physical_page')
+                if not cell_id or not isinstance(page, int) or page < 1:
+                    continue
+                key = (fact.table_code, page, cell_id)
+                if key in seen:
+                    continue
+                seen.add(key)
+                locations.append(table_candidate(table_code=fact.table_code, page=page,
+                                                 cell_id=str(cell_id), value=str(fact.normalized_value)))
+        if len(locations) >= 2:
+            _gap(doc, reason, codes=['operand_ambiguous', 'cell_unbound'], candidates=locations,
+                 blockers=[blocker(dimension='cell', ref=f'{table.title}:{code}:{indicator}:多候选',
+                                   reason_code='cell_unbound')])
+            return
+    from .diagnostic_fields import table_page
+
+    _gap(doc, reason, codes=['operand_missing'], missing=[{
+        'source': 'table', 'table_code': table_code, 'role': f'{indicator}/决算操作数',
+        'page': cell.page_number if cell is not None else table_page(doc, table_code),
+        'row_key': code, 'column': indicator, 'fund_scope': None, 'stage': '决算',
+        'year': doc.fact_context.fiscal_year if isinstance(getattr(doc.fact_context, 'fiscal_year', None), int) else None,
+    }])
 
 
 def _select(doc, view, code, indicator):
@@ -192,7 +280,9 @@ def _select(doc, view, code, indicator):
         if len(bound) == 1:
             candidates = bound
     if cell is None or not str(cell.raw_text or '').strip() or len(candidates) != 1:
-        return None, f'{table.title}科目{code}/{indicator}原始单元格或当前事实缺失、不唯一'
+        reason = f'{table.title}科目{code}/{indicator}原始单元格或当前事实缺失、不唯一'
+        _record_cell_gap(doc, table, cell, candidates, reason, code=code, indicator=indicator)
+        return None, reason
     fact = candidates[0]
     reason = operand_rejection_reason(fact, doc.fact_context.org_name)
     if (fact.unit not in _UNITS or doc.fact_context.fiscal_year is None
@@ -200,12 +290,27 @@ def _select(doc, view, code, indicator):
             or _canonical_budget_stage(fact.budget_stage) != '决算'
             or fact.period not in (None, '本年')):
         reason = reason or '金额单位、年度、期间或决算阶段未确认'
+        from .native_table_arithmetic import record_operand_rejection
+        record_operand_rejection(doc, fact, reason, indicator=indicator, stage='决算')
     matching_refs = [ref for ref in fact.extra_dims.get('evidence_refs', [])
                      if ref.get('source_cell_id') == _cell_id(table, cell)
                      and ref.get('physical_page') == cell.page_number
                      and ref.get('file_hash') == doc.fact_context.file_hash]
     if len(matching_refs) != 1:
         reason = reason or '当前事实未绑定到唯一原页原格'
+        from .diagnostic_fields import blocker
+        _gap(doc, f'{table.title}科目{code}/{indicator}：{reason}',
+             codes=['cell_unbound', 'operand_missing'],
+             blockers=[blocker(dimension='cell', ref=_cell_id(table, cell) if cell is not None else f'{table.title}:{code}',
+                               reason_code='cell_unbound')],
+             missing=[{
+                 'source': 'table', 'table_code': table.table_code,
+                 'role': f'{indicator}/决算操作数',
+                 'page': cell.page_number if cell is not None else None,
+                 'row_key': code, 'column': indicator,
+                 'fund_scope': None, 'stage': '决算',
+                 'year': doc.fact_context.fiscal_year if isinstance(getattr(doc.fact_context, 'fiscal_year', None), int) else None,
+             }])
     return (None, f'{table.title}科目{code}/{indicator}：{reason}') if reason else (fact, None)
 
 

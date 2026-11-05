@@ -102,6 +102,15 @@ def blank_term(doc, table_code, indicator, *, code=None, names=(), stage='决算
     interpreted, _presence, convention = interpret_cell_value(
         cell.raw_text, native_blank_verified=cell.native_blank_verified,
         region=context.org_name, year=context.fiscal_year, table_code=table_code, row=row_idx, column=col)
+    narrative_sources = None
+    if interpreted is None and not cell.raw_text.strip():
+        # 说明里明确写“该项决算为 0”时，为同身份空表格作证；原格仍保持空白。
+        from .narrative_zero_evidence import narrative_zero_sources
+
+        narrative_sources = narrative_zero_sources(
+            doc, table_code=table_code, indicator=indicator, stage=stage)
+        if narrative_sources:
+            interpreted, convention = Decimal('0'), 'narrative_explicit_zero'
     if calculation and interpreted is None:
         return None
     physical = [(fragment, c) for fragment in getattr(artifact, 'physical_fragments', [])
@@ -119,6 +128,8 @@ def blank_term(doc, table_code, indicator, *, code=None, names=(), stage='决算
                    'indicator': indicator, 'subject_code': subject, 'subject_name': name,
                    'budget_stage': stage, 'basis': 'verified_native_grid_blank_with_scoped_convention',
                    'convention': convention, 'calculation': calculation}
+    if narrative_sources:
+        observation['narrative_sources'] = list(narrative_sources)
     return NativeBlankTerm(fact_uid='', indicator=indicator, raw_value='', unit=table.unit_hint,
                           normalized_value=Decimal('0') if calculation else None, org_name=context.org_name,
                           org_scope=next((f.org_scope for f in context.facts if f.instance_uid == instance.instance_uid), None),
@@ -129,8 +140,9 @@ def blank_term(doc, table_code, indicator, *, code=None, names=(), stage='决算
                           extra_dims={'native_blank_observation': observation})
 
 
-def valid_blank_observation(artifact, context, observation):
-    term = blank_term(SimpleNamespace(parse_artifact=artifact, fact_context=context),
+def valid_blank_observation(artifact, context, observation, page_texts=None):
+    term = blank_term(SimpleNamespace(parse_artifact=artifact, fact_context=context,
+                                      page_texts=list(page_texts or [])),
                       observation.get('table_code'), observation.get('indicator'),
                       code=observation.get('subject_code'), names=(observation.get('subject_name'),),
                       stage=observation.get('budget_stage'), calculation=observation.get('calculation', True))

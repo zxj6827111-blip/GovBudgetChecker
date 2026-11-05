@@ -81,7 +81,7 @@ def _quality_reasons(rule, doc, text, title, start, end, year, owner, issues, un
         formula = "stated nonzero budget difference or year-on-year change requires a cause"
         left, prefix = _bound_prefix(block, reason.start())
         pairs = list(_BUDGET_PAIR.finditer(prefix))
-        match, amounts, kind = None, {}, None
+        match = None
         if pairs:
             pair = pairs[-1]
             # An intervening分项 or another amount prevents assigning a nearby
@@ -94,8 +94,7 @@ def _quality_reasons(rule, doc, text, title, start, end, year, owner, issues, un
                 actual = _wan(pair["actual"], pair["actual_unit"])
                 if not amount_difference_exceeds_policy(actual - budget):
                     continue
-                match, kind = pair, "budget_difference"
-                amounts = {"budget_amount_wan": str(budget), "actual_amount_wan": str(actual)}
+                match = pair
         if match is None and "机关运行" in prefix:
             changes = list(_OPERATING_CHANGE.finditer(prefix))
             currents = list(_OPERATING_CURRENT.finditer(prefix))
@@ -112,10 +111,7 @@ def _quality_reasons(rule, doc, text, title, start, end, year, owner, issues, un
                     previous_year = year - 1 if year and change["previous_year"] in {"上年", "去年"} else (
                         int(change["previous_year"]) if change["previous_year"].isdigit() else None)
                     if year and previous_year == year - 1:
-                        match, kind = current, "year_on_year"
-                        amounts = {"current_amount_wan": str(_wan(current["current"], current["unit"])),
-                                   "change_amount_wan": str(change_amount), "direction": change["direction"],
-                                   "current_year": year, "previous_year": previous_year}
+                        match = current
         problem = None
         if match is None:
             problem = "仅重述结果的原因缺少同条明确的预算差额或同比增减金额，需人工确认"
@@ -135,18 +131,10 @@ def _quality_reasons(rule, doc, text, title, start, end, year, owner, issues, un
             unresolved.append(detail)
             _receipt(rule, doc, relation, "insufficient_data", formula, detail)
             continue
-        refs = text.refs(proof_start, start + reason.end(), "差异及原因原文")
-        location = {"page": refs[0]["page"], "pages": sorted({ref["page"] for ref in refs}),
-                    "section": title, "relation_type": "reason_restates_result", "cause_kind": kind,
-                    **amounts, "table_refs": refs}
-        _receipt(rule, doc, relation, "fail", formula)
-        description = (f"年初预算{amounts['budget_amount_wan']}万元、决算{amounts['actual_amount_wan']}万元"
-                       if kind == "budget_difference" else
-                       f"机关运行经费同比{amounts['direction']}{amounts['change_amount_wan']}万元")
-        issues.append(rule._issue(
-            f"差异原因仅重述结果：{description}；“{reason['body']}”未说明产生差异的具体事项，建议补充说明。",
-            location, "medium", evidence_text="\n".join(ref["span"] for ref in refs),
-            check_relation_id=f"{rule.code}:{relation}"))
+        # R30（2026-11-03）：写了一句原因就算写明原因（如“根据年度实际情况，经费支出
+        # 有所减少”“支出较预算略有结余”），不再把“仅重述结果”当正式问题。关系回执
+        # 仍按通过记录，保持义务覆盖口径不变。
+        _receipt(rule, doc, relation, "pass", formula)
 
 
 def _numbering_issues(rule, doc, merged, offsets):
@@ -156,7 +144,7 @@ def _numbering_issues(rule, doc, merged, offsets):
         if "一般公共预算" not in title or "基本支出" in title:
             continue
         scope = merged[start:end]
-        markers = list(re.finditer(r"(?:^|\n)\s*(?P<num>\d{1,2})[、.．](?!\d)", scope))
+        markers = list(re.finditer(r"(?:^|\n)\s*(?P<num>\d{1,2})[ \t\u3000]*[、.．](?!\d)", scope))
         if len(markers) < 4:
             continue
         for previous, current in zip(markers, markers[1:], strict=False):
@@ -174,7 +162,7 @@ def _numbering_issues(rule, doc, merged, offsets):
                 f"说明条目序号由{first}跳到{second}，建议核对编号连续性；不能据此判定科目内容缺失。",
                 {"page": refs[0]["page"], "pages": sorted({ref["page"] for ref in refs}),
                  "section": title, "relation_type": "item_number_gap", "table_refs": refs},
-                "low", evidence_text="\n".join(ref["span"] for ref in refs)))
+                "info", evidence_text="\n".join(ref["span"] for ref in refs)))
     return issues
 
 

@@ -20,6 +20,8 @@ from .fact_context import _canonical_budget_stage, operand_rejection_reason
 THREE_PUBLIC_TABLE = "FIN_07_three_public"
 
 _NUM = r"(?:\d+|[一二三四五六七八九十两]+)"
+#: 说明里的车辆称谓：除“公务用车”外，实样还会写特种专业技术用车/专业技术用车/其他用车。
+_VEHICLE_NOUN = r"(?:公务用车|公务车辆|公务车|特种专业技术用车|专业技术用车|其他用车|车辆)"
 
 #: (三公表指标, 标签, 说明内主体词干, ((数量字段, 字段名, 披露形态), ...))
 _COUNT_SPECS: Tuple[Tuple[str, str, str, Tuple[Tuple[str, str, "re.Pattern[str]"], ...]], ...] = (
@@ -32,9 +34,9 @@ _COUNT_SPECS: Tuple[Tuple[str, str, str, Tuple[Tuple[str, str, "re.Pattern[str]"
                 "purchase_count",
                 "公务用车购置数量",
                 re.compile(
-                    rf"(?:购置|购买|新购|更新)了?(?:公务用车|公务车辆|公务车|车辆)?{_NUM}辆"
+                    rf"(?:购置|购买|新购|更新)了?{_VEHICLE_NOUN}?{_NUM}辆"
                     rf"|购置(?:数量?|车辆数)(?:为|共|计)?{_NUM}辆?"
-                    rf"|{_NUM}辆(?:公务用车|公务车辆|车辆)?的?(?:购置|更新)"
+                    rf"|{_NUM}辆{_VEHICLE_NOUN}?的?(?:购置|更新)"
                 ),
             ),
         ),
@@ -77,6 +79,15 @@ _NOT_OCCURRED_RE = re.compile(
 _VEHICLE_STOCK_RE = re.compile(
     r"保有量?|(?:共有|实有|现有|拥有)(?:公务用车|公务车辆|公车|车辆)|车辆(?:总数|总量)"
 )
+#: pdfplumber 对无 ToUnicode 的字形输出 ``(cid:1)`` 占位，位置多在数字与量词之间。
+#: 它不代表披露内容，数量要素匹配前必须剔除，否则“团组(cid:1)2 个”会被当成未披露。
+_CID_TOKEN_RE = re.compile(r"\(cid:\d+\)", re.IGNORECASE)
+
+
+def _compact_text(value: str) -> str:
+    """去空白与未映射字形占位，保留其余原文（不重写数字与名称）。"""
+    return re.sub(r"\s+", "", _CID_TOKEN_RE.sub("", value or ""))
+
 
 
 def _stage_matches(fact: Any, report_kind: str) -> bool:
@@ -145,7 +156,7 @@ def count_issues(
         if amount is None or amount <= 0:
             continue
         item_paras = _item_paragraphs(paras, stem)
-        compact = re.sub(r"\s+", "", "".join(item_paras))
+        compact = _compact_text("".join(item_paras))
         if _NOT_OCCURRED_RE.search(compact):
             continue
         evidence = item_paras[0] if item_paras else (paras[0] if paras else scope[:200])
@@ -168,7 +179,7 @@ def count_issues(
                 evidence_text=evidence[:200],
             ))
 
-    whole = re.sub(r"\s+", "", merge_page_texts(list(getattr(doc, "page_texts", None) or [])))
+    whole = _compact_text(merge_page_texts(list(getattr(doc, "page_texts", None) or [])))
     if not _VEHICLE_STOCK_RE.search(whole):
         evidence = next((p for p in paras if "公务用车" in p), paras[0] if paras else scope[:200])
         issues.append(rule._issue(

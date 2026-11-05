@@ -8,13 +8,11 @@ def doc(body):
         "五、一般公共预算财政拨款支出决算情况说明\n" + body], [], 0)
 
 
-def test_result_only_cause_is_a_wording_issue_with_direct_numeric_evidence():
+def test_result_only_cause_counts_as_a_stated_reason_after_r30():
+    """R30（2026-11-03）：写了一句原因就算写明原因，不再按“仅重述结果”报正式问题。"""
     document = doc("年初预算为234430.42万元，支出决算为233564.77万元。"
                    "决算数小于预算数的主要原因是决算数与预算数基本持平。")
-    issues = check_quality(R33234_NarrativePercentConsistency(), document)
-    assert len(issues) == 1 and issues[0].severity == "medium"
-    assert issues[0].location["relation_type"] == "reason_restates_result"
-    assert "234430.42" in issues[0].location["table_refs"][0]["span"]
+    assert check_quality(R33234_NarrativePercentConsistency(), document) == []
 
 
 def test_actual_specific_reason_and_rounding_difference_are_not_flagged():
@@ -27,7 +25,8 @@ def test_actual_specific_reason_and_rounding_difference_are_not_flagged():
 def test_item_gap_is_not_reported_as_missing_subject_content():
     document = doc("1、甲\n2、乙\n3、丙\n5、丁")
     issues = check_quality(R33234_NarrativePercentConsistency(), document)
-    assert len(issues) == 1 and issues[0].severity == "low"
+    # 2C：序号跳号只是提示，不占正式层；仍保留“不能据此判定科目内容缺失”的边界。
+    assert len(issues) == 1 and issues[0].severity == "info"
     assert "不能据此判定科目内容缺失" in issues[0].message
 
 

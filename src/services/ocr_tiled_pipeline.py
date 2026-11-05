@@ -460,8 +460,8 @@ async def recognize_document_tiles(
                             "page_budget_seconds": 600,
                         }
                     )
-    from src.services.input_processing_identity import artifact_content_hash
-    artifact.parse_run_uid = artifact_content_hash(artifact)[:32]
+    from src.services.input_processing_identity import refresh_parse_identity
+    refresh_parse_identity(artifact)
     return {
         "enabled": True,
         "status": "pending" if pending else "review_required",

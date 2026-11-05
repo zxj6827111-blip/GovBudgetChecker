@@ -36,7 +36,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -144,6 +144,13 @@ RESOLVED_OBLIGATION_DECISIONS: frozenset = frozenset(
 #: 业务错误码（HTTP 409 + ``detail.error``），沿用 ``review_*`` 前缀风格。
 #: 没有活动会话时不能补核：决定必须挂在"当前这一次复核"上，先开始再处理。
 ERROR_REVIEW_NOT_ACTIVE = "review_not_active"
+#: 请求没有携带分析依据：补核结论必须绑定到写回时读到的分析代际；缺失/空值
+#: 不能跳过代际保护（HTTP 409）。
+ERROR_ANALYSIS_BASIS_REQUIRED = "analysis_basis_required"
+#: 客户端携带的分析依据已过期：请求是在旧分析代际上读到的页面里发出的，
+#: 即使当前另有活动会话，也不能把旧依据下的结论写进新会话。必须刷新到
+#: 当前 ``analysis_basis_token`` 后重试（HTTP 409）。
+ERROR_ANALYSIS_BASIS_STALE = "analysis_basis_stale"
 #: 目标义务当前不由引擎判定为阻塞未完成（可能已自动完成或不适用）——
 #: 它没有东西需要人工表态。拒绝写入，避免"给一条已完成义务补核"这种
 #: 自己和自己打架的记录。
@@ -310,6 +317,17 @@ class ObligationReviewItem(BaseModel):
     decided_at: Optional[str] = None
     note: Optional[str] = None
     evidence_reference: Optional[str] = None
+    #: DH-02 结构化卡点：原样透传引擎字段，供前端与导出消费。
+    reason_codes: List[str] = Field(default_factory=list)
+    blocked_by: List[Dict[str, Any]] = Field(default_factory=list)
+    missing_operands: List[Dict[str, Any]] = Field(default_factory=list)
+    candidates: List[Dict[str, Any]] = Field(default_factory=list)
+    next_action: Optional[str] = None
+    root_cause_key: Optional[str] = None
+    #: DH-03a 旧兼容字段：只透传，不参与义务关闭、待办或门禁。
+    #: ``None`` 表示历史结果没有该字段；新生产结果必为列表（含 []）。
+    legacy_same_source_keys: Optional[List[str]] = None
+    legacy_coverage_terms: Optional[List[str]] = None
 
 
 class ObligationReviewBlock(BaseModel):
@@ -343,6 +361,10 @@ class ObligationDecisionRequest(BaseModel):
       （并发红线，任务书 § 十五）；
     - ``job_uuid`` 与 ``ReviewActionRequest`` 的口径一致：只被当作"待核对的声明"，
       服务端自行验证它属于这条槽位且正是当前分析。
+    - ``analysis_basis_token`` 是客户端读到的分析代际；**必须携带**。缺失/空值
+      由服务层 409 ``analysis_basis_required`` 拒收；与当前分析不一致则 409
+      ``analysis_basis_stale``。保留 Optional 只是为了让服务层返回结构化 409，
+      不是允许无依据写入。
     """
 
     decision: str
@@ -350,6 +372,7 @@ class ObligationDecisionRequest(BaseModel):
     evidence_reference: Optional[str] = Field(default=None, max_length=200)
     expected_revision: Optional[int] = Field(default=None, ge=1)
     job_uuid: Optional[str] = None
+    analysis_basis_token: Optional[str] = Field(default=None, max_length=300)
 
     @field_validator("decision")
     @classmethod
@@ -489,6 +512,8 @@ __all__ = [
     "OBLIGATION_DECISIONS",
     "RESOLVED_OBLIGATION_DECISIONS",
     "ERROR_REVIEW_NOT_ACTIVE",
+    "ERROR_ANALYSIS_BASIS_REQUIRED",
+    "ERROR_ANALYSIS_BASIS_STALE",
     "ERROR_OBLIGATION_NOT_BLOCKING",
     "ERROR_OBLIGATION_DECISION_CONFLICT",
     "ERROR_OBLIGATION_DECISION_EVIDENCE_REQUIRED",

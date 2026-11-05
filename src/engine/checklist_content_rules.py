@@ -15,6 +15,7 @@ import re
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from .annual_template_facts import normative_three_public_table_name
 from .checklist_support import (
     CJK,
     compact,
@@ -27,7 +28,9 @@ from .checklist_support import (
     page_flat,
     page_has_table,
     report_kind,
+    report_year,
     subject_scope,
+    unique_quote,
 )
 from .checklist_identity_rules import body_scope
 from .rule_outcome import RuleDeferred, RuleNotApplicable
@@ -58,9 +61,66 @@ _SHARE_RE = re.compile(r"占[^，,；;。%％\d]{0,14}?(\d+(?:\.\d+)?)\s*[%％]"
 _SHARE_NO_PERCENT_RE = re.compile(r"占[^，,；;。%％\d]{0,14}?\d+(?:\.\d+)?(?![\d.]|\s*[%％])")
 
 
+#: 分项金额 + 占比（“基本支出3,962.80万元，占5.28%”）。
+_AMOUNT_SHARE_RE = re.compile(
+    r"([\u4e00-\u9fa5（）()]{2,24}?)(\d[\d,]*(?:\.\d+)?)\s*万元[，,]?\s*占\s*(\d+(?:\.\d+)?)\s*[%％]")
+_BAD_GROUPING_RE = re.compile(r"\d{1,3}(?:,\d{3})*,\d{4,}")
+
+
 class CMM020_ShareSum(Rule):
     code, severity = "CMM-020", "warn"
     desc = "并列列示的各项占比合计应为100%（预/决算通用，清单 C-08 / A-10 / C-16）"
+
+    def _amount_share_issues(self, doc: Document) -> List[Issue]:
+        """N03：支出分项金额与占比复算（只看“本年支出合计”所在句）。"""
+        issues: List[Issue] = []
+        total_re = re.compile(r"本年支出合计\s*(\d[\d,]*(?:\.\d+)?)\s*万元")
+        for page, text in iter_pages(doc):
+            flat, positions = page_flat(doc, page, text)
+            for total_match in total_re.finditer(flat):
+                total = _dec(total_match.group(1))
+                if total is None or total <= 0:
+                    continue
+                stop = flat.find("。", total_match.end())
+                segment_end = stop if stop >= 0 else min(len(flat), total_match.end() + 600)
+                segment = flat[total_match.end():segment_end]
+                for match in _AMOUNT_SHARE_RE.finditer(segment):
+                    raw_amount, raw_share = match.group(2), match.group(3)
+                    share = _dec(raw_share)
+                    amount = _dec(raw_amount)
+                    if share is None or amount is None:
+                        continue
+                    label = match.group(1)[-12:]
+                    start = flat_span(positions, total_match.end() + match.start(),
+                                      total_match.end() + match.end())[0]
+                    end = flat_span(positions, total_match.end() + match.start(),
+                                    total_match.end() + match.end())[1]
+                    if _BAD_GROUPING_RE.search(raw_amount.replace("，", ",")):
+                        issues.append(issue_at(
+                            self, f"{label}金额“{raw_amount}万元”千分位错位，与占比{raw_share}%无法对应。",
+                            page, text, start, end, severity="warn", checklist_item="C-08",
+                            actual_share=raw_share,
+                        ))
+                        continue
+                    expected = amount * Decimal(100) / total
+                    if abs(expected - share) > Decimal("0.1"):
+                        denominator_start, denominator_end = flat_span(
+                            positions, total_match.start(), total_match.end())
+                        # 占比缺陷的必要比较来源：分母句与比例句都落在同一
+                        # finding 的位置引用里，不能只在 message 里提分母。
+                        issues.append(issue_at(
+                            self, f"{label}占比与金额不符：{raw_amount}万元 ÷ {total}万元 = "
+                            f"{expected.quantize(Decimal('0.01'))}%，正文写{raw_share}%。",
+                            page, text, start, end, severity="warn", checklist_item="C-08",
+                            expected_share=str(expected.quantize(Decimal("0.01"))), actual_share=raw_share,
+                            table_refs=[
+                                {"page": page, "span": unique_quote(text, denominator_start, denominator_end),
+                                 "role": "denominator"},
+                                {"page": page, "span": unique_quote(text, start, end),
+                                 "role": "ratio"},
+                            ],
+                        ))
+        return issues
 
     def apply(self, doc: Document) -> List[Issue]:
         kind = report_kind(doc)
@@ -96,6 +156,7 @@ class CMM020_ShareSum(Rule):
                     page, text, start, end, severity="warn", checklist_item="C-08",
                     share_total=str(total), share_count=len(shares),
                 ))
+        issues.extend(self._amount_share_issues(doc))
         return issues
 
 
@@ -174,9 +235,23 @@ class CMM021_TableTitleNormative(Rule):
             cores = _BUDGET_CORES
         else:
             names, cores = list(_FINAL_TABLE_NAMES), _FINAL_CORES
+        # R-02/R-05：目录表题也是表名出现点；只扫表页会漏掉目录与正文
+        # 不一致（E-06/A-05）。目录行去掉“七、”等中文序号后按同一规范比对。
+        toc_titles: List[Tuple[int, str, int, int, str]] = []
+        for toc_page, toc_text in iter_pages(doc, skip_toc=False):
+            if not is_toc_page(toc_text):
+                continue
+            offset = 0
+            for line in str(toc_text or "").split("\n"):
+                start, offset = offset, offset + len(line) + 1
+                norm = _title_norm(line)
+                if norm.endswith("表") and re.search(r"(?:预算|决算)", norm) and len(norm) <= 64:
+                    toc_titles.append((toc_page, toc_text, start, start + len(line), norm))
+        titles = list(dict.fromkeys([*titles, *toc_titles]))
         mismatches: List[Tuple[int, str, int, int, str, str]] = []
         for page, text, start, end, norm in titles:
-            body = re.sub(r"^20\d{2}年度?", "", norm)
+            body = re.sub(r"^[一二三四五六七八九十]+、", "", norm)
+            body = re.sub(r"^20\d{2}年度?", "", body)
             index = next((i for i, core in reversed(list(enumerate(cores))) if core in _title_norm(body)), None)
             artifact = getattr(doc, "parse_artifact", None)
             if kind == "final" and artifact is not None:
@@ -187,6 +262,16 @@ class CMM021_TableTitleNormative(Rule):
             if index is None:
                 continue
             expected = names[index]
+            if kind == "final" and index == 6:
+                # D2：2022 年官方模板第七张表带“一般公共预算”，2023 年起去掉；
+                # 年度事实来自 annual_final_template_facts.json。2022 年两种写法都
+                # 接受（本批只移除按旧口径的误报，不新增反向报告）。
+                annual = normative_three_public_table_name(
+                    report_year(doc), body_scope(doc) or subject_scope(doc))
+                if annual and body in {expected, annual}:
+                    continue
+                if annual:
+                    expected = annual
             if kind == "final" and index == 8 and body in {"国有资本经营预算财政拨款支出决算表"}:
                 continue  # 清单 A-06 写法，视为规范
             if body != expected:
@@ -199,7 +284,11 @@ class CMM021_TableTitleNormative(Rule):
         more = f"等 {len(mismatches)} 张" if len(mismatches) > 4 else ""
         combined = [*extra, issue_at(
             self, f"表名与规范表名不一致：{detail}{more}。",
-            page, text, start, end, severity="info", checklist_item="E-06", occurrences=len(mismatches),
+            page, text, start, end, severity="warn", checklist_item="E-06", occurrences=len(mismatches),
+            locations=[{"page": p, "text": text[s:s + (e - s)], "start": s, "end": e}
+                       for p, text, s, e, _b, _e in mismatches],
+            table_refs=[{"page": p, "span": text[s:s + (e - s)], "role": "表题"}
+                        for p, text, s, e, _b, _e in mismatches],
         )]
         if pending: raise RuleDeferred(self.code, detail="；".join(pending), partial_issues=combined)
         return combined

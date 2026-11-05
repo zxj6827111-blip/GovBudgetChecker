@@ -13,11 +13,23 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .amount_math import classify_amount_diff
+from .rule_policy import AMOUNT_TOLERANCE_WAN
 from .checklist_support import compact, display_envelope, flat_span, issue_at, iter_pages, page_flat, page_has_table
 from .fact_context import _canonical_budget_stage
 from .native_table_arithmetic import table_facts
 from .rule_outcome import RuleDeferred, RuleNotApplicable
-from .rules_v33 import Document, Issue, Rule
+from .rules_v33 import Document, Issue, Rule, _unit_error_explains_amount
+
+
+def _runtime_defect_key(doc: Any, page: int, suffix: str) -> str:
+    """2A：运行期缺陷键（文档指纹+页码+操作数），不依赖 GS-* 金标 ID。"""
+    fingerprint = ""
+    for attr in ("source_file_hash", "file_sha256", "sha256", "doc_sha256"):
+        value = getattr(doc, attr, None)
+        if value:
+            fingerprint = str(value)
+            break
+    return f"{fingerprint}|p{page}|{suffix}"
 from src.utils.narration import normalize_amount_punctuation
 
 _AMOUNT = r"(\d[\d,]*(?:\.\d+)?)"
@@ -707,9 +719,18 @@ class R33251_FunctionalDetailCompleteness(Rule):
                         if withheld_items:
                             parts.append(withheld_summary)
                         message = "；".join(parts) + "。"
+                        # DH-02：回执创建前登记结构化卡点（分项范围不一致）。
+                        from .diagnostic_fields import blocker as _diag_blocker, record_gap as _diag_gap
+                        _scope_entry = dict(
+                            reason_codes=['scope_unconfirmed', 'item_amount_not_included',
+                                          'sum_scope_not_comparable'],
+                            blocked_by=[_diag_blocker(dimension='fund_scope',
+                                                      ref=f'V33-251:{kind}:{label}:分项范围',
+                                                      reason_code='scope_unconfirmed')])
+                        _diag_gap(doc, message, **_scope_entry)
                         page, text, s, e = _locate(total.start())
                         issues.append(issue_at(
-                            self, message, page, text, s, e, severity="warn",
+                            self, message, page, text, s, e, severity="info",
                             checklist_item=checklist,
                             included_items=[_operand_evidence(record) for record in included],
                             not_included_items=[_operand_evidence(record) for record in not_included_items],
@@ -735,9 +756,18 @@ class R33251_FunctionalDetailCompleteness(Rule):
                             disclosure_sources=exception_evidence,
                         )
                         if not_included_items:
-                            unresolved.append(
+                            from .diagnostic_fields import blocker, record_gap
+                            scope_entry = dict(
+                                reason_codes=['scope_unconfirmed', 'item_amount_not_included',
+                                              'sum_scope_not_comparable'],
+                                blocked_by=[blocker(dimension='fund_scope',
+                                                    ref=f'V33-251:{kind}:{label}:分项范围',
+                                                    reason_code='scope_unconfirmed')])
+                            unresolved_text = (
                                 f"{label}有{len(not_included_items)}处金额未纳入合计：{gap_summary}"
                             )
+                            record_gap(doc, unresolved_text, **scope_entry)
+                            unresolved.append(unresolved_text)
                             unresolved_codes.extend(gap_codes or ["item_amount_not_included"])
                             if withheld_items:
                                 unresolved_codes.extend(
@@ -757,9 +787,18 @@ class R33251_FunctionalDetailCompleteness(Rule):
                             "不能视为完整分项加总"
                         )
                         message = "；".join(parts) + "。"
+                        # DH-02：回执创建前登记结构化卡点（分项范围不一致）。
+                        from .diagnostic_fields import blocker as _diag_blocker, record_gap as _diag_gap
+                        _scope_entry = dict(
+                            reason_codes=['scope_unconfirmed', 'item_amount_not_included',
+                                          'sum_scope_not_comparable'],
+                            blocked_by=[_diag_blocker(dimension='fund_scope',
+                                                      ref=f'V33-251:{kind}:{label}:分项范围',
+                                                      reason_code='scope_unconfirmed')])
+                        _diag_gap(doc, message, **_scope_entry)
                         page, text, s, e = _locate(total.start())
                         issues.append(issue_at(
-                            self, message, page, text, s, e, severity="warn",
+                            self, message, page, text, s, e, severity="info",
                             checklist_item=checklist,
                             included_items=[_operand_evidence(record) for record in included],
                             not_included_items=[_operand_evidence(record) for record in not_included_items],
@@ -783,9 +822,18 @@ class R33251_FunctionalDetailCompleteness(Rule):
                             reason_codes=codes,
                             disclosure_sources=exception_evidence,
                         )
-                        unresolved.append(
+                        from .diagnostic_fields import blocker, record_gap
+                        scope_entry = dict(
+                            reason_codes=['scope_unconfirmed', 'item_amount_not_included',
+                                          'sum_scope_not_comparable'],
+                            blocked_by=[blocker(dimension='fund_scope',
+                                                ref=f'V33-251:{kind}:{label}:分项范围',
+                                                reason_code='scope_unconfirmed')])
+                        unresolved_text = (
                             f"{label}有{len(not_included_items)}处金额未纳入合计：{gap_summary}"
                         )
+                        record_gap(doc, unresolved_text, **scope_entry)
+                        unresolved.append(unresolved_text)
                         unresolved_codes.extend(gap_codes or ["item_amount_not_included"])
                         if withheld_items:
                             unresolved_codes.extend(
@@ -867,6 +915,32 @@ class R33251_FunctionalDetailCompleteness(Rule):
                 else:
                     parts.append("分项合计超出总额")
                 message = "；".join(parts) + "。"
+                receipt_codes = ["item_sum_mismatch"]
+                if unit_items:
+                    receipt_codes.append("source_unit_normalized")
+                # 2A：差额被同源单位错精确解释时，下游不再产出独立正式问题；
+                # 金额子检查仍为 executed，回执记录解释来源与剩余差额。
+                explained = (
+                    conditional_delta is not None
+                    and _unit_error_explains_amount(difference, conditional_delta, AMOUNT_TOLERANCE_WAN)
+                )
+                if explained:
+                    receipt_codes.append("explained_by_unit_error")
+                    relation_receipt(
+                        self, doc, f"V33-251:{kind}:item_sum",
+                        [],
+                        status="fail",
+                        formula="sum(item declared amounts normalized by original unit) == stated section total (万元)",
+                        reason=message,
+                        reason_codes=receipt_codes,
+                        disclosure_sources=exception_evidence,
+                        amount_subcheck_status="executed",
+                        explained_by="unit_error",
+                        residual_difference_wan=format(
+                            max(abs(difference) - abs(conditional_delta), Decimal(0)), "f"),
+                        cascade_of=_runtime_defect_key(doc, page, f"{label}:{format(conditional_assumed, 'f')}"),
+                    )
+                    continue
                 issues.append(issue_at(
                     self, message, page, text, s, e, severity="warn", checklist_item=checklist,
                     included_items=[
@@ -886,9 +960,6 @@ class R33251_FunctionalDetailCompleteness(Rule):
                         "conditional_delta_wan": format(conditional_delta, "f")}
                        if conditional_delta is not None else {}),
                 ))
-                receipt_codes = ["item_sum_mismatch"]
-                if unit_items:
-                    receipt_codes.append("source_unit_normalized")
                 relation_receipt(
                     self, doc, f"V33-251:{kind}:item_sum", [],
                     status="fail",
@@ -896,6 +967,7 @@ class R33251_FunctionalDetailCompleteness(Rule):
                     reason=message,
                     reason_codes=receipt_codes,
                     disclosure_sources=exception_evidence,
+                    amount_subcheck_status="executed",
                 )
         if total is None and items:
             unresolved.append("具体情况段落未识别到年初预算/支出决算总额，分项加总无从复算")
@@ -937,7 +1009,13 @@ class R33251_FunctionalDetailCompleteness(Rule):
                     and _canonical_budget_stage(fact.budget_stage) == "决算"
                     and fact.normalized_value not in (None, Decimal(0))):
                 leaves[code] = re.sub(r"\s+", "", fact.subject_name or "")
-        missing = [name for name in leaves.values() if name and name not in joined]
+        def _present(name: str) -> bool:
+            # 及/与、其他/其它只用于“是否出现”的候选判定；名称差异由名称规则报告。
+            variants = {name, name.replace("与", "及"), name.replace("及", "与"),
+                        name.replace("其他", "其它"), name.replace("其它", "其他")}
+            return any(variant and variant in joined for variant in variants)
+
+        missing = [name for name in leaves.values() if name and not _present(name)]
         listed = max(len(items), listed_final)
         if not missing or listed >= len(leaves):
             return []

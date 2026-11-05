@@ -468,3 +468,76 @@ def test_withdrawing_the_checker_puts_the_obligation_back_as_a_gap(monkeypatch):
         )
         assert instance["status"] == OBLIGATION_NOT_IMPLEMENTED
         assert instance["missing_checkers"] == [RULE_ID]
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-04 真实材料复审：零基数三态（精确零 / 确定非零 / 精度不足）
+# ---------------------------------------------------------------------------
+
+
+def test_real_case_5_small_decrease_from_zero_is_not_zero_base():
+    """第 5 份军粮中心原件：本期 0 万元、减少 0.08 万元、下降 100%。
+
+    复算基期 0.08 万元（减少时基期 = 本期 + 增减额），三个数互相成立。
+    旧口径按“0”的 0 位小数半步长 0.5 把 0.08 当零，属于把容差当数学零。
+    """
+    doc = _contract_doc(
+        _final_page(
+            "公务接待费支出决算为0万元。",
+            "公务接待费支出决算减少0.08万元，下降100%。",
+        )
+    )
+    assert _run(doc) == []
+
+
+def test_real_case_8_exact_zero_base_is_still_reported():
+    """第 8 份国资委原件：本期 99.16 万元、增加 99.16 万元、增长 100%。
+
+    复算基期精确为 0，零基数必须继续报，不能被三态修复一起放过。
+    """
+    doc = _contract_doc(
+        _final_page(
+            "公务接待费支出决算为99.16万元。",
+            "公务接待费支出决算增加99.16万元，增长100%。",
+        )
+    )
+    issues = _run(doc)
+    assert len(issues) == 1
+    assert issues[0].location["zero_base"] is True
+    assert issues[0].location["derived_prior"] == "0.00"
+    assert issues[0].severity in {"error", "high"}
+
+
+def test_integer_delta_envelope_does_not_swallow_small_nonzero_base():
+    """合同反例：本期 1.08、增加 1（整数显示）、基期 0.08、增长 1250%。
+
+    增减额整数显示的半步长是 0.5，若拿它当零基数判据会再次误报；
+    1250% 与 1.08/0.08 完全一致，不应产生任何 finding。
+    """
+    doc = _contract_doc(
+        _final_page(
+            "公务接待费支出决算为1.08万元。",
+            "公务接待费支出决算增加1万元，增长1250%。",
+        )
+    )
+    assert _run(doc) == []
+
+
+def test_indeterminate_base_goes_to_manual_review_not_zero_base():
+    """基期非精确零但落在显示包络内、百分比又对不上 → 人工复核，不报零基数。
+
+    本期 1.08、增加 1（基期名义 0.08，落在 0.505 包络内）、却写增长 50%：
+    既不能断言分母为零，也不能按确定基期给结论。
+    """
+    doc = _contract_doc(
+        _final_page(
+            "公务接待费支出决算为1.08万元。",
+            "公务接待费支出决算增加1万元，增长50%。",
+        )
+    )
+    issues = _run(doc)
+    assert len(issues) == 1
+    location = issues[0].location
+    assert not location.get("zero_base")
+    assert location.get("base_precision") == "indeterminate"
+    assert issues[0].severity in {"manual_review", "warn", "info"}

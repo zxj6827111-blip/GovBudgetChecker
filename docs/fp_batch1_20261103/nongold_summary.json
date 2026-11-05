@@ -1,0 +1,43 @@
+{
+ "samples": 160,
+ "items_old": 2767,
+ "items_new": 2651,
+ "pairs": 2649,
+ "removed_formal": 118,
+ "removed_notice": 0,
+ "added_formal": 0,
+ "added_notice": 2,
+ "by_class": {
+  "R26-零比零": 61,
+  "R16-舍入区间": 7,
+  "D2-2022三公表名": 31,
+  "D2-正文第二部分": 16,
+  "R3-标题措辞": 2,
+  "R30-泛泛原因": 1
+ },
+ "unclassified": [],
+ "substantive_changed": [
+  {
+   "sample_id": "RB-2022-D01",
+   "old_id": "RB-2022-D01|R|CMM-021-14",
+   "new_id": "RB-2022-D01|R|CMM-021-14",
+   "fields": [
+    "message"
+   ]
+  }
+ ],
+ "expected_message_changes": [
+  {
+   "sample_id": "RB-2022-D01",
+   "old_id": "RB-2022-D01|R|CMM-021-14",
+   "new_id": "RB-2022-D01|R|CMM-021-14",
+   "fields": [
+    "message"
+   ],
+   "message_old": "十四、表名与规范表名不一致：“一般公共预算财政拨款三公经费及机关运行经费支出决算表”应为“财政拨款三公经费支出决算表”。",
+   "message_new": "十四、表名与规范表名不一致：“一般公共预算财政拨款三公经费及机关运行经费支出决算表”应为“一般公共预算财政拨款三公经费支出决算表”。"
+  }
+ ],
+ "other_substantive": [],
+ "ok": true
+}

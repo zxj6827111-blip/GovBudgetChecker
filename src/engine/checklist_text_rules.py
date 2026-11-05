@@ -21,6 +21,7 @@ from .checklist_support import (
     CJK,
     flat_span,
     issue_at,
+    unique_quote,
     iter_pages,
     page_flat,
     page_narrative,
@@ -187,10 +188,71 @@ def _paren_balance_issues(rule: Rule, doc: Document) -> List[Issue]:
     return issues
 
 
+def _primary_hit(hits: List[Tuple[int, str, int, int]], pad: int = 24):
+    """取第一条能生成唯一引文的命中，保证证据守卫可验证。"""
+    for page, text, start, end in hits:
+        left, right = max(0, start - pad), min(len(text), end + pad)
+        if unique_quote(text, left, right):
+            return page, text, left, right
+    return hits[0]
+
+
+def _format_punctuation_issues(rule: Rule, doc: Document) -> List[Issue]:
+    """R22 / R9-半角冒号 / R28：中文语境半角标点与文号括号，按类聚合。"""
+    colon = re.compile(r"(?<=[一-鿿）)]):(?!//)")
+    half_comma = re.compile(r"(?<=[一-鿿])[,;]|[,;](?=[一-鿿])")
+    # 中文语境的句末半角句点：紧跟在汉字或百分号后，且不是小数/编号分隔。
+    half_period = re.compile(r"(?<=[一-鿿%％])\.(?![0-9A-Za-z])")
+    doc_number = re.compile(r"[一-鿿]{1,12}[\[【（(]\s*(?:19|20)\d{2}\s*[\]】）)]\s*\d+号")
+    issues: List[Issue] = []
+    classes = {
+        "half_colon": (colon, "中文语境使用半角冒号“:”，应使用全角“：”。"),
+        "half_comma": (half_comma, "中文语境使用半角逗号/分号，应使用全角“，”/“；”。"),
+        "half_period": (half_period, "中文语境使用半角句点“.”，应使用全角“。”。"),
+        "doc_number": (doc_number, "文号年份应使用六角括号“〔〕”，当前使用方括号/尖括号。"),
+    }
+    # 定义/释义段（名词解释、第四部分）与目录不参与标点格式检查：
+    # 这些页面的大段释义性文字允许半角符号，且不属于“说明正文”。
+    page_texts = list(doc.page_texts or [])
+    part4_candidates = [index for index, text in enumerate(page_texts, start=1)
+                        if "第四部分" in str(text or "") or "名词解释" in str(text or "")]
+    part4_start = max(part4_candidates) if part4_candidates else None
+    colon_prefix = re.compile(r"(?:主要用于|主要原因|如下|说明|情况|完成预算|原因)$")
+    for key, (pattern, message) in classes.items():
+        hits: List[Tuple[int, str, int, int]] = []
+        for page, text in iter_pages(doc):
+            if key == "half_colon" and part4_start is not None and page >= part4_start:
+                continue
+            if "目录" in str(text or "")[:80]:
+                continue
+            flat, positions = page_flat(doc, page, text)
+            for match in pattern.finditer(flat):
+                if key == "half_colon":
+                    before = flat[max(0, match.start() - 10):match.start()]
+                    if not colon_prefix.search(before):
+                        continue
+                start, end = flat_span(positions, match.start(), match.end())
+                # 行末标点后只剩独立页码（页脚）时不是金额/正文标点。
+                if re.fullmatch(r"[ \t\r\n]*\d{1,4}[ \t\r\n]*", text[end:]):
+                    continue
+                hits.append((page, text, start, end))
+        if not hits:
+            continue
+        page, text, start, end = _primary_hit(hits)
+        sample = text[start:end].strip()
+        issues.append(issue_at(
+            rule, f"{message}全文共 {len(hits)} 处（如“{sample}”）。",
+            page, text, start, end, severity="low", checklist_item="D-04", occurrences=len(hits),
+            table_refs=[{"page": p, "span": unique_quote(t, a, b), "role": "occurrence"} for p, t, a, b in hits],
+        ))
+    return issues
+
+
 def checklist_text_anomaly_issues(rule: Rule, doc: Document) -> List[Issue]:
     """CMM-002 的清单扩展入口（重复与标点）。"""
     kind = report_kind(doc)
-    return _doubled_word_issues(rule, doc, kind) + _punctuation_issues(rule, doc, kind)
+    return (_doubled_word_issues(rule, doc, kind) + _punctuation_issues(rule, doc, kind)
+            + _format_punctuation_issues(rule, doc))
 
 
 # ---------------------------------------------------------------------------
@@ -377,15 +439,75 @@ class CMM010_AmountFormat(Rule):
                 ))
         if decimals:
             # 整篇统一按 4~6 位小数书写的材料逐处报会淹没其他问题，汇总成一条。
+            # 清单 C-15 把小数位不统一列为可复核的格式问题（low），不是纯提示；
+            # 逐处引用一并给出，避免只用第一处代表全部出现点。
             page, text, start, end = decimals[0]
             sample = text[start:end]
             issues.append(issue_at(
                 self, f"金额小数位不统一：全文共 {len(decimals)} 处万元金额超过两位小数（如“{sample}万元”），"
                 "应统一四舍五入保留两位小数。",
-                page, text, start, end, severity="info", checklist_item="C-15",
+                page, text, start, end, severity="low", checklist_item="C-15",
                 occurrences=len(decimals),
+                table_refs=[{"page": p, "span": unique_quote(t, a, b), "role": "occurrence"}
+                            for p, t, a, b in decimals],
             ))
+        issues.extend(self._zero_one_decimal_issues(doc))
+        issues.extend(self._missing_thousands_issues(doc))
         return issues
+
+    def _zero_one_decimal_issues(self, doc: Document) -> List[Issue]:
+        """R9-小数位：0/1 位小数的金额与百分比也属“未保留两位”。
+
+        整数金额不限于“万元”：正文“年初预算为0 元”“采购金额0 元”同样
+        未保留两位小数；单位后允许换行/空白（“0\\n元”）。
+        """
+        one_dec_amount = re.compile(r"(?<![\d.,，])(\d[\d,]*)\.(\d)\s*(万元|元)(?![/／每])")
+        int_amount = re.compile(r"(?<![\d.,，])(\d{1,3}(?:,\d{3})+|\d+)\s*(?:万元|元)(?![/／每])")
+        one_dec_pct = re.compile(r"(?<![\d.,，])(\d+)\.(\d)\s*[%％]")
+        int_pct = re.compile(r"(?<![\d.,，])(\d+)\s*[%％]")
+        hits: List[Tuple[int, str, int, int]] = []
+        rate_ctx = re.compile(r"(?:单价|标准|每人|每天|每月|每年|人均|每次|每台|每平方米)\S{0,6}$")
+        for page, text in iter_pages(doc):
+            flat, positions = page_flat(doc, page, text)
+            for pattern in (one_dec_amount, int_amount, one_dec_pct, int_pct):
+                for match in pattern.finditer(flat):
+                    before = flat[max(0, match.start() - 14):match.start()]
+                    if pattern is not one_dec_pct and rate_ctx.search(before):
+                        continue
+                    hits.append((page, text, *flat_span(positions, match.start(), match.end())))
+        if not hits:
+            return []
+        page, text, start, end = _primary_hit(hits)
+        sample = text[start:end].strip()
+        return [issue_at(
+            self, f"金额或百分比小数位不统一：全文共 {len(hits)} 处未保留两位小数（如“{sample}”），"
+            "金额与百分比均应统一保留两位小数。",
+            page, text, start, end, severity="low", checklist_item="C-15", occurrences=len(hits),
+            table_refs=[{"page": p, "span": unique_quote(t, a, b), "role": "occurrence"} for p, t, a, b in hits],
+        )]
+
+    def _missing_thousands_issues(self, doc: Document) -> List[Issue]:
+        """R9-千分位：金额 ≥1000 未按半角逗号分千分位。
+
+        单位支持“万元/元”且允许跨行；正文“年初预算为7750.99\\n元”也是
+        金额，不因单位在下一行或不是表格而漏检。
+        """
+        pattern = re.compile(r"(?<![\d.,，])(\d{4,})(?:\.\d+)?\s*(?:万元|元)(?![/／每])")
+        hits: List[Tuple[int, str, int, int]] = []
+        for page, text in iter_pages(doc):
+            flat, positions = page_flat(doc, page, text)
+            for match in pattern.finditer(flat):
+                hits.append((page, text, *flat_span(positions, match.start(), match.end())))
+        if not hits:
+            return []
+        page, text, start, end = _primary_hit(hits)
+        sample = text[start:end].strip()
+        return [issue_at(
+            self, f"金额未按半角逗号分千分位：全文共 {len(hits)} 处（如“{sample}”），"
+            "应写作 1,234.56 万元。",
+            page, text, start, end, severity="low", checklist_item="C-15", occurrences=len(hits),
+            table_refs=[{"page": p, "span": unique_quote(t, a, b), "role": "occurrence"} for p, t, a, b in hits],
+        )]
 
 
 # ---------------------------------------------------------------------------
@@ -394,6 +516,14 @@ class CMM010_AmountFormat(Rule):
 
 _YUAN_AMOUNT_RE = re.compile(r"(?<![\d.,，])(\d[\d,]*(?:\.\d+)?)\s*元(?![/／每])")
 _YUAN_RATE_CONTEXT_RE = re.compile(r"(?:单价|标准|每人|每天|每月|每年|人均|每次|每台|补助标准|收费)\S{0,6}$")
+
+# 2A：正文金额漏写单位“万元”——金额带小数、后接“占X%”，且同段存在万元金额。
+_MISSING_UNIT_RE = re.compile(r"(?<![\d.,，])(\d[\d,]*(?:\.\d+)?)\s*(?=[，,；;]?\s*占)")
+_SIBLING_WAN_RE = re.compile(r"\d[\d,]*(?:\.\d+)?\s*万元")
+_MISSING_UNIT_SUBJECT_RE = re.compile(r"(?:支出|收入|预算|决算)[^，。；]{0,12}$")
+# 2A：零值金额写作“0 元”，但同段其余金额以万元列示。
+_ZERO_YUAN_RE = re.compile(r"(?<![\d.,，])0(?:\.0+)?\s*元")
+_ZERO_UNIT_BEFORE_RE = re.compile(r"(?:年初预算|预算数|支出决算|决算数)为?\s*$")
 
 
 class CMM011_AmountUnitWan(Rule):
@@ -424,6 +554,45 @@ class CMM011_AmountUnitWan(Rule):
                     ))
                 else:
                     integer_hits.append((page, text, start, end))
+            # 2A：同段（按句号切段，含并列分项）内存在万元金额时，
+            # 缺失单位的金额与“0 元”才判定为漏写万元，避免单价/人数/编码误判。
+            for paragraph in re.finditer(r"[^。]{0,800}。?", flat):
+                chunk = paragraph.group(0)
+                if not _SIBLING_WAN_RE.search(chunk):
+                    continue
+                for match in _MISSING_UNIT_RE.finditer(chunk):
+                    before = chunk[max(0, match.start() - 24):match.start()]
+                    subject = _MISSING_UNIT_SUBJECT_RE.search(before)
+                    if not subject:
+                        continue
+                    if "." not in match.group(1):
+                        continue
+                    # 引文连同“支出/收入…”科目名一起给出：只引金额无法说明是
+                    # 哪一项漏了万元，也无法与金标的“科目+金额”出现点对齐。
+                    # 科目名常是“自然资源海洋气象等支出”这类长词，subject
+                    # 只命中末尾“支出”，需要继续向前并入连续汉字。
+                    prefix = re.search(r"[\u4e00-\u9fff]{2,20}$", before[:subject.start()])
+                    extend = (subject.end() - subject.start()) + (
+                        len(prefix.group(0)) if prefix else 0)
+                    offset = paragraph.start() + match.start() - extend
+                    start, end = flat_span(positions, offset,
+                                           paragraph.start() + match.end())
+                    literal = text[start:end].strip()
+                    issues.append(issue_at(
+                        self, f"金额缺少单位“万元”：“{literal}”，同段其余金额均以万元列示。",
+                        page, text, start, end, severity="warn", checklist_item="C-14",
+                    ))
+                for match in _ZERO_YUAN_RE.finditer(chunk):
+                    before = chunk[max(0, match.start() - 18):match.start()]
+                    if not _ZERO_UNIT_BEFORE_RE.search(before):
+                        continue
+                    start, end = flat_span(positions, paragraph.start() + match.start(),
+                                           paragraph.start() + match.end())
+                    literal = text[start:end].strip()
+                    issues.append(issue_at(
+                        self, f"零值金额单位写作“元”：“{literal}”，同段其余金额均以万元列示，应统一为“0万元”。",
+                        page, text, start, end, severity="warn", checklist_item="C-14",
+                    ))
         if integer_hits:
             page, text, start, end = integer_hits[0]
             issues.append(issue_at(

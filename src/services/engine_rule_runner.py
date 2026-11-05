@@ -91,6 +91,33 @@ class EngineRuleRunner:
             evidence_item["text"] = text
             evidence_item["text_snippet"] = text
         location = getattr(issue, "location", {}) or {}
+        # 同一问题命中多处原文时（如“本表反映单位”共 6 处），逐处给出真实引用，
+        # 不只用第一处冒充全部出现点；证据门逐条按各自页码核验。
+        refs = [
+            ref for ref in (location.get("table_refs") or [])
+            if isinstance(ref, dict) and str(ref.get("span") or "").strip()
+            and type(ref.get("page")) is int and ref["page"] > 0
+        ]
+        if len(refs) >= 2:
+            items: List[Dict[str, Any]] = []
+            seen: set = set()
+            for ref in refs:
+                key = (ref["page"], str(ref["span"]))
+                if key in seen:
+                    continue
+                seen.add(key)
+                item = {
+                    "page": ref["page"],
+                    "text": str(ref["span"]),
+                    "text_snippet": str(ref["span"]),
+                    "location_level": "exact_span",
+                    "verification_status": "unverified",
+                }
+                if ref.get("role"):
+                    item["role"] = ref["role"]
+                items.append(item)
+            if len(items) >= 2:
+                return items
         location_level = str(getattr(issue, "location_level", None) or "unresolved")
         if location_level not in {"exact_cell", "exact_span"}:
             location_level = str(location.get("location_level") or location_level)
@@ -467,7 +494,16 @@ class EngineRuleRunner:
                     self._stats["total_findings"] += len(findings)
 
                     detail_str = str(signal.detail or signal)
+                    # 表格准入延期在此做二次分类：rule_identity.py 保持冻结原样，
+                    # 材料格式缺陷/空表与技术映射失败在这里分开并登记结构化事实。
+                    from src.engine.table_admission_policy import reclassify_admission_deferral
+
+                    rewritten = reclassify_admission_deferral(document, str(rule_id), detail_str)
+                    if rewritten:
+                        detail_str = rewritten
                     unresolved = list(getattr(signal, "unresolved_reasons", []) or [])
+                    unresolved = [rewritten if rewritten and item == str(signal.detail or signal) else item
+                                  for item in unresolved]
                     if not unresolved and detail_str:
                         unresolved = [detail_str]
 
@@ -486,6 +522,12 @@ class EngineRuleRunner:
                         has_conversion_error=bool(conversion_errors),
                     )
 
+                    # DH-02：把规则执行期间登记的失败事实转成结构化卡点；文本保持不变。
+                    from src.engine.diagnostic_fields import diagnostics_for_texts
+
+                    diagnostics = diagnostics_for_texts(
+                        document, [detail_str, *unresolved], rule_id=str(rule_id)
+                    )
                     self._outcomes.append(
                         RuleOutcome(
                             rule_id=str(rule_id),
@@ -494,6 +536,7 @@ class EngineRuleRunner:
                             partial_findings_count=len(findings),
                             unresolved_reasons=unresolved,
                             reason_codes=list(getattr(signal, "reason_codes", []) or []),
+                            diagnostics=diagnostics,
                         )
                     )
                     logger.info(

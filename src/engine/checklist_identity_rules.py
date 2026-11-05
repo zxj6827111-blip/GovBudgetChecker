@@ -153,7 +153,33 @@ class CMM017_OrgNameConsistency(Rule):
                 return issues
             raise RuleNotApplicable(self.code, detail="未识别到编制单位名称，名称一致性无法比对")
         reported: set = set()
+        # S04：部门决算单位构成表中的“（本级）”行必须与规范全称一致。
+        for page, text in iter_pages(doc, skip_toc=True):
+            flat = re.sub(r"\s+", "", text or "")
+            for match in re.finditer(r"([\u4e00-\u9fa5（）()]{4,40})[（(]本级[）)]", flat):
+                name = re.sub(r"^第[一二三四五六七八九十]+部分", "", match.group(1))
+                if name in reported or "部分" in name:
+                    continue
+                # 只处理“和/与”连词多写造成的本单位名称变体；不同单位名不在此规则范围。
+                if name.replace("和", "").replace("与", "") != canonical.replace("和", "").replace("与", ""):
+                    continue
+                kind = _variant_kind(name, canonical)
+                if not kind:
+                    continue
+                reported.add(name)
+                start = text.find(name)
+                issues.append(issue_at(
+                    self, f"单位名称与规范全称不一致（{kind}）：此处写作“{name}”，全文规范全称为“{canonical}”。",
+                    page, text, start if start >= 0 else 0,
+                    (start + len(name)) if start >= 0 else len(name),
+                    severity="warn", checklist_item="B-01", expected=canonical, actual=name,
+                ))
+        template_suffixes = ("（部门）", "(部门)", "（单位）", "(单位)", "部门", "单位")
         for name, page, text, start, end in mentions:
+            stripped = next((name[: -len(suffix)] for suffix in template_suffixes
+                             if name.endswith(suffix) and name[: -len(suffix)] == canonical), None)
+            if stripped is not None:
+                continue  # 规范全称后多“（部门）/（单位）”：模板标签，不按名称错报
             kind = _variant_kind(name, canonical)
             if not kind or name in reported:
                 continue
@@ -254,6 +280,39 @@ def _contrast_label(scope: Optional[str]) -> str:
     return "单位" if scope == "unit" else "部门"
 
 
+#: 已授权的人工/归档口径来源；封面自动推断不在其中。
+_AUTHORIZED_SCOPE_SOURCES = {"human_confirmation", "human", "manual", "archive"}
+
+
+def _confirmed_scope(doc: Document) -> Optional[str]:
+    """已授权人工/归档确认的部门-单位口径；自动封面推断不参与。"""
+    resolution = getattr(getattr(doc, "document_profile", None), "writing_scope", {}) or {}
+    if str(resolution.get("status") or "") != "confirmed":
+        return None
+    value = resolution.get("value")
+    if value not in ("unit", "department"):
+        return None
+    source = str(resolution.get("source") or "").strip().lower()
+    if source not in _AUTHORIZED_SCOPE_SOURCES:
+        return None
+    return value
+
+
+def _cover_scope(doc: Document) -> Optional[str]:
+    """封面文种口径：只认封面页明确的“部门决算/单位决算”。"""
+    text = str((doc.page_texts or [""])[0] or "")
+    has_unit = "单位决算" in text
+    has_department = "部门决算" in text
+    if has_department and not has_unit:
+        return "department"
+    if has_unit and not has_department:
+        return "unit"
+    if not has_department and re.search(r"20\d{2}\s*年度?\s*决算", text):
+        # 单位模板封面只写“年度决算”，不带“部门”。
+        return "unit"
+    return None
+
+
 class CMM018_ScopeTerminology(Rule):
     code, severity = "CMM-018", "warn"
     desc = "部门/单位主体口径与层级口径一致（预/决算通用，清单 B-02）"
@@ -264,9 +323,17 @@ class CMM018_ScopeTerminology(Rule):
         issues: List[Issue] = []
         contrast = _archive_writing_contrast(doc)
         contrast_hits: List[Tuple[int, str, int, int]] = []
-        if scope in _SCOPE_WRONG_TERMS:
-            label = "部门" if scope == "department" else "单位"
-            for term, pattern in _SCOPE_WRONG_TERMS[scope]:
+        page1 = str((doc.page_texts or [""])[0] or "")
+        confirmed_scope = _confirmed_scope(doc)
+        effective_scope = confirmed_scope or scope
+        bare_cover = (_cover_scope(doc) == "unit" and "部门" not in page1 and "单位" not in page1
+                      and not confirmed_scope)
+        # R2（封面优先级）：封面明确为无“部门”的年度决算时，正文用语按单位
+        # 口径核对，不因正文/表注多数写成“部门”而跳过“本部门”扫描。
+        term_scope = "unit" if bare_cover else effective_scope
+        if term_scope in _SCOPE_WRONG_TERMS:
+            label = "部门" if term_scope == "department" else "单位"
+            for term, pattern in _SCOPE_WRONG_TERMS[term_scope]:
                 hits: List[Tuple[int, str, int, int]] = []
                 for page, text in iter_pages(doc):
                     flat, positions = page_flat(doc, page, text)
@@ -298,11 +365,43 @@ class CMM018_ScopeTerminology(Rule):
                     more = f"（全文共 {len(hits)} 处）" if len(hits) > 1 else ""
                     issues.append(issue_at(
                         self, f"主体口径混用：本材料为{label}{'预算' if report_kind(doc) == 'budget' else '决算'}，"
-                        f"正文出现“{term}”表述{more}，应统一为“{'本部门' if scope == 'department' else '本单位'}”口径。",
+                        f"正文出现“{term}”表述{more}，应统一为“{'本部门' if term_scope == 'department' else '本单位'}”口径。",
                         page, text, start, end, severity="warn", checklist_item="B-02", occurrences=len(hits),
                         locations=[{'page':p,'text':unique_quote(t,a,b),'start':a,'end':b} for p,t,a,b in hits],
                         table_refs=[{'page':p,'span':unique_quote(t,a,b),'role':'反向主体用语'} for p,t,a,b in hits],
                     ))
+        # R21：表注/构成段的部门-单位口径必须与封面/选定层级一致。
+        # 优先链：已授权人工/归档口径 > 自动封面 R2 > 正文推断。
+        caption_scope = confirmed_scope or _cover_scope(doc) or scope
+        caption_re = {
+            "department": re.compile(r"本表反映单位(?:本年度|年度)|单位本年度没有|纳入[^，。；]{0,40}单位决算"),
+            "unit": re.compile(r"本表反映部门(?:本年度|年度)|部门本年度没有|纳入[^，。；]{0,40}部门决算|部门决算单位构成"),
+        }
+        if caption_scope in caption_re:
+            hits: List[Tuple[int, str, int, int]] = []
+            for page, text in iter_pages(doc, skip_toc=True):
+                if page == 1:
+                    continue
+                flat, positions = page_flat(doc, page, text)
+                for match in caption_re[caption_scope].finditer(flat):
+                    hits.append((page, text, *flat_span(positions, match.start(), match.end())))
+            if hits:
+                # 全面相反时，单处/多处相反表注并入同一条待复核，不再另发 warn；
+                # 非全面相反时逐处聚合成一条正式问题（不设 4 处门槛）。
+                if contrast and contrast.get("comprehensive_contrast"):
+                    contrast_hits.extend(hits)
+                    hits = []
+            if hits:
+                page, text, start, end = hits[0]
+                expected_label = "本部门/部门" if caption_scope == "department" else "本单位/单位"
+                issues.append(issue_at(
+                    self, f"材料口径与封面不一致：正文出现相反口径表述（共{len(hits)}处），"
+                    f"当前封面为{'部门' if caption_scope == 'department' else '单位'}口径，应统一为“{expected_label}”。",
+                    page, text, start, end, severity="warn", checklist_item="B-02", occurrences=len(hits),
+                    locations=[{'page':p,'text':unique_quote(t,a,b),'start':a,'end':b} for p,t,a,b in hits],
+                    table_refs=[{'page':p,'span':unique_quote(t,a,b),'role':'相反口径表注'} for p,t,a,b in hits],
+                ))
+
         if contrast_hits and contrast and contrast.get("comprehensive_contrast"):
             summary = _contrast_summary(contrast)
             pages_text = "、".join(str(p) for p in summary["opposite_pages"]) or "未定位"
@@ -425,7 +524,11 @@ class CMM019_CoverElements(Rule):
         scope = resolution.get("cover_independent_scope") if _uses_writing_resolution(doc) else body_scope(doc)
         contrast = _archive_writing_contrast(doc)
         noun = "预算" if kind == "budget" else "决算"
-        if contrast and contrast.get("comprehensive_contrast"):
+        bare_cover = _cover_scope(doc) == "unit" and "部门" not in flat and "单位" not in flat
+        if bare_cover and scope == "department" and kind == "final":
+            # 封面只写“年度决算”且口径来自正文：文种子项证据不足，不据此判“漏写部门”，也不新增待核义务。
+            pass
+        elif contrast and contrast.get("comprehensive_contrast"):
             # 全面相反：文种子项不出 warn，改出一条待人工复核；年度、名称等其余子项照常执行。
             summary = _contrast_summary(contrast)
             pages_text = "、".join(str(p) for p in summary["opposite_pages"]) or "未定位"

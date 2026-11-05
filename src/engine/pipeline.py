@@ -175,13 +175,27 @@ def run_rules_with_outcomes(
             if partial_list:
                 issues.extend(partial_list)
             detail_str = str(signal.detail or signal)
+            # 表格准入延期在这里做二次分类：rule_identity.py 保持冻结原样
+            # （160 验收包按整文件哈希冻结），材料格式缺陷与技术映射失败
+            # 在此分开，并把单元格级结构化事实登记到同一文档。
+            from .table_admission_policy import reclassify_admission_deferral
+
+            rewritten = reclassify_admission_deferral(doc, str(code), detail_str)
+            if rewritten:
+                detail_str = rewritten
             unresolved = list(getattr(signal, "unresolved_reasons", []) or [])
+            unresolved = [rewritten if rewritten and item == str(signal.detail or signal) else item
+                          for item in unresolved]
             if not unresolved and detail_str:
                 unresolved = [detail_str]
             outcome_status = resolve_rule_status(
                 base_status=signal.status,
                 has_findings=bool(partial_list),
             )
+            # DH-02：把规则执行期间登记的失败事实转成结构化卡点；文本保持不变。
+            from .diagnostic_fields import diagnostics_for_texts
+
+            diagnostics = diagnostics_for_texts(doc, [detail_str, *unresolved], rule_id=str(code))
             outcomes.append(
                 RuleOutcome(
                     rule_id=str(code),
@@ -190,6 +204,7 @@ def run_rules_with_outcomes(
                     partial_findings_count=len(partial_list),
                     unresolved_reasons=unresolved,
                     reason_codes=list(getattr(signal, "reason_codes", []) or []),
+                    diagnostics=diagnostics,
                 )
             )
             continue

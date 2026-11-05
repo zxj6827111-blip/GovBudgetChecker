@@ -340,6 +340,17 @@ class CoverageObligationItem(BaseModel):
     blocks_gate: bool = False
     requires_ai: bool = False
     input_gaps: List[str] = Field(default_factory=list)
+    #: DH-02 结构化卡点（原样透传，不在查询层翻译或推断）。
+    reason_codes: List[str] = Field(default_factory=list)
+    blocked_by: List[Dict[str, Any]] = Field(default_factory=list)
+    missing_operands: List[Dict[str, Any]] = Field(default_factory=list)
+    candidates: List[Dict[str, Any]] = Field(default_factory=list)
+    next_action: Optional[str] = None
+    root_cause_key: Optional[str] = None
+    #: DH-03a 旧兼容字段：原样透传，只供第一阶段 UI 提示，不参与覆盖/关闭/门禁。
+    #: ``None`` 表示历史结果没有该字段（允许旧匹配器回退）；新生产结果必为列表（含 []）。
+    legacy_same_source_keys: Optional[List[str]] = None
+    legacy_coverage_terms: Optional[List[str]] = None
 
 
 class CoverageSummaryBlock(BaseModel):

@@ -209,10 +209,8 @@ async def publish_compatibility_projection(conn, snapshot, parse_run_id):
     from src.services.pdf_parser import PDFParser
     from src.services.table_recognizer import TableRecognizer
     artifact = await load_parse_artifact(conn, parse_run_id)
-    from src.services.input_processing_identity import artifact_content_hash
-    if (artifact.source_file_hash != snapshot['source_file_hash']
-            or artifact.parse_run_uid != snapshot['parse_run_uid']
-            or artifact_content_hash(artifact) != snapshot['artifact_content_hash']):
+    from src.services.analysis_fact_snapshot import artifact_matches_snapshot
+    if not artifact_matches_snapshot(artifact, snapshot):
         raise ValueError('legacy projection artifact differs from published snapshot')
     await archive_legacy_projection(conn, document['document_version_id'],snapshot['source_file_hash'])
     projection = effective_legacy_artifact(artifact, snapshot)

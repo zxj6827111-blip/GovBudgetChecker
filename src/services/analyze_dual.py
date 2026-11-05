@@ -18,6 +18,7 @@ from src.services.rule_process import run_engine_rules_in_process
 
 from src.schemas.issues import JobContext, AnalysisConfig, DualModeResponse, MergedSummary, IssueItem
 from src.services.ai_findings import AIFindingsService
+from src.services.json_canonical import dumps_canonical
 from src.services.engine_rule_runner import EngineRuleRunner
 from src.services.merge_findings import merge_findings
 try:
@@ -82,7 +83,7 @@ def save_snapshot(job_id: str, data: Dict[str, Any]) -> None:
     try:
         job_dir.mkdir(parents=True, exist_ok=True)
         status_file.write_text(
-            json.dumps(merged_data, ensure_ascii=False, indent=2), 
+            dumps_canonical(merged_data, indent=2),
             encoding="utf-8"
         )
         logger.debug(f"快照已保存: {job_id}")

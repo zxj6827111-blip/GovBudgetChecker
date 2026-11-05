@@ -210,6 +210,7 @@ function classify(
   return known?.category ?? "review";
 }
 
+/** 历史匹配器：财政总表侧看 title+detail；空表说明侧只看 detail。 */
 function mentionsFiscalGrantTotal(item: ObligationReviewItemRecord): boolean {
   return /财政拨款收支总表|财政拨款收入支出决算总表/.test(
     `${item.title ?? ""} ${item.detail ?? ""}`,
@@ -220,15 +221,93 @@ function mentionsEmptyStatement(item: ObligationReviewItemRecord): boolean {
   return /财政拨款收入支出决算总表/.test(String(item.detail ?? ""));
 }
 
+const FIN_04_KEY = "FIN_04_fiscal_grant_total";
+
+/** 财政总表侧的稳定表题（义务目录里的表题，不是材料原文）。 */
+const LEGACY_TOTAL_TITLES: ReadonlySet<string> = new Set([
+  "财政拨款收支总表",
+  "财政拨款收入支出决算总表",
+]);
+
+/** 新字段：列表（含 []）为权威；缺失/null 表示历史或过渡任务。 */
+function sameSourceKeys(item: ObligationReviewItemRecord): string[] | null {
+  const value = item.legacy_same_source_keys;
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  return value.filter((entry): entry is string => typeof entry === "string");
+}
+
+function coverageTerms(item: ObligationReviewItemRecord): string[] | null {
+  const value = item.legacy_coverage_terms;
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  return value.filter((entry): entry is string => typeof entry === "string");
+}
+
+/** 结构化证据：缺数/候选的表代码，或阻断项 ref 里精确的 FIN_04（数字边界）。 */
+function structuredFin04(item: ObligationReviewItemRecord): boolean {
+  for (const operand of item.missing_operands ?? []) {
+    if (operand && typeof operand === "object" && (operand as { table_code?: unknown }).table_code === FIN_04_KEY) {
+      return true;
+    }
+  }
+  for (const candidate of item.candidates ?? []) {
+    if (candidate && typeof candidate === "object" && (candidate as { table_code?: unknown }).table_code === FIN_04_KEY) {
+      return true;
+    }
+  }
+  for (const entry of item.blocked_by ?? []) {
+    const ref = entry && typeof entry === "object" && typeof (entry as { ref?: unknown }).ref === "string"
+      ? String((entry as { ref: string }).ref)
+      : "";
+    if (/(^|[^0-9])FIN[ _]?04([^0-9]|$)/.test(ref)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function stableTotalTitle(item: ObligationReviewItemRecord): boolean {
+  return LEGACY_TOTAL_TITLES.has(String(item.title ?? "").trim());
+}
+
+/** 历史任务：第一阶段旧匹配器（只看 detail/title 的欠款表名）。 */
+function historicalSameSource(
+  item: ObligationReviewItemRecord,
+  other: ObligationReviewItemRecord,
+  itemIsEmptyStatement: boolean,
+): boolean {
+  if (itemIsEmptyStatement) {
+    return mentionsEmptyStatement(item) && mentionsFiscalGrantTotal(other);
+  }
+  return mentionsFiscalGrantTotal(item) && mentionsEmptyStatement(other);
+}
+
+/** 过渡任务：只读结构化字段；空表说明侧必须有表代码/阻断证据。 */
+function structuredSameSource(
+  item: ObligationReviewItemRecord,
+  other: ObligationReviewItemRecord,
+  itemIsEmptyStatement: boolean,
+): boolean {
+  const selfEvidence = itemIsEmptyStatement
+    ? structuredFin04(item)
+    : structuredFin04(item) || stableTotalTitle(item);
+  const otherEvidence = itemIsEmptyStatement
+    ? structuredFin04(other) || stableTotalTitle(other)
+    : structuredFin04(other);
+  return selfEvidence && otherEvidence;
+}
+
 /**
- * 同源提示。
+ * 同源提示（方案 B 真值表）。
  *
- * 只登记**能由现有字段可靠判断**的两类：
- * - 空表说明 + 财政拨款总表合计：同一张 FIN_04 的空白金额格；
- * - T5 名称绑定 + V33-227 / 支出决算具体情况漏列：同一科目名称/漏列根因。
- *
- * 不做"同表即同源"的泛化：同一张表上的两条义务可能完全无关，
- * 泛化会把用户引到错误的结论上。
+ * - 双方都提供 legacy_same_source_keys 列表：列表为权威，只看交集；[] 不回退；
+ * - 双方都没有列表且都没有 legacy_coverage_terms：历史任务，逐字保留旧匹配器；
+ * - 其余（只有一侧有列表，或任一侧有覆盖短语列表）：过渡任务，只读
+ *   missing_operands / candidates.table_code / blocked_by.ref 与财政总表
+ *   侧的稳定表题，不读 detail 或“规则说明”。
  */
 function buildSameSource(
   item: ObligationReviewItemRecord,
@@ -238,32 +317,42 @@ function buildSameSource(
   const findingIds: string[] = [];
   const notes: string[] = [];
 
-  if (item.obligation_id === "OBL-STRUCT-EMPTY-STATEMENT" && mentionsEmptyStatement(item)) {
-    const other = allItems.find(
-      (candidate) =>
-        candidate.obligation_id === "OBL-CROSS-FISCAL-TOTAL" &&
-        mentionsFiscalGrantTotal(candidate),
-    );
-    if (other) {
-      obligationIds.push("OBL-CROSS-FISCAL-TOTAL");
-      notes.push(
-        "与「财政拨款收支总表合计一致性」指向同一处空白金额格，建议两条保持同一结论。",
-      );
+  const pairs: Array<[string, string, (self: ObligationReviewItemRecord) => boolean]> = [
+    ["OBL-STRUCT-EMPTY-STATEMENT", "OBL-CROSS-FISCAL-TOTAL", mentionsEmptyStatement],
+    ["OBL-CROSS-FISCAL-TOTAL", "OBL-STRUCT-EMPTY-STATEMENT", mentionsFiscalGrantTotal],
+  ];
+  for (const [selfId, otherId, legacyMatcher] of pairs) {
+    if (item.obligation_id !== selfId) {
+      continue;
     }
-  }
-
-  if (item.obligation_id === "OBL-CROSS-FISCAL-TOTAL" && mentionsFiscalGrantTotal(item)) {
-    const other = allItems.find(
-      (candidate) =>
-        candidate.obligation_id === "OBL-STRUCT-EMPTY-STATEMENT" &&
-        mentionsEmptyStatement(candidate),
-    );
-    if (other) {
-      obligationIds.push("OBL-STRUCT-EMPTY-STATEMENT");
-      notes.push(
-        "与「空表/无此项说明与总表零值确认」指向同一处空白金额格，建议两条保持同一结论。",
-      );
+    const other = allItems.find((candidate) => candidate.obligation_id === otherId);
+    if (!other) {
+      continue;
     }
+    const selfKeys = sameSourceKeys(item);
+    const otherKeys = sameSourceKeys(other);
+    const historical =
+      selfKeys === null &&
+      otherKeys === null &&
+      coverageTerms(item) === null &&
+      coverageTerms(other) === null;
+    let linked: boolean;
+    if (selfKeys !== null && otherKeys !== null) {
+      linked = selfKeys.includes(FIN_04_KEY) && otherKeys.includes(FIN_04_KEY);
+    } else if (historical) {
+      linked = legacyMatcher(item) && historicalSameSource(item, other, selfId === "OBL-STRUCT-EMPTY-STATEMENT");
+    } else {
+      linked = structuredSameSource(item, other, selfId === "OBL-STRUCT-EMPTY-STATEMENT");
+    }
+    if (!linked) {
+      continue;
+    }
+    obligationIds.push(otherId);
+    notes.push(
+      selfId === "OBL-STRUCT-EMPTY-STATEMENT"
+        ? "与「财政拨款收支总表合计一致性」指向同一处空白金额格，建议两条保持同一结论。"
+        : "与「空表/无此项说明与总表零值确认」指向同一处空白金额格，建议两条保持同一结论。",
+    );
   }
 
   if (item.obligation_id === "OBL-TXT-T5" && /找不到同名科目/.test(String(item.detail ?? ""))) {

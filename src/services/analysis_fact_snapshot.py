@@ -10,10 +10,40 @@ import tempfile
 from typing import Any, Sequence
 
 from src.schemas.parse_artifact import FiscalFact
-from src.services.input_processing_identity import content_hash, artifact_content_hash
+from src.services.input_processing_identity import (
+    artifact_content_hash,
+    content_hash,
+    processing_manifest,
+    semantic_artifact_hash,
+)
+from src.services.json_canonical import dumps_canonical
 
-SNAPSHOT_VERSION = 'gbc.analysis-fact-snapshot.v1'
+SNAPSHOT_VERSION = 'gbc.analysis-fact-snapshot.v2'
+LEGACY_SNAPSHOT_VERSIONS = frozenset({'gbc.analysis-fact-snapshot.v1'})
+EXECUTION_MANIFEST_VERSION = 'gbc.analysis-execution.v1'
 _JSON_FIELDS = ('hierarchy_path', 'evidence_ids', 'extra_dims')
+
+
+def freeze_execution_manifest() -> dict:
+    """在分析开始时冻结本次实际执行的完整代码/配置清单。"""
+    return {
+        'schema_version': EXECUTION_MANIFEST_VERSION,
+        'processing_manifest': deepcopy(processing_manifest()),
+    }
+
+
+def compute_execution_fingerprint(*, execution_manifest: dict, source_file_hash: str,
+                                  parse_run_uid: str, artifact_content_hash_value: str,
+                                  semantic_artifact_hash_value: str) -> str:
+    """分析运行指纹：完整执行清单 + 解析产物来源，可随快照冻结和复核。"""
+    return content_hash({
+        'schema_version': EXECUTION_MANIFEST_VERSION,
+        'execution_manifest': execution_manifest,
+        'source_file_hash': source_file_hash,
+        'parse_run_uid': parse_run_uid,
+        'artifact_content_hash': artifact_content_hash_value,
+        'semantic_artifact_hash': semantic_artifact_hash_value,
+    })
 
 
 def canonical_fact(value: Any) -> dict:
@@ -53,6 +83,9 @@ def bind_raw_interpretation(artifact, raw_context, mapping_report: dict) -> None
         'source_file_hash': raw['file_hash'], 'parse_run_uid': raw['parse_run_uid'],
         'context_hash': content_hash(raw), 'column_mapping': deepcopy(mapping_report),
     }
+    # 原始解释也是资格证据：保存后重算身份，不能让 UID 与语义证据脱节。
+    from src.services.input_processing_identity import refresh_parse_identity
+    refresh_parse_identity(artifact)
 
 
 def context_is_source_bound(artifact, value, *, raw: bool = False) -> bool:
@@ -68,7 +101,8 @@ def context_is_source_bound(artifact, value, *, raw: bool = False) -> bool:
         and origin.get('context_hash') == content_hash(ctx))
 
 
-def make_snapshot(*, job_uuid: str, revision_id: str, artifact, raw_context, effective_context) -> dict:
+def make_snapshot(*, job_uuid: str, revision_id: str, artifact, raw_context, effective_context,
+                  execution_manifest: dict | None = None) -> dict:
     def context(value):
         return deepcopy(value.to_dict() if hasattr(value, 'to_dict') else value or {'facts': []})
     raw, effective = context(raw_context), context(effective_context)
@@ -77,11 +111,25 @@ def make_snapshot(*, job_uuid: str, revision_id: str, artifact, raw_context, eff
             raise ValueError(f'{name} fact context differs from artifact source/run')
     if not job_uuid or not revision_id:
         raise ValueError('fact snapshot requires job and revision identity')
+    frozen_execution = (
+        deepcopy(execution_manifest) if execution_manifest is not None
+        else freeze_execution_manifest()
+    )
+    artifact_hash = artifact_content_hash(artifact)
+    semantic_hash = semantic_artifact_hash(artifact)
     payload = {'schema_version': SNAPSHOT_VERSION, 'job_uuid': job_uuid,
                'revision_id': revision_id, 'source_file_hash': artifact.source_file_hash,
                'parse_run_uid': artifact.parse_run_uid,
-               'artifact_content_hash': artifact_content_hash(artifact),
+               'artifact_content_hash': artifact_hash,
+               'semantic_artifact_hash': semantic_hash,
                'processing_manifest': getattr(artifact, 'processing_manifest', {}),
+               'execution_manifest': frozen_execution,
+               'execution_fingerprint': compute_execution_fingerprint(
+                   execution_manifest=frozen_execution,
+                   source_file_hash=artifact.source_file_hash,
+                   parse_run_uid=artifact.parse_run_uid,
+                   artifact_content_hash_value=artifact_hash,
+                   semantic_artifact_hash_value=semantic_hash),
                'raw_context': raw, 'effective_context': effective,
                'raw_facts_hash': facts_hash(raw.get('facts', [])),
                'effective_facts_hash': facts_hash(effective.get('facts', []))}
@@ -92,20 +140,67 @@ def make_snapshot(*, job_uuid: str, revision_id: str, artifact, raw_context, eff
 def validate_snapshot(payload: dict) -> dict:
     value = deepcopy(payload)
     digest = value.pop('snapshot_hash', None)
-    if value.get('schema_version') != SNAPSHOT_VERSION or content_hash(value) != digest:
+    version = value.get('schema_version')
+    if version not in ({SNAPSHOT_VERSION} | LEGACY_SNAPSHOT_VERSIONS) or content_hash(value) != digest:
         raise ValueError('analysis fact snapshot hash mismatch')
+    if version == SNAPSHOT_VERSION:
+        manifest = value.get('execution_manifest')
+        if not isinstance(manifest, dict) or not manifest:
+            raise ValueError('analysis fact snapshot execution manifest missing')
+        if not value.get('semantic_artifact_hash'):
+            raise ValueError('analysis fact snapshot semantic artifact hash missing')
+        expected = compute_execution_fingerprint(
+            execution_manifest=manifest,
+            source_file_hash=value['source_file_hash'],
+            parse_run_uid=value['parse_run_uid'],
+            artifact_content_hash_value=value['artifact_content_hash'],
+            semantic_artifact_hash_value=value['semantic_artifact_hash'])
+        if value.get('execution_fingerprint') != expected:
+            raise ValueError('analysis fact snapshot execution fingerprint mismatch')
     for kind in ('raw', 'effective'):
         if facts_hash(value[f'{kind}_context'].get('facts', [])) != value[f'{kind}_facts_hash']:
             raise ValueError(f'{kind} fiscal facts hash mismatch')
     return payload
 
 
+def snapshot_execution_provenance(snapshot: dict) -> dict | None:
+    """历史读取只返回当时冻结的执行清单；绝不按当前代码重算。
+
+    v1 旧快照没有冻结执行清单，返回 ``None``，由调用方显式标注为旧版本。
+    """
+    validate_snapshot(snapshot)
+    if snapshot.get('schema_version') != SNAPSHOT_VERSION:
+        return None
+    return {
+        'execution_manifest': deepcopy(snapshot['execution_manifest']),
+        'execution_fingerprint': snapshot['execution_fingerprint'],
+    }
+
+
+def artifact_matches_snapshot(artifact, snapshot: dict) -> bool:
+    """快照与 artifact 的来源/语义绑定；审计字段差异不算失配。
+
+    v2 快照按 ``semantic_artifact_hash`` 比较；v1 旧快照没有该字段时
+    保留完整内容哈希的旧口径。
+    """
+    if artifact.source_file_hash != snapshot.get('source_file_hash'):
+        return False
+    if artifact.parse_run_uid != snapshot.get('parse_run_uid'):
+        return False
+    if snapshot.get('semantic_artifact_hash'):
+        return semantic_artifact_hash(artifact) == snapshot['semantic_artifact_hash']
+    return artifact_content_hash(artifact) == snapshot.get('artifact_content_hash')
+
+
 def verify_consumed_snapshot(snapshot: dict, *, artifact, raw_context, effective_context) -> None:
     """规则只能消费冻结事实；执行中意外改值或改身份必须在写库前阻断。"""
     validate_snapshot(snapshot)
+    if snapshot.get('schema_version') != SNAPSHOT_VERSION:
+        raise ValueError('consumed fact snapshot lacks frozen execution provenance')
     current = make_snapshot(job_uuid=snapshot['job_uuid'], revision_id=snapshot['revision_id'],
                             artifact=artifact, raw_context=raw_context,
-                            effective_context=effective_context)
+                            effective_context=effective_context,
+                            execution_manifest=snapshot['execution_manifest'])
     if current != snapshot:
         raise ValueError('consumed fact snapshot changed during analysis')
 
@@ -140,7 +235,7 @@ async def verify_persisted_facts(conn, *, parse_run_id: int, facts: Sequence) ->
             if expected_map.get(uid, {}).get(key) != actual_map.get(uid, {}).get(key)] or ['missing_or_extra']}
             for uid in sorted(expected_map.keys() | actual_map.keys())
             if expected_map.get(uid) != actual_map.get(uid)][:5]
-        raise ValueError('persisted fiscal facts differ from raw snapshot: ' + json.dumps(differences, ensure_ascii=False))
+        raise ValueError('persisted fiscal facts differ from raw snapshot: ' + dumps_canonical(differences))
     evidence = {str(e['evidence_id']): e for e in await load_parse_evidence(conn, parse_run_id)}
     for fact in facts:
         for ref in fact.extra_dims.get('evidence_refs', []):
@@ -172,7 +267,7 @@ async def persist_snapshot(conn, *, snapshot: dict, parse_run_id: int) -> dict:
             ON CONFLICT(job_uuid, revision_id) DO NOTHING''',
             snapshot['job_uuid'], snapshot['revision_id'], parse_run_id,
             snapshot['source_file_hash'], snapshot['snapshot_hash'], snapshot['raw_facts_hash'],
-            snapshot['effective_facts_hash'], json.dumps(snapshot, ensure_ascii=False))
+            snapshot['effective_facts_hash'], dumps_canonical(snapshot))
         row = await conn.fetchrow('SELECT payload FROM analysis_fact_snapshots WHERE job_uuid=$1 AND revision_id=$2',
                                   snapshot['job_uuid'], snapshot['revision_id'])
         actual = json.loads(row['payload']) if isinstance(row['payload'], str) else row['payload']
@@ -181,6 +276,8 @@ async def persist_snapshot(conn, *, snapshot: dict, parse_run_id: int) -> dict:
             raise ValueError('immutable database analysis snapshot differs from current snapshot')
     return {'snapshot_hash': snapshot['snapshot_hash'], 'revision_id': snapshot['revision_id'],
             'raw_facts_hash': snapshot['raw_facts_hash'], 'effective_facts_hash': snapshot['effective_facts_hash'],
+            'execution_fingerprint': snapshot.get('execution_fingerprint'),
+            'semantic_artifact_hash': snapshot.get('semantic_artifact_hash'),
             'storage_consistent': True}
 
 
@@ -224,6 +321,9 @@ async def publish_snapshot(conn, payload: dict) -> None:
     for key in ('revision_id', 'snapshot_hash', 'raw_facts_hash', 'effective_facts_hash'):
         if receipt.get(key) != snapshot.get(key):
             raise ValueError('analysis publication snapshot mismatch: ' + key)
+    if (snapshot.get('execution_fingerprint')
+            and receipt.get('execution_fingerprint') != snapshot['execution_fingerprint']):
+        raise ValueError('analysis publication execution fingerprint mismatch')
     if receipt.get('storage_consistent') is not True:
         raise ValueError('analysis publication storage consistency unconfirmed')
     if ('expected_current_fact_revision_id' in payload
@@ -239,7 +339,7 @@ async def publish_snapshot(conn, payload: dict) -> None:
     core_hash = compute_analysis_result_fingerprint(payload)
     await conn.execute('INSERT INTO analysis_revision_results(job_uuid,revision_id,core_hash,payload) '
                        'VALUES($1,$2,$3,$4::jsonb) ON CONFLICT DO NOTHING',
-                       payload['job_id'], revision, core_hash, json.dumps(payload, ensure_ascii=False))
+                       payload['job_id'], revision, core_hash, dumps_canonical(payload))
     stored_core = await conn.fetchval('SELECT core_hash FROM analysis_revision_results WHERE job_uuid=$1 AND revision_id=$2',
                                      payload['job_id'],revision)
     if stored_core != core_hash:

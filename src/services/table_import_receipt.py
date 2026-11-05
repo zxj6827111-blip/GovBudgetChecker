@@ -4,16 +4,11 @@ from __future__ import annotations
 import re
 from collections import Counter
 
+from src.services.cell_identity import source_cell_id  # noqa: F401  （兼容既有导入路径）
 from src.services.fiscal_column_identity import canonical_column_mappings, code_dimension_columns, header_paths
 from src.services.fiscal_row_roles import is_index_header, native_bilateral_padding_positions
 from src.services.fiscal_table_rules import (
     NINE_TABLE_RULES, is_auxiliary_grant_expenditure_title, is_unit_breakdown_header, normalize_text)
-
-
-def source_cell_id(table, cell):
-    return (f"{cell.origin_fragment_uid or table.fragment_uid}:"
-            f"r{cell.origin_row_idx if cell.origin_row_idx is not None else cell.row_idx}"
-            f"c{cell.origin_col_idx if cell.origin_col_idx is not None else cell.col_idx}")
 
 
 def _serial_lane_proofs(artifact):

@@ -183,9 +183,10 @@ def test_unresolved_total_le_15(replays):
         item = replays[alias]["unresolved"]["V33-251"]
         assert "未纳入合计" in item["detail"] and label in item["detail"]
         planned_missing += 1
-    assert replays['shiquan']['summary']['rule_statuses']['V33-234'] == 'fail'
-    assert any(issue.rule == 'V33-234' and '312.55%' in issue.message
-               and '20.00' in issue.message and '62.51' in issue.message for issue in replays['shiquan']['issues'])
+    # 2C：软换行断开的“主要原因”已可识别，312.55% 条目不再误报未说明原因。
+    assert replays['shiquan']['summary']['rule_statuses']['V33-234'] == 'pass'
+    assert not any(issue.rule == 'V33-234' and '312.55%' in issue.message
+                   for issue in replays['shiquan']['issues'])
     # v3 封面不能用封面或未验收的标题风格自证；冻结夹具不带年度模板快照。
     # 2026-11-01：body_year 改为按页 ±20 字窗口识别标题，跨行的
     # “2025\n年度决算表”不再漏计；yichuan/shiquan 的年度锚点已能独立成立，
@@ -277,14 +278,16 @@ def test_wenlv_cascade_errors_zero(replays):
 def test_yichuan_output_budget(replays):
     # Portable percentage tolerance is 0.1pp: the 0.20pp vehicle delta is a
     # valid additional warning on top of the prior 12-item sample baseline.
-    # 2026-10-22 检查点清单（CMM-013 缺“第二部分”、V33-251 具体情况差 4.20 万元）另计。
+    # 2026-10-22 检查点清单中，V33-251 具体情况差 4.20 万元仍报；D2（2026-11-03）
+    # 起 2025 年部门决算照 2024 年模板，正文不写“第二部分”，CMM-013 不再报。
     issues = replays["yichuan"]["issues"]
     checklist = [i for i in issues if getattr(i, "rule", "") in {"CMM-013", "V33-251"}]
-    assert len(checklist) == 2
+    assert len(checklist) == 1 and checklist[0].rule == "V33-251"
     # 批次1 年份角色修复恢复了完成率复算：yichuan 声明 98%，按
     # 20707.11→20218.21 应为 97.64%，相差 0.36pp；这是真实新增发现，
     # 不是回归，也不能为了维持旧条数而删除检查。
-    assert len(issues) - len(checklist) <= 14
+    # 2D 格式穷尽：CMM-010/CMM-002 在宜川样张新增 4 条可见格式问题。
+    assert len(issues) - len(checklist) <= 18
 
 
 # ---------------------------------------------------------------------------

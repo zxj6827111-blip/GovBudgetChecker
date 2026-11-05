@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
 
@@ -137,6 +138,17 @@ UNRESOLVED_OBLIGATION_STATUSES: FrozenSet[str] = frozenset(
         OBLIGATION_EXECUTION_ERROR,
         OBLIGATION_PROFILE_UNRESOLVED,
         OBLIGATION_KIND_CONFLICT,
+        OBLIGATION_AI_NOT_RUN,
+        OBLIGATION_AI_FAILED,
+    }
+)
+
+#: 方案 DH-02 第 1 条要求逐条诊断的义务状态（范围外状态只在报告里列出）。
+DH02_OBLIGATION_SCOPE_STATUSES: FrozenSet[str] = frozenset(
+    {
+        OBLIGATION_INSUFFICIENT_DATA,
+        OBLIGATION_PARSE_AMBIGUITY,
+        OBLIGATION_EXECUTION_ERROR,
         OBLIGATION_AI_NOT_RUN,
         OBLIGATION_AI_FAILED,
     }
@@ -1179,6 +1191,15 @@ class ObligationInstance:
     gap_note: str = ""
     requires_ai: bool = False
     blocks_gate: bool = True
+    # DH-02 结构化卡点（义务级汇总；只增字段，不改写 detail）
+    blocked_by: Tuple[Dict[str, Any], ...] = ()
+    missing_operands: Tuple[Dict[str, Any], ...] = ()
+    candidates: Tuple[Dict[str, Any], ...] = ()
+    next_action: Optional[str] = None
+    root_cause_key: Optional[str] = None
+    # DH-03a 旧兼容字段（只供第一阶段 UI 提示；不参与覆盖/关闭/待办/门禁）
+    legacy_same_source_keys: Tuple[str, ...] = ()
+    legacy_coverage_terms: Tuple[str, ...] = ()
 
     @property
     def is_completed(self) -> bool:
@@ -1193,6 +1214,20 @@ class ObligationInstance:
         return self.status in UNRESOLVED_OBLIGATION_STATUSES
 
     def to_dict(self) -> Dict[str, Any]:
+        detail = self.detail
+        if self.is_unresolved:
+            # DH-03b：未完成原因改用结构化文案；旧 detail 已冻结进 legacy 字段。
+            from src.engine.diagnostic_fields import render_reason_text
+
+            detail = render_reason_text(
+                detail,
+                {
+                    "reason_codes": list(self.reason_codes),
+                    "blocked_by": list(self.blocked_by),
+                    "missing_operands": list(self.missing_operands),
+                    "candidates": list(self.candidates),
+                },
+            )
         return {
             "obligation_id": self.obligation_id,
             "group_id": self.group_id,
@@ -1201,7 +1236,7 @@ class ObligationInstance:
             "status": self.status,
             "reason": self.reason,
             "reason_label": OBLIGATION_REASON_LABELS.get(self.reason or "", None),
-            "detail": self.detail,
+            "detail": detail,
             "checkers": list(self.checkers),
             "missing_checkers": list(self.missing_checkers),
             "depends_on": list(self.depends_on),
@@ -1212,6 +1247,13 @@ class ObligationInstance:
             "gap_note": self.gap_note,
             "requires_ai": self.requires_ai,
             "blocks_gate": self.blocks_gate,
+            "blocked_by": [dict(item) for item in self.blocked_by],
+            "missing_operands": [dict(item) for item in self.missing_operands],
+            "candidates": [dict(item) for item in self.candidates],
+            "next_action": self.next_action,
+            "root_cause_key": self.root_cause_key,
+            "legacy_same_source_keys": list(self.legacy_same_source_keys),
+            "legacy_coverage_terms": list(self.legacy_coverage_terms),
         }
 
 
@@ -1625,6 +1667,172 @@ def _build_summary(
     }
 
 
+#: DH-03a 唯一合法旧同源键（冻结第一阶段既有 UI 提示依据）。
+LEGACY_SAME_SOURCE_KEY = "FIN_04_fiscal_grant_total"
+#: 旧算法不参与同源匹配的泛化词（与 2026-11-01 obligation_finding_coverage 逐字一致）。
+_LEGACY_GENERIC_TERMS = frozenset({
+    "一般公共", "一般公共预算", "财政拨款", "年初预算", "决算数", "预算数", "基本支出", "项目支出",
+    "合计", "本年", "上年", "三公经费", "机关运行经费", "支出决算", "收入决算",
+})
+_LEGACY_QUOTED_RE = re.compile(r"[“「]([^”」]{2,40})[”」]")
+
+
+def legacy_same_source_keys(instance: ObligationInstance) -> List[str]:
+    """冻结旧 UI 算法：只认 FIN_04 两个义务的固定表名短语，不扩大简称/表代号。"""
+    oid = instance.obligation_id
+    detail = str(instance.detail or "")
+    matched = oid == "OBL-STRUCT-EMPTY-STATEMENT" and "财政拨款收入支出决算总表" in detail
+    if oid == "OBL-CROSS-FISCAL-TOTAL":
+        text = str(instance.title or "") + " " + detail
+        matched = "财政拨款收支总表" in text or "财政拨款收入支出决算总表" in text
+    return [LEGACY_SAME_SOURCE_KEY] if matched else []
+
+
+def legacy_coverage_terms(detail: Any) -> List[str]:
+    """冻结旧算法：detail 中 4 字以上、非泛化的引号短语，排序去重。"""
+    terms = {match.group(1).strip() for match in _LEGACY_QUOTED_RE.finditer(str(detail or ""))}
+    return sorted(term for term in terms if len(term) >= 4 and term not in _LEGACY_GENERIC_TERMS)
+
+
+def _fill_legacy_fields(instances: Sequence[ObligationInstance]) -> None:
+    for instance in instances:
+        instance.legacy_same_source_keys = tuple(legacy_same_source_keys(instance))
+        instance.legacy_coverage_terms = tuple(legacy_coverage_terms(instance.detail))
+
+
+def _ai_root_key(instance: ObligationInstance) -> str:
+    from src.engine.diagnostic_fields import root_cause_key
+
+    return root_cause_key(
+        {
+            "obligation_id": instance.obligation_id,
+            "reason_codes": list(instance.reason_codes),
+            "blocked_by": list(instance.blocked_by),
+            "missing_operands": list(instance.missing_operands),
+            "candidates": list(instance.candidates),
+        }
+    )
+
+
+def _pair_root_keys(instance: ObligationInstance, fields: Mapping[str, Any]) -> List[str]:
+    """义务×规则汇总回执各自的根因键（与生产根因签名逐字段一致）。
+
+    DH-02 的一一对应要求：同一签名只能对应同一根因键。汇总回执带有自己的
+    ``rule_id``/``sub_check_id``，不能共用义务聚合键（聚合键不含规则维度），
+    否则同一义务下多个规则的汇总回执会在缺失阻断/缺数位置时撞键。
+    """
+    from src.engine.diagnostic_fields import root_cause_key
+
+    keys: List[str] = []
+    for rule_id in dict.fromkeys((*instance.checkers, *instance.missing_checkers)):
+        keys.append(root_cause_key({
+            "reason_codes": list(fields.get("reason_codes") or []),
+            "blocked_by": list(fields.get("blocked_by") or []),
+            "missing_operands": list(fields.get("missing_operands") or []),
+            "candidates": list(fields.get("candidates") or []),
+            "rule_id": str(rule_id),
+            "sub_check_id": f"{instance.obligation_id}:{rule_id}",
+            "obligation_id": instance.obligation_id,
+        }))
+    return keys
+
+
+def _attach_structured_diagnostics(
+    instances: Sequence[ObligationInstance],
+    *,
+    rule_execution_summary: Optional[Mapping[str, Any]],
+    fact_receipts: Optional[Sequence[Mapping[str, Any]]],
+    selected_ids: FrozenSet[str],
+) -> None:
+    """DH-02：把回执/规则级结构化卡点汇总到义务实例。
+
+    - 只汇总**未完成**关系回执与规则摘要里的结构化卡点；
+    - 位置未知的缺数不编造页码，沿用回执里登记的事实；
+    - 义务 detail 不变，这里只填诊断字段。
+    """
+    from src.engine.diagnostic_fields import aggregate, default_entry
+
+    rule_diagnostics: Dict[str, List[Dict[str, Any]]] = {}
+    if isinstance(rule_execution_summary, Mapping):
+        for entry in rule_execution_summary.get("unresolved_rules") or []:
+            if not isinstance(entry, Mapping):
+                continue
+            rule_id = str(entry.get("rule_id") or "").strip()
+            diagnostics = [dict(item) for item in entry.get("diagnostics") or [] if isinstance(item, dict)]
+            if rule_id and diagnostics:
+                rule_diagnostics.setdefault(rule_id, []).extend(diagnostics)
+
+    relation_diagnostics: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+    for raw in fact_receipts or []:
+        if not isinstance(raw, Mapping):
+            continue
+        if str(raw.get("status") or "") not in {
+            "insufficient_data", "parse_error", "execution_error"
+        }:
+            continue
+        rule_id = str(raw.get("rule_id") or "").strip()
+        if not rule_id or not raw.get("reason_codes"):
+            continue
+        diagnostic = {key: raw.get(key) for key in (
+            "reason_codes", "blocked_by", "missing_operands", "candidates", "next_action",
+        )}
+        targets = ([str(raw.get("obligation_id"))] if raw.get("obligation_id")
+                   else [key for key in obligation_ids_for_rule(rule_id) if key in selected_ids])
+        for obligation_id in targets:
+            relation_diagnostics.setdefault((str(obligation_id), rule_id), []).append(diagnostic)
+
+    for instance in instances:
+        if instance.requires_ai:
+            if instance.status == OBLIGATION_AI_NOT_RUN:
+                instance.reason_codes = tuple(dict.fromkeys((*instance.reason_codes, "ai_not_requested")))
+                instance.next_action = "rerun_ai"
+                _ai_keys = _pair_root_keys(instance, {
+                    "reason_codes": instance.reason_codes,
+                    "blocked_by": instance.blocked_by,
+                    "missing_operands": instance.missing_operands,
+                    "candidates": instance.candidates,
+                })
+                instance.root_cause_key = min(_ai_keys) if _ai_keys else _ai_root_key(instance)
+            elif instance.status == OBLIGATION_AI_FAILED:
+                instance.reason_codes = tuple(dict.fromkeys((*instance.reason_codes, "ai_timeout")))
+                instance.next_action = "rerun_ai"
+                _ai_keys = _pair_root_keys(instance, {
+                    "reason_codes": instance.reason_codes,
+                    "blocked_by": instance.blocked_by,
+                    "missing_operands": instance.missing_operands,
+                    "candidates": instance.candidates,
+                })
+                instance.root_cause_key = min(_ai_keys) if _ai_keys else _ai_root_key(instance)
+            else:
+                continue
+            continue
+        diagnostics: List[Dict[str, Any]] = []
+        for rule_id in dict.fromkeys((*instance.checkers, *instance.missing_checkers)):
+            diagnostics.extend(relation_diagnostics.get((instance.obligation_id, str(rule_id)), []))
+            diagnostics.extend(rule_diagnostics.get(str(rule_id), []))
+        if not diagnostics:
+            if instance.status not in DH02_OBLIGATION_SCOPE_STATUSES:
+                continue
+            diagnostics = [default_entry(instance.status)]
+        summary = aggregate(diagnostics, obligation_id=instance.obligation_id)
+        if summary is None:
+            continue
+        codes = list(dict.fromkeys((*instance.reason_codes, *summary["reason_codes"])))
+        instance.reason_codes = tuple(codes)
+        instance.blocked_by = tuple(summary["blocked_by"])
+        instance.missing_operands = tuple(summary["missing_operands"])
+        instance.candidates = tuple(summary["candidates"])
+        instance.next_action = summary["next_action"]
+        pair_keys = _pair_root_keys(instance, {
+            "reason_codes": codes,
+            "blocked_by": instance.blocked_by,
+            "missing_operands": instance.missing_operands,
+            "candidates": instance.candidates,
+        })
+        # 义务级主根因键取自同一最上游回执；无规则配对时沿用聚合键。
+        instance.root_cause_key = min(pair_keys) if pair_keys else summary["root_cause_key"]
+
+
 def build_obligation_ledger(
     profile: Optional[DocumentProfile],
     *,
@@ -1633,6 +1841,7 @@ def build_obligation_ledger(
     ai_execution: Optional[Mapping[str, Any]] = None,
     ai_required: bool = False,
     structured_ingest: Optional[Mapping[str, Any]] = None,
+    fact_receipts: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """构建检查义务账本（应检查事项的逐项状态 + 覆盖摘要）。
 
@@ -1678,6 +1887,15 @@ def build_obligation_ledger(
             _input_gaps(instance.depends_on, structured_ingest)
         )
 
+    # DH-03a：旧兼容字段在 detail 落定后、任何原因文案改写前冻结。
+    _fill_legacy_fields(instances)
+
+    _attach_structured_diagnostics(
+        instances,
+        rule_execution_summary=rule_execution_summary,
+        fact_receipts=fact_receipts,
+        selected_ids=frozenset(item.obligation_id for item in instances),
+    )
     return _build_summary(instances, notes)
 
 
@@ -1778,6 +1996,7 @@ def build_check_receipts(
         return worst, reason
 
     receipt_items: List[Dict[str, Any]] = []
+    pair_primary: Dict[str, List[Tuple[str, Optional[str]]]] = {}
     instances = (
         obligation_coverage.get("instances", [])
         if isinstance(obligation_coverage, Mapping)
@@ -1849,6 +2068,46 @@ def build_check_receipts(
                         "relation_tolerances": per_relation_tolerance,
                     }
 
+            # DH-02：汇总回执承载义务级结构化卡点，关系回执各自保留本关系卡点。
+            # 只有未完成回执需要诊断；通过的汇总回执仅在义务级确有诊断时携带，
+            # 以便规则摘要未完成但子关系全通过的汇总回执仍可解释。
+            structured: Dict[str, Any] = {}
+            if status in {"insufficient_data", "parse_error", "execution_error"} or instance.get("next_action"):
+                structured = {
+                    "reason_codes": list(instance.get("reason_codes") or []),
+                    "blocked_by": [dict(value) for value in instance.get("blocked_by") or []
+                                   if isinstance(value, Mapping)],
+                    "missing_operands": [dict(value) for value in instance.get("missing_operands") or []
+                                         if isinstance(value, Mapping)],
+                    "candidates": [dict(value) for value in instance.get("candidates") or []
+                                   if isinstance(value, Mapping)],
+                    "next_action": instance.get("next_action"),
+                    "root_cause_key": instance.get("root_cause_key"),
+                }
+                if not structured["reason_codes"]:
+                    from src.engine.diagnostic_fields import default_entry, finalize
+
+                    fallback = finalize(
+                        default_entry(status),
+                        rule_id=raw_rule_id,
+                        sub_check_id=f"{obligation_id}:{raw_rule_id}",
+                        obligation_id=obligation_id,
+                    )
+                    structured.update(fallback)
+                elif structured["reason_codes"]:
+                    # DH-02：汇总回执带自己的规则/子检查身份，根因键按本回执
+                    # 签名重算；直接沿用义务聚合键会让同义务多规则在无阻断时撞键。
+                    from src.engine.diagnostic_fields import root_cause_key
+
+                    structured["root_cause_key"] = root_cause_key({
+                        "reason_codes": list(structured["reason_codes"]),
+                        "blocked_by": list(structured["blocked_by"]),
+                        "missing_operands": list(structured["missing_operands"]),
+                        "candidates": list(structured["candidates"]),
+                        "rule_id": raw_rule_id,
+                        "sub_check_id": f"{obligation_id}:{raw_rule_id}",
+                        "obligation_id": obligation_id,
+                    })
             receipt = CheckReceipt(
                 rule_id=raw_rule_id,
                 sub_check_id=f"{obligation_id}:{raw_rule_id}",
@@ -1862,8 +2121,31 @@ def build_check_receipts(
                 obligation_id=obligation_id or None,
                 evaluation_basis="fiscal_fact" if is_fact_based else "legacy_document",
                 fact_migration_status="complete" if is_fact_based else "pending",
+                reason_codes=structured.get("reason_codes") or [],
+                blocked_by=structured.get("blocked_by") or [],
+                missing_operands=structured.get("missing_operands") or [],
+                candidates=structured.get("candidates") or [],
+                next_action=structured.get("next_action"),
+                root_cause_key=structured.get("root_cause_key"),
             )
             receipt_items.append(receipt.to_dict())
+            if receipt.status in UNCOMPLETED_RECEIPT_STATUSES and receipt.root_cause_key:
+                pair_primary.setdefault(obligation_id, []).append(
+                    (receipt.root_cause_key, receipt.next_action))
+
+    # 义务级主根因键必须来自一条真实未完成回执（与验收口径一致）：
+    # 通过的汇总回执不承载义务诊断，不能把它们的规则身份键选成主键。
+    instance_by_id = {str(item.get("obligation_id")): item for item in instances
+                      if isinstance(item, dict)}
+    for obligation_id, pairs in pair_primary.items():
+        instance = instance_by_id.get(obligation_id)
+        if not instance:
+            continue
+        key, _action = min(pairs, key=lambda item: item[0])
+        instance["root_cause_key"] = key
+        # 动作不再按“根因键最小的那条回执”覆盖：汇总阶段已按主原因码
+        # 继承了与材料/技术分类一致的动作，按任意回执覆盖会让
+        # “原因码是 cell_unbound、动作却是 tech_fix”自相矛盾。
 
     # 关系级回执置于义务级回执之后，逐关系可追溯（AC-04 验收要求）
     receipt_items.extend(relation_receipts)
