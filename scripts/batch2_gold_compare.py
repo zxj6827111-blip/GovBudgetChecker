@@ -193,13 +193,36 @@ def _amount_bindings(text: str) -> List[tuple]:
     return bindings
 
 
+def _span_bounds(ref: Dict[str, Any]) -> Optional[Tuple[int, int]]:
+    span = ref.get("source_span")
+    if isinstance(span, (list, tuple)) and len(span) == 2:
+        start, end = span
+        if isinstance(start, int) and isinstance(end, int):
+            return (start, end) if start <= end else (end, start)
+    return None
+
+
+def _ref_identity(ref: Dict[str, Any]) -> Dict[str, Any]:
+    """引用的可验证位置身份；缺身份字段的引用不能与任何片段拼接。"""
+    return {
+        "block": str(ref.get("source_block_id") or ref.get("source_block") or "").strip(),
+        "table": str(ref.get("table_id") or ref.get("table_ref_id")
+                     or ref.get("table") or "").strip(),
+        "row": _name_key(ref.get("row") or ref.get("row_id") or ""),
+        "span": _span_bounds(ref),
+    }
+
+
 def _item_occurrences(item: Dict[str, Any]) -> List[tuple]:
-    """[(page, text)]：同一引用内部的文本只与它自己的 page 绑定。
+    """[(page, text, identity)]：同一引用内部的文本只与它自己的 page 绑定。
 
     R3-02：显式页码引用优先；只要存在 evidence/table_refs/locations 引用，
     顶层 text/quotes 不再被统一重绑到 ``location.page``（多页条目尤其如此），
     只作为无页归属的摘要保留。无显式引用时，单页条目才把顶层正文绑到该页；
     多页条目的顶层正文保持 None（fail-closed）。
+
+    R4-01：引用携带 ``identity``（source_block_id / table / row / source_span），
+    供跨 ref 拼接时核验位置连续性；顶层摘要没有位置身份，不能参与拼接。
     """
     explicit: List[tuple] = []
     location = item.get("location") if isinstance(item.get("location"), dict) else {}
@@ -216,7 +239,7 @@ def _item_occurrences(item: Dict[str, Any]) -> List[tuple]:
                 continue
             raw_page = ref.get("page")
             page = int(raw_page) if isinstance(raw_page, int) and raw_page > 0 else None
-            explicit.append((page, str(value)))
+            explicit.append((page, str(value), _ref_identity(ref)))
     for evidence in item.get("evidence") or []:
         if not isinstance(evidence, dict):
             continue
@@ -226,7 +249,7 @@ def _item_occurrences(item: Dict[str, Any]) -> List[tuple]:
             continue
         raw_page = evidence.get("page")
         page = int(raw_page) if isinstance(raw_page, int) and raw_page > 0 else None
-        explicit.append((page, str(value)))
+        explicit.append((page, str(value), _ref_identity(evidence)))
     top_texts = [str(item.get("text") or "")] + [str(q) for q in item.get("quotes") or [] if q]
     top_texts = [value for value in top_texts if value]
     if explicit:
@@ -235,13 +258,69 @@ def _item_occurrences(item: Dict[str, Any]) -> List[tuple]:
         # 顶层正文/引文可以绑到该唯一页（message 常引用同页原句）。
         pages = {int(p) for p in item.get("pages") or [] if isinstance(p, int)}
         single = next(iter(pages)) if len(pages) == 1 else None
-        return explicit + [(single, value) for value in top_texts]
+        return explicit + [(single, value, {}) for value in top_texts]
     pages = {int(p) for p in item.get("pages") or [] if isinstance(p, int)}
     primary = location.get("page")
     single = next(iter(pages)) if len(pages) == 1 else None
     if single is None and not pages and isinstance(primary, int) and primary > 0:
         single = primary
-    return [(single, value) for value in top_texts]
+    return [(single, value, {}) for value in top_texts]
+
+
+#: 跨 ref 拼接时允许的原文间隙（一个空白字符的规范化误差）。
+_MAX_JOIN_GAP = 1
+
+
+def _refs_joinable(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
+    """只有位置身份可验证的两个引用才允许拼成一次命中。
+
+    R4-01：不再对所有同页引用无条件串接。要求：
+    - 两个引用都声明了 table/row 身份时，不能互相冲突；
+    - 两侧都有 source_span 时，必须是连续/重叠（间隙最多 1，覆盖空白）；
+    - 没有 span 时，必须属于同一个 source_block_id。
+    任一条件不满足即不拼接；顶层摘要（无身份）永远不与其它片段拼接。
+    """
+    if not left or not right:
+        return False
+    if left.get("table") and right.get("table") and left["table"] != right["table"]:
+        return False
+    left_row, right_row = left.get("row") or "", right.get("row") or ""
+    if left_row and right_row and left_row != right_row \
+            and left_row not in right_row and right_row not in left_row:
+        return False
+    left_span, right_span = left.get("span"), right.get("span")
+    if left_span and right_span:
+        return right_span[0] <= left_span[1] + _MAX_JOIN_GAP
+    if left.get("block") and right.get("block"):
+        # 同 block 还要求同行：只有“同一关系”才拼；缺行身份时 fail-closed。
+        return left["block"] == right["block"] and bool(left_row and right_row)
+    return False
+
+
+def _joined_fragment_hit(entries: Sequence[tuple], needle: str) -> bool:
+    """按原文顺序拼接“身份连续”的引用；返回是否有窗口命中完整锚点。"""
+    by_page: Dict[Optional[int], List[tuple]] = defaultdict(list)
+    for page, text, identity in entries:
+        if page is not None:
+            by_page[page].append((text, identity))
+    for refs in by_page.values():
+        if len(refs) < 2:
+            continue
+        order = sorted(
+            range(len(refs)),
+            key=lambda index: (refs[index][1].get("span") or (10 ** 9, 10 ** 9), index))
+        ordered = [refs[index] for index in order]
+        for start in range(len(ordered)):
+            joined = ordered[start][0]
+            if needle in joined:
+                return True
+            for end in range(start + 1, len(ordered)):
+                if not _refs_joinable(ordered[end - 1][1], ordered[end][1]):
+                    break
+                joined += ordered[end][0]
+                if needle in joined:
+                    return True
+    return False
 
 
 #: 同一局部关系的切分边界：名称和金额必须在同一个 clause 内配对，
@@ -276,33 +355,32 @@ def _anchor_covered(item: Dict[str, Any], anchor: str, eval_lib,
     - 显式页码引用优先，顶层 quotes 不再被 ``location.page`` 统一重绑。
     - 金额不符后不允许名称回退；名称/口径类必须由调用方显式
       ``amount_required=False``，且仍要求同页同 clause 名称命中。
+    - R4-01（第四轮复核 2026-11-04）：跨 ref 拼接必须有可验证位置身份
+      （source_block_id 相同，或 source_span 连续/重叠且 table/row 不冲突），
+      异行/异表/不连续片段不能组成一次命中。
     """
     needle = eval_lib.norm(anchor)
     if not needle:
         return False
-    occurrences = [(p, eval_lib.norm(t)) for p, t in _item_occurrences(item) if t]
+    occurrences = [(page_value, eval_lib.norm(text), identity)
+                   for page_value, text, identity in _item_occurrences(item) if text]
     if page is not None:
-        occurrences = [(p, t) for p, t in occurrences if p == page]
+        occurrences = [entry for entry in occurrences if entry[0] == page]
     if not occurrences:
         return False
-    # 同页相邻片段池：格式/标点类锚点常被表格提取拆成多个 ref，
-    # 同一页的片段按原顺序拼接后允许整段命中；不跨页，也不用于
-    # 名称-金额的局部配对（那里仍走 clause 级）。
-    page_pools: Dict[int, str] = {}
-    for ref_page, ref_text in occurrences:
-        if ref_page is not None:
-            page_pools[ref_page] = page_pools.get(ref_page, "") + ref_text
-    needle = eval_lib.norm(anchor)
-    if any(needle in pool for pool in page_pools.values()):
+    # R4-01：同页跨 ref 拼接只在位置身份可验证时成立（同一 block，或
+    # source_span 连续/重叠且 table/row 不冲突）。不能再把同页所有片段
+    # 无条件串接；格式/标点类也不能借不连续位置拼出金额。
+    if _joined_fragment_hit(occurrences, needle):
         return True
     anchor_bindings = _amount_bindings(needle)
     segments = _text_segments(needle)
     if not anchor_bindings:
         # 纯文本锚点：完整引文逐出现点命中；片段匹配也只在单个 clause 内。
-        for _p, text in occurrences:
+        for _p, text, _identity in occurrences:
             if needle in text:
                 return True
-        for _p, text in occurrences:
+        for _p, text, _identity in occurrences:
             for clause in _clauses(text):
                 shorter, longer = sorted((len(clause), len(needle)))
                 if clause and (clause in needle or needle in clause) \
@@ -324,7 +402,7 @@ def _anchor_covered(item: Dict[str, Any], anchor: str, eval_lib,
     material = [item for item in anchor_bindings if item[1] != "%"]
     if not material:
         material = list(anchor_bindings)
-    for _p, text in occurrences:
+    for _p, text, _identity in occurrences:
         # 完整锚点原文在，直接视为同一出现点（保留合法长引文正控）。
         if needle in text:
             return True

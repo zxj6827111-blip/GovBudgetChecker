@@ -118,3 +118,57 @@ def test_full_quote_still_covers():
     assert cmp._anchor_covered(
         item("说明写“其他行政事业单位离退休支出（项）”", ["其他行政事业单位离退休支出（项）"], [21]),
         "其他行政事业单位离退休支出（项）", ev, page=21)
+
+
+def _ref_full(page, text, block, span, row="", table=""):
+    payload = {"page": page, "text": text, "source_block_id": block,
+               "source_span": list(span), "row": row}
+    if table:
+        payload["table_id"] = table
+    return payload
+
+
+def test_discontinuous_refs_cannot_form_amount_occurrence():
+    # R4-01：同页、异行、source_span 不连续的两个片段不能拼出金额出现点。
+    payload = item("", [], [5], refs=[
+        _ref_full(5, "项目支出", "native:p5:s10:e18", (10, 18), "项目支出"),
+        _ref_full(5, "100.00万元", "native:p5:s90:e100", (90, 100), "基本支出")])
+    assert not cmp._anchor_covered(payload, "项目支出100.00万元", ev, page=5)
+
+
+def test_contiguous_refs_with_same_row_can_join():
+    # 真实连续片段正控：同一行、span 首尾相接（空白间隙 0）仍应命中。
+    payload = item("", [], [5], refs=[
+        _ref_full(5, "项目支出", "native:p5:s10:e18", (10, 18), "项目支出"),
+        _ref_full(5, "100.00万元", "native:p5:s18:e28", (18, 28), "项目支出")])
+    assert cmp._anchor_covered(payload, "项目支出100.00万元", ev, page=5)
+
+
+def test_same_page_different_blocks_without_span_cannot_join():
+    payload = item("", [], [5], refs=[
+        {"page": 5, "text": "项目支出", "source_block_id": "native:p5:b1"},
+        {"page": 5, "text": "100.00万元", "source_block_id": "native:p5:b2"}])
+    assert not cmp._anchor_covered(payload, "项目支出100.00万元", ev, page=5)
+
+
+def test_same_block_same_row_without_span_can_join():
+    payload = item("", [], [5], refs=[
+        {"page": 5, "text": "项目支出", "source_block_id": "native:p5:b1", "row": "项目支出"},
+        {"page": 5, "text": "100.00万元", "source_block_id": "native:p5:b1", "row": "项目支出"}])
+    assert cmp._anchor_covered(payload, "项目支出100.00万元", ev, page=5)
+
+
+def test_same_block_without_row_cannot_join():
+    # R4-01：同 block 但缺行身份时 fail-closed，避免只靠 block id 拼金额。
+    payload = item("", [], [5], refs=[
+        {"page": 5, "text": "项目支出", "source_block_id": "native:p5:b1"},
+        {"page": 5, "text": "100.00万元", "source_block_id": "native:p5:b1"}])
+    assert not cmp._anchor_covered(payload, "项目支出100.00万元", ev, page=5)
+
+
+def test_adjacent_span_with_conflicting_row_cannot_join():
+    # 位置相邻也不能跨行拼：名称和金额必须属于同一行/同一关系。
+    payload = item("", [], [5], refs=[
+        _ref_full(5, "项目支出", "native:p5:s10:e18", (10, 18), "项目支出"),
+        _ref_full(5, "100.00万元", "native:p5:s18:e28", (18, 28), "基本支出")])
+    assert not cmp._anchor_covered(payload, "项目支出100.00万元", ev, page=5)
