@@ -6927,7 +6927,7 @@ class R33240_Table2_IncomeAdvancedCheck(Rule):
                 if diff_level == "mismatch":
                     source_detail = ", ".join([f"{k}={v:.2f}" for k, v in source_vals.items() if v != 0])
                     native_quote = self._native_row_quote(row, doc.page_texts)
-                    location = {"table": "收入决算表", "row": r_idx+1, "code": code, "diff": diff}
+                    location = {"table": "收入决算表", "row": r_idx+1, "code": code, "diff": str(diff)}
                     evidence_text = (
                         f"表格：收入决算表\n行号：{r_idx+1}\n行内容：{row_txt[:100]}...\n"
                         f"合计值：{total_val}\n分项之和：{source_sum} ({source_detail})"
@@ -7019,7 +7019,7 @@ class R33240_Table2_IncomeAdvancedCheck(Rule):
                 issues.append(self._issue(
                     f"【收入决算表】{cand['kind']}({cand['parent']} {cand['name']})纵向汇总不平："
                     f"{cand['self_label']}({cand['total']:.2f}) ≠ {cand['child_label']}({cand['child_sum']:.2f})，差额={cand['diff']:.2f}",
-                    {"table": "收入决算表", "code": cand["parent"], "diff": cand["diff"], "type": "vertical"
+                    {"table": "收入决算表", "code": cand["parent"], "diff": str(cand["diff"]), "type": "vertical"
                      if cand["kind"] != "合计行" else "vertical_total"},
                     "error",
                     evidence_text=(
@@ -7217,7 +7217,7 @@ class R33241_Table3_ExpenseAdvancedCheck(Rule):
                     )
                     issues.append(self._issue(
                         f"【支出决算表】第{r_idx+1}行横向求和不平：合计({total_val:.2f}) ≠ 基本({basic_val:.2f})+项目({project_val:.2f}){extra_part}={calc_sum:.2f}，差额={diff:.2f}。科目：{code} {name}",
-                        {"table": "支出决算表", "row": r_idx+1, "code": code, "diff": diff}, "error",
+                        {"table": "支出决算表", "row": r_idx+1, "code": code, "diff": str(diff)}, "error",
                         evidence_text=f"表格：支出决算表\n行号：{r_idx+1}\n科目：{code} {name}\n合计：{total_val}\n基本支出：{basic_val}\n项目支出：{project_val}{extra_detail}"
                     ))
                 elif diff_level == "rounding_hint":
@@ -7295,7 +7295,7 @@ class R33241_Table3_ExpenseAdvancedCheck(Rule):
                 issues.append(self._issue(
                     f"【支出决算表】{cand['kind']}({cand['parent']} {cand['name']})纵向汇总不平："
                     f"{cand['self_label']}({cand['total']:.2f}) ≠ {cand['child_label']}({cand['child_sum']:.2f})，差额={cand['diff']:.2f}",
-                    {"table": "支出决算表", "code": cand["parent"], "diff": cand["diff"],
+                    {"table": "支出决算表", "code": cand["parent"], "diff": str(cand["diff"]),
                      "type": "vertical" if cand["kind"] != "合计行" else "vertical_total"},
                     "error",
                     evidence_text=(

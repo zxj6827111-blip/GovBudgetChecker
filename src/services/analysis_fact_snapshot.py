@@ -16,6 +16,7 @@ from src.services.input_processing_identity import (
     processing_manifest,
     semantic_artifact_hash,
 )
+from src.services.json_canonical import dumps_canonical
 
 SNAPSHOT_VERSION = 'gbc.analysis-fact-snapshot.v2'
 LEGACY_SNAPSHOT_VERSIONS = frozenset({'gbc.analysis-fact-snapshot.v1'})
@@ -234,7 +235,7 @@ async def verify_persisted_facts(conn, *, parse_run_id: int, facts: Sequence) ->
             if expected_map.get(uid, {}).get(key) != actual_map.get(uid, {}).get(key)] or ['missing_or_extra']}
             for uid in sorted(expected_map.keys() | actual_map.keys())
             if expected_map.get(uid) != actual_map.get(uid)][:5]
-        raise ValueError('persisted fiscal facts differ from raw snapshot: ' + json.dumps(differences, ensure_ascii=False))
+        raise ValueError('persisted fiscal facts differ from raw snapshot: ' + dumps_canonical(differences))
     evidence = {str(e['evidence_id']): e for e in await load_parse_evidence(conn, parse_run_id)}
     for fact in facts:
         for ref in fact.extra_dims.get('evidence_refs', []):
@@ -266,7 +267,7 @@ async def persist_snapshot(conn, *, snapshot: dict, parse_run_id: int) -> dict:
             ON CONFLICT(job_uuid, revision_id) DO NOTHING''',
             snapshot['job_uuid'], snapshot['revision_id'], parse_run_id,
             snapshot['source_file_hash'], snapshot['snapshot_hash'], snapshot['raw_facts_hash'],
-            snapshot['effective_facts_hash'], json.dumps(snapshot, ensure_ascii=False))
+            snapshot['effective_facts_hash'], dumps_canonical(snapshot))
         row = await conn.fetchrow('SELECT payload FROM analysis_fact_snapshots WHERE job_uuid=$1 AND revision_id=$2',
                                   snapshot['job_uuid'], snapshot['revision_id'])
         actual = json.loads(row['payload']) if isinstance(row['payload'], str) else row['payload']
@@ -338,7 +339,7 @@ async def publish_snapshot(conn, payload: dict) -> None:
     core_hash = compute_analysis_result_fingerprint(payload)
     await conn.execute('INSERT INTO analysis_revision_results(job_uuid,revision_id,core_hash,payload) '
                        'VALUES($1,$2,$3,$4::jsonb) ON CONFLICT DO NOTHING',
-                       payload['job_id'], revision, core_hash, json.dumps(payload, ensure_ascii=False))
+                       payload['job_id'], revision, core_hash, dumps_canonical(payload))
     stored_core = await conn.fetchval('SELECT core_hash FROM analysis_revision_results WHERE job_uuid=$1 AND revision_id=$2',
                                      payload['job_id'],revision)
     if stored_core != core_hash:
