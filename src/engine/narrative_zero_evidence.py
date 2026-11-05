@@ -30,6 +30,12 @@ _LABELS = {
 }
 
 _NONZERO_DELTA_RE = re.compile(r"(?:增加|减少|增长|下降)")
+
+#: 明确不属于财政拨款的资金口径：不能证明“财政拨款三公表”的空格为零。
+#: 目标表自身是财政拨款口径，不能反过来给说明文本赋予身份。
+_NON_FISCAL_SCOPE_RE = re.compile(
+    r"非财政拨款|其他资金|事业收入|经营收入|上级补助|附属单位上缴|自有资金|非财政补助"
+)
 _CLAUSE_SPLIT = re.compile(r"[。；;]")
 
 
@@ -73,13 +79,18 @@ def narrative_zero_sources(doc: Any, *, table_code: str, indicator: str,
         clause = compact[begin:end]
         if not pattern.search(clause):
             continue
-        if _NONZERO_DELTA_RE.search(clause):
-            continue  # 增减额句不是水平陈述
+        if _NON_FISCAL_SCOPE_RE.search(clause):
+            # “非财政拨款…决算0万元”说的是另一资金口径，不能补财政拨款表。
+            return None
+        # 含“增加/减少”的句子未必没有水平值：
+        # “决算1万元，比上年增加0.20万元”仍披露了本期值 1 万元。
+        # 水平值由 level 正则单独取；只有取不到水平值时才整句跳过。
         if "预算" in clause and "决算" not in clause:
             continue  # 预算口径的零不能证明决算格
         statements = [m.group("num") for m in level.finditer(clause)]
         if not statements:
-            continue  # 表格行、名词解释、定义句都不是水平陈述
+            # 纯增减额句、表格行、名词解释、定义句都不是水平陈述
+            continue
         if "决算" not in clause and not _section_is_final(text, begin, doc):
             continue
         if any(Decimal(text_value.replace(",", "")) != 0 for text_value in statements):

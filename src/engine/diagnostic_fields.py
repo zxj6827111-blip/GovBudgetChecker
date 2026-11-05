@@ -361,6 +361,9 @@ def lookup_failure(doc: Any, text: Any) -> List[Dict[str, Any]]:
 #: 规则级文本（没有更细证据可用时）按规则自己陈述的阻断类型归类。
 #: 只用于规则执行摘要，不用于关系回执；ref 标明“规则级”，不伪造页码。
 _RULE_LEVEL_PATTERNS = (
+    # 表已识别但没有任何可用金额事实 = 空表/缺表（材料侧），与
+    # native_table_arithmetic 的同一句话映射保持一致；不能报成列映射故障。
+    (("没有可用金额事实",), "table_missing", "instance_uid"),
     (("结构化表模型不可用", "结构化表模型"), "table_mapping_incomplete", "instance_uid"),
     (("未定位到唯一的", "结构化表"), "table_missing", "instance_uid"),
     (("解析存在不确定",), "table_mapping_incomplete", "instance_uid"),
@@ -377,7 +380,7 @@ _RULE_LEVEL_PATTERNS = (
     (("来源表仍有未完成读取",), "table_mapping_incomplete", "instance_uid"),
     (("识别风险阻断",), "cell_low_confidence", "cell"),
     (("评级类别未识别",), "row_level_unresolved", "row"),
-    (("未取到", "取不到", "取数失败", "没有可用金额事实", "原文未定位"),
+    (("未取到", "取不到", "取数失败", "原文未定位"),
      "table_mapping_incomplete", "instance_uid"),
 )
 

@@ -147,3 +147,14 @@ def test_empty_table_without_cells_is_material_not_technical():
     assert final["reason_codes"] == ["table_missing"]
     assert final["next_action"] == "human_confirm"
     assert final["blocked_by"][0]["dimension"] == "instance_uid"
+
+
+def test_no_usable_amount_facts_is_material_not_mapping_failure():
+    """第 1/4 份：规则说“表没有可用金额事实”，应归材料侧 table_missing。"""
+    from src.engine.diagnostic_fields import finalize, rule_level_entry
+
+    entry = rule_level_entry(
+        "一般公共预算财政拨款“三公”经费支出决算表 没有可用金额事实", rule_id="CMM-001")
+    assert entry["reason_codes"] == ["table_missing"]
+    assert entry["blocked_by"][0]["dimension"] == "instance_uid"
+    assert finalize(entry)["next_action"] == "human_confirm"

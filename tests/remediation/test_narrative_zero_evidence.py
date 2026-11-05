@@ -102,3 +102,21 @@ def test_budget_stage_blank_stays_unknown():
     doc = _doc()
     assert blank_term(doc, 'FIN_07_three_public', 'vehicle_purchase', code='total',
                       stage='年初预算') is None
+
+
+def test_non_fiscal_zero_cannot_prove_fiscal_blank():
+    """非财政拨款的零不能补财政拨款三公表的空格。"""
+    doc = _doc(REAL_TEXT.replace(
+        '公务接待费支出0万元。当年度根据实际工作情况，未安排公务接待。',
+        '非财政拨款公务接待费支出决算0万元。'))
+    assert narrative_zero_sources(doc, table_code='FIN_07_three_public',
+                                  indicator='reception', stage='决算') is None
+
+
+def test_nonzero_level_with_yoy_clause_still_blocks_zero():
+    """“决算1万元，比上年增加0.20万元”仍披露本期非零值，不能只看“增加”就跳过。"""
+    doc = _doc(REAL_TEXT.replace(
+        '公务接待费支出0万元。当年度根据实际工作情况，未安排公务接待。',
+        '公务接待费支出决算1万元，比上年增加0.20万元。'))
+    assert narrative_zero_sources(doc, table_code='FIN_07_three_public',
+                                  indicator='reception', stage='决算') is None
