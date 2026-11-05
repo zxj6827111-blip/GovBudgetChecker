@@ -172,8 +172,16 @@ def enforce_legacy_table_admission(document, rule_id):
 
 
 def _cells_by_fragment(receipt: dict) -> dict:
+    """未绑定金额格在回执的两层结构里都可能出现。
+
+    ``build_table_import_receipt`` 返回的是外层回执，逐格明细挂在
+    ``reading_quality.unbound_money_cells``；持久化的 reading_import 则把
+    部分字段摊平。两处都取，避免因结构层级差异漏掉真实格。
+    """
+    cells = list(receipt.get("unbound_money_cells") or [])
+    cells += list((receipt.get("reading_quality") or {}).get("unbound_money_cells") or [])
     grouped: dict = {}
-    for cell in receipt.get("unbound_money_cells") or []:
+    for cell in cells:
         grouped.setdefault(cell.get("fragment_uid"), []).append(cell)
     return grouped
 

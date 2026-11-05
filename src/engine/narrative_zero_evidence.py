@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import re
+from decimal import Decimal
 from typing import Any, Optional
 
 from .native_narrative_checks import _Text, _foreign_owner
@@ -29,7 +30,6 @@ _LABELS = {
 }
 
 _NONZERO_DELTA_RE = re.compile(r"(?:增加|减少|增长|下降)")
-_ZERO_RE = re.compile(r"(?:为|是)?\s*0(?:\.0+)?\s*万?元")
 _CLAUSE_SPLIT = re.compile(r"[。；;]")
 
 
@@ -64,6 +64,10 @@ def narrative_zero_sources(doc: Any, *, table_code: str, indicator: str,
     if not compact:
         return None
 
+    level = re.compile(
+        rf"(?:{ '|'.join(labels) })\s*(?:支出)?\s*(?:决算(?:数)?)?\s*(?:为|是)?\s*"
+        r"(?P<num>\d[\d,]*(?:\.\d+)?)\s*万元"
+    )
     zero_ranges = []
     for begin, end in _clauses(compact):
         clause = compact[begin:end]
@@ -73,10 +77,13 @@ def narrative_zero_sources(doc: Any, *, table_code: str, indicator: str,
             continue  # 增减额句不是水平陈述
         if "预算" in clause and "决算" not in clause:
             continue  # 预算口径的零不能证明决算格
+        statements = [m.group("num") for m in level.finditer(clause)]
+        if not statements:
+            continue  # 表格行、名词解释、定义句都不是水平陈述
         if "决算" not in clause and not _section_is_final(text, begin, doc):
             continue
-        if not _ZERO_RE.search(clause):
-            # 同类语境的水平陈述却不是 0 → 不能形成零证据
+        if any(Decimal(text_value.replace(",", "")) != 0 for text_value in statements):
+            # 同一指标确有非零水平陈述 → 不能形成零证据
             return None
         if _foreign_owner(clause, org_name):
             return None
