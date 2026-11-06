@@ -181,3 +181,22 @@ def test_adapter_keeps_revision_binding_outside_problem_content(case):
     second = adapt_record(r, second_status, meta)
     assert first["findings"] == second["findings"]
     assert first["source_binding"] != second["source_binding"]
+
+
+@pytest.mark.parametrize('approved', [False, True])
+def test_missing_relation_requires_precise_replacement_evidence(case, approved):
+    b, c, _, r, s, ev = case
+    before = h.load_collection(b)['S']
+    old = before['receipts'][0]
+    r['receipts'][0]['sub_check_id'] = 'sum-located'
+    s['review_report']['check_receipts'] = copy.deepcopy(r['receipts'])
+    s['review_report']['issues'][0]['check_relation_id'] = 'R:sum-located'
+    bundle = ev['samples'][0]
+    for fact in bundle['facts']: fact['relation_keys'] = [['O', 'R', 'sum-located']]
+    bundle['relation_contracts'][0].update(key=['O', 'R', 'sum-located'], receipt_digest=h.digest(r['receipts'][0]))
+    if approved:
+        ev['decisions'].append({'action': 'replace_relation', 'before': before['source_binding'],
+            'after': bundle['binding'], 'key': ['O', 'R', 'sum'], 'replacement_keys': [['O', 'R', 'sum-located']],
+            'old_digest': h.digest(old), 'new_digest': h.digest(r['receipts']),
+            'reason': 'source now located', 'sources': [{'page': 1, 'quote': '10.00'}]})
+    assert check(case)['overall'] == ('PASS' if approved else 'FAIL')

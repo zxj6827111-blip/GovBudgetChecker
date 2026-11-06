@@ -229,7 +229,16 @@ def compare_collections(baseline_dir, candidate_dir, kit_dir, evidence=None):
             if len(bm) != len(b["receipts"]) or len(cm) != len(c["receipts"]):
                 problems.append(f"{sid}: 回执身份重复，不允许字典覆盖")
             for key in bm.keys() - cm.keys():
-                problems.append(f"{sid} {key}: 回执消失")
+                replacements = next((d.get("replacement_keys") for d in evidence.get("decisions", [])
+                                     if d.get("action") == "replace_relation" and d.get("key") == list(key)
+                                     and d.get("before") == b["source_binding"]
+                                     and d.get("after") == c["source_binding"]), None)
+                valid_keys = (isinstance(replacements, list) and bool(replacements)
+                              and all(isinstance(k, list) and len(k) == 3 and tuple(k) in cm for k in replacements))
+                new_rows = [cm[tuple(k)] for k in replacements] if valid_keys else None
+                decision = authorized(evidence, "replace_relation", b, c, key, bm[key], new_rows)
+                if not valid_keys or not verified_decision(decision, pages, c["sha256"]):
+                    problems.append(f"{sid} {key}: 回执消失，缺少逐键替代及原件依据")
             for key, r in cm.items():
                 old = bm.get(key)
                 if r.get("status") in UNRESOLVED and (not r.get("reason_codes") or not r.get("next_action")):

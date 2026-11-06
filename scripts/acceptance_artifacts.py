@@ -97,6 +97,13 @@ def adapt_record(record: dict, status: dict, meta: dict) -> dict:
         return value
 
     result["todo"] = remap(record.get("todo"))
+    if isinstance(result["todo"], dict) and isinstance(result["todo"].get("problems"), list):
+        # 旧提取器先按含 revision 的指纹排序；重新映射之后必须按新身份
+        # 重排这个无序队列集合，不能把运行生成的排列当成业务变化。
+        for problem in result["todo"]["problems"]:
+            if isinstance(problem.get("members"), list):
+                problem["members"] = sorted(problem["members"])
+        result["todo"]["problems"] = sorted(result["todo"]["problems"], key=canonical)
     result["receipts"] = [{**r, **({"issue_refs": sorted(id_to_fp.get(str(ref), f"unmapped:{ref}")
                                                       for ref in r["issue_refs"])} if "issue_refs" in r else {})}
                           for r in status["review_report"]["check_receipts"]]
