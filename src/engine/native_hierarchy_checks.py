@@ -453,6 +453,13 @@ def check_native_detail_tables(rule, doc, *, table_codes=None, include_income_so
                     journal(rule, doc, row_facts)
                     location['operand_refs'] = [operand_ref(row_facts[0], 'duplicate_row')]
                     location['fact_context_version_token'] = doc.fact_context.version_token
+                # 这是实际执行的原件重复行检查；登记独立关系，不能只给问题
+                # 一个永远无法落到回执的字符串引用。
+                receipt(rule, doc, f"{table_code}:duplicate_row:{duplicate['code']}", row_facts,
+                        status='fail', formula='exact duplicate source rows',
+                        disclosure_sources=[{'page': duplicate['page'], 'row_index': duplicate['row_idx'],
+                                             'first_row_index': duplicate['first_row_idx'],
+                                             'table_code': table_code, 'subject_code': duplicate['code']}])
                 issues.append(rule._issue(
                     message, location, 'low', evidence_text=message,
                     check_relation_id=(

@@ -1987,6 +1987,10 @@ def build_check_receipts(
             applicable_statuses or [STATUS_NOT_APPLICABLE],
             key=lambda s: _RECEIPT_STATUS_PRIORITY.get(s, -1),
         )
+        # 规则摘要可能还有未物化为子关系的卡点。已有子关系全通过不能掩盖
+        # 这些未完成项；保留其真实六态，问题引用仍由子回执独立保留。
+        if fallback in UNCOMPLETED_RULE_STATUSES:
+            worst = max((worst, fallback), key=lambda s: _RECEIPT_STATUS_PRIORITY.get(s, -1))
         # 全部子关系完成才聚合为完成；任一未完成如实保留未完成状态
         reason = None
         if worst in UNCOMPLETED_RECEIPT_STATUSES:
@@ -2072,7 +2076,7 @@ def build_check_receipts(
             # 只有未完成回执需要诊断；通过的汇总回执仅在义务级确有诊断时携带，
             # 以便规则摘要未完成但子关系全通过的汇总回执仍可解释。
             structured: Dict[str, Any] = {}
-            if status in {"insufficient_data", "parse_error", "execution_error"} or instance.get("next_action"):
+            if status in {"insufficient_data", "parse_error", "execution_error"}:
                 structured = {
                     "reason_codes": list(instance.get("reason_codes") or []),
                     "blocked_by": [dict(value) for value in instance.get("blocked_by") or []

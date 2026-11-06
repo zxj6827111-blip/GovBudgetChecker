@@ -204,6 +204,24 @@ def select(doc, facts, indicator, *, code=None, name=None, stage='决算', allow
                               names=(name,) if name else (), stage=stage)
             if term is not None:
                 return term, None
+            # 列身份已确认、原格确实为空，与“金额列未绑定”是两种根因。
+            # 仅观察原格，不创建零值，也不借其它列或决算叙事填充预算。
+            observed = blank_term(doc, facts[0].table_code, indicator, code=code,
+                                  names=(name,) if name else (), stage=stage, calculation=False)
+            if observed is not None:
+                from .diagnostic_fields import blocker, record_gap, table_missing_operand
+
+                cell = observed.extra_dims['native_blank_observation']
+                reason = f'{code or name or indicator}的{indicator}/{stage}原件单元格为空白，金额含义未确认'
+                record_gap(doc, reason, reason_codes=['cell_blank_semantics_unknown'],
+                           blocked_by=[blocker(dimension='cell', ref=cell['source_cell_id'],
+                                               reason_code='cell_blank_semantics_unknown')],
+                           missing_operands=[table_missing_operand(
+                               table_code=observed.table_code, role=f'{indicator}/{stage}操作数',
+                               page=cell['physical_page'], row_key=code or name, column=indicator,
+                               fund_scope=observed.fund_scope, stage=stage, year=observed.fiscal_year)],
+                           preferred_action='human_confirm')
+                return None, reason
         reason = f'{code or name or indicator}的{indicator}/{stage}操作数缺失或不唯一'
         _record_operand_gap(doc, facts, candidates, reason, indicator=indicator,
                             code=code, name=name, stage=stage)
@@ -343,6 +361,8 @@ def cluster_source_errors(rule, issues):
         combined.message = f"{title}多行勾稽不平，可能为原件整列漏填或错位：\n" + "\n".join(issue.message for issue in group)
         combined.evidence_text = "\n".join(issue.evidence_text or issue.message for issue in group)
         combined.location = {**group[0].location,
+            "reference_kind": "source_diagnostic_group",
+            "relation_ids": list(dict.fromkeys(issue.check_relation_id for issue in group)),
             "relations": [{"message": issue.message, "relation_id": issue.check_relation_id, "location": issue.location} for issue in group],
             "operand_refs": [ref for issue in group for ref in issue.location.get("operand_refs", [])],
             "native_blank_sources": [ref for issue in group for ref in issue.location.get("native_blank_sources", [])]}

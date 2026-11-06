@@ -319,11 +319,13 @@ class EngineRuleRunner:
         if not isinstance(receipts, list):
             return
         finding_ids_by_relation: Dict[str, List[str]] = {}
+        from src.services.issue_relation_refs import issue_relation_ids
+
         for finding in findings:
-            relation_id = str(getattr(finding, "check_relation_id", "") or "").strip()
             finding_id = str(getattr(finding, "id", "") or "").strip()
-            if relation_id and finding_id:
-                finding_ids_by_relation.setdefault(relation_id, []).append(finding_id)
+            if finding_id:
+                for relation_id in issue_relation_ids(finding.model_dump()):
+                    finding_ids_by_relation.setdefault(relation_id, []).append(finding_id)
         for receipt in receipts[max(0, receipt_start):]:
             if not isinstance(receipt, dict) or str(receipt.get("rule_id") or "") != rule_id:
                 continue

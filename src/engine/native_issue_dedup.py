@@ -421,7 +421,11 @@ def _quality(item):
 
 
 def _relation_ids(item):
-    return list(dict.fromkeys(str(value) for value in [
+    from src.services.issue_relation_refs import issue_relation_ids
+
+    payload = item if isinstance(item, dict) else {
+        'rule_id': _rule(item), 'check_relation_id': _get(item, 'check_relation_id'), 'location': _location(item)}
+    return list(dict.fromkeys(str(value) for value in [*issue_relation_ids(payload),
         _get(item, 'check_relation_id'), *(_get(item, 'check_relation_ids') or []),
         *(_location(item).get('check_relation_ids') or [])] if value))
 
