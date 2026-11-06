@@ -13,43 +13,124 @@ FACTORS = {'元': Decimal('.0001'), '万元': Decimal('1'), '亿元': Decimal('1
 _AMOUNT = re.compile(r'[+\-−]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?')
 _UNIT = re.compile(r'亿元|万元|元|(?<![A-Za-z])(?:yuan|wan)(?![A-Za-z])')
 # 识别完整原文表示与支持其语义是两步；不能先只匹配支持的子串。
-_AMOUNT_SURFACE = re.compile(r'[+\-−(（\[{$￥¥]*\d[\d,.]*(?:[eE][+\-−]*\d*)?[)）\]}%％]*')
-_UNIT_SURFACE = re.compile(r'[0-9.,零〇一二三四五六七八九十百千万亿兆壹贰叁肆伍陆柒捌玖拾佰仟萬億]+元|元|[A-Za-z]+')
+_AMOUNT_SURFACE = re.compile(
+    r'(?:[+\-−(（\[{$￥¥]\s*)*\d[\d,.]*'
+    r'(?:\s*[eE]\s*[+\-−]?\s*\d*)?(?:\s*[)）\]}%％])*')
 
 
 def _norm(value):
     return re.sub(r'\s+', '', unicodedata.normalize('NFKC', str(value))).replace('−', '-')
 
 
-def whole_source_token(page, anchor, pattern):
-    """用原页字符重建完整词元，再检验框；不能把负号或“万”裁掉。"""
-    box = anchor['bbox']
-    observed = []
+def _contains(box, glyph):
+    b = glyph['bbox']
+    return (box[0] - .1 <= b[0] and box[1] - .1 <= b[1]
+            and b[2] <= box[2] + .1 and b[3] <= box[3] + .1)
+
+
+def _overlaps_x(a, b):
+    return max(a[0], b[0]) < min(a[2], b[2])
+
+
+def _row_text(page, box):
+    """跨 PDF text line 收集同一物理行；字距和 span/line 切分均不能删语义。"""
+    glyphs = []
+    line_id = 0
     for block in page.get_text('rawdict')['blocks']:
         for line in block.get('lines', []):
-            chars = [c for span in line.get('spans', []) for c in span.get('chars', []) if not c['c'].isspace()]
-            # 同一PDF行可有多个金额列。只在真实列间空隙切分，不能在负号、
-            # 括号、指数或数量级前缀处切掉不支持的语法。
-            runs = []
-            for char in chars:
-                if runs and char['bbox'][0] - runs[-1][-1]['bbox'][2] <= .45 * min(
-                        char['bbox'][3] - char['bbox'][1], runs[-1][-1]['bbox'][3] - runs[-1][-1]['bbox'][1]):
-                    runs[-1].append(char)
-                else:
-                    runs.append([char])
-            surface = _AMOUNT_SURFACE if pattern is _AMOUNT else _UNIT_SURFACE
-            for run in runs:
-                text = ''.join(unicodedata.normalize('NFKC', c['c']) for c in run)
-                if len(text) != len(run):
-                    continue
-                for match in surface.finditer(text):
-                    glyphs = run[match.start():match.end()]
-                    selected = any(box[0] - .1 <= (c['bbox'][0] + c['bbox'][2]) / 2 <= box[2] + .1
-                                   and box[1] - .1 <= (c['bbox'][1] + c['bbox'][3]) / 2 <= box[3] + .1 for c in glyphs)
-                    if selected:
-                        contained = all(box[0] - .1 <= c['bbox'][0] and box[1] - .1 <= c['bbox'][1]
-                                        and c['bbox'][2] <= box[2] + .1 and c['bbox'][3] <= box[3] + .1 for c in glyphs)
-                        observed.append((_norm(match.group()), contained))
+            line_id += 1
+            if max(line['bbox'][1], box[1]) >= min(line['bbox'][3], box[3]):
+                continue
+            if line.get('dir', (1, 0)) != (1, 0):
+                raise ValueError('原格文字方向无法确认')
+            glyphs.extend((c, line_id) for s in line.get('spans', []) for c in s.get('chars', []))
+    glyphs.sort(key=lambda item: (item[0]['bbox'][0], item[0]['bbox'][1]))
+    text, positions, previous = [], [], None
+    for glyph, identity in glyphs:
+        if previous is not None and previous != identity:
+            # 保留分段为空白，词法仍可跨过它；空白本身不证明原格边界。
+            text.append(' ')
+            positions.append(None)
+        for char in unicodedata.normalize('NFKC', glyph['c']):
+            text.append(char)
+            positions.append(None if char.isspace() else glyph)
+        previous = identity
+    return ''.join(text), positions
+
+
+def _amount_matches(page, text, positions, anchors):
+    row, column = anchors['row'], anchors['column']
+    # 仅移除已经逐字验证的行标；不能把未知字符当成表格装饰吞掉。
+    label = [i for i, g in enumerate(positions) if g and _contains(row['bbox'], g)]
+    if _norm(''.join(text[i] for i in label)) != _norm(row['quote']):
+        raise ValueError('无法确认原格行标范围')
+    chars = list(text)
+    for i in label:
+        chars[i] = ' '
+    text = ''.join(chars)
+
+    # 用原页表头而非金额之间的空隙证明邻列存在。未覆盖的字形、同列多个
+    # 金额、跨列表示或没有表头对应的片段均拒收，不能任意分配到最近一列。
+    words = [w for w in page.get_text('words')
+             if column['bbox'][1] <= (w[1] + w[3]) / 2 <= column['bbox'][3]]
+    own = [w for w in words if _overlaps_x(w, column['bbox'])]
+    if _norm(''.join(w[4] for w in sorted(own))) != _norm(column['quote']):
+        raise ValueError('无法确认完整列头')
+    columns = [column['bbox']] + [w[:4] for w in words if w not in own]
+    matches, owners = [], []
+    consumed = set()
+    for match in _AMOUNT_SURFACE.finditer(text):
+        glyphs = [g for g in positions[match.start():match.end()] if g]
+        bounds = [min(g['bbox'][0] for g in glyphs), 0, max(g['bbox'][2] for g in glyphs), 0]
+        aligned = [i for i, c in enumerate(columns) if _overlaps_x(bounds, c)]
+        if len(aligned) != 1 or aligned[0] in owners:
+            raise ValueError('金额表示缺少唯一原列边界')
+        owners.extend(aligned)
+        consumed.update(range(match.start(), match.end()))
+        matches.append((match, glyphs, aligned[0] == 0))
+    if any(not c.isspace() and i not in consumed for i, c in enumerate(text)):
+        raise ValueError('原行有未归属完整金额表示的字符')
+    return [(m, g) for m, g, selected in matches if selected]
+
+
+def _unit_field(page, text, positions, anchors):
+    """单位必须是完整字段；仅可剔除独立绑定的表题和明确的单位标签。"""
+    chars = list(text)
+    table = anchors.get('table')
+    if table:
+        titles = []
+        for box in page.search_for(table['quote']):
+            indices = [i for i, g in enumerate(positions) if g and _contains(box, g)]
+            if indices and _norm(''.join(text[i] for i in indices)) == _norm(table['quote']):
+                if _contains(table['bbox'], {'bbox': box}):
+                    titles.append(indices)
+        if len(titles) > 1:
+            raise ValueError('单位行表题不唯一')
+        if titles:
+            for i in titles[0]:
+                chars[i] = ' '
+    # 正向承认标签结构，不以符号/数量级黑名单猜测其余片段是否无关。
+    field = ''.join(chars)
+    label = re.match(r'\s*[;；:]?\s*(?:(?:单位|金额单位|Unit)\s*[:：]\s*)?', field)
+    start = label.end()
+    glyphs = [g for i, g in enumerate(positions) if i >= start and g and not chars[i].isspace()]
+    return _norm(field[start:]), glyphs
+
+
+def whole_source_token(page, anchor, pattern, anchors):
+    """先识别含空白的完整表示并证明原列，再验证引文包含全部语义字形。"""
+    box = anchor['bbox']
+    text, positions = _row_text(page, box)
+    if pattern is _AMOUNT:
+        tokens = [(_norm(m.group()), g) for m, g in _amount_matches(page, text, positions, anchors)]
+    else:
+        tokens = [_unit_field(page, text, positions, anchors)]
+    observed = []
+    for token, glyphs in tokens:
+        selected = any(box[0] - .1 <= (g['bbox'][0] + g['bbox'][2]) / 2 <= box[2] + .1
+                       and box[1] - .1 <= (g['bbox'][1] + g['bbox'][3]) / 2 <= box[3] + .1 for g in glyphs)
+        if selected:
+            observed.append((token, all(_contains(box, g) for g in glyphs)))
     if (len(observed) != 1 or not observed[0][1] or observed[0][0] != _norm(anchor['quote'])
             or not pattern.fullmatch(observed[0][0])):
         raise ValueError('原格金额或单位不是原页完整词元')
@@ -91,8 +172,8 @@ def fact_source_errors(fact, expected, pages, pdf_sha, validate_source):
     if anchors['unit_source']['quote'] != cell.get('raw_unit') or cell.get('raw_unit') not in FACTORS:
         errors.append('原文单位未绑定')
     try:
-        original = whole_source_token(pages[page - 1], anchors['cell'], _AMOUNT)
-        unit = whole_source_token(pages[page - 1], anchors['unit_source'], _UNIT)
+        original = whole_source_token(pages[page - 1], anchors['cell'], _AMOUNT, anchors)
+        unit = whole_source_token(pages[page - 1], anchors['unit_source'], _UNIT, anchors)
         if not _AMOUNT.fullmatch(_norm(pages[page - 1].get_textbox(box))):
             raise ValueError('原格含未支持的金额表示')
         raw = Decimal(_norm(cell['raw_value']).replace(',', ''))
