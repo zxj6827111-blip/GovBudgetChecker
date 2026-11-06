@@ -5,7 +5,7 @@
 ## 工具职责与入口
 
 - 治理：`scripts/verify_pending_review.py`，工具版本 `unified-governance-v1-candidate`；复用保存提交 `3ca22f88` 的 r4 保护及测试，不整体导入 r5。
-- 适配：`scripts/adapt_acceptance_collection.py SOURCE NEW_OUT`；版本 `review-report-adapter-v2`。旧采集只读，缺字段与空列表区分；保留正式、候选、提示、待核与原始问题层。
+- 适配：`scripts/adapt_acceptance_collection.py SOURCE NEW_OUT`；版本 `review-report-adapter-v3`。旧采集只读，缺字段与空列表区分；保留正式、候选、提示、待核与原始问题层。
 - 效果：`scripts/effect_acceptance_v3.py --baseline B --candidate C --kit K --out NEW_OUT [--evidence E --evidence-sha256 SHA] [--repeat C2]`。
 - r4 原契约只读复用副本在 `contracts/pending_review_r4`。采集包另有原件清单、环境与哈希封印，必须显式指定 `--kit`；此目录不是完整采集包。
 
@@ -15,9 +15,9 @@
 
 `schema=independent-effect-evidence-v1`。`samples[].binding` 精确匹配新记录的 `source_binding`（材料、主体、年度、文种、分析代际、代码、规则、配置）；`facts[]` 保存独立核对的 fact_id、value_wan、unit、year、原页、引文、bbox、file_hash、relation_keys。来源与待核回执分离，不能从 operand_fact_ids/required_fact_ids 构造事实全集。
 
-支持的直接复算限于有完整独立数值的加总。其它公式、空白解释及 N/A 必须有 `relation_proofs`：key、完整 receipt_digest、conclusion、reason、sources。未实现公式不自动放行。
+每条关系另须 relation_contracts：key、receipt_digest、逐 fact_id 的 operand_identities（表、指标、行、资金与阶段）。支持的直接复算限于有完整独立数值的加总。其它公式、空白解释及 N/A 必须有 `relation_proofs`：key、完整 receipt_digest、conclusion、reason、sources。未实现公式不自动放行。
 
-问题增删、证据替换及合理收严使用 `decisions`：action、before、after、key、old_digest、new_digest、reason、sources；绑定对象完整内容，不能同规则不同材料/关系/版本借用。action 为 remove_issue / add_issue / evidence_replaced / justified_regression。
+问题增删、证据替换及合理收严使用 `decisions`：action、before、after、key、old_digest、new_digest、reason、sources；绑定对象完整内容，不能同规则不同材料/关系/版本借用。action 为 remove_issue / add_issue / evidence_replaced / justified_regression；关系键替代用 replace_relation，必须显式列出 replacement_keys 和前后完整摘要。
 
 SHA256 防止核验输入漂移，不是核验人的身份认证。独立真值与签收由核验人提供；本工具不会从系统输出自动生成真值或批准文件。
 
@@ -28,3 +28,11 @@ SHA256 防止核验输入漂移，不是核验人的身份认证。独立真值�
 ## 发布门禁
 
 专项台账、全部原始及新证据位于同一工作区 `outputs/unified_remediation_20261106`。只有独立复核签收后才能合入 main；服务切换另做版本与真实流程验收。B1、原7争议、预算/OCR/AI能力仍单独待验收，不以本专项单元测试通过代替。
+
+## 当前交付状态
+
+源码修复与本地验证已完成一版候选；独立验收尚未签收。原14/4/28/24集合逐项记录在专项总台账，集合不能相加。24条中2条恢复、22条按原件保持未知；原28条是待独立审定的处置，另有3条新增范围项。
+
+业务完整回归5221通过、196跳过；最新工具正负控129通过；Ruff及项目mypy通过。真实数据库/API/浏览器、四格式导出和分析代际隔离通过。验证实例已停，日常main与3000入口未切换。
+
+正式效果报告仍拒收缺独立事实或授权的变化，治理报告为PENDING；不能据此声明专项或全系统准确性验收完成。可复制独立复核提示词、交付说明和机器台账位于 `outputs/unified_remediation_20261106/`。证据JSON格式见 `effect_evidence.schema.json`；格式正确不是事实正确或核验人身份认证。

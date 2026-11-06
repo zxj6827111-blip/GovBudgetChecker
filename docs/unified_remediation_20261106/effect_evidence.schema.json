@@ -1,0 +1,407 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:govbudgetchecker:independent-effect-evidence-v1",
+  "title": "效果验收独立事实与逐对象裁决契约（候选）",
+  "description": "仅约束交付格式；SHA256不是核验人认证。禁止从被检查回执声明构造事实集合或自动签收。回执摘要对当前适配后的完整回执计算，绑定与原始工件须单独核对。",
+  "type": "object",
+  "required": [
+    "schema",
+    "samples",
+    "decisions"
+  ],
+  "properties": {
+    "schema": {
+      "const": "independent-effect-evidence-v1"
+    },
+    "samples": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "binding",
+          "facts",
+          "relation_contracts"
+        ],
+        "properties": {
+          "binding": {
+            "$ref": "#/$defs/binding"
+          },
+          "facts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/fact"
+            }
+          },
+          "relation_contracts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "key",
+                "receipt_digest",
+                "operand_identities"
+              ],
+              "properties": {
+                "key": {
+                  "$ref": "#/$defs/relation_key"
+                },
+                "receipt_digest": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "operand_identities": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/$defs/dimensions"
+                  }
+                }
+              }
+            }
+          },
+          "verified_blank_observations": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "relation_proofs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/proof"
+            }
+          }
+        }
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/decision"
+      }
+    }
+  },
+  "$defs": {
+    "binding": {
+      "type": "object",
+      "required": [
+        "sample_id",
+        "pdf_sha256",
+        "analysis_revision",
+        "code_digest",
+        "profile_digest",
+        "rules_digest",
+        "organization",
+        "year",
+        "report_kind"
+      ],
+      "properties": {
+        "sample_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "analysis_revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "organization": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pdf_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "code_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "profile_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "rules_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "year": {
+          "type": "integer",
+          "minimum": 1900
+        },
+        "report_kind": {
+          "enum": [
+            "budget",
+            "final"
+          ]
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "properties": {
+        "page": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "physical_page": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "file_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "quote": {
+          "type": "string",
+          "minLength": 1
+        },
+        "span": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bbox": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number"
+          },
+          "minItems": 4,
+          "maxItems": 4
+        }
+      },
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "required": [
+                "page"
+              ]
+            },
+            {
+              "required": [
+                "physical_page"
+              ]
+            }
+          ]
+        },
+        {
+          "anyOf": [
+            {
+              "required": [
+                "quote"
+              ]
+            },
+            {
+              "required": [
+                "span"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "dimensions": {
+      "type": "object",
+      "required": [
+        "table_code",
+        "indicator",
+        "row_key",
+        "fund_scope",
+        "stage"
+      ],
+      "properties": {
+        "table_code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "indicator": {
+          "type": "string",
+          "minLength": 1
+        },
+        "row_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fund_scope": {
+          "type": "string",
+          "minLength": 1
+        },
+        "stage": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "fact": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/source"
+        },
+        {
+          "$ref": "#/$defs/dimensions"
+        }
+      ],
+      "type": "object",
+      "required": [
+        "fact_id",
+        "value_wan",
+        "unit",
+        "year",
+        "organization",
+        "file_hash",
+        "relation_keys"
+      ],
+      "properties": {
+        "fact_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "value_wan": {
+          "type": "string"
+        },
+        "unit": {
+          "const": "万元"
+        },
+        "year": {
+          "type": "integer",
+          "minimum": 1900
+        },
+        "organization": {
+          "type": "string",
+          "minLength": 1
+        },
+        "file_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "relation_keys": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/relation_key"
+          },
+          "minItems": 1
+        }
+      }
+    },
+    "proof": {
+      "type": "object",
+      "required": [
+        "key",
+        "receipt_digest",
+        "conclusion",
+        "reason",
+        "sources"
+      ],
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/relation_key"
+        },
+        "receipt_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "conclusion": {
+          "enum": [
+            "pass",
+            "not_applicable"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/source"
+          },
+          "minItems": 1
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "required": [
+        "action",
+        "before",
+        "after",
+        "key",
+        "old_digest",
+        "new_digest",
+        "reason",
+        "sources"
+      ],
+      "properties": {
+        "action": {
+          "enum": [
+            "remove_issue",
+            "add_issue",
+            "evidence_replaced",
+            "justified_regression",
+            "replace_relation"
+          ]
+        },
+        "before": {
+          "$ref": "#/$defs/binding"
+        },
+        "after": {
+          "$ref": "#/$defs/binding"
+        },
+        "key": {
+          "type": "array"
+        },
+        "old_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "new_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/source"
+          },
+          "minItems": 1
+        },
+        "replacement_keys": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/relation_key"
+          },
+          "minItems": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "replace_relation"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "replacement_keys"
+            ]
+          }
+        }
+      ]
+    },
+    "relation_key": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 3,
+      "maxItems": 3
+    }
+  }
+}

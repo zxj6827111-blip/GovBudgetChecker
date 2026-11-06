@@ -1,0 +1,18 @@
+{
+  "status": "CANDIDATE_REQUIRES_INDEPENDENT_REVIEW",
+  "code_commit": "5ac9e71b8b46d97c786636656f54a504171a19ea",
+  "base_main": "47581360966191d180880f7fb07dab48974948bb",
+  "branch": "codex/unified-remediation-20261106",
+  "ledger": "/Volumes/workSSD/software development/gbc-worktrees/unified-remediation-20261106/outputs/unified_remediation_20261106/ledger.json",
+  "delivery": "/Volumes/workSSD/software development/gbc-worktrees/unified-remediation-20261106/outputs/unified_remediation_20261106/交付与未完成项.txt",
+  "independent_review_prompt": "/Volumes/workSSD/software development/gbc-worktrees/unified-remediation-20261106/outputs/unified_remediation_20261106/ZCode独立复核提示词.txt",
+  "main_merged": false,
+  "runtime_switched": false,
+  "capabilities_not_accepted": [
+    "B1",
+    "original seven disputes",
+    "budget",
+    "OCR",
+    "AI"
+  ]
+}

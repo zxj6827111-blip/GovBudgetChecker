@@ -1,5 +1,5 @@
 {
-  "status": "CANDIDATE_NOT_APPROVED",
+  "status": "SOURCE_AUDITED_CANDIDATE_NOT_APPROVED",
   "base_commit": "47581360966191d180880f7fb07dab48974948bb",
   "historical_source": {
     "date": "2026-11-05",
@@ -85,5 +85,8 @@
       "decision": "NO_BULK_IMPORT",
       "reason": "r5仍未批准，不引入旧起点或其新基线要求；当前候选直接基于47581360"
     }
-  }
+  },
+  "current_code_commit": "5ac9e71b8b46d97c786636656f54a504171a19ea",
+  "current_adapter": "review-report-adapter-v3",
+  "test_reuse_note": "保存稿旧断言保留一次；另修复其现有Ruff格式和循环变量绑定问题，不改断言含义。"
 }
