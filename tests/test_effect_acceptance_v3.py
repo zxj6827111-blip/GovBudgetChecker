@@ -437,7 +437,7 @@ def replace_independent_grid(case, printed, raw, unit="wan", claimed_unit=None):
     with fitz.open() as doc:
         p = doc.new_page()
         p.insert_text((45, 35), "Table")
-        p.insert_text((125, 35), unit, fontname="china-s" if unit in ["元", "万元"] else "helv")
+        p.insert_text((125, 35), unit, fontname="china-s" if any("\u4e00" <= c <= "\u9fff" for c in unit) else "helv")
         p.insert_text((45, 95), "All")
         for x, label, value in zip(
             [150, 250, 350], ["Total", "Basic", "Project"], printed, strict=True
@@ -588,3 +588,30 @@ def test_changed_objects_can_swap_display_ids_with_precise_authorizations(case):
         ev['decisions'].append({'action':'issue_changed','before':h.load_collection(b)['S']['source_binding'],'after':h.load_collection(c)['S']['source_binding'],
             'key':list(h.formal_identity(old)),'old_digest':h.digest(old),'new_digest':h.digest(new),'reason':'exact independent pair','sources':[{'page':1,'quote':'10.00'}]})
     assert check(case)['overall']=='PASS'
+
+
+@pytest.mark.parametrize('printed_unit', ['百万元', '千万元', '佰万元', '100万元'])
+def test_entire_extended_unit_is_required_even_if_anchor_is_legal_suffix(case, printed_unit):
+    replace_independent_grid(case, ['10.00', '6.00', '4.00'], ['10', '6', '4'], printed_unit, '万元')
+    assert check(case)['overall'] == 'FAIL'
+
+
+@pytest.mark.parametrize('notation', ['({})', '{}e3', '{}E+3', '{}e-3'])
+@pytest.mark.parametrize('crop', [False, True])
+def test_unsupported_complete_amount_never_becomes_plain_mantissa(case, notation, crop):
+    values = ['10.00', '6.00', '4.00']
+    replace_independent_grid(case, [notation.format(v) for v in values], ['10', '6', '4'])
+    if crop:
+        pdf = case[2] / 'pdfs/S/source.pdf'
+        with fitz.open(pdf) as doc:
+            for fact, value, x in zip(case[-1]['samples'][0]['facts'], values, [150, 250, 350], strict=True):
+                bbox = next(b for b in doc[0].search_for(value) if abs(b.x0 - x) < 15)
+                fact['quote'] = value
+                fact['source_cell']['cell'] = {'page': 1, 'quote': value, 'bbox': list(bbox)}
+                case[-1]['samples'][0]['relation_contracts'][0]['operand_identities'][fact['fact_id']]['source_cell_digest'] = h.digest(fact['source_cell'])
+    assert check(case)['overall'] == 'FAIL'
+
+
+def test_standard_grouped_decimal_remains_supported(case):
+    replace_independent_grid(case, ['1,000.00', '600.00', '400.00'], ['1000', '600', '400'])
+    assert check(case)['overall'] == 'PASS'

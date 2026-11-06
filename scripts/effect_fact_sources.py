@@ -12,6 +12,9 @@ FACTORS = {'元': Decimal('.0001'), '万元': Decimal('1'), '亿元': Decimal('1
 
 _AMOUNT = re.compile(r'[+\-−]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?')
 _UNIT = re.compile(r'亿元|万元|元|(?<![A-Za-z])(?:yuan|wan)(?![A-Za-z])')
+# 识别完整原文表示与支持其语义是两步；不能先只匹配支持的子串。
+_AMOUNT_SURFACE = re.compile(r'[+\-−(（\[{$￥¥]*\d[\d,.]*(?:[eE][+\-−]*\d*)?[)）\]}%％]*')
+_UNIT_SURFACE = re.compile(r'[0-9.,零〇一二三四五六七八九十百千万亿兆壹贰叁肆伍陆柒捌玖拾佰仟萬億]+元|元|[A-Za-z]+')
 
 
 def _norm(value):
@@ -25,19 +28,30 @@ def whole_source_token(page, anchor, pattern):
     for block in page.get_text('rawdict')['blocks']:
         for line in block.get('lines', []):
             chars = [c for span in line.get('spans', []) for c in span.get('chars', []) if not c['c'].isspace()]
-            text = ''.join(unicodedata.normalize('NFKC', c['c']) for c in chars)
-            # NFKC扩为多字符的罕见字形不支持，不能误用字符下标。
-            if len(text) != len(chars):
-                continue
-            for match in pattern.finditer(text):
-                glyphs = chars[match.start():match.end()]
-                selected = any(box[0] - .1 <= (c['bbox'][0] + c['bbox'][2]) / 2 <= box[2] + .1
-                               and box[1] - .1 <= (c['bbox'][1] + c['bbox'][3]) / 2 <= box[3] + .1 for c in glyphs)
-                if selected:
-                    contained = all(box[0] - .1 <= c['bbox'][0] and box[1] - .1 <= c['bbox'][1]
-                                    and c['bbox'][2] <= box[2] + .1 and c['bbox'][3] <= box[3] + .1 for c in glyphs)
-                    observed.append((_norm(match.group()), contained))
-    if len(observed) != 1 or not observed[0][1] or observed[0][0] != _norm(anchor['quote']):
+            # 同一PDF行可有多个金额列。只在真实列间空隙切分，不能在负号、
+            # 括号、指数或数量级前缀处切掉不支持的语法。
+            runs = []
+            for char in chars:
+                if runs and char['bbox'][0] - runs[-1][-1]['bbox'][2] <= .45 * min(
+                        char['bbox'][3] - char['bbox'][1], runs[-1][-1]['bbox'][3] - runs[-1][-1]['bbox'][1]):
+                    runs[-1].append(char)
+                else:
+                    runs.append([char])
+            surface = _AMOUNT_SURFACE if pattern is _AMOUNT else _UNIT_SURFACE
+            for run in runs:
+                text = ''.join(unicodedata.normalize('NFKC', c['c']) for c in run)
+                if len(text) != len(run):
+                    continue
+                for match in surface.finditer(text):
+                    glyphs = run[match.start():match.end()]
+                    selected = any(box[0] - .1 <= (c['bbox'][0] + c['bbox'][2]) / 2 <= box[2] + .1
+                                   and box[1] - .1 <= (c['bbox'][1] + c['bbox'][3]) / 2 <= box[3] + .1 for c in glyphs)
+                    if selected:
+                        contained = all(box[0] - .1 <= c['bbox'][0] and box[1] - .1 <= c['bbox'][1]
+                                        and c['bbox'][2] <= box[2] + .1 and c['bbox'][3] <= box[3] + .1 for c in glyphs)
+                        observed.append((_norm(match.group()), contained))
+    if (len(observed) != 1 or not observed[0][1] or observed[0][0] != _norm(anchor['quote'])
+            or not pattern.fullmatch(observed[0][0])):
         raise ValueError('原格金额或单位不是原页完整词元')
     return observed[0][0]
 
