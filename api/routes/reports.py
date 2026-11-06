@@ -1088,6 +1088,9 @@ def _build_docx_document_xml(
         ),
         _docx_paragraph("问题清单", style="Heading1"),
     ]
+    obligation_lines = _obligation_review_lines(status_payload)
+    if obligation_lines:
+        body[-1:-1] = [_docx_paragraph(line) for line in obligation_lines]
 
     if not enriched_issues:
         # ZC-00（SYS-12）：存在未完成检查（或旧版记录无法证明完整性）时，
@@ -1743,6 +1746,7 @@ def _append_report_appendix_pages(
     } if isinstance(decisions, list) else {}
     lines.append(f"REVIEW_REPORT_SHA256: {_review_report_sha256(status_payload)}")
     lines.extend(_material_dimension_lines(status_payload))
+    lines.extend(_obligation_review_lines(status_payload))
     if conclusion["is_complete"] is True:
         lines.append("检查范围已完成。以下问题和提示以本次 ReviewReport 为准。")
     elif conclusion["coverage_known"] is False:
@@ -2021,6 +2025,85 @@ def _hydrate_version_bound_decisions(job_id: str, payload: Dict[str, Any]) -> Di
     return hydrated
 
 
+async def _load_export_obligation_review(
+    job_id: str, payload: Dict[str, Any], user: Dict[str, Any],
+) -> Dict[str, Any]:
+    """补核决定属于复核会话；只附加到同一当前分析，不能覆盖引擎回执或串入历史。"""
+    from api import material_access
+    from src.services import review_lifecycle_service
+    from src.services.material_detail_query_service import MaterialDetailQueryService
+
+    async def load(conn: Any) -> Dict[str, Any]:
+        # 指针和复核会话须在同一只读快照内读取，防止重分析期间拼接两个代际。
+        async with conn.transaction(isolation="repeatable_read", readonly=True):
+            row = await conn.fetchrow(
+                "SELECT current_fact_revision_id, analysis_revision FROM analysis_jobs WHERE job_uuid=$1",
+                job_id,
+            )
+            revision = str(payload.get("analysis_revision") or "")
+            if not row or not revision or str(row["current_fact_revision_id"] or "") != revision:
+                return {"available": False, "reason": "historical_or_unbound_analysis"}
+            context = await review_lifecycle_service.load_review_by_job(conn, job_id)
+            if not context.review_context.available or context.review is None:
+                return {"available": False, "reason": "review_context_unavailable"}
+            review = context.review.model_dump(mode="json")
+            analysis = review["current_analysis"]
+            document_version = (payload.get("structured_ingest") or {}).get("document_version_id")
+            if (analysis.get("job_uuid") != job_id
+                    or analysis.get("analysis_revision") != row["analysis_revision"]
+                    or analysis.get("document_version_id") != document_version):
+                return {"available": False, "reason": "analysis_identity_mismatch"}
+            slot = await MaterialDetailQueryService(conn).load_slot_row(review["slot_id"])
+            material_access.require_slot_access(material_access.build_access_scope(user), slot, review["slot_id"])
+            basis = analysis.get("analysis_basis_token")
+            session = review.get("current_session")
+            if session is None:
+                session = next((item for item in review.get("history", [])
+                                if item.get("status") == "completed"
+                                and item.get("analysis_job_uuid") == job_id
+                                and item.get("analysis_basis_token") == basis), None)
+            if session and (session.get("analysis_job_uuid") != job_id
+                            or session.get("analysis_basis_token") != basis
+                            or session.get("document_version_id") != document_version):
+                return {"available": False, "reason": "review_session_identity_mismatch"}
+            block = review["obligation_review"]
+            keys = ("obligation_id", "title", "decision", "decision_revision", "decided_by",
+                    "decided_at", "note", "evidence_reference", "locations")
+            items = [{key: item.get(key) for key in keys} for item in block.get("items", [])
+                     if item.get("decision") is not None] if session else []
+            return {
+                "available": bool(block.get("available")), "reason": block.get("reason"),
+                "analysis_revision": revision, "analysis_basis_token": basis,
+                "document_version_id": document_version,
+                "review_session_id": session.get("review_session_id") if session else None,
+                "session_status": session.get("status") if session else "not_started",
+                "pending_total": block.get("pending_total"), "covered_total": block.get("covered_total"),
+                "items": items,
+            }
+
+    return await material_access.with_connection(load)
+
+
+def _obligation_review_lines(payload: Dict[str, Any]) -> List[str]:
+    block = (payload.get("review_report") or {}).get("obligation_review")
+    if not isinstance(block, dict):
+        return []
+    if not block.get("available"):
+        return ["人工补核记录：当前导出版本未附加可核实的复核记录（" + str(block.get("reason") or "unavailable") + "）。"]
+    labels = {"verified_ok": "核对无误", "verified_issue": "确认有问题",
+              "not_applicable": "不适用", "pending": "恢复待处理"}
+    lines = ["人工补核记录（引擎自动检查状态保持原样）："]
+    for item in block.get("items", []):
+        lines.extend([
+            f"{item.get('obligation_id')} · {item.get('title')}：{labels.get(item.get('decision'), item.get('decision'))}",
+            f"复核人：{item.get('decided_by') or '未记录'}；时间：{item.get('decided_at') or '未记录'}；决定版本：{item.get('decision_revision')}",
+            f"补核说明：{item.get('note') or '未记录'}；证据位置：{item.get('evidence_reference') or '见补核说明'}",
+        ])
+    if not block.get("items"):
+        lines.append("尚无已保存的人工补核决定。")
+    return lines
+
+
 @router.get("/api/reports/download")
 async def download_report(
     request: Request,
@@ -2028,7 +2111,7 @@ async def download_report(
     format: str = Query(default="pdf", pattern="^(pdf|json|csv|docx)$"),
     analysis_revision: Optional[str] = Query(default=None),
 ):
-    _, _, _, status_payload = require_job_access(request, job_id)
+    _, _, user, status_payload = require_job_access(request, job_id)
     if analysis_revision and ("/" in analysis_revision or "\\" in analysis_revision or analysis_revision.startswith('.')):
         raise HTTPException(status_code=422,detail='invalid analysis_revision')
     if os.getenv('DATABASE_URL'):
@@ -2043,6 +2126,10 @@ async def download_report(
     else:
         status_payload = _load_revision_payload(job_id, analysis_revision)
     status_payload = _hydrate_version_bound_decisions(job_id, status_payload)
+    if os.getenv("DATABASE_URL"):
+        status_payload["review_report"]["obligation_review"] = await _load_export_obligation_review(
+            job_id, status_payload, user,
+        )
     issues = _extract_issues(status_payload)
     review_report = status_payload.get("review_report")
     review_report = review_report if isinstance(review_report, dict) else {}
@@ -2060,6 +2147,7 @@ async def download_report(
                 if isinstance(review_report, dict)
                 else []
             ),
+            "obligation_review": review_report.get("obligation_review", {"available": False, "reason": "not_recorded"}),
             "issues": enriched_issues,
             "count": len(enriched_issues),
         }
@@ -2106,6 +2194,19 @@ async def download_report(
                 "check_relation_id": item.get("check_relation_id") or "",
                 "fact_ids": json.dumps(item.get("fact_ids") or [], ensure_ascii=False),
                 "evidence_ids": json.dumps(item.get("evidence_ids") or [], ensure_ascii=False),
+            })
+            writer.writerow(row)
+        for item in review_report.get("obligation_review", {}).get("items", []):
+            row = {key: "" for key in _CSV_FIELDNAMES}
+            row.update({
+                "record_type": "obligation_decision", "obligation_ids": item.get("obligation_id") or "",
+                "title": item.get("title") or "", "human_decision": item.get("decision") or "",
+                "human_decision_note": item.get("note") or "", "decision_revision": item.get("decision_revision") or "",
+                "decision_actor": item.get("decided_by") or "", "evidence_text": item.get("evidence_reference") or "",
+                "analysis_revision": status_payload.get("analysis_revision") or "",
+                "detail_lines": json.dumps({key: review_report["obligation_review"].get(key)
+                                          for key in ("review_session_id", "analysis_basis_token", "document_version_id")}
+                                         | {"decided_at": item.get("decided_at"), "locations": item.get("locations")}, ensure_ascii=False),
             })
             writer.writerow(row)
         for item in review_report.get("manual_review", []):
