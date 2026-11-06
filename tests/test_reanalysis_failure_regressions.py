@@ -178,13 +178,42 @@ def test_final_diagnostics_keep_failure_without_model_content():
 ])
 async def test_pipeline_queue_accounting_keeps_explicit_and_hard_limits(tmp_path, monkeypatch, mode, hard_limit, expected):
     import json
+    import time
     from api import main
+    from src.services import analysis_timing
     from src.services.analysis_timing import record_ai_queue_wait
+
+    # 验证计费口径，不测共享 CI 的调度/I/O 性能。用事件推进原有 80ms 排队、
+    # 10ms 工作阶段；保留 30ms 处理预算和显式/硬上限反例，不放宽业务门槛。
+    elapsed = 0.0
+    queue_finished = asyncio.Event()
+    work_finished = asyncio.Event()
+    real_asyncio = asyncio
+
+    async def scheduled_wait(tasks, *, timeout):
+        nonlocal elapsed
+        await real_asyncio.sleep(0)
+        next_boundary = .08 if elapsed < .08 else .09
+        elapsed = min(elapsed + timeout, next_boundary)
+        if elapsed >= .08:
+            queue_finished.set()
+        if elapsed >= .09:
+            work_finished.set()
+        await real_asyncio.sleep(0)
+        return ({task for task in tasks if task.done()}, {task for task in tasks if not task.done()})
+
+    clock = SimpleNamespace(monotonic=lambda: elapsed, time=time.time)
+    monkeypatch.setattr(main, 'time', clock)
+    monkeypatch.setattr(analysis_timing, 'time', clock)
+    monkeypatch.setattr(main, 'asyncio', SimpleNamespace(
+        create_task=real_asyncio.create_task, wait=scheduled_wait, gather=real_asyncio.gather,
+        TimeoutError=real_asyncio.TimeoutError, CancelledError=real_asyncio.CancelledError,
+    ))
 
     async def body(directory):
         with record_ai_queue_wait():
-            await asyncio.sleep(.08)
-        await asyncio.sleep(.01)
+            await queue_finished.wait()
+        await work_finished.wait()
         main._safe_write(directory, {'status': 'review_required'})
 
     monkeypatch.setattr(main, '_resolve_pipeline_budget', lambda _: {
