@@ -153,3 +153,28 @@ def test_dual_budget_final_total_keeps_decision_identity():
     assert narrative_zero_sources(doc, table_code='FIN_07_three_public', indicator='total_actual', stage='决算')
     doc = _doc(ORDER7_TEXT.split('（二）')[0].replace('年初预算为5.00', '年初预算为0.00').replace('支出决算为0.00', '支出决算为5.00'))
     assert narrative_zero_sources(doc, table_code='FIN_07_three_public', indicator='total_actual', stage='决算') is None
+
+
+@pytest.mark.parametrize('sentence', [
+    '不适用甲局2024年度无“三公”经费财政拨款支出这一表述。',
+    '甲局2024年度无“三公”经费财政拨款支出这一表述不成立。',
+    '假设甲局2024年度无“三公”经费财政拨款支出。',
+    '可能甲局2024年度无“三公”经费财政拨款支出。',
+    '不能说明甲局2024年度无“三公”经费财政拨款支出。',
+    '甲局2024年度无“三公”经费财政拨款支出。公务用车购置费支出决算为5万元。',
+    '甲局2024年度无“三公”经费财政拨款支出。公务用车购置支出决算为5万元。',
+    '公务用车购置费支出决算不为0万元。',
+    '不适用公务用车购置费支出决算为0万元这一表述。',
+])
+def test_non_assertions_and_purchase_fee_conflicts_are_unknown(sentence):
+    doc = _doc('七、财政拨款“三公”经费支出决算情况说明。' + sentence)
+    assert narrative_zero_sources(doc, table_code='FIN_07_three_public', indicator='vehicle_purchase', stage='决算') is None
+
+
+def test_table_page_does_not_pollute_following_shanghai_statement():
+    doc = _doc('')
+    doc.page_texts = ['公务用车购置费\n非财政拨款\n事业收入\n0.00',
+                      '七、财政拨款“三公”经费支出决算情况说明\n公务用车购置支出为0万元。']
+    refs = narrative_zero_sources(doc, table_code='FIN_07_three_public', indicator='vehicle_purchase', stage='决算')
+    assert refs and {r['page'] for r in refs} == {2}
+    assert narrative_zero_sources(doc, table_code='FIN_07_three_public', indicator='vehicle_purchase', stage='年初预算') is None
