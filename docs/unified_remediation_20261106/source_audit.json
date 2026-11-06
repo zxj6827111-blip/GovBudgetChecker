@@ -1,0 +1,89 @@
+{
+  "status": "CANDIDATE_NOT_APPROVED",
+  "base_commit": "47581360966191d180880f7fb07dab48974948bb",
+  "historical_source": {
+    "date": "2026-11-05",
+    "purpose": "统一专项范围与来源审查；不是修复实施或完整工具签收",
+    "main": "47581360966191d180880f7fb07dab48974948bb",
+    "files": {
+      "scripts/verify_pending_review.py": {
+        "saved_commit": "3ca22f88b913424ee07d7fee6f5bad91131ecca7",
+        "saved_sha256": "ec1d505a47b15848bb5a8e9fc57213bc53bca8aae772b5028f30012b20fd197a",
+        "main_sha256": "ce0768f560f05d108be44166c50dd6491718bc388a805b9775081b6fbb6bb49b",
+        "original_workspace_matches_saved": true,
+        "r5_candidate_sha256": "ab202649048e090113a2d7360475f2dfd3960054ced87ff1ff8a1109eab8f13b",
+        "r5_candidate_matches_saved": false
+      },
+      "tests/test_verify_pending_review.py": {
+        "saved_commit": "3ca22f88b913424ee07d7fee6f5bad91131ecca7",
+        "saved_sha256": "0f5aa95b1cfa80c3c399360ae835e05a1bdadb089a4540e63f9fdd77f4a3262c",
+        "main_sha256": "c4a6355bb28649d964715ccd75eee0b813e634debe0163df009ced5ddf277047",
+        "original_workspace_matches_saved": true,
+        "r5_candidate_sha256": "0f5aa95b1cfa80c3c399360ae835e05a1bdadb089a4540e63f9fdd77f4a3262c",
+        "r5_candidate_matches_saved": true
+      }
+    },
+    "saved_harness_equals_frozen_r4": true,
+    "r4_harness": "/Volumes/workSSD/software development/GovBudgetChecker/outputs/pending_review_20261101/acceptance_kit/v1-regression-r4/tools/verify_pending_review.py",
+    "r4_harness_sha256": "ec1d505a47b15848bb5a8e9fc57213bc53bca8aae772b5028f30012b20fd197a",
+    "r5_status": "CANDIDATE_NOT_APPROVED（依据现有交付身份文件；本次未签发）",
+    "r5_handoff": "/Users/zhangxingjin/.codex/visualizations/2026/11/03/01a1a13d-cb17-7f72-85ad-32c7d17549d4/pending_review_r5_candidate/交付总览_交原聊天独立审核.md",
+    "effect_v2": {
+      "path": "/Volumes/workSSD/software development/gbc-worktrees/real-painpoint-fixes-20261104/scripts/effect_acceptance_v2.py",
+      "sha256": "dadf5fcb16e7025a3244b2de952dbd6cc2f19d7c3fd79357a291e3bf34c6cbd8",
+      "in_daily_main": false
+    },
+    "adapter_evidence": {
+      "collection": "/Volumes/workSSD/software development/GovBudgetChecker/outputs/real_painpoint_effect_closeout_20261105/candidate_d1_final",
+      "records": 160,
+      "normalized_findings": 0,
+      "raw_statuses": 160,
+      "raw_formal_issues": 933,
+      "method": "本次逐个读取gzip工件统计；无重采集、无重新分析"
+    },
+    "coverage": {
+      "already_explicit": "SP-02/03/04覆盖effect-v2；SP-01/05/06/07/08覆盖业务与历史治理",
+      "added": "SP-00 明确审查保存的验收器及测试、与r4/r5的重叠、当前版本兼容性及统一验收契约"
+    },
+    "validation_limits": [
+      "未完整运行保存稿或r5测试",
+      "未判定保存稿所有改动均正确",
+      "未修复业务或工具",
+      "未改变运行服务或合并代码"
+    ]
+  },
+  "groups": {
+    "A": {
+      "decision": "KEEP",
+      "reason": "复用r4序列化report_kind/kind适配；当前真实DocumentProfile测试保留"
+    },
+    "B": {
+      "decision": "ADAPT",
+      "reason": "r4未知诊断范围继续PENDING；四条T13生产聚合缺陷另修，不伪造范围豁免"
+    },
+    "C": {
+      "decision": "KEEP_WITH_LIMIT",
+      "reason": "保留允许动作校验；推荐不等于认证。原件空白从产生处登记human_confirm，不当作列身份故障"
+    },
+    "D": {
+      "decision": "KEEP",
+      "reason": "保留种子承诺、登记哈希和不可覆盖；CLI姓名不构成独立签收"
+    },
+    "E": {
+      "decision": "KEEP",
+      "reason": "保留快照/路径保护/退出码/PENDING传播；contracts加入代码快照范围"
+    },
+    "F": {
+      "decision": "REPAIR",
+      "reason": "新共享适配器读review_report四层，缺层报错；160份独立统计原始933=新适配933"
+    },
+    "G": {
+      "decision": "DEDUPLICATE_AND_EXTEND",
+      "reason": "保存测试与r5沿用旧测试相同，只引入一次；保留旧断言并加单一故障正负控"
+    },
+    "H": {
+      "decision": "NO_BULK_IMPORT",
+      "reason": "r5仍未批准，不引入旧起点或其新基线要求；当前候选直接基于47581360"
+    }
+  }
+}

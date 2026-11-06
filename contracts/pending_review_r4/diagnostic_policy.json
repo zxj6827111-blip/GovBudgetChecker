@@ -1,0 +1,730 @@
+{
+  "future_phase_requirements": [
+    "DH-06 另建 AI 开启验收包，定义定位任务来源、ai_timeout/ai_locate_rejected 和失败路由，不能沿用本包禁 AI 回执的约束。"
+  ],
+  "phase": "DH-00..DH-03_AI_off",
+  "reasons": {
+    "ai_not_requested": {
+      "actions": [
+        "rerun_ai"
+      ],
+      "basis": {
+        "rationale": "语义模型模式提示提供补跑；AI 失败在本包模式下仍被 T16 拒绝。",
+        "source": "方案 DH-07.4；第一阶段 AI 关闭约束"
+      },
+      "constraint_status": "explicit_plan",
+      "layer": "语义模型",
+      "priority": 50,
+      "recommended_actions": [
+        "rerun_ai"
+      ]
+    },
+    "ai_partial_citation_rejected": {
+      "actions": [
+        "rerun_ai"
+      ],
+      "basis": {
+        "rationale": "语义模型模式提示提供补跑；AI 失败在本包模式下仍被 T16 拒绝。",
+        "source": "方案 DH-07.4；第一阶段 AI 关闭约束"
+      },
+      "constraint_status": "explicit_plan",
+      "layer": "语义模型",
+      "priority": 50,
+      "recommended_actions": [
+        "rerun_ai"
+      ]
+    },
+    "ai_partial_invalid_output": {
+      "actions": [
+        "rerun_ai"
+      ],
+      "basis": {
+        "rationale": "语义模型模式提示提供补跑；AI 失败在本包模式下仍被 T16 拒绝。",
+        "source": "方案 DH-07.4；第一阶段 AI 关闭约束"
+      },
+      "constraint_status": "explicit_plan",
+      "layer": "语义模型",
+      "priority": 50,
+      "recommended_actions": [
+        "rerun_ai"
+      ]
+    },
+    "ai_timeout": {
+      "actions": [
+        "rerun_ai"
+      ],
+      "basis": {
+        "rationale": "语义模型模式提示提供补跑；AI 失败在本包模式下仍被 T16 拒绝。",
+        "source": "方案 DH-07.4；第一阶段 AI 关闭约束"
+      },
+      "constraint_status": "explicit_plan",
+      "layer": "语义模型",
+      "priority": 50,
+      "recommended_actions": [
+        "rerun_ai"
+      ]
+    },
+    "candidate_amount_conflict": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "方案定义动作但未规定此原因的唯一路由；按真实卡点选择并由原页抽查确认。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "遗留原因",
+      "priority": 100,
+      "recommended_actions": [
+        "system_recheck",
+        "tech_fix",
+        "human_confirm"
+      ]
+    },
+    "cell_blank_semantics_unknown": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "方案定义动作但未规定此原因的唯一路由；按真实卡点选择并由原页抽查确认。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "单元格",
+      "priority": 30,
+      "recommended_actions": [
+        "system_recheck",
+        "tech_fix",
+        "human_confirm"
+      ]
+    },
+    "cell_low_confidence": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "方案定义动作但未规定此原因的唯一路由；按真实卡点选择并由原页抽查确认。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "单元格",
+      "priority": 30,
+      "recommended_actions": [
+        "system_recheck",
+        "tech_fix",
+        "human_confirm"
+      ]
+    },
+    "cell_unbound": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "未绑定既可能缺身份，也可能解析或定位遗漏，需区分后处理。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "单元格",
+      "priority": 10,
+      "recommended_actions": [
+        "tech_fix"
+      ]
+    },
+    "code_name_conflict": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "编码冲突应按 DH-04 出问题，后续可能需技术或人工复核。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "身份",
+      "priority": 20,
+      "recommended_actions": [
+        "human_confirm"
+      ]
+    },
+    "column_identity_unconfirmed": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "表头证据可能允许系统补取，缺少证据时才需要人工确认。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "列",
+      "priority": 10,
+      "recommended_actions": [
+        "tech_fix"
+      ]
+    },
+    "column_width_drift": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "优先修复跨页映射，也可能由现有重提取能力恢复。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "列",
+      "priority": 10,
+      "recommended_actions": [
+        "tech_fix"
+      ]
+    },
+    "comparison_identity_unresolved": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "方案定义动作但未规定此原因的唯一路由；按真实卡点选择并由原页抽查确认。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "遗留原因",
+      "priority": 100,
+      "recommended_actions": [
+        "system_recheck",
+        "tech_fix",
+        "human_confirm"
+      ]
+    },
+    "exception_amount_conflict": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "方案定义动作但未规定此原因的唯一路由；按真实卡点选择并由原页抽查确认。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "遗留原因",
+      "priority": 100,
+      "recommended_actions": [
+        "system_recheck",
+        "tech_fix",
+        "human_confirm"
+      ]
+    },
+    "exception_scope_ambiguous": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "方案定义动作但未规定此原因的唯一路由；按真实卡点选择并由原页抽查确认。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "遗留原因",
+      "priority": 100,
+      "recommended_actions": [
+        "system_recheck",
+        "tech_fix",
+        "human_confirm"
+      ]
+    },
+    "execution_error": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "通常技术修复；可恢复故障也可以系统重试。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "规则",
+      "priority": 10,
+      "recommended_actions": [
+        "tech_fix"
+      ]
+    },
+    "item_amount_not_included": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "方案定义动作但未规定此原因的唯一路由；按真实卡点选择并由原页抽查确认。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "遗留原因",
+      "priority": 100,
+      "recommended_actions": [
+        "system_recheck",
+        "tech_fix",
+        "human_confirm"
+      ]
+    },
+    "item_disclosure_missing": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "方案定义动作但未规定此原因的唯一路由；按真实卡点选择并由原页抽查确认。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "遗留原因",
+      "priority": 100,
+      "recommended_actions": [
+        "system_recheck",
+        "tech_fix",
+        "human_confirm"
+      ]
+    },
+    "item_sum_mismatch": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "方案定义动作但未规定此原因的唯一路由；按真实卡点选择并由原页抽查确认。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "遗留原因",
+      "priority": 100,
+      "recommended_actions": [
+        "system_recheck",
+        "tech_fix",
+        "human_confirm"
+      ]
+    },
+    "name_mismatch_confirmed": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "名称差异应按 DH-04 出问题；不宜用单一人工动作代替该流程。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "身份",
+      "priority": 20,
+      "recommended_actions": [
+        "human_confirm"
+      ]
+    },
+    "operand_ambiguous": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "方案定义动作但未规定此原因的唯一路由；按真实卡点选择并由原页抽查确认。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "操作数",
+      "priority": 30,
+      "recommended_actions": [
+        "system_recheck",
+        "tech_fix",
+        "human_confirm"
+      ]
+    },
+    "operand_missing": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "方案定义动作但未规定此原因的唯一路由；按真实卡点选择并由原页抽查确认。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "操作数",
+      "priority": 30,
+      "recommended_actions": [
+        "system_recheck",
+        "tech_fix",
+        "human_confirm"
+      ]
+    },
+    "parse_error": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "通常技术修复；已有解析重试或补取路径也可能有效。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "规则",
+      "priority": 10,
+      "recommended_actions": [
+        "tech_fix"
+      ]
+    },
+    "row_code_missing": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "原文可能确实缺码，也可能解析遗漏，不能只凭原因码认定技术缺陷。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "行",
+      "priority": 10,
+      "recommended_actions": [
+        "tech_fix"
+      ]
+    },
+    "row_identity_duplicate": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "方案定义动作但未规定此原因的唯一路由；按真实卡点选择并由原页抽查确认。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "行",
+      "priority": 30,
+      "recommended_actions": [
+        "system_recheck",
+        "tech_fix",
+        "human_confirm"
+      ]
+    },
+    "row_level_unresolved": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "层级可经确定性重提取、技术修复或原页确认解决。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "行",
+      "priority": 10,
+      "recommended_actions": [
+        "tech_fix"
+      ]
+    },
+    "rule_no_reason": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "需补足具体诊断，原因码本身不足以决定唯一动作。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "规则",
+      "priority": 10,
+      "recommended_actions": [
+        "tech_fix"
+      ]
+    },
+    "scope_unconfirmed": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "方案定义动作但未规定此原因的唯一路由；按真实卡点选择并由原页抽查确认。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "口径",
+      "priority": 30,
+      "recommended_actions": [
+        "system_recheck",
+        "tech_fix",
+        "human_confirm"
+      ]
+    },
+    "source_unit_normalized": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "方案定义动作但未规定此原因的唯一路由；按真实卡点选择并由原页抽查确认。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "遗留原因",
+      "priority": 100,
+      "recommended_actions": [
+        "system_recheck",
+        "tech_fix",
+        "human_confirm"
+      ]
+    },
+    "stated_total_missing": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "方案定义动作但未规定此原因的唯一路由；按真实卡点选择并由原页抽查确认。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "遗留原因",
+      "priority": 100,
+      "recommended_actions": [
+        "system_recheck",
+        "tech_fix",
+        "human_confirm"
+      ]
+    },
+    "subject_conflict": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "方案定义动作但未规定此原因的唯一路由；按真实卡点选择并由原页抽查确认。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "主体",
+      "priority": 30,
+      "recommended_actions": [
+        "system_recheck",
+        "tech_fix",
+        "human_confirm"
+      ]
+    },
+    "subject_name_unlocated": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "方案定义动作但未规定此原因的唯一路由；按真实卡点选择并由原页抽查确认。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "身份",
+      "priority": 30,
+      "recommended_actions": [
+        "system_recheck",
+        "tech_fix",
+        "human_confirm"
+      ]
+    },
+    "subject_unconfirmed": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "方案定义动作但未规定此原因的唯一路由；按真实卡点选择并由原页抽查确认。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "主体",
+      "priority": 30,
+      "recommended_actions": [
+        "system_recheck",
+        "tech_fix",
+        "human_confirm"
+      ]
+    },
+    "sum_scope_not_comparable": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "方案定义动作但未规定此原因的唯一路由；按真实卡点选择并由原页抽查确认。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "遗留原因",
+      "priority": 100,
+      "recommended_actions": [
+        "system_recheck",
+        "tech_fix",
+        "human_confirm"
+      ]
+    },
+    "table_mapping_incomplete": {
+      "actions": [
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "表映射不完整属于解析缺陷，不能转给材料方确认。",
+        "source": "方案 DH-02.10"
+      },
+      "constraint_status": "explicit_plan",
+      "layer": "表",
+      "priority": 10,
+      "recommended_actions": [
+        "tech_fix"
+      ]
+    },
+    "table_missing": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "优先核原页确认缺表；完整搜索或解析修复也可能纠正误识别。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "表",
+      "priority": 20,
+      "recommended_actions": [
+        "human_confirm"
+      ]
+    },
+    "text_binding_failed": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "方案定义动作但未规定此原因的唯一路由；按真实卡点选择并由原页抽查确认。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "说明",
+      "priority": 30,
+      "recommended_actions": [
+        "system_recheck",
+        "tech_fix",
+        "human_confirm"
+      ]
+    },
+    "text_statement_absent": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "断言原文缺披露须核完整说明；确认前保留系统复核路径。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "说明",
+      "priority": 20,
+      "recommended_actions": [
+        "human_confirm"
+      ]
+    },
+    "text_statement_unparsed": {
+      "actions": [
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "疑似表述尚未解析可技术修复，也可在身份已确认后定向补取；路由不表示已执行或准入已满足。",
+        "source": "方案 DH-06.1、DH-02.10"
+      },
+      "constraint_status": "explicit_plan",
+      "layer": "说明",
+      "priority": 10,
+      "recommended_actions": [
+        "system_recheck",
+        "tech_fix"
+      ]
+    },
+    "withheld_amount_unknown": {
+      "actions": [
+        "human_confirm",
+        "system_recheck",
+        "tech_fix"
+      ],
+      "basis": {
+        "rationale": "方案定义动作但未规定此原因的唯一路由；按真实卡点选择并由原页抽查确认。",
+        "source": "方案 DH-02.3、DH-02.9"
+      },
+      "constraint_status": "provisional_nonexclusive",
+      "layer": "遗留原因",
+      "priority": 100,
+      "recommended_actions": [
+        "system_recheck",
+        "tech_fix",
+        "human_confirm"
+      ]
+    }
+  },
+  "sampling": {
+    "algorithm": "sha256-layer2-special1-v1",
+    "formal_seed_policy": "reviewer_random_after_registration",
+    "layer_order": [
+      "主体",
+      "口径",
+      "表",
+      "行",
+      "列",
+      "单元格",
+      "操作数",
+      "说明",
+      "身份",
+      "规则",
+      "语义模型",
+      "遗留原因"
+    ],
+    "min_per_layer": 2,
+    "selftest_seed": "20261102",
+    "size": 30,
+    "special_flags": [
+      "unowned_receipt",
+      "legacy_reason",
+      "scope_override"
+    ]
+  },
+  "version": 2
+}

@@ -1,0 +1,8 @@
+{
+  "finding_keys": [
+    "id",
+    "created_at"
+  ],
+  "note": "正式问题指纹去除的易变字段；以自测 S1 两次同代码采集的逐字段差异为准，冻结后不得增删",
+  "version": "v1-initial"
+}

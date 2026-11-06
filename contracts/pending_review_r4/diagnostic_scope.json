@@ -1,0 +1,444 @@
+{
+  "entries": [
+    {
+      "case_id": "731380a3be910b486a90b6dca17a9a8ea327e20a27c40208ab01fa786600ff55",
+      "decision": "diagnose",
+      "evidence": {
+        "aggregate_receipt": true,
+        "rule_execution_status": "insufficient_data",
+        "source_status_sha256": "2ca900ce273eab1fec44722ec627a1cb47140f49143e557e5234b8fd6e7fc3bc"
+      },
+      "original_reason": "底层规则状态为 insufficient_data，检查未完成",
+      "pdf_sha256": "bd96548bbf43acc6d7d6fbca9be383ed348cde946380403389adf0b6586ec57a",
+      "rationale": "规则执行摘要仍为未完成；此为规则×义务汇总，不能用子关系聚合的通过/失败遮住余下缺口。",
+      "receipt_key": [
+        "OBL-TREND-COMPLETION-RATE",
+        "V33-TREND-COMPLETION-RATE",
+        "OBL-TREND-COMPLETION-RATE:V33-TREND-COMPLETION-RATE"
+      ],
+      "sample_id": "RA-036",
+      "status": "fail"
+    },
+    {
+      "case_id": "2b2c024ce9d0a91f0028d6e0f8ff712ff9d1e236629ceb73db80fc32cd9650ee",
+      "decision": "explanation_only",
+      "evidence": {
+        "aggregate_receipt": false,
+        "rule_execution_status": "insufficient_data",
+        "source_status_sha256": "9c3210de05e17ed80266f333c8a49b1702cd19272303166c10c3bafb300a058c"
+      },
+      "original_reason": "支出说明未披露基本支出占比",
+      "pdf_sha256": "ab5aadce947a6b61f7ed4264877460ecf719d02148d7b737a2a2a9c96eb03605",
+      "rationale": "该关系明确不适用，只保留适用性说明，不解释为取数失败。",
+      "receipt_key": [
+        "OBL-TXT-T3",
+        "V33-104",
+        "T3:basic_share_of_expense_total"
+      ],
+      "sample_id": "RA-038",
+      "status": "not_applicable"
+    },
+    {
+      "case_id": "575740000f8fa47cf4cd860357c342cd4e2f8b73532b2d5d7f15b9137e693ac1",
+      "decision": "diagnose",
+      "evidence": {
+        "aggregate_receipt": true,
+        "rule_execution_status": "insufficient_data",
+        "source_status_sha256": "5198635cbde0f622e64e94262c6cc63cc6ab612aed12520d523f8fba658ba9ac"
+      },
+      "original_reason": "底层规则状态为 insufficient_data，检查未完成",
+      "pdf_sha256": "1bb4e05d789471471ea1bc4091a7dc9ed186638ce3c92487b981b2c73bd32752",
+      "rationale": "规则执行摘要仍为未完成；此为规则×义务汇总，不能用子关系聚合的通过/失败遮住余下缺口。",
+      "receipt_key": [
+        "OBL-TREND-COMPLETION-RATE",
+        "V33-TREND-COMPLETION-RATE",
+        "OBL-TREND-COMPLETION-RATE:V33-TREND-COMPLETION-RATE"
+      ],
+      "sample_id": "RB-2022-D03",
+      "status": "pass"
+    },
+    {
+      "case_id": "bbae6fefa65526cc30a9cee95821e28bc36fd9ead5ff4a19462482728b888e1d",
+      "decision": "diagnose",
+      "evidence": {
+        "aggregate_receipt": true,
+        "rule_execution_status": "insufficient_data",
+        "source_status_sha256": "c681cbe6d93feef97e9bccd6f80d2d00204a09d543a05ba91312e88914a1b7b6"
+      },
+      "original_reason": "底层规则状态为 insufficient_data，检查未完成",
+      "pdf_sha256": "7d0e037ad04d4322f15e2a5cb1f7c23c96677748f833b39109b7ad3228ce51cf",
+      "rationale": "规则执行摘要仍为未完成；此为规则×义务汇总，不能用子关系聚合的通过/失败遮住余下缺口。",
+      "receipt_key": [
+        "OBL-TREND-COMPLETION-RATE",
+        "V33-TREND-COMPLETION-RATE",
+        "OBL-TREND-COMPLETION-RATE:V33-TREND-COMPLETION-RATE"
+      ],
+      "sample_id": "RB-2022-U11",
+      "status": "fail"
+    },
+    {
+      "case_id": "bae371131b99d6282e6a233472943fa1356a8a43ecbf843ab02b65fe7288f4a0",
+      "decision": "explanation_only",
+      "evidence": {
+        "aggregate_receipt": false,
+        "rule_execution_status": "insufficient_data",
+        "source_status_sha256": "da19b7b277a36c8d2d030967c853026157955d6f8278f00abb00655058599707"
+      },
+      "original_reason": "公务用车购置费未单独写明，由原文小计43.56万元减公务用车运行维护费43.56万元得出，与表内一致",
+      "pdf_sha256": "4768eea357ef16d84cef8c9c646f0ba8ee8ad4f011360fb1193d832308c6abfe",
+      "rationale": "该已通过子关系的推导说明，只保留解释，不强制新增原因码。",
+      "receipt_key": [
+        "OBL-TXT-T7",
+        "CMM-001",
+        "three_public:detail:vehicle_purchase:by_subtotal"
+      ],
+      "sample_id": "RB-2022-U13",
+      "status": "pass"
+    },
+    {
+      "case_id": "d2eee4985eba0872d4faa3397648da47140564bfccd47152b204f3c76ea4008b",
+      "decision": "explanation_only",
+      "evidence": {
+        "aggregate_receipt": false,
+        "rule_execution_status": "insufficient_data",
+        "source_status_sha256": "da19b7b277a36c8d2d030967c853026157955d6f8278f00abb00655058599707"
+      },
+      "original_reason": "公务用车购置费未单独写明，由原文小计43.56万元减公务用车运行维护费43.56万元得出，与表内一致",
+      "pdf_sha256": "4768eea357ef16d84cef8c9c646f0ba8ee8ad4f011360fb1193d832308c6abfe",
+      "rationale": "该已通过子关系的推导说明，只保留解释，不强制新增原因码。",
+      "receipt_key": [
+        "OBL-SG-TABLE-TEXT",
+        "CMM-001",
+        "three_public:detail:vehicle_purchase:by_subtotal"
+      ],
+      "sample_id": "RB-2022-U13",
+      "status": "pass"
+    },
+    {
+      "case_id": "f3cab010edb2bde6bf3a18ff25a1d5a17a6694a05aa347a30cce1f5100d8a9ad",
+      "decision": "diagnose",
+      "evidence": {
+        "aggregate_receipt": true,
+        "rule_execution_status": "insufficient_data",
+        "source_status_sha256": "2cd218f676b7464282ec75f2471a63be4dcda9952751daf48ededa1da410c803"
+      },
+      "original_reason": "底层规则状态为 insufficient_data，检查未完成",
+      "pdf_sha256": "b143edc650db6dcb4983df99509a9f9016393316c8ccfb26747deb4cd180341d",
+      "rationale": "规则执行摘要仍为未完成；此为规则×义务汇总，不能用子关系聚合的通过/失败遮住余下缺口。",
+      "receipt_key": [
+        "OBL-TREND-COMPLETION-RATE",
+        "V33-TREND-COMPLETION-RATE",
+        "OBL-TREND-COMPLETION-RATE:V33-TREND-COMPLETION-RATE"
+      ],
+      "sample_id": "RB-2022-U22",
+      "status": "pass"
+    },
+    {
+      "case_id": "c5d3a09e87b86f18387261086b6b61cddeb0c08e5d5fe73da429bacb0450087e",
+      "decision": "explanation_only",
+      "evidence": {
+        "aggregate_receipt": false,
+        "rule_execution_status": "insufficient_data",
+        "source_status_sha256": "e3f0c78f1ac9bffd3e38173706e8e8f5e6adbe5bfbb654f41c1ecd51dba61863"
+      },
+      "original_reason": "支出决算具体情况逐项列示的年初预算合计1654.663864万元（纳入12项），与该部分所列年初预算总额1646万元不一致，相差8.663864万元；其中1项原文以元列示，已按原文单位折算为万元；条件性说明：若这些项按万元名义值计入，合计将增加38.636136万元（当前已纳入0.003864万元，若按万元名义值替换为38.64万元）；本规则不采用该假设，单位问题另行确认；分项合计超出总额。",
+      "pdf_sha256": "efb3e02127f6540759b1042b0191eb12ad5807005f70d8e8742779d1303e902b",
+      "rationale": "该子关系已完成并报告不一致，保留问题说明；父义务的其他未完成关系另行诊断。",
+      "receipt_key": [
+        "OBL-TXT-FINAL-DETAIL",
+        "V33-251",
+        "V33-251:budget:item_sum"
+      ],
+      "sample_id": "RB-2023-D03",
+      "status": "fail"
+    },
+    {
+      "case_id": "6743ce80eafc7a39fd55dd6c278e426ba09fe0d04e1674d3c2ff19f41d8aaa20",
+      "decision": "explanation_only",
+      "evidence": {
+        "aggregate_receipt": false,
+        "rule_execution_status": "insufficient_data",
+        "source_status_sha256": "8083bce3660ef696e14dbd01cb688f9312733895b53caaa125bca1d911155a3c"
+      },
+      "original_reason": "支出决算具体情况逐项列示的年初预算合计1840.9848万元（纳入11项），与该部分所列年初预算总额1888.98万元不一致，相差47.9952万元；其中1项原文以元列示，已按原文单位折算为万元；条件性说明：若这些项按万元名义值计入，合计将增加47.9952万元（当前已纳入0.0048万元，若按万元名义值替换为48万元）；本规则不采用该假设，单位问题另行确认；可能漏列科目。",
+      "pdf_sha256": "5ed377e7f18ff6abb3456eca8d60a95ccbceb594142e0db16f9c6e5fee910177",
+      "rationale": "该子关系已完成并报告不一致，保留问题说明；父义务的其他未完成关系另行诊断。",
+      "receipt_key": [
+        "OBL-TXT-FINAL-DETAIL",
+        "V33-251",
+        "V33-251:budget:item_sum"
+      ],
+      "sample_id": "RB-2024-D02",
+      "status": "fail"
+    },
+    {
+      "case_id": "2b0b1f7ab8cf7ae2d88e8e61c40cde3bc9dc68e21a0236fd28fbae23a3293c52",
+      "decision": "diagnose",
+      "evidence": {
+        "aggregate_receipt": true,
+        "rule_execution_status": "insufficient_data",
+        "source_status_sha256": "200afd1f61a3c6dd3dce2004e5001c517353e83be0b5579a603a668805fa0f77"
+      },
+      "original_reason": "底层规则状态为 insufficient_data，检查未完成",
+      "pdf_sha256": "97346fe97d7608e3b405ca9cdf919d45e79e7295c304ef2ebd9ebb02bd40994b",
+      "rationale": "规则执行摘要仍为未完成；此为规则×义务汇总，不能用子关系聚合的通过/失败遮住余下缺口。",
+      "receipt_key": [
+        "OBL-TXT-T2",
+        "V33-226",
+        "OBL-TXT-T2:V33-226"
+      ],
+      "sample_id": "RB-2024-U07",
+      "status": "pass"
+    },
+    {
+      "case_id": "c426109ed970c0d925d4b678ccf1e302fe30ac92af5f4757cbdaf3ae4429bf79",
+      "decision": "explanation_only",
+      "evidence": {
+        "aggregate_receipt": false,
+        "rule_execution_status": "insufficient_data",
+        "source_status_sha256": "200afd1f61a3c6dd3dce2004e5001c517353e83be0b5579a603a668805fa0f77"
+      },
+      "original_reason": "收入说明未披露财政拨款收入占比",
+      "pdf_sha256": "97346fe97d7608e3b405ca9cdf919d45e79e7295c304ef2ebd9ebb02bd40994b",
+      "rationale": "该关系明确不适用，只保留适用性说明，不解释为取数失败。",
+      "receipt_key": [
+        "OBL-TXT-T2",
+        "V33-103",
+        "T2:fiscal_allocation:share_of_income_total"
+      ],
+      "sample_id": "RB-2024-U07",
+      "status": "not_applicable"
+    },
+    {
+      "case_id": "49f76fcfdf8723e88400b41bb3fb3fd8e96b31a7613ba109d4fe6ae7ca1ce493",
+      "decision": "explanation_only",
+      "evidence": {
+        "aggregate_receipt": false,
+        "rule_execution_status": "insufficient_data",
+        "source_status_sha256": "2670e3c38ab3c787bd5888de09a5ad53fa2eb22819352b4f7af31a53a6f06930"
+      },
+      "original_reason": "支出说明未披露基本支出占比",
+      "pdf_sha256": "1b11a318b1b7e0eeade7ad758a7e843869db6c229ec46ccae577bb7e9ba421fb",
+      "rationale": "该关系明确不适用，只保留适用性说明，不解释为取数失败。",
+      "receipt_key": [
+        "OBL-TXT-T3",
+        "V33-104",
+        "T3:basic_share_of_expense_total"
+      ],
+      "sample_id": "RB-2024-U15",
+      "status": "not_applicable"
+    },
+    {
+      "case_id": "3129c7c91b333b82a1e8ff345bded87665a159634bfdd1e53e6049880b0a1664",
+      "decision": "diagnose",
+      "evidence": {
+        "aggregate_receipt": true,
+        "rule_execution_status": "insufficient_data",
+        "source_status_sha256": "fc47737a17c788ddbd11a0fb6d641f6c8d34d8135e0a0badd85b74d32086bc8c"
+      },
+      "original_reason": "底层规则状态为 insufficient_data，检查未完成",
+      "pdf_sha256": "8b7fc1822afa6e23862ed8dee87b7bd5d4eb137f84ff2f186ef0616a82b6d5a4",
+      "rationale": "规则执行摘要仍为未完成；此为规则×义务汇总，不能用子关系聚合的通过/失败遮住余下缺口。",
+      "receipt_key": [
+        "OBL-TXT-T2",
+        "V33-226",
+        "OBL-TXT-T2:V33-226"
+      ],
+      "sample_id": "RB-2024-U17",
+      "status": "pass"
+    },
+    {
+      "case_id": "754b5b470b963d3a87563bbca49c8c49925f43ba4bc4ef0f283f6b0e9589bc45",
+      "decision": "explanation_only",
+      "evidence": {
+        "aggregate_receipt": false,
+        "rule_execution_status": "insufficient_data",
+        "source_status_sha256": "fc47737a17c788ddbd11a0fb6d641f6c8d34d8135e0a0badd85b74d32086bc8c"
+      },
+      "original_reason": "收入说明未披露财政拨款收入占比",
+      "pdf_sha256": "8b7fc1822afa6e23862ed8dee87b7bd5d4eb137f84ff2f186ef0616a82b6d5a4",
+      "rationale": "该关系明确不适用，只保留适用性说明，不解释为取数失败。",
+      "receipt_key": [
+        "OBL-TXT-T2",
+        "V33-103",
+        "T2:fiscal_allocation:share_of_income_total"
+      ],
+      "sample_id": "RB-2024-U17",
+      "status": "not_applicable"
+    },
+    {
+      "case_id": "90b7db4a7f61d56a34c644437268ec360bb1cd6da7e729dc0b498e5d0c806235",
+      "decision": "explanation_only",
+      "evidence": {
+        "aggregate_receipt": false,
+        "rule_execution_status": "pass",
+        "source_status_sha256": "190b934c24097156281f2093747ccfcdcab5f107dc8f297d554eab131b00d7e3"
+      },
+      "original_reason": "公务用车购置及运行维护费原文未提，由三公决算合计0.61万元减其余两项得出，与表内一致",
+      "pdf_sha256": "f194b78e1dc7172770257e00ae12d71346bcc6acacffa2f4ca3a80a76749176d",
+      "rationale": "该已通过子关系的推导说明，只保留解释，不强制新增原因码。",
+      "receipt_key": [
+        "OBL-TXT-T7",
+        "V33-224",
+        "three_public:detail:vehicle_purchase_operation:by_total"
+      ],
+      "sample_id": "RB-2024-U18",
+      "status": "pass"
+    },
+    {
+      "case_id": "f2b612d02652fb76f33e64077d78fcc8752ce3955c8bdc240aa165cdba3669fd",
+      "decision": "explanation_only",
+      "evidence": {
+        "aggregate_receipt": false,
+        "rule_execution_status": "pass",
+        "source_status_sha256": "190b934c24097156281f2093747ccfcdcab5f107dc8f297d554eab131b00d7e3"
+      },
+      "original_reason": "公务用车购置及运行维护费原文未提，由三公决算合计0.61万元减其余两项得出，与表内一致",
+      "pdf_sha256": "f194b78e1dc7172770257e00ae12d71346bcc6acacffa2f4ca3a80a76749176d",
+      "rationale": "该已通过子关系的推导说明，只保留解释，不强制新增原因码。",
+      "receipt_key": [
+        "OBL-SG-TABLE-TEXT",
+        "V33-224",
+        "three_public:detail:vehicle_purchase_operation:by_total"
+      ],
+      "sample_id": "RB-2024-U18",
+      "status": "pass"
+    },
+    {
+      "case_id": "1800ffdd957363e1399d7ee667918fdc11da30018f4b3a176bf2327406212bbe",
+      "decision": "explanation_only",
+      "evidence": {
+        "aggregate_receipt": false,
+        "rule_execution_status": "fail",
+        "source_status_sha256": "25e6cacdc56123704f208d8d57eaac6c0b179167493abc0a5ac862903f0b4309"
+      },
+      "original_reason": "公务用车购置及运行维护费原文未提，由三公决算合计182.50万元减其余两项得出，与表内一致",
+      "pdf_sha256": "e201eba97a1c5d87980dd9caa4c5ce0d0a1ded8de463024200223a0b74fd2286",
+      "rationale": "该已通过子关系的推导说明，只保留解释，不强制新增原因码。",
+      "receipt_key": [
+        "OBL-TXT-T7",
+        "V33-224",
+        "three_public:detail:vehicle_purchase_operation:by_total"
+      ],
+      "sample_id": "RB-2024-U23",
+      "status": "pass"
+    },
+    {
+      "case_id": "e03a12a0b16bc1d801fbb404225df15ec75d7413d39acd47b431926123d54cda",
+      "decision": "explanation_only",
+      "evidence": {
+        "aggregate_receipt": false,
+        "rule_execution_status": "fail",
+        "source_status_sha256": "25e6cacdc56123704f208d8d57eaac6c0b179167493abc0a5ac862903f0b4309"
+      },
+      "original_reason": "公务用车购置及运行维护费原文未提，由三公决算合计182.50万元减其余两项得出，与表内一致",
+      "pdf_sha256": "e201eba97a1c5d87980dd9caa4c5ce0d0a1ded8de463024200223a0b74fd2286",
+      "rationale": "该已通过子关系的推导说明，只保留解释，不强制新增原因码。",
+      "receipt_key": [
+        "OBL-SG-TABLE-TEXT",
+        "V33-224",
+        "three_public:detail:vehicle_purchase_operation:by_total"
+      ],
+      "sample_id": "RB-2024-U23",
+      "status": "pass"
+    },
+    {
+      "case_id": "2a31467ac88f9056375bc18e3283fde050383082efbd72dee073825398eb4200",
+      "decision": "diagnose",
+      "evidence": {
+        "aggregate_receipt": true,
+        "rule_execution_status": "insufficient_data",
+        "source_status_sha256": "948df25be7de53b29b704f876c57a410fb3344191731ce227248f6a7ff048861"
+      },
+      "original_reason": "底层规则状态为 insufficient_data，检查未完成",
+      "pdf_sha256": "10afef7bcb2cbc057b601d220206f36a3e4a6f6b8636f851d02f46d8df9f6dd9",
+      "rationale": "规则执行摘要仍为未完成；此为规则×义务汇总，不能用子关系聚合的通过/失败遮住余下缺口。",
+      "receipt_key": [
+        "OBL-TREND-COMPLETION-RATE",
+        "V33-TREND-COMPLETION-RATE",
+        "OBL-TREND-COMPLETION-RATE:V33-TREND-COMPLETION-RATE"
+      ],
+      "sample_id": "RB-2025-D05",
+      "status": "fail"
+    },
+    {
+      "case_id": "f63767d7d4393c52a1d64e1e18b4255554c0ae3cdc65ebeee17be3be39c6736c",
+      "decision": "diagnose",
+      "evidence": {
+        "aggregate_receipt": true,
+        "rule_execution_status": "insufficient_data",
+        "source_status_sha256": "e155d828cb56360d0daccc7237a9d590803e472f70fa693d738a3e6798f33a75"
+      },
+      "original_reason": "底层规则状态为 insufficient_data，检查未完成",
+      "pdf_sha256": "dec2525d6f2cb22609a5ae82aa0a221962e56932fbfdc25cef4aab137fc3123c",
+      "rationale": "规则执行摘要仍为未完成；此为规则×义务汇总，不能用子关系聚合的通过/失败遮住余下缺口。",
+      "receipt_key": [
+        "OBL-TREND-COMPLETION-RATE",
+        "V33-TREND-COMPLETION-RATE",
+        "OBL-TREND-COMPLETION-RATE:V33-TREND-COMPLETION-RATE"
+      ],
+      "sample_id": "RB-2025-U02",
+      "status": "pass"
+    },
+    {
+      "case_id": "2413f9b05a087b9851b4ffa0f9e6708ed0974c091f8ea4d8cb37ce2044178d7c",
+      "decision": "diagnose",
+      "evidence": {
+        "aggregate_receipt": true,
+        "rule_execution_status": "insufficient_data",
+        "source_status_sha256": "c2294aca56e0365be0473d581c02f80a6965dd9c561fe5dc60d4403bbfc033f2"
+      },
+      "original_reason": "底层规则状态为 insufficient_data，检查未完成",
+      "pdf_sha256": "dc7960eea9113ecc060b38bea3d2ef56386f7da0def2fbe62102069c352e00b1",
+      "rationale": "规则执行摘要仍为未完成；此为规则×义务汇总，不能用子关系聚合的通过/失败遮住余下缺口。",
+      "receipt_key": [
+        "OBL-TREND-COMPLETION-RATE",
+        "V33-TREND-COMPLETION-RATE",
+        "OBL-TREND-COMPLETION-RATE:V33-TREND-COMPLETION-RATE"
+      ],
+      "sample_id": "RB-2025-U03",
+      "status": "fail"
+    },
+    {
+      "case_id": "811c5b854073dede607fe52104cdb5802430fa975b46e232b7f1e188d6260124",
+      "decision": "diagnose",
+      "evidence": {
+        "aggregate_receipt": true,
+        "rule_execution_status": "insufficient_data",
+        "source_status_sha256": "e84dfa7ae29fecc865b9f9f7d81a2fd02e15c46f6e20a4aa266fa6d4526e48eb"
+      },
+      "original_reason": "底层规则状态为 insufficient_data，检查未完成",
+      "pdf_sha256": "c8208854b0ee69cad2d74f25075bb602b475db982d9249e4abd1a3c87d47edb2",
+      "rationale": "规则执行摘要仍为未完成；此为规则×义务汇总，不能用子关系聚合的通过/失败遮住余下缺口。",
+      "receipt_key": [
+        "OBL-NARRATIVE-AMOUNT",
+        "V33-234",
+        "OBL-NARRATIVE-AMOUNT:V33-234"
+      ],
+      "sample_id": "RB-2025-U22",
+      "status": "pass"
+    },
+    {
+      "case_id": "0621bce463a68532c4a0ed932c7b53dd88623bda6455b1c15dd7e97e47c6c409",
+      "decision": "explanation_only",
+      "evidence": {
+        "aggregate_receipt": false,
+        "rule_execution_status": "insufficient_data",
+        "source_status_sha256": "e84dfa7ae29fecc865b9f9f7d81a2fd02e15c46f6e20a4aa266fa6d4526e48eb"
+      },
+      "original_reason": "支出说明未披露基本支出占比",
+      "pdf_sha256": "c8208854b0ee69cad2d74f25075bb602b475db982d9249e4abd1a3c87d47edb2",
+      "rationale": "该关系明确不适用，只保留适用性说明，不解释为取数失败。",
+      "receipt_key": [
+        "OBL-TXT-T3",
+        "V33-104",
+        "T3:basic_share_of_expense_total"
+      ],
+      "sample_id": "RB-2025-U22",
+      "status": "not_applicable"
+    }
+  ],
+  "source": "旧自测预览 full_A；仅冻结验收诊断范围，不是业务特例或新基线。",
+  "source_code": "src/engine/check_obligations.py:build_check_receipts",
+  "version": 1
+}

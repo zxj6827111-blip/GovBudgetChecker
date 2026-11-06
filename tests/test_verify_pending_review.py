@@ -3,18 +3,28 @@
 import argparse
 import copy
 import importlib.util
+import os
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 
 
 SPEC = importlib.util.spec_from_file_location(
-    "pending_acceptance", Path(__file__).resolve().parents[1] / "scripts/verify_pending_review.py"
+    "pending_acceptance", os.environ.get("PENDING_REVIEW_HARNESS_PATH",
+                                         Path(__file__).resolve().parents[1] / "scripts/verify_pending_review.py")
 )
 h = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(h)
 CONTRACT = h.build_identity_contract(Path(__file__).resolve().parents[1])
+LEGACY_CODES = ["stated_total_missing", "withheld_amount_unknown", "sum_scope_not_comparable",
+                "comparison_identity_unresolved", "item_disclosure_missing", "item_amount_not_included",
+                "item_sum_mismatch", "candidate_amount_conflict", "exception_amount_conflict",
+                "exception_scope_ambiguous", "source_unit_normalized"]
+TEST_LAYERS = {"操作数":["operand_missing","operand_ambiguous"], "规则":["rule_no_reason","parse_error"],
+               "表":["table_mapping_incomplete","table_missing"], "口径":["scope_unconfirmed"],
+               "语义模型":["ai_timeout","ai_not_requested"], "说明":["text_statement_absent","text_statement_unparsed"]}
 
 
 def operand():
@@ -54,9 +64,21 @@ def evidence(tmp_path):
     profile = {"OCR_ENABLED": "false", "PYTHON_DOTENV_DISABLED": "1"}
     h.write_json(kit / "runtime_profile.json", {"env": profile})
     h.write_json(kit / "gold_exclusion.json", {"sha256": []})
-    h.write_json(kit / "reason_codes_v1.json", {"codes": ["operand_missing", "operand_ambiguous", "rule_no_reason",
-                 "table_mapping_incomplete", "scope_unconfirmed", "ai_timeout"]})
+    vocab = {"codes":sorted({c for codes in TEST_LAYERS.values() for c in codes} | set(LEGACY_CODES)),
+             "by_layer":TEST_LAYERS, "legacy_existing":LEGACY_CODES}
+    h.write_json(kit / "reason_codes_v1.json", vocab)
     h.write_json(kit / "rule_identity_dimensions.json", CONTRACT)
+    h.write_json(kit / "diagnostic_policy.json", h.build_diagnostic_policy(vocab))
+    entries = []
+    for sample in samples:
+        for receipt, decision in [
+            ({"obligation_id":"OBL-TXT-T5","rule_id":"V33-222","sub_check_id":"total","status":"fail",
+              "incomplete_reason":"合计操作数缺失或不唯一"},"diagnose"),
+            ({"obligation_id":"OBL-TXT-T5","rule_id":"V33-224","sub_check_id":"derived-pass","status":"pass",
+              "incomplete_reason":"由原文小计推导，与表内一致"},"explanation_only"),
+        ]:
+            entries.append({"case_id":h.receipt_scope_id(sample, receipt), "decision":decision})
+    h.write_json(kit / "diagnostic_scope.json", {"version":1,"entries":entries})
     digest = h.seal_kit(kit)
 
     def run(name, stage="self"):
@@ -451,3 +473,288 @@ def test_aggregate_can_select_one_root_without_losing_other_actions(evidence, ma
                 parent.update(root_cause_key=row["receipts"][0]["root_cause_key"], next_action="tech_fix")
     edit_rows(current, change)
     assert verdict(h.compare_runs(base, current, "DH-02", kit), "T13") == expected
+
+
+@pytest.mark.parametrize("serializer", ["to_dict", "model_dump"])
+def test_real_serialized_profile_reaches_identity_context(serializer):
+    from src.schemas.document_profile import DocumentProfile
+    profile = DocumentProfile()
+    profile.report_kind.value = "final"
+    profile.writing_scope = {"domain":"final"}
+    payload = getattr(profile, serializer)()
+    assert "kind" not in payload
+    row = h.extract_record({"sample_id":"test","sha256":"a"*64}, {"document_profile":payload,
+                           "review_report": {"issues": [], "candidate_findings": [], "tips": [], "manual_review": []}},
+                           {"coverage_items":[]}, {"finding_keys":["id","created_at"]})
+    assert row["identity_context"] == {"kind":profile.kind,"domain":"final"}
+    assert "org_scope" not in h._required_dimensions(CONTRACT, "CMM-018", row["identity_context"])
+
+
+@pytest.mark.parametrize("stage", ["DH-02", "DH-03b"])
+def test_passed_derivation_is_not_forced_to_inherit_diagnostic_codes(evidence, stage):
+    kit, run = evidence
+    base, current = run("base"), run("current",stage)
+    for root in (base,current):
+        def add(row):
+            row["receipts"].append({"obligation_id":"OBL-TXT-T5","rule_id":"V33-224",
+                "sub_check_id":"derived-pass","status":"pass","reason_codes":[],
+                "incomplete_reason":"由原文小计推导，与表内一致"})
+        edit_rows(root,add)
+    result = h.compare_runs(base,current,stage,kit)
+    assert result["overall"] == "PASS",result
+    if stage == "DH-03b":
+        edit_rows(current, lambda row: row["receipts"][-1].update(incomplete_reason=""))
+        assert verdict(h.compare_runs(base,current,stage,kit),"I3") == "FAIL"
+
+
+def test_unreviewed_non_incomplete_receipt_never_silently_enters_or_leaves_scope(evidence):
+    kit,run=evidence
+    base,current=run("base"),run("current","DH-02")
+    for root in (base,current):
+        edit_rows(root,lambda row:row["receipts"].append({"obligation_id":"OBL-TXT-T5","rule_id":"V33-224",
+             "sub_check_id":"unreviewed","status":"pass","reason_codes":[],"incomplete_reason":"尚未审定的说明"}))
+    result=h.compare_runs(base,current,"DH-02",kit)
+    assert verdict(result,"M12")=="PENDING"
+    assert result["formal_acceptance_eligible"] is False
+
+
+def test_non_upstream_code_cannot_fake_organization_blocker(evidence):
+    kit,run=evidence
+    base,current=run("base"),run("current","DH-02")
+    edit_rows(current,lambda row:update_diagnostics(row,lambda r:r.update(
+        blocked_by=[{"dimension":"organization","ref":"fake","reason_code":"operand_missing"}])))
+    assert verdict(h.compare_runs(base,current,"DH-02",kit),"T11")=="FAIL"
+
+
+@pytest.mark.parametrize("code",["ai_timeout","ai_not_requested"])
+def test_local_rule_cannot_replace_its_gap_with_ai_reason(evidence,code):
+    kit,run=evidence
+    base,current=run("base"),run("current","DH-02")
+    edit_rows(current,lambda row:update_diagnostics(row,lambda r:r.update(
+        reason_codes=[code],next_action="rerun_ai")))
+    assert verdict(h.compare_runs(base,current,"DH-02",kit),"T16")=="FAIL"
+
+
+def test_ai_off_mode_obligation_can_only_report_not_requested(evidence):
+    kit,run=evidence
+    base,current=run("base"),run("current","DH-02")
+    for root in (base,current):
+        def add(row):
+            item={"obligation_id":"OBL-AI-SEMANTIC-REVIEW","status":"ai_not_run","detail":"未请求AI","reason_codes":[]}
+            if root==current:
+                item.update(reason_codes=["ai_not_requested"],blocked_by=[],root_cause_key="ai-mode",next_action="rerun_ai")
+            row["obligations"][item["obligation_id"]]=item
+            row["coverage_items"][item["obligation_id"]]=copy.deepcopy(item)
+        edit_rows(root,add)
+    assert h.compare_runs(base,current,"DH-02",kit)["overall"]=="PASS"
+    def corrupt(row):
+        for collection in (row["obligations"],row["coverage_items"]):
+            collection["OBL-AI-SEMANTIC-REVIEW"]["reason_codes"]=["ai_timeout"]
+    edit_rows(current,corrupt)
+    assert verdict(h.compare_runs(base,current,"DH-02",kit),"T16")=="FAIL"
+
+
+def test_table_mapping_failure_cannot_be_routed_to_material_author(evidence):
+    kit,run=evidence
+    base,current=run("base"),run("current","DH-02")
+    edit_rows(current,lambda row:update_diagnostics(row,lambda r:r.update(
+        reason_codes=["table_mapping_incomplete"],next_action="human_confirm",
+        blocked_by=[{"dimension":"instance_uid","ref":"table-A","reason_code":"table_mapping_incomplete"}])))
+    assert verdict(h.compare_runs(base,current,"DH-02",kit),"T16")=="FAIL"
+
+
+def test_all_legacy_codes_have_a_frozen_sampling_layer(evidence):
+    kit,_=evidence
+    policy=h._diagnostic_policy(kit)
+    assert all(policy["reasons"][code]["layer"]=="遗留原因" for code in LEGACY_CODES)
+
+
+def test_sampling_is_order_independent_and_preserves_quotas(evidence):
+    kit,_=evidence
+    policy=h._diagnostic_policy(kit)
+    groups=[{"root_id":f"root-{i:03}","layer":["操作数","说明","遗留原因"][i%3],
+             "flags":["unowned_receipt"] if i==0 else ["scope_override"] if i==1 else ["legacy_reason"] if i%3==2 else []}
+            for i in range(90)]
+    first=h.select_audit_groups(groups,policy,"20261102",30)
+    second=h.select_audit_groups(list(reversed(groups)),policy,20261102,30)
+    assert first==second and len(first)==30
+    for layer in {g["layer"] for g in groups}:
+        assert sum(g["layer"]==layer for g in first)>=2
+    for flag in policy["sampling"]["special_flags"]:
+        assert any(flag in g["flags"] for g in first)
+    assert first!=h.select_audit_groups(groups,policy,"other-seed",30)
+    with pytest.raises(SystemExit):
+        h.select_audit_groups(groups,policy,"20261102",1)
+
+
+def test_multilayer_reason_has_one_deterministic_primary_layer(evidence):
+    kit,_=evidence
+    policy=h._diagnostic_policy(kit)
+    first={"reason_codes":["operand_missing","text_statement_unparsed","stated_total_missing"],"blocked_by":[]}
+    second={**first,"reason_codes":list(reversed(first["reason_codes"]))}
+    assert h._primary_reason(first,policy,CONTRACT)==h._primary_reason(second,policy,CONTRACT)=="text_statement_unparsed"
+
+
+def test_audit_sample_manifest_repeats_byte_for_byte_and_is_not_a_verdict(evidence,tmp_path):
+    kit,run=evidence
+    base,current=run("base"),run("current","DH-02")
+    def sample(out):
+        return h.audit_sample_main(argparse.Namespace(kit=str(kit),baseline=str(base),current=str(current),
+            stage="DH-02",allow_partial=False,seed=None,size=None,selftest_sampling=True,out=str(out)))
+    out1,out2=tmp_path/"sample1",tmp_path/"sample2"
+    assert sample(out1)==sample(out2)==0
+    assert (out1/"selection.json").read_bytes()==(out2/"selection.json").read_bytes()
+    assert h.read_json(out1/"selection.json")["purpose"]=="manual_audit_selection_not_verdict"
+    assert h.sha256_file(out1/"selection.json") in (out1/"selection.sha256").read_text()
+    with pytest.raises(SystemExit):
+        sample(out1)
+    edit_rows(current,lambda row:row["run"].update(status="error"))
+    with pytest.raises(SystemExit):
+        sample(tmp_path/"bad-sample")
+
+
+def test_snapshot_refuses_packaged_default_and_empty_git_source(tmp_path,monkeypatch):
+    monkeypatch.setattr(h,"REPO_ROOT",tmp_path)
+    monkeypatch.setattr(h,"DEFAULT_KIT",tmp_path)
+    with pytest.raises(SystemExit):
+        h.snapshot_main(argparse.Namespace(source=None,out=str(tmp_path/"wrong")))
+    source=tmp_path/"repo";source.mkdir()
+    subprocess.run(["git","init","-q",str(source)],check=True)
+    with pytest.raises(SystemExit):
+        h.snapshot_main(argparse.Namespace(source=str(source),out=str(tmp_path/"empty")))
+    assert not (tmp_path/"empty").exists()
+    (source/"src").mkdir();(source/"src/sample.py").write_text("VALUE=1\n")
+    assert h.snapshot_main(argparse.Namespace(source=str(source),out=str(tmp_path/"valid")))==0
+    assert h.read_json(tmp_path/"valid/SNAPSHOT.json")["file_count"]==1
+
+
+def test_code_difference_paths_are_preserved_in_comparison(evidence):
+    kit,run=evidence
+    base,current=run("base"),run("current")
+    edit_meta(current,lambda meta:(meta["code"].update(digest="changed"),meta.update(code_after="changed"),
+                                  meta["code"]["files"].update({"src/example.py":"changed"})))
+    report=h.compare_runs(base,current,"self",kit)
+    assert report["code_files_differing"]==["src/example.py"]
+    assert next(c for c in report["checks"] if c["id"]=="M5")["details"]==["src/example.py"]
+
+
+@pytest.mark.parametrize('action',['tech_fix','system_recheck'])
+def test_unparsed_text_keeps_specific_reason_and_allows_DH06_routing(evidence,action):
+    kit,run=evidence
+    base,current=run('base'),run('current','DH-02')
+    edit_rows(current,lambda row:update_diagnostics(row,lambda r:r.update(
+        reason_codes=['operand_missing','text_statement_unparsed'],next_action=action)))
+    report=h.compare_runs(base,current,'DH-02',kit)
+    assert report['overall']=='PASS',report
+
+
+def test_unconfirmed_single_action_restrictions_are_only_recommendations():
+    codes=['row_code_missing','row_level_unresolved','column_identity_unconfirmed','column_width_drift',
+           'cell_unbound','parse_error','execution_error','rule_no_reason','table_missing',
+           'text_statement_absent','name_mismatch_confirmed','code_name_conflict']
+    policy=h.build_diagnostic_policy({'codes':codes,'by_layer':{'规则':codes},'legacy_existing':[]})
+    for code in codes:
+        rule=policy['reasons'][code]
+        assert set(rule['actions'])=={'tech_fix','system_recheck','human_confirm'}
+        assert rule['constraint_status']=='provisional_nonexclusive'
+        assert rule['basis']['source'] and rule['basis']['rationale']
+        assert rule['recommended_actions']
+
+
+def audit_args(kit,base,current,out,**kwargs):
+    return argparse.Namespace(kit=str(kit),baseline=str(base),current=str(current),stage='DH-02',
+        allow_partial=False,seed=None,size=None,selftest_sampling=False,registration=None,seed_receipt=None,
+        out=str(out),**kwargs)
+
+
+def registered_seed(kit,base,current,tmp_path):
+    reg,seed=tmp_path/'registration',tmp_path/'reviewer-seed'
+    assert h.audit_register_main(audit_args(kit,base,current,reg))==0
+    assert h.audit_seed_main(argparse.Namespace(kit=str(kit),registration=str(reg),reviewer='验收测试员',out=str(seed)))==0
+    return reg,seed
+
+
+def test_fixed_seed_is_explicitly_selftest_only_even_with_full_source(evidence,tmp_path):
+    kit,run=evidence;base,current=run('base'),run('current','DH-02')
+    args=audit_args(kit,base,current,tmp_path/'rejected')
+    with pytest.raises(SystemExit):h.audit_sample_main(args)
+    args.selftest_sampling=True;args.out=str(tmp_path/'test-only')
+    assert h.audit_sample_main(args)==0
+    manifest=h.read_json(tmp_path/'test-only/selection.json')
+    assert manifest['formal_source'] is True
+    assert manifest['formal_sampling_eligible'] is False
+    assert manifest['seed_provenance']['mode']=='selftest_only_not_formal'
+
+
+def test_registration_then_random_receipt_is_bound_and_reproducible(evidence,tmp_path):
+    kit,run=evidence;base,current=run('base'),run('current','DH-02')
+    reg,seed=registered_seed(kit,base,current,tmp_path)
+    receipt=h.read_json(seed/'seed.json')
+    assert len(receipt['seed'])==64
+    assert receipt['registration_sha256']==h.sha256_file(reg/'registration.json')
+    assert 'seed' not in h.read_json(reg/'registration.json')
+    for name in ('one','two'):
+        args=audit_args(kit,base,current,tmp_path/name);args.registration=str(reg);args.seed_receipt=str(seed)
+        assert h.audit_sample_main(args)==0
+    assert (tmp_path/'one/selection.json').read_bytes()==(tmp_path/'two/selection.json').read_bytes()
+    manifest=h.read_json(tmp_path/'one/selection.json')
+    assert manifest['formal_sampling_eligible'] is True
+    assert manifest['seed_provenance']['registration_sha256']==h.sha256_file(reg/'registration.json')
+    assert manifest['seed_provenance']['seed_receipt_sha256']==h.sha256_file(seed/'seed.json')
+
+
+def test_changed_root_key_after_registration_cannot_grind_sampling(evidence,tmp_path):
+    kit,run=evidence;base,current=run('base'),run('current','DH-02')
+    reg,seed=registered_seed(kit,base,current,tmp_path)
+    edit_rows(current,lambda row:update_diagnostics(row,lambda r:r.update(root_cause_key='renamed-to-evade-sampling')))
+    assert h.compare_runs(base,current,'DH-02',kit)['overall']=='PASS'
+    args=audit_args(kit,base,current,tmp_path/'must-not-exist');args.registration=str(reg);args.seed_receipt=str(seed)
+    with pytest.raises(SystemExit):h.audit_sample_main(args)
+    assert not (tmp_path/'must-not-exist').exists()
+
+
+@pytest.mark.parametrize('field',['seed','size','selftest_sampling'])
+def test_formal_receipt_cannot_be_mixed_with_seed_or_size_overrides(evidence,tmp_path,field):
+    kit,run=evidence;base,current=run('base'),run('current','DH-02')
+    reg,seed=registered_seed(kit,base,current,tmp_path)
+    args=audit_args(kit,base,current,tmp_path/'bad');args.registration=str(reg);args.seed_receipt=str(seed)
+    setattr(args,field,True if field=='selftest_sampling' else 1 if field=='size' else '20261102')
+    with pytest.raises(SystemExit):h.audit_sample_main(args)
+
+
+def test_new_submission_cannot_reuse_old_seed_receipt(evidence,tmp_path):
+    kit,run=evidence;base,current=run('base'),run('current','DH-02')
+    reg,seed=registered_seed(kit,base,current,tmp_path)
+    edit_rows(current,lambda row:update_diagnostics(row,lambda r:r.update(root_cause_key='new-submission')))
+    reg2=tmp_path/'registration-new'
+    assert h.audit_register_main(audit_args(kit,base,current,reg2))==0
+    args=audit_args(kit,base,current,tmp_path/'bad');args.registration=str(reg2);args.seed_receipt=str(seed)
+    with pytest.raises(SystemExit):h.audit_sample_main(args)
+
+
+def test_seed_issue_uses_randomness_and_records_custody_limit(evidence,tmp_path):
+    kit,run=evidence;base,current=run('base'),run('current','DH-02')
+    reg,seed=registered_seed(kit,base,current,tmp_path)
+    other=tmp_path/'another-reviewer-seed'
+    assert h.audit_seed_main(argparse.Namespace(kit=str(kit),registration=str(reg),reviewer='验收测试员',out=str(other)))==0
+    a,b=h.read_json(seed/'seed.json'),h.read_json(other/'seed.json')
+    assert a['seed']!=b['seed']
+    assert a['identity_assurance']=='reviewer_custody_required_not_authenticated_by_cli'
+    with pytest.raises(SystemExit):
+        h.audit_seed_main(argparse.Namespace(kit=str(kit),registration=str(reg),reviewer='',out=str(tmp_path/'no-reviewer')))
+
+
+def test_tampered_seed_receipt_hash_is_rejected(evidence,tmp_path):
+    kit,run=evidence;base,current=run('base'),run('current','DH-02')
+    reg,seed=registered_seed(kit,base,current,tmp_path)
+    data=h.read_json(seed/'seed.json');data['seed']='a'*64;h.write_json(seed/'seed.json',data)
+    args=audit_args(kit,base,current,tmp_path/'bad');args.registration=str(reg);args.seed_receipt=str(seed)
+    with pytest.raises(SystemExit):h.audit_sample_main(args)
+
+
+def test_parse_artifact_identity_changes_are_not_whitelisted_as_volatile(evidence):
+    kit,run=evidence;base,current=run('base'),run('current')
+    for path in (base,current):
+        edit_rows(path,lambda row:row['receipts'][0].update(cell_observations=[{'parse_run_uid':'artifact-original'}]))
+    edit_rows(current,lambda row:row['receipts'][0]['cell_observations'][0].update(parse_run_uid='artifact-changed'))
+    assert verdict(h.compare_runs(base,current,'self',kit),'I3')=='FAIL'

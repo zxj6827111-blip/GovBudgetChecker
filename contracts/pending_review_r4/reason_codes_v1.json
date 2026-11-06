@@ -1,0 +1,111 @@
+{
+  "by_layer": {
+    "主体": [
+      "subject_unconfirmed",
+      "subject_conflict"
+    ],
+    "列": [
+      "column_identity_unconfirmed",
+      "column_width_drift"
+    ],
+    "单元格": [
+      "cell_blank_semantics_unknown",
+      "cell_low_confidence",
+      "cell_unbound"
+    ],
+    "口径": [
+      "scope_unconfirmed"
+    ],
+    "操作数": [
+      "operand_missing",
+      "operand_ambiguous"
+    ],
+    "行": [
+      "row_code_missing",
+      "row_identity_duplicate",
+      "row_level_unresolved"
+    ],
+    "表": [
+      "table_missing",
+      "table_mapping_incomplete"
+    ],
+    "规则": [
+      "rule_no_reason",
+      "parse_error",
+      "execution_error"
+    ],
+    "语义模型": [
+      "ai_not_requested",
+      "ai_partial_invalid_output",
+      "ai_partial_citation_rejected",
+      "ai_timeout"
+    ],
+    "说明": [
+      "text_statement_unparsed",
+      "text_statement_absent",
+      "text_binding_failed"
+    ],
+    "身份": [
+      "name_mismatch_confirmed",
+      "code_name_conflict",
+      "subject_name_unlocated"
+    ]
+  },
+  "change_rule": "增改须由验收方修订并重新冻结（新验收包版本）；执行方不得自行扩充",
+  "codes": [
+    "ai_not_requested",
+    "ai_partial_citation_rejected",
+    "ai_partial_invalid_output",
+    "ai_timeout",
+    "candidate_amount_conflict",
+    "cell_blank_semantics_unknown",
+    "cell_low_confidence",
+    "cell_unbound",
+    "code_name_conflict",
+    "column_identity_unconfirmed",
+    "column_width_drift",
+    "comparison_identity_unresolved",
+    "exception_amount_conflict",
+    "exception_scope_ambiguous",
+    "execution_error",
+    "item_amount_not_included",
+    "item_disclosure_missing",
+    "item_sum_mismatch",
+    "name_mismatch_confirmed",
+    "operand_ambiguous",
+    "operand_missing",
+    "parse_error",
+    "row_code_missing",
+    "row_identity_duplicate",
+    "row_level_unresolved",
+    "rule_no_reason",
+    "scope_unconfirmed",
+    "source_unit_normalized",
+    "stated_total_missing",
+    "subject_conflict",
+    "subject_name_unlocated",
+    "subject_unconfirmed",
+    "sum_scope_not_comparable",
+    "table_mapping_incomplete",
+    "table_missing",
+    "text_binding_failed",
+    "text_statement_absent",
+    "text_statement_unparsed",
+    "withheld_amount_unknown"
+  ],
+  "legacy_existing": [
+    "stated_total_missing",
+    "withheld_amount_unknown",
+    "sum_scope_not_comparable",
+    "comparison_identity_unresolved",
+    "item_disclosure_missing",
+    "item_amount_not_included",
+    "item_sum_mismatch",
+    "candidate_amount_conflict",
+    "exception_amount_conflict",
+    "exception_scope_ambiguous",
+    "source_unit_normalized"
+  ],
+  "source": "方案 R2 DH-02 第 2 条原因代码表 + 2026-11-01 代码中已有的原因码（legacy，保留可用）",
+  "version": "v1"
+}
