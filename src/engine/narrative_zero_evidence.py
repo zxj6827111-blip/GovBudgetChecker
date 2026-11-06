@@ -39,6 +39,50 @@ _NON_FISCAL_SCOPE_RE = re.compile(
 _CLAUSE_SPLIT = re.compile(r"[。；;]")
 
 
+def _level_pattern(labels):
+    return re.compile(
+        rf"(?:{'|'.join(labels)})(?:财政拨款)?(?:支出)?(?:决算(?:数)?)?(?:为|是)?"
+        r"(?P<num>\d[\d,]*(?:\.\d+)?)万元")
+
+
+_TOTAL_DUAL_LEVEL = re.compile(
+    r'(?:“三公”经费|三公经费)(?:财政拨款)?支出年初预算(?:数)?(?:为|是)?'
+    r'\d[\d,]*(?:\.\d+)?万元[，,]支出决算(?:数)?(?:为|是)?(?P<num>\d[\d,]*(?:\.\d+)?)万元')
+
+
+def explicit_no_activity_sources(doc, text):
+    """同年度财政拨款三公全部无支出的原句，只证明决算，不证明预算。"""
+    context = getattr(doc, 'fact_context', None)
+    if context is None or not context.org_name or context.fiscal_year is None:
+        return None
+    matches = []
+    pattern = re.compile(r'(?:20\d{2}年度|本年度|本年)(?:没有|无)[“”"\s]*三公[“”"\s]*经费财政拨款支出')
+    for begin, end in _clauses(text.compact):
+        clause = text.compact[begin:end]
+        if (not pattern.search(clause) or _NON_FISCAL_SCOPE_RE.search(clause)
+                or re.search(r'并非|不是|不代表|不能说明|暂无', clause)
+                or _foreign_owner(clause, context.org_name)
+                or any(int(y) != context.fiscal_year for y in re.findall(r'20\d{2}(?=年)', clause))
+                or not _section_is_final(text, begin, doc)):
+            continue
+        matches.append((begin, end))
+    if not matches:
+        return None
+    # 全部无支出与任何当前分项的非零水平陈述冲突时，不拿总述覆盖明细。
+    for begin, end in _clauses(text.compact):
+        clause = text.compact[begin:end]
+        if ('预算' in clause and '决算' not in clause) or any(
+                int(y) != context.fiscal_year for y in re.findall(r'20\d{2}(?=年)', clause)):
+            continue
+        for indicator, labels in _LABELS.items():
+            values = [m['num'] for m in _level_pattern(labels).finditer(clause)]
+            if indicator == 'total_actual':
+                values += [m['num'] for m in _TOTAL_DUAL_LEVEL.finditer(clause)]
+            if any(Decimal(v.replace(',', '')) != 0 for v in values):
+                return None
+    return [ref for begin, end in matches for ref in text.refs(begin, end, '原文明确本年度三公财政拨款决算无支出')]
+
+
 def _clauses(compact: str):
     """把合并文本切成句读单元，保留字符区间。"""
     start = 0
@@ -70,10 +114,7 @@ def narrative_zero_sources(doc: Any, *, table_code: str, indicator: str,
     if not compact:
         return None
 
-    level = re.compile(
-        rf"(?:{ '|'.join(labels) })\s*(?:支出)?\s*(?:决算(?:数)?)?\s*(?:为|是)?\s*"
-        r"(?P<num>\d[\d,]*(?:\.\d+)?)\s*万元"
-    )
+    level = _level_pattern(labels)
     zero_ranges = []
     for begin, end in _clauses(compact):
         clause = compact[begin:end]
@@ -88,6 +129,9 @@ def narrative_zero_sources(doc: Any, *, table_code: str, indicator: str,
         if "预算" in clause and "决算" not in clause:
             continue  # 预算口径的零不能证明决算格
         statements = [m.group("num") for m in level.finditer(clause)]
+        if indicator == 'total_actual':
+            # 预算与决算在同一句时只取显式“支出决算”的金额；不能把预算5读成决算5。
+            statements += [m['num'] for m in _TOTAL_DUAL_LEVEL.finditer(clause)]
         if not statements:
             # 纯增减额句、表格行、名词解释、定义句都不是水平陈述
             continue
@@ -102,12 +146,13 @@ def narrative_zero_sources(doc: Any, *, table_code: str, indicator: str,
             return None
         zero_ranges.append((begin, end))
 
+    no_activity = explicit_no_activity_sources(doc, text)
     if not zero_ranges:
-        return None
+        return no_activity
     refs = []
     for begin, end in zero_ranges:
         refs.extend(text.refs(begin, end, "说明明确该项决算为0"))
-    return refs or None
+    return (refs + (no_activity or [])) or None
 
 
 def _section_is_final(text: _Text, position: int, doc: Any = None) -> bool:

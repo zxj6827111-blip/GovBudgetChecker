@@ -120,3 +120,36 @@ def test_nonzero_level_with_yoy_clause_still_blocks_zero():
         '公务接待费支出决算1万元，比上年增加0.20万元。'))
     assert narrative_zero_sources(doc, table_code='FIN_07_three_public',
                                   indicator='reception', stage='决算') is None
+
+
+ORDER7_TEXT = ('甲局2024年度部门决算\n七、财政拨款“三公”经费支出决算情况说明\n'
+               '“三公”经费财政拨款支出年初预算为5.00万元，支出决算为0.00万元，完成预算的0.00%。'
+               '（二）“三公”经费财政拨款支出决算具体情况说明。'
+               '甲局2024年度无“三公”经费财政拨款支出。')
+
+
+@pytest.mark.parametrize('indicator', ['total_actual', 'overseas', 'vehicle_purchase_operation',
+                                      'vehicle_purchase', 'vehicle_operation', 'reception'])
+def test_explicit_current_no_activity_only_proves_final_stage(indicator):
+    doc = _doc(ORDER7_TEXT)
+    assert narrative_zero_sources(doc, table_code='FIN_07_three_public', indicator=indicator, stage='决算')
+    assert narrative_zero_sources(doc, table_code='FIN_07_three_public', indicator=indicator, stage='年初预算') is None
+
+
+@pytest.mark.parametrize('fault', ['foreign_owner', 'foreign_year', 'non_fiscal', 'negation', 'positive_part'])
+def test_no_activity_cannot_override_identity_or_positive_disclosure(fault):
+    text = ORDER7_TEXT.split('（二）')[1]
+    if fault == 'foreign_owner': text = text.replace('甲局2024', '乙局2024')
+    elif fault == 'foreign_year': text = text.replace('2024年度无', '2023年度无')
+    elif fault == 'non_fiscal': text = text.replace('经费财政拨款支出。', '经费非财政拨款支出。')
+    elif fault == 'negation': text = text.replace('甲局2024', '不能说明甲局2024')
+    elif fault == 'positive_part': text += '公务接待费支出决算1万元。'
+    doc = _doc('七、财政拨款“三公”经费支出决算情况说明\n（二）' + text)
+    assert narrative_zero_sources(doc, table_code='FIN_07_three_public', indicator='vehicle_purchase', stage='决算') is None
+
+
+def test_dual_budget_final_total_keeps_decision_identity():
+    doc = _doc(ORDER7_TEXT.split('（二）')[0])
+    assert narrative_zero_sources(doc, table_code='FIN_07_three_public', indicator='total_actual', stage='决算')
+    doc = _doc(ORDER7_TEXT.split('（二）')[0].replace('年初预算为5.00', '年初预算为0.00').replace('支出决算为0.00', '支出决算为5.00'))
+    assert narrative_zero_sources(doc, table_code='FIN_07_three_public', indicator='total_actual', stage='决算') is None
