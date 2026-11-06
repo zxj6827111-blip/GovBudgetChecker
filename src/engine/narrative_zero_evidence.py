@@ -76,6 +76,7 @@ def _neutral_fragment(fragment, org):
     heading = r'(?:[一二三四五六七八九十\d]+[、.．]|[（(][一二三四五六七八九十\d]+[）)])?'
     fragment = re.sub(r'^' + heading + r'(?:财政拨款)?[“”"]*三公[“”"]*经费(?:财政拨款)?支出决算(?:具体)?情况说明', '', fragment)
     fragment = re.sub(r'^' + heading, '', fragment)
+    fragment = re.sub(r'^(?:具体)?情况如下', '', fragment)
     if org and fragment.startswith(org):
         fragment = fragment[len(org):]
     fragment = re.sub(r'^(?:20\d{2}年度?|本年度|本年|本部门|本单位|财政拨款|其中[:：]?)+', '', fragment)

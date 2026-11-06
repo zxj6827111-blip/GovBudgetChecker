@@ -208,3 +208,10 @@ def test_open_qualifier_survives_page_or_semicolon(boundary):
     claim='甲局2024年度无“三公”经费财政拨款支出'
     doc.page_texts=[intro,claim+'。'] if boundary=='page' else [intro+claim+'；'+claim+'。']
     assert narrative_zero_sources(doc, table_code='FIN_07_three_public', indicator='vehicle_purchase', stage='决算') is None
+
+
+def test_neutral_disclosure_lead_in_is_not_a_modal_qualifier():
+    doc = _doc('七、财政拨款“三公”经费支出决算情况说明。具体情况如下：1、因公出国（境）费支出0万元。')
+    assert narrative_zero_sources(doc, table_code='FIN_07_three_public', indicator='overseas', stage='决算')
+    doc = _doc('七、财政拨款“三公”经费支出决算情况说明。若具体情况如下：1、因公出国（境）费支出0万元。')
+    assert narrative_zero_sources(doc, table_code='FIN_07_three_public', indicator='overseas', stage='决算') is None
