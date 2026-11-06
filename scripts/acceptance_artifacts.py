@@ -87,6 +87,8 @@ def adapt_record(record: dict, status: dict, meta: dict) -> dict:
 
     def remap(value):
         if isinstance(value, str):
+            if value.startswith("id:") and value[3:] in id_to_fp:
+                return id_to_fp[value[3:]]
             return replacements.get(value, value)
         if isinstance(value, list):
             return [remap(v) for v in value]
