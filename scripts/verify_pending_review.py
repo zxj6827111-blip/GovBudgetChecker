@@ -1113,6 +1113,39 @@ def _scope_contract(kit: Path) -> Dict[str, Any]:
     return scope
 
 
+
+def apply_scope_review(scope, records, path, expected_sha):
+    """仅消费外部封印的逐材料逐关系范围裁决，不改冻结包或采集meta。"""
+    if not path or not expected_sha or sha256_file(Path(path)) != expected_sha:
+        refuse("逐对象范围裁决缺少外部SHA或不匹配")
+    review = read_json(Path(path))
+    if review.get('version') != 'independent-diagnostic-scope-review-20261106-v1':
+        refuse("范围补充契约版本不支持")
+    entries, seen = list(scope['entries']), set()
+    for decision in review.get('decisions', []):
+        token = (decision.get('sample_id'), decision.get('pdf_sha256'), tuple(decision.get('key') or []))
+        if (token in seen or len(token[2]) != 3
+                or decision.get('scope_review') != 'APPROVED_OBJECT_SCOPE_ONLY'
+                or decision.get('diagnostic_scope_decision') not in {'diagnose', 'explanation_only'}
+                or not decision.get('reason') or not decision.get('sources')):
+            refuse("逐对象范围裁决重复或缺少有效身份/依据")
+        seen.add(token)
+        row = records.get(token[0])
+        if row is None or row['sha256'] != token[1]:
+            continue
+        matched = [r for r in row['receipts'] if _receipt_key(r) == token[2]]
+        if len(matched) == 1:
+            entries.append({'case_id': receipt_scope_id(row, matched[0]),
+                            'decision': decision['diagnostic_scope_decision'],
+                            'external_review_sha256': expected_sha})
+    # 已冻结裁决若与新裁决冲突，必须明示拒收，不能后写覆盖。
+    decisions = {}
+    for entry in entries:
+        if entry['case_id'] in decisions and decisions[entry['case_id']]['decision'] != entry['decision']:
+            refuse("外部范围裁决与冻结裁决冲突")
+        decisions[entry['case_id']] = entry
+    return {**scope, 'entries': list(decisions.values()), 'external_review_sha256': expected_sha}
+
 def diagnostic_scope(row: Dict[str, Any], scope: Dict[str, Any]):
     decisions = {e["case_id"]: e for e in scope["entries"]}
     keys, unknown = set(), []
@@ -1306,7 +1339,8 @@ def _diagnostic_consistency(row: Dict[str, Any], vocabulary: Set[str], contract:
     return shape, rollup, roots
 
 
-def compare_runs(base_dir: Path, cur_dir: Path, stage: str, kit: Path, *, allow_partial: bool = False) -> Dict[str, Any]:
+def compare_runs(base_dir: Path, cur_dir: Path, stage: str, kit: Path, *, allow_partial: bool = False,
+                 scope_review=None, scope_review_sha256=None) -> Dict[str, Any]:
     checks: List[Dict[str, Any]] = []
 
     def add(check_id: str, title: str, ok: Optional[bool], details: Sequence[str] = (), level: str = "FAIL") -> None:
@@ -1324,6 +1358,9 @@ def compare_runs(base_dir: Path, cur_dir: Path, stage: str, kit: Path, *, allow_
     expected_samples = _frozen_samples(kit)
     bs, brs, bid, bvalid = _run_records(base_dir, bm, expected_samples, allow_partial)
     cs, crs, cid, cvalid = _run_records(cur_dir, cm, expected_samples, allow_partial)
+
+    if scope_review or scope_review_sha256:
+        scope = apply_scope_review(scope, brs, scope_review, scope_review_sha256)
 
     # M：比较前提
     add("M1", "两次采集均属于当前冻结验收包", bm.get("kit_digest") == cm.get("kit_digest") == expected_digest)
@@ -1562,7 +1599,9 @@ def compare_main(args: argparse.Namespace) -> int:
     kit = Path(args.kit).resolve()
     verify_kit(kit)
     report = compare_runs(Path(args.baseline).resolve(), Path(args.current).resolve(), args.stage, kit,
-                          allow_partial=args.allow_partial)
+                          allow_partial=args.allow_partial, scope_review=args.scope_review,
+                          scope_review_sha256=args.scope_review_sha256)
+    report["external_scope_review_sha256"] = args.scope_review_sha256
     if args.out:
         write_json(Path(args.out), report)
     for check in report["checks"]:
@@ -2527,6 +2566,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     k.add_argument("--current", required=True)
     k.add_argument("--stage", choices=sorted(STAGE_NEW_FIELDS), required=True)
     k.add_argument("--out", default="")
+    k.add_argument("--scope-review", default=None)
+    k.add_argument("--scope-review-sha256", default=None)
     k.add_argument("--allow-partial", action="store_true", help="只验证非空局部样本；成功仅标 PARTIAL_PASS，不得用于正式验收")
 
     audit = sub.add_parser("audit-sample")

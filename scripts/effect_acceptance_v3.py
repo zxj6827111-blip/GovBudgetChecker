@@ -21,7 +21,7 @@ if __package__ in {None, ""}:
 
 from scripts.acceptance_artifacts import AdapterError, adapt_record, canonical, digest
 
-POLICY_VERSION = "real-painpoint-effect-v3"
+POLICY_VERSION = "real-painpoint-effect-v4"
 UNRESOLVED = {"insufficient_data", "parse_error", "execution_error"}
 RESOLVED = {"pass", "not_applicable"}
 VOLATILE = {"created_at", "analysis_revision", "evidence_id", "evidence_ids",
@@ -70,6 +70,32 @@ def issue_digest(issue):
     return digest(stable({k: v for k, v in issue.items() if k not in {"id", "pre_group_issue_id"}}))
 
 
+
+def issue_semantics(issue):
+    result = stable({k: v for k, v in issue.items()
+                     if k not in {'id', 'pre_group_issue_id', 'evidence', 'bbox', 'location'}})
+    # 原文定位另走evidence_replaced；关系组成员绝不是展示信息。
+    result['relation_location'] = {k: v for k, v in (issue.get('location') or {}).items()
+                                   if k not in {'page', 'bbox', 'reference_kind'}}
+    return result
+
+
+def layer_changes(before, after):
+    def index(rows):
+        found, errors = {}, []
+        for item in rows:
+            # 有稳定ID时按ID配对；无ID对象用完整内容指纹，不能发全层许可。
+            key = ('id', str(item['id'])) if item.get('id') else ('content', issue_digest(item))
+            if key in found:
+                errors.append(f'对象身份重复{key}')
+            found[key] = item
+        return found, errors
+    a, ea = index(before)
+    b, eb = index(after)
+    return [(key, a.get(key), b.get(key)) for key in sorted(a.keys() | b.keys())
+            if (issue_digest(a[key]) if key in a else None) !=
+               (issue_digest(b[key]) if key in b else None)], ea + eb
+
 def load_collection(root):
     meta = read(root / "meta.json")
     records = {p.name.removesuffix(".json.gz"): read(p) for p in (root / "records").glob("*.json.gz")}
@@ -108,7 +134,7 @@ def load_evidence(path, expected_sha):
     if not path or not expected_sha or sha(path) != expected_sha:
         raise AdapterError("缺少独立证据包或其外部 SHA256 不匹配")
     result = read(path)
-    if result.get("schema") != "independent-effect-evidence-v1":
+    if result.get("schema") not in {"independent-effect-evidence-v1", "independent-effect-evidence-v2"}:
         raise AdapterError("独立证据包契约版本错误")
     return result
 
@@ -124,6 +150,8 @@ def authorized(evidence, action, before, after, key, old, new):
 
 def source_errors(source, pages, pdf_sha):
     errors = []
+    if not isinstance(source, dict):
+        return ["证据不是对象"]
     if source.get("file_hash", pdf_sha) != pdf_sha:
         errors.append("证据来自其他材料")
     page = source.get("physical_page", source.get("page"))
@@ -151,7 +179,8 @@ def source_errors(source, pages, pdf_sha):
 def verified_decision(decision, pages, pdf_sha):
     if not decision:
         return False
-    return all(not source_errors(s, pages, pdf_sha) for s in decision["sources"])
+    return bool(decision.get("sources")) and all(
+        isinstance(s, dict) and not source_errors(s, pages, pdf_sha) for s in decision["sources"])
 
 
 def recovery_errors(receipt, row, evidence, pages):
@@ -181,6 +210,8 @@ def recovery_errors(receipt, row, evidence, pages):
             continue
         errors.extend(source_errors(fact, pages, row["sha256"]))
         expected = (contract.get("operand_identities") or {}).get(fid)
+        from scripts.effect_fact_sources import fact_source_errors
+        errors.extend(fact_source_errors(fact, expected, pages, row["sha256"], source_errors))
         dimensions = ("table_code", "indicator", "row_key", "fund_scope", "stage")
         if (not isinstance(expected, dict) or any(not expected.get(k) for k in dimensions)
                 or any(fact.get(k) != expected[k] for k in dimensions)):
@@ -280,9 +311,33 @@ def compare_collections(baseline_dir, candidate_dir, kit_dir, evidence=None):
                     missing = unresolved_issue_relations(issue, c["receipts"])
                     if missing:
                         pending.append(f"{sid}: 正式问题引用未闭合 {missing}")
+            # 同一展示ID的改写优先配对，防止标题变更被当成两个不相干对象。
+            by_id = {i['id']: i for i in c['finding_layers']['formal']}
+            for old in b['finding_layers']['formal']:
+                new = by_id.get(old['id'])
+                if new is not None and formal_identity(old) != formal_identity(new):
+                    bg[formal_identity(old)].remove(old)
+                    cg[formal_identity(new)].remove(new)
+                    token = ('same-object', old['id'])
+                    bg[token], cg[token] = [old], [new]
             for identity in bg.keys() | cg.keys():
                 bs, cs = bg.get(identity, []), cg.get(identity, [])
+                matched_b, matched_c = [], []
+                remaining = list(cs)
+                for old in bs:
+                    exact = next((n for n in remaining if issue_digest(n) == issue_digest(old)), None)
+                    if exact is not None:
+                        matched_b.append(old)
+                        matched_c.append(exact)
+                        remaining.remove(exact)
+                bs = matched_b + [o for o in bs if o not in matched_b]
+                cs = matched_c + remaining
                 for old, new in zip(bs, cs, strict=False):
+                    if issue_semantics(old) != issue_semantics(new):
+                        decision = authorized(evidence, "issue_changed", b, c, formal_identity(old), old, new)
+                        if (evidence.get('schema') != 'independent-effect-evidence-v2'
+                                or not verified_decision(decision, pages, c['sha256'])):
+                            problems.append(f"{sid} {identity}: 正式问题语义/关系绑定变更无逐对象授权")
                     old_ev = Counter(canonical(stable(e)) for e in old.get("evidence") or [])
                     new_ev = Counter(canonical(stable(e)) for e in new.get("evidence") or [])
                     def location_projection(issue):
@@ -322,10 +377,18 @@ def compare_collections(baseline_dir, candidate_dir, kit_dir, evidence=None):
                         decision = authorized(evidence, action, b, c, identity, old, new)
                         if not verified_decision(decision, pages, c["sha256"]):
                             problems.append(f"{sid} {identity}: 正式问题增删无本材料本版本逐问题授权")
-            # 其他问题层也必须保留：变化不会自动当作业务错误，但不能无裁决 PASS。
+            # 每个非正式层对象都独立消费决定；未裁决对象保持PENDING。
             for layer in ("candidate", "tips", "manual_review"):
-                if stable(b["finding_layers"][layer]) != stable(c["finding_layers"][layer]):
-                    pending.append(f"{sid}: {layer} 层变化待逐项裁决")
+                changes, invalid = layer_changes(b['finding_layers'][layer], c['finding_layers'][layer])
+                problems.extend(f"{sid} {layer}: {e}" for e in invalid)
+                for key, old, new in changes:
+                    decision = authorized(evidence, 'layer_object_changed', b, c, [layer, *key], old, new)
+                    if (evidence.get('schema') != 'independent-effect-evidence-v2'
+                            or not verified_decision(decision, pages, c['sha256'])):
+                        pending.append(f"{sid}: {layer} 对象{key}变化待逐项裁决")
+                    elif new:
+                        for source in new.get('evidence') or []:
+                            problems.extend(f"{sid}: {e}" for e in source_errors(source, pages, c['sha256']))
     return {"policy": POLICY_VERSION, "overall": "FAIL" if problems else "PENDING" if pending else "PASS",
             "samples": len(before.keys() & after.keys()), "problems": problems,
             "pending": pending, "ledger": ledger}

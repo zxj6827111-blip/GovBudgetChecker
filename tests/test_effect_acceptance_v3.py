@@ -29,7 +29,11 @@ def case(tmp_path):
     pdf = kit / "pdfs/S/source.pdf"
     with fitz.open() as d:
         p = d.new_page()
-        p.insert_text((50, 60), "10.00 = 6.00 + 4.00")
+        p.insert_text((50, 40), "Table; wan")
+        for x, label, value in [(100, 'Total', '10.00'), (200, 'Basic', '6.00'), (300, 'Project', '4.00')]:
+            p.insert_text((x, 65), label)
+            p.insert_text((x, 95), value)
+        p.insert_text((50, 95), 'All')
         d.save(pdf)
     sha = h.sha(pdf)
     issue = {"id": "R-1", "rule_id": "R", "severity": "high", "title": "error", "message": "m",
@@ -54,15 +58,24 @@ def case(tmp_path):
     news["review_report"]["check_receipts"] = copy.deepcopy(newr["receipts"])
     meta = write(cand, newr, news, "new-code")
     binding = provenance(news, meta, "S", sha)
-    evidence = {"schema": "independent-effect-evidence-v1", "samples": [{"binding": binding, "facts": [
+    evidence = {"schema": "independent-effect-evidence-v2", "samples": [{"binding": binding, "facts": [
         {"fact_id": fid, "value_wan": value, "quote": value, "page": 1, "file_hash": sha,
          "unit": "万元", "year": 2025, "organization": "unit", "table_code": "FIN_03_expenditure",
          "indicator": fid, "row_key": "total", "fund_scope": "all_funds", "stage": "决算",
          "relation_keys": [["O", "R", "sum"]]}
         for fid, value in (("total", "10.00"), ("part1", "6.00"), ("part2", "4.00"))]}], "decisions": []}
+    with fitz.open(pdf) as d:
+        def anchor(quote):
+            return {'page': 1, 'quote': quote, 'bbox': list(d[0].search_for(quote)[0])}
+        for fact, label in zip(evidence['samples'][0]['facts'], ['Total', 'Basic', 'Project'], strict=True):
+            fact['source_cell'] = {'schema': 'independent-fiscal-cell-v2',
+                'raw_value': fact['value_wan'], 'raw_unit': 'wan',
+                'cell': anchor(fact['quote']), 'row': anchor('All'),
+                'column': anchor(label), 'table': {'page': 1, 'quote': 'Table', 'bbox': [40, 20, 400, 120]},
+                'unit_source': anchor('wan')}
     evidence["samples"][0]["relation_contracts"] = [{"key": ["O", "R", "sum"],
         "receipt_digest": h.digest(newr["receipts"][0]), "operand_identities": {
-            f["fact_id"]: {k: f[k] for k in ("table_code", "indicator", "row_key", "fund_scope", "stage")}
+            f["fact_id"]: {**{k: f[k] for k in ("table_code", "indicator", "row_key", "fund_scope", "stage")}, "source_cell_digest": h.digest(f["source_cell"])}
             for f in evidence["samples"][0]["facts"]}}]
     return base, cand, kit, newr, news, evidence
 
@@ -210,6 +223,13 @@ def test_missing_relation_requires_precise_replacement_evidence(case, approved):
             'after': bundle['binding'], 'key': ['O', 'R', 'sum'], 'replacement_keys': [['O', 'R', 'sum-located']],
             'old_digest': h.digest(old), 'new_digest': h.digest(r['receipts']),
             'reason': 'source now located', 'sources': [{'page': 1, 'quote': '10.00'}]})
+    if approved:
+        old_issue = before['finding_layers']['formal'][0]
+        new_issue = s['review_report']['issues'][0]
+        ev['decisions'].append({'action': 'issue_changed', 'before': before['source_binding'],
+            'after': bundle['binding'], 'key': list(h.formal_identity(old_issue)),
+            'old_digest': h.digest(old_issue), 'new_digest': h.digest(new_issue),
+            'reason': 'independent relation binding reviewed', 'sources': [{'page': 1, 'quote': '10.00'}]})
     assert check(case)['overall'] == ('PASS' if approved else 'FAIL')
 
 
@@ -262,3 +282,126 @@ def test_na_basis_remains_part_of_evaluation():
     old = {'status': 'not_applicable', 'incomplete_reason': '原文无支出'}
     new = {**old, 'incomplete_reason': '任意新说明'}
     assert h.receipt_evaluation(old) != h.receipt_evaluation(new)
+
+
+def issue_change_decision(case):
+    b, c, _, _, status, evidence = case
+    old = h.load_collection(b)['S']['finding_layers']['formal'][0]
+    new = status['review_report']['issues'][0]
+    decision = {'action': 'issue_changed', 'before': h.load_collection(b)['S']['source_binding'],
+                'after': h.load_collection(c)['S']['source_binding'], 'key': list(h.formal_identity(old)),
+                'old_digest': h.digest(old), 'new_digest': h.digest(new),
+                'reason': 'exact object independently reviewed', 'sources': [{'page': 1, 'quote': '10.00'}]}
+    evidence['decisions'].append(decision)
+    return decision
+
+
+@pytest.mark.parametrize('field', ['check_relation_id', 'group_members', 'message', 'title'])
+def test_formal_semantic_change_requires_full_object_authorization(case, field):
+    issue = case[4]['review_report']['issues'][0]
+    if field == 'check_relation_id':
+        for root in case[:2]:
+            record = h.read(root / 'records/S.json.gz')
+            status = h.read(root / 'status/S.status.json.gz')
+            record['receipts'].append({**record['receipts'][0], 'sub_check_id': 'other'})
+            status['review_report']['check_receipts'] = copy.deepcopy(record['receipts'])
+            write(root, record, status, 'code' if root == case[0] else 'new-code')
+        # New relation exists both sides: this control cannot be rejected just for a dangling ref.
+        case[3]['receipts'].append({**case[3]['receipts'][0], 'sub_check_id': 'other'})
+        case[4]['review_report']['check_receipts'] = copy.deepcopy(case[3]['receipts'])
+        case[-1]['samples'][0]['relation_contracts'].append({
+            **case[-1]['samples'][0]['relation_contracts'][0], 'key': ['O', 'R', 'other'],
+            'receipt_digest': h.digest(case[3]['receipts'][-1])})
+        for f in case[-1]['samples'][0]['facts']: f['relation_keys'].append(['O', 'R', 'other'])
+        issue[field] = 'R:other'
+    elif field == 'group_members':
+        issue['location']['relation_ids'] = ['R:other']
+    else:
+        issue[field] = 'changed content'
+    assert check(case)['overall'] == 'FAIL'
+    issue_change_decision(case)
+    assert check(case)['overall'] == 'PASS'
+
+
+@pytest.mark.parametrize('fault', ['quote_other_column', 'same_value_wrong_cell', 'wrong_raw_value', 'wrong_unit', 'missing_binding'])
+def test_independent_raw_cell_binding_rejects_displaced_facts(case, fault):
+    f = case[-1]['samples'][0]['facts'][1]
+    if fault == 'quote_other_column': f['quote'] = '4.00'
+    elif fault == 'same_value_wrong_cell': f['source_cell']['column'] = copy.deepcopy(case[-1]['samples'][0]['facts'][2]['source_cell']['column'])
+    elif fault == 'wrong_raw_value': f['source_cell']['raw_value'] = '4.00'
+    elif fault == 'wrong_unit': f['source_cell']['raw_unit'] = '元'
+    else: del f['source_cell']
+    assert check(case)['overall'] == 'FAIL'
+
+
+@pytest.mark.parametrize('fault', [None, 'wrong_sample', 'wrong_revision', 'wrong_object', 'wrong_layer', 'wrong_digest', 'forged_source', 'v1'])
+def test_nonformal_change_decisions_are_object_and_layer_bound(case, fault):
+    b, c, _, _, s, ev = case
+    new = {'id': 'M1', 'title': 'current observation'}
+    s['review_report']['manual_review'] = [new]
+    decision = {'action': 'layer_object_changed', 'before': h.load_collection(b)['S']['source_binding'],
+                'after': h.load_collection(c)['S']['source_binding'], 'key': ['manual_review', 'id', 'M1'],
+                'old_digest': h.digest(None), 'new_digest': h.digest(new),
+                'reason': 'independent exact observation review', 'sources': [{'page': 1, 'quote': '10.00'}]}
+    if fault == 'wrong_sample': decision['after'] = {**decision['after'], 'sample_id': 'other'}
+    elif fault == 'wrong_revision': decision['after'] = {**decision['after'], 'analysis_revision': 'old'}
+    elif fault == 'wrong_object': decision['key'][-1] = 'other'
+    elif fault == 'wrong_layer': decision['key'][0] = 'tips'
+    elif fault == 'wrong_digest': decision['new_digest'] = 'wrong'
+    elif fault == 'forged_source': decision['sources'][0]['quote'] = 'not on source'
+    elif fault == 'v1': ev['schema'] = 'independent-effect-evidence-v1'
+    assert check(case)['overall'] == 'PENDING'
+    ev['decisions'].append(decision)
+    assert check(case)['overall'] == ('PASS' if fault is None else 'PENDING')
+
+
+def test_fact_correct_unit_conversion_from_original_yuan(case):
+    _, _, kit, _, status, ev = case
+    pdf = kit/'pdfs/S/source.pdf'
+    with fitz.open() as d:
+        p = d.new_page()
+        p.insert_text((50, 40), 'Table; yuan')
+        p.insert_text((50, 95), 'All')
+        for x, label, val in [(100, 'Total', '100000'), (200, 'Basic', '60000'), (300, 'Project', '40000')]:
+            p.insert_text((x, 65), label)
+            p.insert_text((x, 95), val)
+        d.save(pdf)
+    sha = h.sha(pdf)
+    for root in case[:2]:
+        record, raw = h.read(root/'records/S.json.gz'), h.read(root/'status/S.status.json.gz')
+        record['sha256'] = sha
+        raw['checksum'] = sha
+        raw['review_report']['issues'][0]['evidence'] = [{'page': 1, 'quote': '100000'}]
+        write(root, record, raw, 'code' if root == case[0] else 'new-code')
+    case[3]['sha256'] = sha
+    status['checksum'] = sha
+    status['review_report']['issues'][0]['evidence'] = [{'page': 1, 'quote': '100000'}]
+    ev['samples'][0]['binding']['pdf_sha256'] = sha
+    with fitz.open(pdf) as d:
+        def anchor(q): return {'page': 1, 'quote': q, 'bbox': list(d[0].search_for(q)[0])}
+        for f, label, raw in zip(ev['samples'][0]['facts'], ['Total','Basic','Project'], ['100000','60000','40000'], strict=True):
+            f.update(quote=raw, file_hash=sha)
+            f['source_cell'].update(raw_value=raw, raw_unit='yuan', cell=anchor(raw), column=anchor(label), unit_source=anchor('yuan'))
+            ev['samples'][0]['relation_contracts'][0]['operand_identities'][f['fact_id']]['source_cell_digest'] = h.digest(f['source_cell'])
+    assert check(case)['overall'] == 'PASS'
+
+
+def test_exact_same_number_at_other_column_is_not_same_cell(case):
+    _, _, kit, _, status, ev = case
+    pdf = kit/'pdfs/S/source.pdf'
+    with fitz.open(pdf) as d:
+        d[0].insert_text((400, 95), '6.00')
+        d.saveIncr()
+    sha = h.sha(pdf)
+    for root in case[:2]:
+        record, raw = h.read(root/'records/S.json.gz'), h.read(root/'status/S.status.json.gz')
+        record['sha256'] = sha
+        raw['checksum'] = sha
+        write(root, record, raw, 'code' if root == case[0] else 'new-code')
+    case[3]['sha256'], status['checksum'] = sha, sha
+    ev['samples'][0]['binding']['pdf_sha256'] = sha
+    for f in ev['samples'][0]['facts']: f['file_hash'] = sha
+    # Same text, value and page, but the top-level location points to a repeated number.
+    with fitz.open(pdf) as d:
+        ev['samples'][0]['facts'][1]['bbox'] = list(d[0].search_for('6.00')[-1])
+    assert check(case)['overall'] == 'FAIL'
