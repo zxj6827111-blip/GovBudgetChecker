@@ -60,15 +60,6 @@ def _row_text(page, box):
 
 def _amount_matches(page, text, positions, anchors):
     row, column = anchors['row'], anchors['column']
-    # 仅移除已经逐字验证的行标；不能把未知字符当成表格装饰吞掉。
-    label = [i for i, g in enumerate(positions) if g and _contains(row['bbox'], g)]
-    if _norm(''.join(text[i] for i in label)) != _norm(row['quote']):
-        raise ValueError('无法确认原格行标范围')
-    chars = list(text)
-    for i in label:
-        chars[i] = ' '
-    text = ''.join(chars)
-
     # 用原页表头而非金额之间的空隙证明邻列存在。未覆盖的字形、同列多个
     # 金额、跨列表示或没有表头对应的片段均拒收，不能任意分配到最近一列。
     words = [w for w in page.get_text('words')
@@ -77,6 +68,11 @@ def _amount_matches(page, text, positions, anchors):
     if _norm(''.join(w[4] for w in sorted(own))) != _norm(column['quote']):
         raise ValueError('无法确认完整列头')
     columns = [column['bbox']] + [w[:4] for w in words if w not in own]
+    label = _row_label_indices(page, text, positions, row, columns)
+    chars = list(text)
+    for i in label:
+        chars[i] = ' '
+    text = ''.join(chars)
     matches, owners = [], []
     consumed = set()
     for match in _AMOUNT_SURFACE.finditer(text):
@@ -91,6 +87,43 @@ def _amount_matches(page, text, positions, anchors):
     if any(not c.isspace() and i not in consumed for i, c in enumerate(text)):
         raise ValueError('原行有未归属完整金额表示的字符')
     return [(m, g) for m, g, selected in matches if selected]
+
+
+def _row_label_indices(page, text, positions, row, columns):
+    """先证明行标与所有金额列及表示互斥，再允许删除；真实子串不是边界证明。"""
+    label = {i for i, g in enumerate(positions) if g and _contains(row['bbox'], g)}
+    if not label or _norm(''.join(text[i] for i in sorted(label))) != _norm(row['quote']):
+        raise ValueError('无法确认原格行标范围')
+    # 当前契约中的行标是金额列左侧的身份字段；不能借任一操作数的行标
+    # 吞掉其他金额列的前缀、符号或数值，即使引文与摘要完全一致。
+    # 与行标起点投影一致的其他表头可属于身份列；当前声明的金额列始终
+    # 保留，不能把它借这个排除规则改认成身份列。
+    amount_columns = [c for i, c in enumerate(columns)
+                      if i == 0 or not c[0] <= row['bbox'][0] < c[2]]
+    if row['bbox'][2] > min(c[0] for c in amount_columns):
+        raise ValueError('行标范围侵入原页金额列')
+    for match in _AMOUNT_SURFACE.finditer(text):
+        indices = {i for i in range(match.start(), match.end()) if positions[i]}
+        if not indices & label:
+            continue
+        glyphs = [positions[i] for i in indices]
+        bounds = [min(g['bbox'][0] for g in glyphs), 0, max(g['bbox'][2] for g in glyphs), 0]
+        if not any(_overlaps_x(bounds, c) for c in amount_columns):
+            continue
+        # 行标自身可以含横线。仅当它是完整、独立、位于全部金额列左侧
+        # 的原页文字组件时，才有依据将其与后面的金额分开；否则保留歧义。
+        complete_label = False
+        for block in page.get_text('rawdict')['blocks']:
+            for line in block.get('lines', []):
+                chars = [c for s in line.get('spans', []) for c in s.get('chars', []) if not c['c'].isspace()]
+                if (chars and all(_contains(row['bbox'], c) for c in chars)
+                        and _norm(''.join(c['c'] for c in chars)) == _norm(row['quote'])
+                        and any(c['c'].isalpha() for c in chars)
+                        and line['bbox'][2] <= min(c[0] for c in amount_columns)):
+                    complete_label = True
+        if not complete_label:
+            raise ValueError('行标消除会改变完整金额表示')
+    return label
 
 
 def _unit_field(page, text, positions, anchors):
