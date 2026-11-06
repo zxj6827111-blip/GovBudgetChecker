@@ -21,7 +21,7 @@ if __package__ in {None, ""}:
 
 from scripts.acceptance_artifacts import AdapterError, adapt_record, canonical, digest
 
-POLICY_VERSION = "real-painpoint-effect-v4"
+POLICY_VERSION = "real-painpoint-effect-v5"
 UNRESOLVED = {"insufficient_data", "parse_error", "execution_error"}
 RESOLVED = {"pass", "not_applicable"}
 VOLATILE = {"created_at", "analysis_revision", "evidence_id", "evidence_ids",
@@ -75,10 +75,76 @@ def issue_semantics(issue):
     result = stable({k: v for k, v in issue.items()
                      if k not in {'id', 'pre_group_issue_id', 'evidence', 'bbox', 'location'}})
     # 原文定位另走evidence_replaced；关系组成员绝不是展示信息。
+    from src.services.issue_relation_refs import issue_relation_ids
+    result['reference_kind'] = (issue.get('location') or {}).get('reference_kind') or 'check'
+    result['effective_relation_ids'] = sorted(issue_relation_ids(issue))
     result['relation_location'] = {k: v for k, v in (issue.get('location') or {}).items()
                                    if k not in {'page', 'bbox', 'reference_kind'}}
     return result
 
+
+
+def pair_formal_issues(before, after, decisions=(), before_binding=None, after_binding=None):
+    """先抵消完整未变对象；展示ID只是剩余变更配对的线索，永不作为许可。"""
+    remaining = list(after)
+    old_changed = []
+    for old in before:
+        exact = next((new for new in remaining if issue_digest(old) == issue_digest(new)), None)
+        if exact is None:
+            old_changed.append(old)
+        else:
+            remaining.remove(exact)
+    pairs, removed = [], []
+    for old in old_changed:
+        same_id = [new for new in remaining if old.get('id') == new.get('id')]
+        same_identity = [new for new in remaining if formal_identity(old) == formal_identity(new)]
+        approved_pairs = [new for new in remaining if any(
+            d.get('action') in {'issue_changed', 'evidence_replaced'}
+            and d.get('before') == before_binding and d.get('after') == after_binding
+            and d.get('key') == list(formal_identity(old))
+            and d.get('old_digest') == digest(old) and d.get('new_digest') == digest(new)
+            for d in decisions)]
+        # 精确公开授权可确认展示ID交换后的配对；配对本身不跳过后续原件验证。
+        options = approved_pairs or same_identity or same_id
+        if not options:
+            removed.append(old)
+        else:
+            new = sorted(options, key=issue_digest)[0]
+            remaining.remove(new)
+            pairs.append((old, new))
+    return pairs, removed, remaining
+
+
+def operand_contract_errors(receipt, contract, facts):
+    operands = receipt.get('operand_fact_ids') or []
+    identities = contract.get('operand_identities') or {}
+    if (not isinstance(operands, list) or any(not isinstance(v, str) or not v for v in operands)
+            or not isinstance(identities, dict) or any(not isinstance(v, dict) for v in identities.values())
+            or (receipt.get('required_fact_ids') is not None and
+                (not isinstance(receipt['required_fact_ids'], list) or
+                 any(not isinstance(v, str) or not v for v in receipt['required_fact_ids'])))):
+        return ['独立操作数契约结构错误']
+    bindings = contract.get('operand_bindings')
+    if bindings is not None:
+        if (not isinstance(bindings, list) or len(bindings) < 2
+                or any(not isinstance(b, dict) or b.get('role') not in {'total', 'part'} for b in bindings)
+                or bindings[0]['role'] != 'total' or any(b['role'] != 'part' for b in bindings[1:])):
+            return ['独立操作数角色/顺序契约错误']
+        required = [b.get('fact_id') for b in bindings]
+        if operands != required or set(required) != set(identities):
+            return ['操作数角色、顺序或合法重数与独立契约不符']
+    else:
+        # 旧v2合同只声明每个事实一次；不得由回执增删重数后重封摘要绕过。
+        required = list(identities)
+        if Counter(operands) != Counter(required):
+            return ['操作数集合/重数与独立契约不符']
+        if receipt.get('formula') == 'total = sum(parts) (万元)':
+            totals = {fid for fid, dim in identities.items() if dim.get('indicator') in {'total', 'total_actual'}}
+            if len(totals) != 1 or not operands or operands[0] not in totals:
+                return ['求和总数角色未由独立契约确认']
+    if receipt.get('required_fact_ids') is not None and Counter(receipt['required_fact_ids']) != Counter(required):
+        return ['必需操作数与独立契约不符']
+    return []
 
 def layer_changes(before, after):
     def index(rows):
@@ -214,6 +280,7 @@ def recovery_errors(receipt, row, evidence, pages):
                      and c.get("receipt_digest") == digest(receipt)), None)
     if not contract:
         return ["缺少独立逐关系操作数身份契约"]
+    errors.extend(operand_contract_errors(receipt, contract, index))
     values = []
     for fid in receipt.get("operand_fact_ids") or []:
         fact = index.get(fid)
@@ -313,82 +380,62 @@ def compare_collections(baseline_dir, candidate_dir, kit_dir, evidence=None):
                             problems.append(f"{sid} {key}: 已完成关系回退无独立依据")
                     ledger.append({"sample_id": sid, "key": key, "old": digest(old), "new": digest(r),
                                    "change_kind": "evaluation" if evaluation_changed else "diagnostic_only"})
-            bg, cg = {}, {}
-            for issue in b["finding_layers"]["formal"]:
-                bg.setdefault(formal_identity(issue), []).append(issue)
-            for issue in c["finding_layers"]["formal"]:
-                cg.setdefault(formal_identity(issue), []).append(issue)
+            for issue in c['finding_layers']['formal']:
                 from src.services.issue_relation_refs import unresolved_issue_relations
-                if issue.get("check_relation_id"):
-                    missing = unresolved_issue_relations(issue, c["receipts"])
+                if issue.get('check_relation_id'):
+                    missing = unresolved_issue_relations(issue, c['receipts'])
                     if missing:
                         pending.append(f"{sid}: 正式问题引用未闭合 {missing}")
-            # 同一展示ID的改写优先配对，防止标题变更被当成两个不相干对象。
-            by_id = {i['id']: i for i in c['finding_layers']['formal']}
-            for old in b['finding_layers']['formal']:
-                new = by_id.get(old['id'])
-                if new is not None and formal_identity(old) != formal_identity(new):
-                    bg[formal_identity(old)].remove(old)
-                    cg[formal_identity(new)].remove(new)
-                    token = ('same-object', old['id'])
-                    bg[token], cg[token] = [old], [new]
-            for identity in bg.keys() | cg.keys():
-                bs, cs = bg.get(identity, []), cg.get(identity, [])
-                matched_b, matched_c = [], []
-                remaining = list(cs)
-                for old in bs:
-                    exact = next((n for n in remaining if issue_digest(n) == issue_digest(old)), None)
-                    if exact is not None:
-                        matched_b.append(old)
-                        matched_c.append(exact)
-                        remaining.remove(exact)
-                bs = matched_b + [o for o in bs if o not in matched_b]
-                cs = matched_c + remaining
-                for old, new in zip(bs, cs, strict=False):
-                    if issue_semantics(old) != issue_semantics(new):
-                        decision = authorized(evidence, "issue_changed", b, c, formal_identity(old), old, new)
-                        if (evidence.get('schema') != 'independent-effect-evidence-v2'
-                                or not verified_decision(decision, pages, c['sha256'])):
-                            problems.append(f"{sid} {identity}: 正式问题语义/关系绑定变更无逐对象授权")
-                    old_ev = Counter(canonical(stable(e)) for e in old.get("evidence") or [])
-                    new_ev = Counter(canonical(stable(e)) for e in new.get("evidence") or [])
-                    def location_projection(issue):
-                        return stable({k: v for k, v in (issue.get("location") or {}).items()
-                                       if k not in {"reference_kind", "relation_ids"}})
+            pairs, removed, added = pair_formal_issues(b['finding_layers']['formal'], c['finding_layers']['formal'],
+                                                      evidence.get('decisions', []), b['source_binding'], c['source_binding'])
+            for old, new in pairs:
+                # 对外唯一身份：旧formal_identity；正文/证据一起变也不暴露内部配对token。
+                identity = formal_identity(old)
+                if issue_semantics(old) != issue_semantics(new):
+                    decision = authorized(evidence, "issue_changed", b, c, formal_identity(old), old, new)
+                    if (evidence.get('schema') != 'independent-effect-evidence-v2'
+                            or not verified_decision(decision, pages, c['sha256'])):
+                        problems.append(f"{sid} {identity}: 正式问题语义/关系绑定变更无逐对象授权")
+                old_ev = Counter(canonical(stable(e)) for e in old.get("evidence") or [])
+                new_ev = Counter(canonical(stable(e)) for e in new.get("evidence") or [])
+                def location_projection(issue):
+                    return stable({k: v for k, v in (issue.get("location") or {}).items()
+                                   if k not in {"reference_kind", "relation_ids"}})
 
-                    location_changed = (location_projection(old) != location_projection(new)
-                                        or old.get("bbox") != new.get("bbox"))
-                    lost = (old_ev - new_ev or (old.get("location") and not new.get("location"))
-                            or (old.get("bbox") and not new.get("bbox")))
-                    if old_ev != new_ev or lost or location_changed:
-                        decision = authorized(evidence, "evidence_replaced", b, c, identity, old, new)
-                        if not verified_decision(decision, pages, c["sha256"]):
-                            problems.append(f"{sid} {identity}: 已有问题证据退化/替换无独立依据")
-                        if old_ev and not new_ev:
-                            problems.append(f"{sid} {identity}: 既有正式问题不能丢失全部报告证据")
-                    if location_changed and new.get("location"):
-                        location = new["location"]
-                        page = location.get("page", new.get("page_number"))
-                        box = location.get("bbox") or new.get("bbox")
-                        sources = [s for s in new.get("evidence") or []
-                                   if s.get("physical_page", s.get("page")) == page]
-                        if not sources or not any(not source_errors({**s, "bbox": box}, pages, c["sha256"])
-                                                  for s in sources):
-                            problems.append(f"{sid} {identity}: 新定位没有同页同框原文证据")
-                    # 只验证新增/改写的原文证据。增加关系组类型不等于重写原始引文；
-                    # 不能把历史同样存在的弱证据误报为本轮证据退化。
-                    added_evidence = new_ev - old_ev
-                    if added_evidence:
-                        for source in new.get("evidence") or []:
-                            if canonical(stable(source)) not in added_evidence:
-                                continue
-                            problems.extend(f"{sid}: {e}" for e in source_errors(source, pages, c["sha256"]))
-                for action, items in (("remove_issue", bs[len(cs):]), ("add_issue", cs[len(bs):])):
-                    for issue in items:
-                        old, new = (issue, None) if action == "remove_issue" else (None, issue)
-                        decision = authorized(evidence, action, b, c, identity, old, new)
-                        if not verified_decision(decision, pages, c["sha256"]):
-                            problems.append(f"{sid} {identity}: 正式问题增删无本材料本版本逐问题授权")
+                location_changed = (location_projection(old) != location_projection(new)
+                                    or old.get("bbox") != new.get("bbox"))
+                lost = (old_ev - new_ev or (old.get("location") and not new.get("location"))
+                        or (old.get("bbox") and not new.get("bbox")))
+                if old_ev != new_ev or lost or location_changed:
+                    decision = authorized(evidence, "evidence_replaced", b, c, identity, old, new)
+                    if not verified_decision(decision, pages, c["sha256"]):
+                        problems.append(f"{sid} {identity}: 已有问题证据退化/替换无独立依据")
+                    if old_ev and not new_ev:
+                        problems.append(f"{sid} {identity}: 既有正式问题不能丢失全部报告证据")
+                if location_changed and new.get("location"):
+                    location = new["location"]
+                    page = location.get("page", new.get("page_number"))
+                    box = location.get("bbox") or new.get("bbox")
+                    sources = [s for s in new.get("evidence") or []
+                               if s.get("physical_page", s.get("page")) == page]
+                    if not sources or not any(not source_errors({**s, "bbox": box}, pages, c["sha256"])
+                                              for s in sources):
+                        problems.append(f"{sid} {identity}: 新定位没有同页同框原文证据")
+                # 只验证新增/改写的原文证据。增加关系组类型不等于重写原始引文；
+                # 不能把历史同样存在的弱证据误报为本轮证据退化。
+                added_evidence = new_ev - old_ev
+                if added_evidence:
+                    for source in new.get("evidence") or []:
+                        if canonical(stable(source)) not in added_evidence:
+                            continue
+                        problems.extend(f"{sid}: {e}" for e in source_errors(source, pages, c["sha256"]))
+            for action, items in (('remove_issue', removed), ('add_issue', added)):
+                for issue in items:
+                    old, new = (issue, None) if action == 'remove_issue' else (None, issue)
+                    identity = formal_identity(issue)
+                    decision = authorized(evidence, action, b, c, identity, old, new)
+                    if not verified_decision(decision, pages, c['sha256']):
+                        problems.append(f"{sid} {identity}: 正式问题增删无本材料本版本逐问题授权")
             # 每个非正式层对象都独立消费决定；未裁决对象保持PENDING。
             for layer in ("candidate", "tips", "manual_review"):
                 changes, invalid = layer_changes(b['finding_layers'][layer], c['finding_layers'][layer])

@@ -1114,13 +1114,30 @@ def _scope_contract(kit: Path) -> Dict[str, Any]:
 
 
 
+
+def scope_semantic_digest(receipt):
+    """批准绑定完整非易变适用性/诊断内容，不由当前理由生成新批准。"""
+    volatile = {'issue_refs', 'created_at', 'analysis_revision', 'evidence_id', 'evidence_ids',
+                'parse_run_uid', 'fact_version', 'fact_context_version_token'}
+    def project(value):
+        if isinstance(value, dict):
+            return {k: project(v) for k, v in value.items() if k not in volatile}
+        if isinstance(value, list):
+            return [project(v) for v in value]
+        return value
+    return sha256_text(canonical(project(receipt)))
+
 def apply_scope_review(scope, records, path, expected_sha):
     """仅消费外部封印的逐材料逐关系范围裁决，不改冻结包或采集meta。"""
     if not path or not expected_sha or sha256_file(Path(path)) != expected_sha:
         refuse("逐对象范围裁决缺少外部SHA或不匹配")
     review = read_json(Path(path))
-    if review.get('version') != 'independent-diagnostic-scope-review-20261106-v1':
+    version = review.get('version')
+    if version not in {'independent-diagnostic-scope-review-20261106-v1', 'independent-diagnostic-scope-review-v2'}:
         refuse("范围补充契约版本不支持")
+    # v1缺批准语义锚点。保留旧封印供审阅，但不能用当前状态/理由反推旧批准。
+    if version == 'independent-diagnostic-scope-review-20261106-v1':
+        return {**scope, 'external_review_sha256': expected_sha, 'unapplied_review': 'LEGACY_UNBOUND_REQUIRES_V2_REVIEW'}
     entries, seen = list(scope['entries']), set()
     for decision in review.get('decisions', []):
         token = (decision.get('sample_id'), decision.get('pdf_sha256'), tuple(decision.get('key') or []))
@@ -1138,9 +1155,15 @@ def apply_scope_review(scope, records, path, expected_sha):
             continue
         matched = [r for r in row['receipts'] if _receipt_key(r) == token[2]]
         if len(matched) == 1:
-            entries.append({'case_id': receipt_scope_id(row, matched[0]),
-                            'decision': decision['diagnostic_scope_decision'],
-                            'external_review_sha256': expected_sha})
+            receipt = matched[0]
+            if (decision.get('approved_case_id') == receipt_scope_id(row, receipt)
+                    and decision.get('approved_semantic_digest') == scope_semantic_digest(receipt)
+                    and decision.get('approved_status') == receipt.get('status')
+                    and decision.get('approved_reason') == receipt.get('incomplete_reason')):
+                entries.append({'case_id': decision['approved_case_id'],
+                                'approved_semantic_digest': decision['approved_semantic_digest'],
+                                'decision': decision['diagnostic_scope_decision'],
+                                'external_review_sha256': expected_sha})
     # 已冻结裁决若与新裁决冲突，必须明示拒收，不能后写覆盖。
     decisions = {}
     for entry in entries:
@@ -1158,7 +1181,8 @@ def diagnostic_scope(row: Dict[str, Any], scope: Dict[str, Any]):
         elif row["obligations"].get(receipt.get("obligation_id"), {}).get("status") in DH02_OBLIGATION_SCOPE \
                 and _nonblank(receipt.get("incomplete_reason")):
             case = decisions.get(receipt_scope_id(row, receipt))
-            if case is None:
+            if case is None or ('approved_semantic_digest' in case and
+                                case['approved_semantic_digest'] != scope_semantic_digest(receipt)):
                 unknown.append(f"{row['sample_id']} {_receipt_key(receipt)}: 非未完成回执的诊断范围尚未审定")
             elif case["decision"] == "diagnose":
                 keys.add(_receipt_key(receipt))

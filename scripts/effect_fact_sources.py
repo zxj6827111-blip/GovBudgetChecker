@@ -1,12 +1,45 @@
 """独立事实的原格、表头、行标和单位必须形成同一空间证据链。"""
 from decimal import Decimal, InvalidOperation
 import re
+import unicodedata
 
 from scripts.acceptance_artifacts import digest
 
 FACT_SOURCE_VERSION = 'independent-fiscal-cell-v2'
 FACTORS = {'元': Decimal('.0001'), '万元': Decimal('1'), '亿元': Decimal('10000'), 'wan': Decimal('1'), 'yuan': Decimal('.0001')}
 
+
+
+_AMOUNT = re.compile(r'[+\-−]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?')
+_UNIT = re.compile(r'亿元|万元|元|(?<![A-Za-z])(?:yuan|wan)(?![A-Za-z])')
+
+
+def _norm(value):
+    return re.sub(r'\s+', '', unicodedata.normalize('NFKC', str(value))).replace('−', '-')
+
+
+def whole_source_token(page, anchor, pattern):
+    """用原页字符重建完整词元，再检验框；不能把负号或“万”裁掉。"""
+    box = anchor['bbox']
+    observed = []
+    for block in page.get_text('rawdict')['blocks']:
+        for line in block.get('lines', []):
+            chars = [c for span in line.get('spans', []) for c in span.get('chars', []) if not c['c'].isspace()]
+            text = ''.join(unicodedata.normalize('NFKC', c['c']) for c in chars)
+            # NFKC扩为多字符的罕见字形不支持，不能误用字符下标。
+            if len(text) != len(chars):
+                continue
+            for match in pattern.finditer(text):
+                glyphs = chars[match.start():match.end()]
+                selected = any(box[0] - .1 <= (c['bbox'][0] + c['bbox'][2]) / 2 <= box[2] + .1
+                               and box[1] - .1 <= (c['bbox'][1] + c['bbox'][3]) / 2 <= box[3] + .1 for c in glyphs)
+                if selected:
+                    contained = all(box[0] - .1 <= c['bbox'][0] and box[1] - .1 <= c['bbox'][1]
+                                    and c['bbox'][2] <= box[2] + .1 and c['bbox'][3] <= box[3] + .1 for c in glyphs)
+                    observed.append((_norm(match.group()), contained))
+    if len(observed) != 1 or not observed[0][1] or observed[0][0] != _norm(anchor['quote']):
+        raise ValueError('原格金额或单位不是原页完整词元')
+    return observed[0][0]
 
 def fact_source_errors(fact, expected, pages, pdf_sha, validate_source):
     errors = []
@@ -44,14 +77,16 @@ def fact_source_errors(fact, expected, pages, pdf_sha, validate_source):
     if anchors['unit_source']['quote'] != cell.get('raw_unit') or cell.get('raw_unit') not in FACTORS:
         errors.append('原文单位未绑定')
     try:
-        actual = pages[page - 1].get_textbox(box)
-        tokens = re.findall(r'(?<![\d.])(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![\d.])', actual)
-        raw = Decimal(str(cell['raw_value']).replace(',', ''))
+        original = whole_source_token(pages[page - 1], anchors['cell'], _AMOUNT)
+        unit = whole_source_token(pages[page - 1], anchors['unit_source'], _UNIT)
+        if not _AMOUNT.fullmatch(_norm(pages[page - 1].get_textbox(box))):
+            raise ValueError('原格含未支持的金额表示')
+        raw = Decimal(_norm(cell['raw_value']).replace(',', ''))
         value = Decimal(str(fact['value_wan']))
-        if (not raw.is_finite() or not value.is_finite() or len(tokens) != 1
-                or Decimal(tokens[0].replace(',', '')) != raw
-                or value != raw * FACTORS[cell['raw_unit']]):
+        if (not raw.is_finite() or not value.is_finite()
+                or Decimal(original.replace(',', '')) != raw
+                or unit != cell['raw_unit'] or value != raw * FACTORS[unit]):
             errors.append('原格数值或单位换算与事实值不符')
-    except (KeyError, TypeError, InvalidOperation):
-        errors.append('原格数值或单位非法')
+    except (KeyError, TypeError, ValueError, InvalidOperation):
+        errors.append('原格数值或完整单位非法')
     return errors

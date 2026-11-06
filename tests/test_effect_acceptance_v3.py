@@ -426,5 +426,165 @@ def test_added_evidence_on_formal_issue_needs_explicit_object_decision(case):
 def test_formal_content_change_cannot_borrow_new_authorization(case, field):
     case[4]['review_report']['issues'][0]['message'] = 'updated'
     decision = issue_change_decision(case)
-    decision['after'] = {**decision['after'],field:'wrong'}
-    assert check(case)['overall'] == 'FAIL'
+    decision["after"] = {**decision["after"], field: "wrong"}
+    assert check(case)["overall"] == "FAIL"
+
+
+def replace_independent_grid(case, printed, raw, unit="wan", claimed_unit=None):
+    """原件数值/单位是输入真值，不从被检查的操作数构造。"""
+    b, c, kit, record, status, ev = case
+    pdf = kit / "pdfs/S/source.pdf"
+    with fitz.open() as doc:
+        p = doc.new_page()
+        p.insert_text((45, 35), "Table")
+        p.insert_text((125, 35), unit, fontname="china-s" if unit in ["元", "万元"] else "helv")
+        p.insert_text((45, 95), "All")
+        for x, label, value in zip(
+            [150, 250, 350], ["Total", "Basic", "Project"], printed, strict=True
+        ):
+            p.insert_text((x, 65), label)
+            p.insert_text((x, 95), value)
+        doc.save(pdf)
+    checksum = h.sha(pdf)
+    for root in [b, c]:
+        r, s = h.read(root / "records/S.json.gz"), h.read(root / "status/S.status.json.gz")
+        r["sha256"] = checksum
+        s["checksum"] = checksum
+        s["review_report"]["issues"][0]["evidence"] = [{"page": 1, "quote": printed[0]}]
+        write(root, r, s, "code" if root == b else "new-code")
+    record["sha256"] = checksum
+    status["checksum"] = checksum
+    status["review_report"]["issues"][0]["evidence"] = [{"page": 1, "quote": printed[0]}]
+    bundle = ev["samples"][0]
+    bundle["binding"]["pdf_sha256"] = checksum
+    with fitz.open(pdf) as doc:
+
+        def anchor(q):
+            return {"page": 1, "quote": q, "bbox": list(doc[0].search_for(q)[0])}
+
+        for fact, value, literal, label in zip(
+            bundle["facts"], raw, printed, ["Total", "Basic", "Project"], strict=True
+        ):
+            fact.update(value_wan=value, quote=literal, file_hash=checksum)
+            fact["source_cell"].update(
+                raw_value=value,
+                raw_unit=claimed_unit or unit,
+                cell=anchor(literal),
+                row=anchor("All"),
+                column=anchor(label),
+                table={"page": 1, "quote": "Table", "bbox": [35, 15, 450, 120]},
+                unit_source=anchor(claimed_unit or unit),
+            )
+            bundle["relation_contracts"][0]["operand_identities"][fact["fact_id"]][
+                "source_cell_digest"
+            ] = h.digest(fact["source_cell"])
+
+
+@pytest.mark.parametrize(
+    "printed,raw,expected",
+    [
+        (["-10.00", "-6.00", "-4.00"], ["-10", "-6", "-4"], "PASS"),
+        (["10.00", "-6.00", "4.00"], ["10", "6", "4"], "FAIL"),
+        (["10.00", "+6.00", "4.00"], ["10", "6", "4"], "PASS"),
+    ],
+)
+def test_original_amount_sign_is_preserved(case, printed, raw, expected):
+    replace_independent_grid(case, printed, raw)
+    assert check(case)["overall"] == expected
+
+
+def test_unit_cannot_be_suffix_of_wan_on_original_page(case):
+    replace_independent_grid(case, ["100000", "60000", "40000"], ["10", "6", "4"], "万元", "元")
+    # 单独构造正确原始数值+错误换算；不得只靠不同raw_value拒收。
+    for f, value in zip(case[-1]["samples"][0]["facts"], ["100000", "60000", "40000"], strict=True):
+        f["source_cell"]["raw_value"] = value
+        case[-1]["samples"][0]["relation_contracts"][0]["operand_identities"][f["fact_id"]][
+            "source_cell_digest"
+        ] = h.digest(f["source_cell"])
+    assert check(case)["overall"] == "FAIL"
+
+
+def test_repeated_operand_must_not_replace_required_fact(case):
+    replace_independent_grid(case, ["12.00", "6.00", "4.00"], ["12", "6", "4"])
+    case[3]["receipts"][0].update(
+        operand_fact_ids=["total", "part1", "part1"], required_fact_ids=["total", "part1", "part2"]
+    )
+    case[4]["review_report"]["check_receipts"] = copy.deepcopy(case[3]["receipts"])
+    case[-1]["samples"][0]["relation_contracts"][0]["receipt_digest"] = h.digest(
+        case[3]["receipts"][0]
+    )
+    assert check(case)["overall"] == "FAIL"
+
+
+def test_independently_declared_role_multiplicity_can_pass(case):
+    replace_independent_grid(case, ["12.00", "6.00", "4.00"], ["12", "6", "4"])
+    r = case[3]["receipts"][0]
+    r.update(
+        operand_fact_ids=["total", "part1", "part1"], required_fact_ids=["total", "part1", "part1"]
+    )
+    case[4]["review_report"]["check_receipts"] = copy.deepcopy(case[3]["receipts"])
+    contract = case[-1]["samples"][0]["relation_contracts"][0]
+    contract["receipt_digest"] = h.digest(r)
+    del contract["operand_identities"]["part2"]
+    contract["operand_bindings"] = [
+        {"role": "total", "fact_id": "total"},
+        {"role": "part", "fact_id": "part1"},
+        {"role": "part", "fact_id": "part1"},
+    ]
+    assert check(case)["overall"] == "PASS"
+
+
+def test_display_ids_can_swap_between_different_formal_objects(case):
+    b, _, _, _, status, _ = case
+    rec, raw = h.read(b / "records/S.json.gz"), h.read(b / "status/S.status.json.gz")
+    second = {
+        **copy.deepcopy(raw["review_report"]["issues"][0]),
+        "id": "R-2",
+        "title": "another",
+        "message": "another",
+    }
+    raw["review_report"]["issues"].append(second)
+    write(b, rec, raw, "code")
+    status["review_report"]["issues"] = [
+        {**copy.deepcopy(second), "id": "R-1"},
+        {**copy.deepcopy(status["review_report"]["issues"][0]), "id": "R-2"},
+    ]
+    assert check(case)["overall"] == "PASS"
+
+
+def test_body_and_evidence_share_the_same_public_authorization_key(case):
+    b, c, _, _, status, ev = case
+    old = h.load_collection(b)["S"]["finding_layers"]["formal"][0]
+    new = status["review_report"]["issues"][0]
+    new["message"] = "reviewed body"
+    new["evidence"].append({"page": 1, "quote": "Project"})
+    for action in ["issue_changed", "evidence_replaced"]:
+        ev["decisions"].append(
+            {
+                "action": action,
+                "before": h.load_collection(b)["S"]["source_binding"],
+                "after": h.load_collection(c)["S"]["source_binding"],
+                "key": list(h.formal_identity(old)),
+                "old_digest": h.digest(old),
+                "new_digest": h.digest(new),
+                "reason": "independent exact change",
+                "sources": [{"page": 1, "quote": "10.00"}],
+            }
+        )
+    assert check(case)["overall"] == "PASS"
+
+
+def test_changed_objects_can_swap_display_ids_with_precise_authorizations(case):
+    b,c,_,_,status,ev=case
+    record,raw=h.read(b/'records/S.json.gz'),h.read(b/'status/S.status.json.gz')
+    olda=copy.deepcopy(raw['review_report']['issues'][0])
+    oldb={**copy.deepcopy(olda),'id':'R-2','title':'second','message':'second'}
+    raw['review_report']['issues']=[olda,oldb]
+    write(b,record,raw,'code')
+    newa={**copy.deepcopy(olda),'id':'R-2','message':'updated first'}
+    newb={**copy.deepcopy(oldb),'id':'R-1','message':'updated second'}
+    status['review_report']['issues']=[newb,newa]
+    for old,new in [(olda,newa),(oldb,newb)]:
+        ev['decisions'].append({'action':'issue_changed','before':h.load_collection(b)['S']['source_binding'],'after':h.load_collection(c)['S']['source_binding'],
+            'key':list(h.formal_identity(old)),'old_digest':h.digest(old),'new_digest':h.digest(new),'reason':'exact independent pair','sources':[{'page':1,'quote':'10.00'}]})
+    assert check(case)['overall']=='PASS'

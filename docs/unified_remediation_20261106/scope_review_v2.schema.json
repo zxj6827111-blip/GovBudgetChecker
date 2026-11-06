@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:govbudgetchecker:independent-diagnostic-scope-review-v2",
+  "title": "逐对象诊断范围复核v2",
+  "description": "由独立复核者批准；v1缺锚点不可自动迁移。SHA不是复核者身份认证。",
+  "type": "object",
+  "required": [
+    "version",
+    "decisions"
+  ],
+  "properties": {
+    "version": {
+      "const": "independent-diagnostic-scope-review-v2"
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "sample_id",
+          "pdf_sha256",
+          "key",
+          "scope_review",
+          "diagnostic_scope_decision",
+          "approved_case_id",
+          "approved_semantic_digest",
+          "approved_status",
+          "approved_reason",
+          "reason",
+          "sources"
+        ],
+        "properties": {
+          "sample_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "pdf_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "key": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "scope_review": {
+            "const": "APPROVED_OBJECT_SCOPE_ONLY"
+          },
+          "diagnostic_scope_decision": {
+            "enum": [
+              "diagnose",
+              "explanation_only"
+            ]
+          },
+          "approved_case_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "approved_semantic_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "approved_status": {
+            "type": "string"
+          },
+          "approved_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sources": {
+            "type": "array",
+            "minItems": 1
+          }
+        }
+      }
+    }
+  }
+}
