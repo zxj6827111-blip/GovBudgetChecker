@@ -513,7 +513,7 @@ def obligation_covered_by_finding(
         if not any(_identity_has_anchor(identity) for identity in identities):
             return False
         used: Set[int] = set()
-        for operand, identity in zip(operands, identities):
+        for operand, identity in zip(operands, identities, strict=True):
             if not _identity_has_anchor(identity):
                 # 有位置但身份不足以定位：不能凭文字相似补位。
                 return False

@@ -378,7 +378,7 @@ class CMM018_ScopeTerminology(Rule):
             "unit": re.compile(r"本表反映部门(?:本年度|年度)|部门本年度没有|纳入[^，。；]{0,40}部门决算|部门决算单位构成"),
         }
         if caption_scope in caption_re:
-            hits: List[Tuple[int, str, int, int]] = []
+            hits = []
             for page, text in iter_pages(doc, skip_toc=True):
                 if page == 1:
                     continue

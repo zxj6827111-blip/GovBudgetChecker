@@ -231,8 +231,6 @@ def _record_cell_gap(doc, table, cell, candidates, reason, *, code, indicator):
     if not table_code:
         # 表格对象缺表代码时不登记：位置无法成立，不能编造。
         return
-    title = getattr(table, 'title', None) or str(table_code)
-
     if len(candidates) > 1:
         locations, seen = [], set()
         for fact in candidates:

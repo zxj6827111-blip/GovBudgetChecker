@@ -1806,7 +1806,7 @@ def _attach_structured_diagnostics(
             else:
                 continue
             continue
-        diagnostics: List[Dict[str, Any]] = []
+        diagnostics = []
         for rule_id in dict.fromkeys((*instance.checkers, *instance.missing_checkers)):
             diagnostics.extend(relation_diagnostics.get((instance.obligation_id, str(rule_id)), []))
             diagnostics.extend(rule_diagnostics.get(str(rule_id), []))

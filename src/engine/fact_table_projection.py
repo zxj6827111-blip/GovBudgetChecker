@@ -85,7 +85,7 @@ def _record_projection_gap(doc, message, *, codes, blockers=(), missing=None):
     from .diagnostic_fields import record_gap
 
     try:
-        record_gap(doc, text, reason_codes=list(codes), blocked_by=list(blockers),
+        record_gap(doc, message, reason_codes=list(codes), blocked_by=list(blockers),
                    missing_operands=list(missing or ()))
     except Exception:  # noqa: BLE001 - 登记失败不影响原结论
         pass

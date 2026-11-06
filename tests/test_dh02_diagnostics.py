@@ -116,6 +116,20 @@ class _Doc:
     pass
 
 
+def test_projection_failure_registers_the_supplied_message_and_blocker():
+    from src.engine.fact_table_projection import _record_projection_gap
+
+    doc = _Doc()
+    message = "统一事实与解析原件或运行身份不一致"
+    _record_projection_gap(doc, message, codes=["table_mapping_incomplete"], blockers=[
+        blocker(dimension="instance_uid", ref="FIN_02_income:parse-version",
+                reason_code="table_mapping_incomplete"),
+    ])
+    fields = fields_for_text(doc, message, rule_id="V33-120", sub_check_id="projection")
+    assert fields["reason_codes"] == ["table_mapping_incomplete"]
+    assert fields["blocked_by"][0]["ref"] == "FIN_02_income:parse-version"
+
+
 def test_detail_text_is_not_rewritten_by_diagnostics():
     doc = _Doc()
     detail = "total的overseas/决算操作数缺失或不唯一"
