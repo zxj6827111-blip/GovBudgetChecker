@@ -215,3 +215,20 @@ def test_neutral_disclosure_lead_in_is_not_a_modal_qualifier():
     assert narrative_zero_sources(doc, table_code='FIN_07_three_public', indicator='overseas', stage='决算')
     doc = _doc('七、财政拨款“三公”经费支出决算情况说明。若具体情况如下：1、因公出国（境）费支出0万元。')
     assert narrative_zero_sources(doc, table_code='FIN_07_three_public', indicator='overseas', stage='决算') is None
+
+
+@pytest.mark.parametrize('qualifier', ['假设', '若存在下列情况', '以下表述不成立', '不能作此认定'])
+@pytest.mark.parametrize('boundary', ['page', 'semicolon'])
+def test_unconsumed_qualifier_is_carried_without_colon_or_comma(qualifier, boundary):
+    doc = _doc('')
+    head = '七、财政拨款“三公”经费支出决算情况说明。'
+    claim = '甲局2024年度无“三公”经费财政拨款支出。'
+    doc.page_texts = [head + qualifier, claim] if boundary == 'page' else [head + qualifier + '；' + claim]
+    assert narrative_zero_sources(doc, table_code='FIN_07_three_public', indicator='vehicle_purchase', stage='决算') is None
+
+
+def test_only_true_sentence_end_closes_an_unconsumed_qualifier():
+    doc = _doc('七、财政拨款“三公”经费支出决算情况说明。假设前例。甲局2024年度无“三公”经费财政拨款支出。')
+    assert narrative_zero_sources(doc, table_code='FIN_07_three_public', indicator='vehicle_purchase', stage='决算')
+    doc.page_texts = ['七、财政拨款“三公”经费支出决算情况说明。具体情况如下', '甲局2024年度无“三公”经费财政拨款支出。']
+    assert narrative_zero_sources(doc, table_code='FIN_07_three_public', indicator='vehicle_purchase', stage='决算')

@@ -49,15 +49,33 @@ def _units(text, org):
         for a, b in _clauses(text.compact[start:stop]):
             clause = text.compact[start + a:start + b]
             yield start + a, start + b, uncertain
-            claim = _NO_ACTIVITY.search(clause)
-            if (claim and not _assertive(clause, claim.start(), claim.end(), org)) or (
-                    clause.endswith(('：', ':', '，', ',')) and
-                    not all(_neutral_fragment(p, org) for p in re.split(r'[，,:：]', clause))):
+            # 软边界只切定位，不结束语义限定。未被语法完整消费的片段
+            # （包括没有任何标点的前缀）必须继续支配后续片段。
+            declarations = [m for _, m in _amount_assertions(clause)]
+            absence = _NO_ACTIVITY.search(clause)
+            complete = (all(_neutral_fragment(p, org) for p in re.split(r'[，,:：]', clause))
+                        or bool(declarations) and all(_assertive(clause, m.start(), m.end(), org) for m in declarations)
+                        or absence is not None and _assertive(clause, absence.start(), absence.end(), org))
+            if not complete and not _grid_only_fragment(text, start + a, start + b):
                 uncertain = True
             # 分号和换页不能自动解除尚未结束的限定，句号才结束当前语句。
             if text.compact[start + b:start + b + 1] == '。':
                 uncertain = False
 
+
+
+def _grid_only_fragment(text, begin, end):
+    """仅排除能逐行确认为表头/数值的网格，未知散文不能借换页消失。"""
+    if begin >= end:
+        return False
+    raw = text.raw[text.positions[begin]:text.positions[end - 1] + 1]
+    lines = [re.sub(r'\s+', '', line) for line in raw.splitlines() if line.strip()]
+    headings = {'合计', '小计', '预算数', '决算数', '财政拨款', '科目名称', '科目编码', '单位:万元', '单位：万元'}
+    def grid_line(line):
+        return (line in headings or re.fullmatch(_NUMBER, line)
+                or _NON_FISCAL_SCOPE_RE.fullmatch(line)
+                or any(re.fullmatch('|'.join(labels), line) for labels in _LABELS.values()))
+    return len(lines) >= 3 and any(re.fullmatch(_NUMBER, line) for line in lines) and all(grid_line(line) for line in lines)
 
 def _amount_assertions(clause):
     """同一规范表示用于取零和反证，双阶段句只取明确决算值。"""
