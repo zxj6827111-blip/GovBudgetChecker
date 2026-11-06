@@ -496,12 +496,12 @@ export default function UserManagementPanel({
               <table className="min-w-full text-sm">
                 <thead>
                   <tr>
-                    <Th className="px-3">用户名</Th>
-                    <Th className="px-3">角色</Th>
-                    <Th className="px-3">状态</Th>
-                    <Th className="px-3">组织范围</Th>
-                    <Th className="px-3">创建时间</Th>
-                    <Th className="px-3">操作</Th>
+                    <Th className="px-2">用户名</Th>
+                    <Th className="px-2">角色</Th>
+                    <Th className="px-2">状态</Th>
+                    <Th className="px-2">组织范围</Th>
+                    <Th className="px-2">创建时间</Th>
+                    <Th className="px-2">操作</Th>
                   </tr>
                 </thead>
                 <tbody>
@@ -512,18 +512,18 @@ export default function UserManagementPanel({
 
                     return (
                       <tr key={item.username} data-testid={`admin-users-row-${item.username}`}>
-                        <Td className="px-3 text-slate-800">{item.username}</Td>
-                        <Td className="px-3">
+                        <Td className="px-2 text-slate-800">{item.username}</Td>
+                        <Td className="px-2">
                           <Badge tone={item.is_admin ? "processing" : "neutral"} className="whitespace-nowrap">
                             {item.is_read_only ? "主管只读" : item.is_admin ? "管理员" : "审核工作人员"}
                           </Badge>
                         </Td>
-                        <Td className="px-3">
+                        <Td className="px-2">
                           <Badge tone={item.is_active ? "done" : "review"} className="whitespace-nowrap">
                             {item.is_active ? "已启用" : "已禁用"}
                           </Badge>
                         </Td>
-                        <Td className="min-w-36 px-3 text-slate-600">
+                        <Td className="min-w-36 px-2 text-slate-600">
                           {item.is_admin ? (
                             <span className="text-sm text-slate-700">全部组织</span>
                           ) : (
@@ -559,8 +559,8 @@ export default function UserManagementPanel({
                             </div>
                           )}
                         </Td>
-                        <Td className="px-3 text-slate-600">{formatTimestamp(item.created_at)}</Td>
-                        <Td className="min-w-[220px] px-3">
+                        <Td className="px-2 text-slate-600">{formatTimestamp(item.created_at)}</Td>
+                        <Td className="min-w-[220px] px-2">
                           <div className="flex flex-wrap gap-2">
                             <Button
                               variant="secondary"
