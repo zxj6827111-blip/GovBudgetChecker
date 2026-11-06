@@ -234,3 +234,21 @@ def test_typed_reference_annotation_does_not_change_original_evidence(case):
 def test_forged_location_is_rejected_even_when_original_evidence_is_retained(case):
     case[4]['review_report']['issues'][0]['location']['page'] = 999
     assert check(case)['overall'] == 'FAIL'
+
+
+def test_completed_receipt_diagnostic_cleanup_is_not_counted_as_recovery(case):
+    b, _, _, r, s, ev = case
+    base_record, base_status = copy.deepcopy(r), copy.deepcopy(s)
+    base_record['receipts'][0].update(reason_codes=['operand_missing'], next_action='system_recheck')
+    base_status['review_report']['check_receipts'] = copy.deepcopy(base_record['receipts'])
+    write(b, base_record, base_status, 'code')
+    ev['samples'] = []  # 没有声称新恢复，无需借独立事实快照证明诊断字段清理。
+    result = check(case)
+    assert result['overall'] == 'PASS'
+    assert all(row['change_kind'] == 'diagnostic_only' for row in result['ledger'])
+
+
+def test_na_basis_remains_part_of_evaluation():
+    old = {'status': 'not_applicable', 'incomplete_reason': '原文无支出'}
+    new = {**old, 'incomplete_reason': '任意新说明'}
+    assert h.receipt_evaluation(old) != h.receipt_evaluation(new)

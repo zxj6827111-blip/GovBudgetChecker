@@ -42,6 +42,14 @@ def receipt_key(row):
     return tuple(str(row.get(k) or "") for k in ("obligation_id", "rule_id", "sub_check_id"))
 
 
+def receipt_evaluation(row):
+    """治理字段与计算/适用性依据分开；纯诊断清理不计作检查恢复。"""
+    diagnostic = {"reason_codes", "blocked_by", "missing_operands", "candidates", "next_action", "root_cause_key"}
+    if row.get("status") == "pass":
+        diagnostic.add("incomplete_reason")
+    return stable({k: v for k, v in row.items() if k not in diagnostic})
+
+
 def stable(value):
     if isinstance(value, dict):
         return {k: stable(v) for k, v in value.items() if k not in VOLATILE}
@@ -253,13 +261,15 @@ def compare_collections(baseline_dir, candidate_dir, kit_dir, evidence=None):
                 if r.get("status") in UNRESOLVED and (not r.get("reason_codes") or not r.get("next_action")):
                     problems.append(f"{sid} {key}: 未完成回执缺原因/动作")
                 if old is None or stable(old) != stable(r):
-                    if r.get("status") in RESOLVED:
+                    evaluation_changed = old is None or receipt_evaluation(old) != receipt_evaluation(r)
+                    if evaluation_changed and r.get("status") in RESOLVED:
                         problems.extend(f"{sid} {key}: {e}" for e in recovery_errors(r, c, evidence, pages))
                     if old and old.get("status") in RESOLVED and r.get("status") in UNRESOLVED:
                         decision = authorized(evidence, "justified_regression", b, c, key, old, r)
                         if not verified_decision(decision, pages, c["sha256"]):
                             problems.append(f"{sid} {key}: 已完成关系回退无独立依据")
-                    ledger.append({"sample_id": sid, "key": key, "old": digest(old), "new": digest(r)})
+                    ledger.append({"sample_id": sid, "key": key, "old": digest(old), "new": digest(r),
+                                   "change_kind": "evaluation" if evaluation_changed else "diagnostic_only"})
             bg, cg = {}, {}
             for issue in b["finding_layers"]["formal"]:
                 bg.setdefault(formal_identity(issue), []).append(issue)
