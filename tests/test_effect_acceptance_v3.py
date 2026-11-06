@@ -224,3 +224,13 @@ def test_invalid_source_shape_never_means_no_problem(case, fault):
         s['review_report']['issues'][0].pop('message')
         s['review_report']['issues'][0].pop('title')
     assert check(case)['overall'] == 'FAIL'
+
+
+def test_typed_reference_annotation_does_not_change_original_evidence(case):
+    case[4]['review_report']['issues'][0]['location']['reference_kind'] = 'check'
+    assert check(case)['overall'] == 'PASS'
+
+
+def test_forged_location_is_rejected_even_when_original_evidence_is_retained(case):
+    case[4]['review_report']['issues'][0]['location']['page'] = 999
+    assert check(case)['overall'] == 'FAIL'

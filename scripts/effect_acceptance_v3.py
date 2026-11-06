@@ -275,16 +275,36 @@ def compare_collections(baseline_dir, candidate_dir, kit_dir, evidence=None):
                 for old, new in zip(bs, cs, strict=False):
                     old_ev = Counter(canonical(stable(e)) for e in old.get("evidence") or [])
                     new_ev = Counter(canonical(stable(e)) for e in new.get("evidence") or [])
+                    def location_projection(issue):
+                        return stable({k: v for k, v in (issue.get("location") or {}).items()
+                                       if k not in {"reference_kind", "relation_ids"}})
+
+                    location_changed = (location_projection(old) != location_projection(new)
+                                        or old.get("bbox") != new.get("bbox"))
                     lost = (old_ev - new_ev or (old.get("location") and not new.get("location"))
                             or (old.get("bbox") and not new.get("bbox")))
-                    if lost:
+                    if lost or location_changed:
                         decision = authorized(evidence, "evidence_replaced", b, c, identity, old, new)
                         if not verified_decision(decision, pages, c["sha256"]):
                             problems.append(f"{sid} {identity}: 已有问题证据退化/替换无独立依据")
                         if old_ev and not new_ev:
                             problems.append(f"{sid} {identity}: 既有正式问题不能丢失全部报告证据")
-                    if issue_digest(old) != issue_digest(new):
+                    if location_changed and new.get("location"):
+                        location = new["location"]
+                        page = location.get("page", new.get("page_number"))
+                        box = location.get("bbox") or new.get("bbox")
+                        sources = [s for s in new.get("evidence") or []
+                                   if s.get("physical_page", s.get("page")) == page]
+                        if not sources or not any(not source_errors({**s, "bbox": box}, pages, c["sha256"])
+                                                  for s in sources):
+                            problems.append(f"{sid} {identity}: 新定位没有同页同框原文证据")
+                    # 只验证新增/改写的原文证据。增加关系组类型不等于重写原始引文；
+                    # 不能把历史同样存在的弱证据误报为本轮证据退化。
+                    added_evidence = new_ev - old_ev
+                    if added_evidence:
                         for source in new.get("evidence") or []:
+                            if canonical(stable(source)) not in added_evidence:
+                                continue
                             problems.extend(f"{sid}: {e}" for e in source_errors(source, pages, c["sha256"]))
                 for action, items in (("remove_issue", bs[len(cs):]), ("add_issue", cs[len(bs):])):
                     for issue in items:
