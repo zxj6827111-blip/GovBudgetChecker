@@ -55,8 +55,14 @@ def case(tmp_path):
     binding = provenance(news, meta, "S", sha)
     evidence = {"schema": "independent-effect-evidence-v1", "samples": [{"binding": binding, "facts": [
         {"fact_id": fid, "value_wan": value, "quote": value, "page": 1, "file_hash": sha,
-         "unit": "万元", "year": 2025, "relation_keys": [["O", "R", "sum"]]}
+         "unit": "万元", "year": 2025, "organization": "unit", "table_code": "FIN_03_expenditure",
+         "indicator": fid, "row_key": "total", "fund_scope": "all_funds", "stage": "决算",
+         "relation_keys": [["O", "R", "sum"]]}
         for fid, value in (("total", "10.00"), ("part1", "6.00"), ("part2", "4.00"))]}], "decisions": []}
+    evidence["samples"][0]["relation_contracts"] = [{"key": ["O", "R", "sum"],
+        "receipt_digest": h.digest(newr["receipts"][0]), "operand_identities": {
+            f["fact_id"]: {k: f[k] for k in ("table_code", "indicator", "row_key", "fund_scope", "stage")}
+            for f in evidence["samples"][0]["facts"]}}]
     return base, cand, kit, newr, news, evidence
 
 
@@ -72,7 +78,8 @@ def test_independent_legal_recovery_passes(case):
 
 @pytest.mark.parametrize("fault", ["unknown_fact", "missing_snapshot", "wrong_revision", "wrong_sample", "wrong_sha",
                                   "wrong_code", "wrong_relation", "wrong_year", "wrong_unit", "false_equation",
-                                  "forged_quote", "wrong_page", "wrong_bbox", "non_finite"])
+                                  "forged_quote", "wrong_page", "wrong_bbox", "non_finite",
+                                  "wrong_fund", "wrong_stage", "wrong_org"])
 def test_independent_fact_faults_rejected_alone(case, fault):
     _, _, _, r, s, ev = case
     bundle = ev["samples"][0]
@@ -94,6 +101,9 @@ def test_independent_fact_faults_rejected_alone(case, fault):
     elif fault == "wrong_page": fact["page"] = 999
     elif fault == "wrong_bbox": fact["bbox"] = [400, 400, 450, 450]
     elif fault == "non_finite": fact["value_wan"] = "NaN"
+    elif fault == "wrong_fund": fact["fund_scope"] = "non_fiscal"
+    elif fault == "wrong_stage": fact["stage"] = "年初预算"
+    elif fault == "wrong_org": fact["organization"] = "other-unit"
     assert check(case)["overall"] == "FAIL", fault
 
 

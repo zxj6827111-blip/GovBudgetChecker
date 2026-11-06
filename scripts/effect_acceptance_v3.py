@@ -151,6 +151,11 @@ def recovery_errors(receipt, row, evidence, pages):
     index = {f.get("fact_id"): f for f in facts}
     if len(index) != len(facts) or None in index:
         return ["独立事实身份重复或缺失"]
+    contract = next((c for c in bundle.get("relation_contracts", [])
+                     if c.get("key") == list(receipt_key(receipt))
+                     and c.get("receipt_digest") == digest(receipt)), None)
+    if not contract:
+        return ["缺少独立逐关系操作数身份契约"]
     values = []
     for fid in receipt.get("operand_fact_ids") or []:
         fact = index.get(fid)
@@ -158,6 +163,13 @@ def recovery_errors(receipt, row, evidence, pages):
             errors.append(f"操作数不在独立事实快照：{fid}")
             continue
         errors.extend(source_errors(fact, pages, row["sha256"]))
+        expected = (contract.get("operand_identities") or {}).get(fid)
+        dimensions = ("table_code", "indicator", "row_key", "fund_scope", "stage")
+        if (not isinstance(expected, dict) or any(not expected.get(k) for k in dimensions)
+                or any(fact.get(k) != expected[k] for k in dimensions)):
+            errors.append("事实表/行/列/资金/阶段身份与独立关系契约不符")
+        if fact.get("organization") != row["source_binding"]["organization"] or fact.get("file_hash") != row["sha256"]:
+            errors.append("事实主体或材料身份不符")
         # 原件、资金、年度、阶段、关系必须由独立核对记录声明，不能从被测回执补齐。
         if list(receipt_key(receipt)) not in fact.get("relation_keys", []):
             errors.append("事实未授权用于当前关系")
