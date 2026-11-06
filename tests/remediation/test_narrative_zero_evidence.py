@@ -178,3 +178,33 @@ def test_table_page_does_not_pollute_following_shanghai_statement():
     refs = narrative_zero_sources(doc, table_code='FIN_07_three_public', indicator='vehicle_purchase', stage='决算')
     assert refs and {r['page'] for r in refs} == {2}
     assert narrative_zero_sources(doc, table_code='FIN_07_three_public', indicator='vehicle_purchase', stage='年初预算') is None
+
+
+@pytest.mark.parametrize('prefix', ['以下表述不成立', '不能作此认定', '若使用旧模板填报', '假设', '需要核实'])
+@pytest.mark.parametrize('separator', ['：', '，', ',', ':'])
+def test_modal_scope_is_not_erased_by_punctuation(prefix, separator):
+    doc = _doc('七、财政拨款“三公”经费支出决算情况说明。' + prefix + separator +
+               '甲局2024年度无“三公”经费财政拨款支出。')
+    assert narrative_zero_sources(doc, table_code='FIN_07_three_public', indicator='vehicle_purchase', stage='决算') is None
+
+
+@pytest.mark.parametrize('positive', ['公务用车运行维护支出5万元',
+    '“三公”经费财政拨款支出年初预算为5万元，支出决算为4万元'])
+def test_all_normalized_final_declarations_participate_in_conflict(positive):
+    doc = _doc('七、财政拨款“三公”经费支出决算情况说明。甲局2024年度无“三公”经费财政拨款支出。' + positive + '。')
+    assert narrative_zero_sources(doc, table_code='FIN_07_three_public', indicator='vehicle_purchase', stage='决算') is None
+
+
+@pytest.mark.parametrize('number', ['-5', '+5', '−5'])
+def test_signed_nonzero_statement_also_blocks_global_zero(number):
+    doc = _doc('七、财政拨款“三公”经费支出决算情况说明。甲局2024年度无“三公”经费财政拨款支出。公务用车运行维护支出' + number + '万元。')
+    assert narrative_zero_sources(doc, table_code='FIN_07_three_public', indicator='vehicle_purchase', stage='决算') is None
+
+
+@pytest.mark.parametrize('boundary',['page','semicolon'])
+def test_open_qualifier_survives_page_or_semicolon(boundary):
+    doc=_doc('')
+    intro='以下表述不成立：'
+    claim='甲局2024年度无“三公”经费财政拨款支出'
+    doc.page_texts=[intro,claim+'。'] if boundary=='page' else [intro+claim+'；'+claim+'。']
+    assert narrative_zero_sources(doc, table_code='FIN_07_three_public', indicator='vehicle_purchase', stage='决算') is None
