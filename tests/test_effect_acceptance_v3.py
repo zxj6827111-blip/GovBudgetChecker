@@ -87,6 +87,8 @@ def test_independent_fact_faults_rejected_alone(case, fault):
     if fault == "unknown_fact":
         r["receipts"][0]["operand_fact_ids"][0] = "nonexistent"
         s["review_report"]["check_receipts"] = copy.deepcopy(r["receipts"])
+        # 仅验证事实存在性，不借“回执摘要变化”这个别的故障拒收。
+        bundle["relation_contracts"][0]["receipt_digest"] = h.digest(r["receipts"][0])
     elif fault == "missing_snapshot":
         ev["samples"] = []
     elif fault in {"wrong_revision", "wrong_sample", "wrong_sha", "wrong_code"}:
@@ -104,7 +106,10 @@ def test_independent_fact_faults_rejected_alone(case, fault):
     elif fault == "wrong_fund": fact["fund_scope"] = "non_fiscal"
     elif fault == "wrong_stage": fact["stage"] = "年初预算"
     elif fault == "wrong_org": fact["organization"] = "other-unit"
-    assert check(case)["overall"] == "FAIL", fault
+    result = check(case)
+    assert result["overall"] == "FAIL", fault
+    if fault == "unknown_fact":
+        assert any("操作数不在独立事实快照" in e for e in result["problems"])
 
 
 def removal_authorization(case):

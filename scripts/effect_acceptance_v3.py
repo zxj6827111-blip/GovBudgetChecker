@@ -263,6 +263,8 @@ def compare_collections(baseline_dir, candidate_dir, kit_dir, evidence=None):
                         decision = authorized(evidence, "evidence_replaced", b, c, identity, old, new)
                         if not verified_decision(decision, pages, c["sha256"]):
                             problems.append(f"{sid} {identity}: 已有问题证据退化/替换无独立依据")
+                        if old_ev and not new_ev:
+                            problems.append(f"{sid} {identity}: 既有正式问题不能丢失全部报告证据")
                     if issue_digest(old) != issue_digest(new):
                         for source in new.get("evidence") or []:
                             problems.extend(f"{sid}: {e}" for e in source_errors(source, pages, c["sha256"]))
