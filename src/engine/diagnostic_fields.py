@@ -540,6 +540,11 @@ def merge_entry(entry: Mapping[str, Any], extra: Mapping[str, Any]) -> Dict[str,
             if canonical(item) not in known:
                 result[field].append(dict(item))
                 known.add(canonical(item))
+    # 同一组原件空白的人工确认建议在合并时仍有依据；不能在序列化途中
+    # 丢失它，再退回默认的系统重跑。不同建议继续交给主原因策略裁决。
+    preferred = entry.get("preferred_action")
+    if preferred and preferred == extra.get("preferred_action"):
+        result["preferred_action"] = preferred
     return result
 
 

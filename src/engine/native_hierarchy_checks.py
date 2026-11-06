@@ -111,12 +111,12 @@ def _unrepresented_source_codes(artifact, table, row_codes, measure_start):
     return list(dict.fromkeys(missing))
 
 
-def _gap(doc, text, *, codes, blockers=(), missing=(), candidates=()):
+def _gap(doc, text, *, codes, blockers=(), missing=(), candidates=(), preferred_action=None):
     """DH-02：登记表/行/列/格级卡点；字段不合法时静默跳过，不影响结论。"""
     from .diagnostic_fields import record_gap
 
     record_gap(doc, text, reason_codes=list(codes), blocked_by=list(blockers),
-               missing_operands=list(missing), candidates=list(candidates))
+               missing_operands=list(missing), candidates=list(candidates), preferred_action=preferred_action)
 
 
 def _table_blocker(title, reason_code, ref):
@@ -153,6 +153,7 @@ def _table_view(doc, table_code, *, include_income_sources=False):
              blockers=[_table_blocker(title, 'table_mapping_incomplete', 'identity-conflict')])
         return None, reason
     mappings = _column_mappings_for_instance(instance, table)
+    literal_mappings = mappings
     # This rule owns the total/basic/project roles. The remaining income and
     # expenditure components have dedicated horizontal arithmetic rules.
     # Blank optional component columns must not expand this rule's scope.
@@ -163,6 +164,22 @@ def _table_view(doc, table_code, *, include_income_sources=False):
                       'operational_income', 'subsidiary_income', 'other_income'})
     mappings = [m for m in mappings if m.get('canonical_measure') in roles]
     if not mappings or not any(m['canonical_measure'] == 'total_actual' for m in mappings):
+        numeric_columns = {c.col_idx for c in table.cells if not c.is_header and c.numeric_value is not None}
+        known_columns = {int(m['source_col_idx']) for m in literal_mappings}
+        label_columns = {int(c) for m in literal_mappings for c in m.get('source_label_cols', [])}
+        # 完整原生表只有明确的财政拨款列时，缺的是总收入披露；已知列
+        # 不能冒充总额，也不能让用户一直等待软件“重新绑定”这列。
+        if (table_code == 'FIN_02_income' and table.extraction_method in {'lines', 'lines_strict'}
+                and table.confidence >= .8 and numeric_columns & known_columns
+                and numeric_columns <= known_columns | label_columns
+                and any(m['canonical_measure'] == 'fiscal_allocation' for m in literal_mappings)):
+            reason = f'{title}原件已识别的金额列未披露本年收入合计，不能用财政拨款收入替代'
+            from .diagnostic_fields import table_missing_operand
+            _gap(doc, reason, codes=['operand_missing'], preferred_action='human_confirm', missing=[
+                table_missing_operand(table_code=table_code, role='本年收入合计', page=table.page_number,
+                                      row_key='total', column='total_actual', fund_scope='all_funds',
+                                      stage='决算', year=context.fiscal_year)])
+            return None, reason
         reason = f'{title}本年合计金额列身份未绑定'
         from .diagnostic_fields import blocker
         _gap(doc, reason, codes=['column_identity_unconfirmed'],
@@ -268,6 +285,10 @@ def _select(doc, view, code, indicator):
         term = blank_term(doc, table.table_code, indicator, code=code)
         if term is not None:
             return term, None
+        from .native_table_arithmetic import observed_blank_gap
+        reason = observed_blank_gap(doc, table.table_code, indicator, code=code)
+        if reason:
+            return None, reason
     if len(candidates) > 1 and cell is not None:
         # 同一原行被排版重复时会有多条事实；只认绑定到本行这一格的唯一事实，
         # 不按顺序挑第一条。

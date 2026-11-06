@@ -169,6 +169,27 @@ record_operand_gap = _record_operand_gap
 record_operand_rejection = _record_operand_rejection
 
 
+def observed_blank_gap(doc, table_code, indicator, *, code=None, name=None, stage='决算'):
+    """只在独立原页原格及列身份完整时登记空白，不创建操作数。"""
+    from .diagnostic_fields import blocker, record_gap, table_missing_operand
+
+    observed = blank_term(doc, table_code, indicator, code=code,
+                          names=(name,) if name else (), stage=stage, calculation=False)
+    if observed is None:
+        return None
+    cell = observed.extra_dims['native_blank_observation']
+    reason = f'{code or name or indicator}的{indicator}/{stage}原件单元格为空白，金额含义未确认'
+    record_gap(doc, reason, reason_codes=['cell_blank_semantics_unknown'],
+               blocked_by=[blocker(dimension='cell', ref=cell['source_cell_id'],
+                                   reason_code='cell_blank_semantics_unknown')],
+               missing_operands=[table_missing_operand(
+                   table_code=observed.table_code, role=f'{indicator}/{stage}操作数',
+                   page=cell['physical_page'], row_key=code or name, column=indicator,
+                   fund_scope=observed.fund_scope, stage=stage, year=observed.fiscal_year)],
+               preferred_action='human_confirm')
+    return reason
+
+
 def select(doc, facts, indicator, *, code=None, name=None, stage='决算', allow_native_blank=False):
     context = doc.fact_context
     normalized_name = re.sub(r'\s+', '', str(name)) if name is not None else None
@@ -206,21 +227,8 @@ def select(doc, facts, indicator, *, code=None, name=None, stage='决算', allow
                 return term, None
             # 列身份已确认、原格确实为空，与“金额列未绑定”是两种根因。
             # 仅观察原格，不创建零值，也不借其它列或决算叙事填充预算。
-            observed = blank_term(doc, facts[0].table_code, indicator, code=code,
-                                  names=(name,) if name else (), stage=stage, calculation=False)
-            if observed is not None:
-                from .diagnostic_fields import blocker, record_gap, table_missing_operand
-
-                cell = observed.extra_dims['native_blank_observation']
-                reason = f'{code or name or indicator}的{indicator}/{stage}原件单元格为空白，金额含义未确认'
-                record_gap(doc, reason, reason_codes=['cell_blank_semantics_unknown'],
-                           blocked_by=[blocker(dimension='cell', ref=cell['source_cell_id'],
-                                               reason_code='cell_blank_semantics_unknown')],
-                           missing_operands=[table_missing_operand(
-                               table_code=observed.table_code, role=f'{indicator}/{stage}操作数',
-                               page=cell['physical_page'], row_key=code or name, column=indicator,
-                               fund_scope=observed.fund_scope, stage=stage, year=observed.fiscal_year)],
-                           preferred_action='human_confirm')
+            reason = observed_blank_gap(doc, facts[0].table_code, indicator, code=code, name=name, stage=stage)
+            if reason:
                 return None, reason
         reason = f'{code or name or indicator}的{indicator}/{stage}操作数缺失或不唯一'
         _record_operand_gap(doc, facts, candidates, reason, indicator=indicator,
@@ -916,14 +924,24 @@ def check_expenditure_arithmetic(rule, doc):
     if len(unresolved) > 12:
         # Relation receipts retain each row and reason; the rule summary
         # should remain readable for a table with many explicit blank cells.
+        from .diagnostic_fields import lookup_failure, merge_entry, record_failure
         grouped, other = {}, []
         for reason in unresolved:
-            match = re.fullmatch(r'(.+)的(.+)/决算操作数缺失或不唯一', reason)
+            match = re.fullmatch(r'(.+)的(.+)/决算(操作数缺失或不唯一|原件单元格为空白，金额含义未确认)', reason)
             if match:
-                grouped.setdefault(match.group(2), []).append(match.group(1))
+                grouped.setdefault((match.group(2), match.group(3)), []).append((match.group(1), reason))
             else:
                 other.append(reason)
-        unresolved = other + [f'支出表{key}金额操作数未绑定：科目{",".join(codes[:8])}'
-                              f'（共{len(codes)}行，逐行原因已保留在关系回执）'
-                              for key, codes in grouped.items()]
+        unresolved = other
+        for (key, kind), values in grouped.items():
+            codes = [code for code, _ in values]
+            label = '原件空白金额含义未确认' if kind.startswith('原件') else '金额操作数未绑定'
+            summary = f'支出表{key}{label}：科目{",".join(codes[:8])}（共{len(codes)}行，逐行原因已保留在关系回执）'
+            entries = [e for _, text in values for e in lookup_failure(doc, text)]
+            if entries:
+                entry = entries[0]
+                for extra in entries[1:]:
+                    entry = merge_entry(entry, extra)
+                record_failure(doc, summary, entry)
+            unresolved.append(summary)
     return finish(rule, cluster_rounding(rule, issues), unresolved)

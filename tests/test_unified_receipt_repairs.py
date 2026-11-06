@@ -66,3 +66,30 @@ def test_real_farm_blank_has_known_column_but_unknown_amount():
     assert diagnostic["next_action"] == "human_confirm"
     assert diagnostic["missing_operands"][0]["page"] == 7
     assert context.to_dict() == before  # 不写入任何零事实。
+
+
+def test_compound_blanks_keep_the_source_driven_action():
+    from types import SimpleNamespace
+    from src.engine.diagnostic_fields import record_gap, fields_for_text
+    doc = SimpleNamespace()
+    for name in ("a", "b"):
+        record_gap(doc, f"blank-{name}", reason_codes=["cell_blank_semantics_unknown"],
+                   blocked_by=[{"dimension": "cell", "ref": name, "reason_code": "cell_blank_semantics_unknown"}],
+                   preferred_action="human_confirm")
+    result = fields_for_text(doc, "blank-a；blank-b", rule_id="V33-241", sub_check_id="sum")
+    assert result["next_action"] == "human_confirm"
+
+
+def test_literal_fiscal_column_does_not_stand_for_missing_income_total():
+    from tests.remediation.test_native_pdf_core import grid, context_for
+    from src.engine.native_hierarchy_checks import _table_view
+    from src.engine.diagnostic_fields import fields_for_text
+    table = grid([["科目编码", "科目名称", "财政拨款收入"],
+                  ["合计", "", "100.00"], ["208", "社会保障", "100.00"]],
+                 [0, 40, 100, 160], uid="income", page=1, code="FIN_02_income", confidence=.99, unit="万元")
+    doc = context_for([table], [table])
+    _, reason = _table_view(doc, "FIN_02_income")
+    assert "不能用财政拨款收入替代" in reason
+    diagnostic = fields_for_text(doc, reason, rule_id="V33-240", sub_check_id="complete")
+    assert diagnostic["reason_codes"] == ["operand_missing"]
+    assert diagnostic["next_action"] == "human_confirm"
