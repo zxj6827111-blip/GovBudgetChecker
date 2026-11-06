@@ -581,7 +581,9 @@ def _identity_context(status, meta):
 
 def extract_record(sample: Dict[str, Any], status: Dict[str, Any], todo: Dict[str, Any],
                    volatile: Dict[str, Any]) -> Dict[str, Any]:
-    keys = set(volatile["finding_keys"])
+    # 报告层包含分析代际；它不属于问题内容。材料/代际/代码的身份另行保留，
+    # 不能因真实双跑生成了新 revision 就把相同问题判成内容回归。
+    keys = set(volatile["finding_keys"]) | {"analysis_revision"}
     result = status.get("result") if isinstance(status.get("result"), dict) else {}
     meta = result.get("meta") if isinstance(result.get("meta"), dict) else {}
     from scripts.acceptance_artifacts import ADAPTER_VERSION, formal_layers

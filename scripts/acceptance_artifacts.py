@@ -8,7 +8,7 @@ import hashlib
 import json
 from typing import Any
 
-ADAPTER_VERSION = "review-report-adapter-v2"
+ADAPTER_VERSION = "review-report-adapter-v3"
 
 
 class AdapterError(ValueError):
@@ -21,6 +21,16 @@ def canonical(value: Any) -> str:
 
 def digest(value: Any) -> str:
     return hashlib.sha256(canonical(value).encode()).hexdigest()
+
+
+def finding_content(value):
+    """内容投影剔除运行生成字段；分析代际仍由 source_binding 单独约束。"""
+    if isinstance(value, dict):
+        return {k: finding_content(v) for k, v in value.items()
+                if k not in {"id", "created_at", "analysis_revision"}}
+    if isinstance(value, list):
+        return [finding_content(v) for v in value]
+    return value
 
 
 def formal_layers(status: dict) -> dict:
@@ -70,6 +80,22 @@ def adapt_record(record: dict, status: dict, meta: dict) -> dict:
     result["raw_issue_layers"] = (status.get("result") or {}).get("issues")
     result["raw_status_digest"] = digest(status)
     # 正式问题须取报告最终层，候选/提示不混入。
-    result["findings"] = sorted(digest(i) for i in layers["formal"])
-    result["finding_bodies"] = {digest(i): i for i in layers["formal"]}
+    id_to_fp = {i["id"]: digest(finding_content(i)) for i in layers["formal"]}
+    result["findings"] = sorted(id_to_fp.values())
+    result["finding_bodies"] = {digest(finding_content(i)): finding_content(i) for i in layers["formal"]}
+    replacements = {old: digest(finding_content(body)) for old, body in record.get("finding_bodies", {}).items()}
+
+    def remap(value):
+        if isinstance(value, str):
+            return replacements.get(value, value)
+        if isinstance(value, list):
+            return [remap(v) for v in value]
+        if isinstance(value, dict):
+            return {k: remap(v) for k, v in value.items()}
+        return value
+
+    result["todo"] = remap(record.get("todo"))
+    result["receipts"] = [{**r, **({"issue_refs": sorted(id_to_fp.get(str(ref), f"unmapped:{ref}")
+                                                      for ref in r["issue_refs"])} if "issue_refs" in r else {})}
+                          for r in status["review_report"]["check_receipts"]]
     return result

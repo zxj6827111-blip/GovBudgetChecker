@@ -7,7 +7,7 @@ import fitz
 import pytest
 
 from scripts import effect_acceptance_v3 as h
-from scripts.acceptance_artifacts import AdapterError, formal_layers, provenance
+from scripts.acceptance_artifacts import AdapterError, formal_layers, provenance, adapt_record
 
 
 def write(root, record, status, code="code"):
@@ -168,3 +168,16 @@ def test_same_version_repeat_compares_all_layers_and_code(case, tmp_path):
     s["review_report"]["tips"].append({"title": "changed"})
     write(other, r, s, "new-code")
     assert h.reproducibility(c, other)["verdict"] == "FAIL"
+
+
+def test_adapter_keeps_revision_binding_outside_problem_content(case):
+    _, c, _, r, s, _ = case
+    meta = h.read(c / "meta.json")
+    first = adapt_record(r, s, meta)
+    second_status = copy.deepcopy(s)
+    second_status["analysis_revision"] = "rev-next"
+    for issue in second_status["review_report"]["issues"]:
+        issue.update(analysis_revision="rev-next", created_at=999)
+    second = adapt_record(r, second_status, meta)
+    assert first["findings"] == second["findings"]
+    assert first["source_binding"] != second["source_binding"]
