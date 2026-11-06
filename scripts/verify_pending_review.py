@@ -1127,7 +1127,10 @@ def apply_scope_review(scope, records, path, expected_sha):
         if (token in seen or len(token[2]) != 3
                 or decision.get('scope_review') != 'APPROVED_OBJECT_SCOPE_ONLY'
                 or decision.get('diagnostic_scope_decision') not in {'diagnose', 'explanation_only'}
-                or not decision.get('reason') or not decision.get('sources')):
+                or not decision.get('reason') or not (decision.get('sources') or (
+                    decision.get('origin') == 'additional3'
+                    and re.fullmatch(r'[0-9a-f]{64}', str(decision.get('source_status_sha256') or ''))
+                    and re.fullmatch(r'[0-9a-f]{64}', str(review.get('sources', {}).get('additional_scope3_sha256') or ''))))):
             refuse("逐对象范围裁决重复或缺少有效身份/依据")
         seen.add(token)
         row = records.get(token[0])

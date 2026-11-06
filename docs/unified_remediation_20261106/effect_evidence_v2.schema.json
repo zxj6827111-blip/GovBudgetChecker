@@ -52,7 +52,7 @@
                 "operand_identities": {
                   "type": "object",
                   "additionalProperties": {
-                    "$ref": "#/$defs/dimensions"
+                    "$ref": "#/$defs/operand_identity"
                   }
                 }
               }
@@ -208,8 +208,7 @@
         "indicator",
         "row_key",
         "fund_scope",
-        "stage",
-        "source_cell_digest"
+        "stage"
       ],
       "properties": {
         "table_code": {
@@ -511,6 +510,22 @@
               ]
             }
           ]
+        }
+      }
+    },
+    "operand_identity": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/dimensions"
+        }
+      ],
+      "required": [
+        "source_cell_digest"
+      ],
+      "properties": {
+        "source_cell_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
         }
       }
     }

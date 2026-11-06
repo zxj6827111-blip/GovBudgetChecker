@@ -90,8 +90,20 @@ def layer_changes(before, after):
                 errors.append(f'对象身份重复{key}')
             found[key] = item
         return found, errors
-    a, ea = index(before)
-    b, eb = index(after)
+    # 展示ID和列表顺序都不是语义；先按完整非易变内容抵消，再配对变更。
+    remaining = list(after)
+    unmatched = []
+    for old in before:
+        exact = next((new for new in remaining if issue_digest(old) == issue_digest(new)), None)
+        if exact is None:
+            unmatched.append(old)
+        else:
+            remaining.remove(exact)
+    # 重复ID仍应拒收，不能借先抵消躲过结构校验。
+    _, ea = index(before)
+    _, eb = index(after)
+    a, _ = index(unmatched)
+    b, _ = index(remaining)
     return [(key, a.get(key), b.get(key)) for key in sorted(a.keys() | b.keys())
             if (issue_digest(a[key]) if key in a else None) !=
                (issue_digest(b[key]) if key in b else None)], ea + eb
@@ -348,7 +360,7 @@ def compare_collections(baseline_dir, candidate_dir, kit_dir, evidence=None):
                                         or old.get("bbox") != new.get("bbox"))
                     lost = (old_ev - new_ev or (old.get("location") and not new.get("location"))
                             or (old.get("bbox") and not new.get("bbox")))
-                    if lost or location_changed:
+                    if old_ev != new_ev or lost or location_changed:
                         decision = authorized(evidence, "evidence_replaced", b, c, identity, old, new)
                         if not verified_decision(decision, pages, c["sha256"]):
                             problems.append(f"{sid} {identity}: 已有问题证据退化/替换无独立依据")

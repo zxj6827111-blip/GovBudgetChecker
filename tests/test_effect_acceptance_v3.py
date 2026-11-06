@@ -405,3 +405,26 @@ def test_exact_same_number_at_other_column_is_not_same_cell(case):
     with fitz.open(pdf) as d:
         ev['samples'][0]['facts'][1]['bbox'] = list(d[0].search_for('6.00')[-1])
     assert check(case)['overall'] == 'FAIL'
+
+
+@pytest.mark.parametrize('layer', ['manual_review','tips','candidate_findings'])
+def test_nonformal_display_id_and_order_changes_are_volatile(case, layer):
+    b, _, _, _, s, _ = case
+    r, raw = h.read(b/'records/S.json.gz'), h.read(b/'status/S.status.json.gz')
+    raw['review_report'][layer] = [{'id': 'old', 'title': 'same observation'}, {'id': 'old2', 'title': 'other observation'}]
+    write(b, r, raw, 'code')
+    s['review_report'][layer] = [{'id': 'new2', 'title': 'other observation'}, {'id': 'new', 'title': 'same observation'}]
+    assert check(case)['overall'] == 'PASS'
+
+
+def test_added_evidence_on_formal_issue_needs_explicit_object_decision(case):
+    case[4]['review_report']['issues'][0]['evidence'].append({'page': 1, 'quote': '4.00'})
+    assert check(case)['overall'] == 'FAIL'
+
+
+@pytest.mark.parametrize('field', ['sample_id','analysis_revision','pdf_sha256'])
+def test_formal_content_change_cannot_borrow_new_authorization(case, field):
+    case[4]['review_report']['issues'][0]['message'] = 'updated'
+    decision = issue_change_decision(case)
+    decision['after'] = {**decision['after'],field:'wrong'}
+    assert check(case)['overall'] == 'FAIL'
