@@ -80,6 +80,12 @@ def load_collection(root):
         raw_receipts = (raw.get("review_report") or {}).get("check_receipts")
         if not isinstance(raw_receipts, list) or not isinstance(record.get("receipts"), list):
             raise AdapterError(f"{sid}: 缺少原始或标准化回执")
+        for receipt in raw_receipts:
+            if (not isinstance(receipt, dict) or receipt.get("status") not in UNRESOLVED | RESOLVED | {"fail"}
+                    or not receipt.get("rule_id") or not receipt.get("sub_check_id")):
+                raise AdapterError(f"{sid}: 回执缺少六态状态或检查身份")
+        if len({receipt_key(r) for r in raw_receipts}) != len(raw_receipts):
+            raise AdapterError(f"{sid}: 回执身份重复")
         def receipts(rows):
             return Counter(canonical({k: v for k, v in r.items() if k != "issue_refs"}) for r in rows)
         if receipts(raw_receipts) != receipts(record["receipts"]):
@@ -142,6 +148,9 @@ def verified_decision(decision, pages, pdf_sha):
 
 def recovery_errors(receipt, row, evidence, pages):
     errors = []
+    if (not row["source_binding"].get("organization") or not row["source_binding"].get("year")
+            or row["source_binding"].get("report_kind") not in {"budget", "final"}):
+        return ["主体、年度或文种未确认，不能授权恢复"]
     bundle = next((s for s in evidence.get("samples", []) if s.get("binding") == row["source_binding"]), None)
     if not bundle:
         return ["缺少同材料/同分析版本的独立事实快照"]

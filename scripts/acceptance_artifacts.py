@@ -45,9 +45,15 @@ def formal_layers(status: dict) -> dict:
         if not isinstance(value, list) or any(not isinstance(v, dict) for v in value):
             raise AdapterError(f"review_report.{field} 缺失或不是对象列表")
         if name == "formal":
+            ids = []
             for item in value:
                 if any(not str(item.get(k) or "").strip() for k in ("id", "rule_id", "severity")):
                     raise AdapterError("正式问题缺少 id/rule_id/severity")
+                if not str(item.get("message") or item.get("title") or "").strip():
+                    raise AdapterError("正式问题缺少可核对的内容")
+                ids.append(item["id"])
+            if len(ids) != len(set(ids)):
+                raise AdapterError("正式问题 id 重复，不能覆盖条目")
         layers[name] = value
     return layers
 
@@ -61,7 +67,11 @@ def provenance(status: dict, meta: dict, sample_id: str, pdf_sha: str) -> dict:
     code = (meta.get("code") or {}).get("digest")
     if not revision or not code or meta.get("code_after") != code:
         raise AdapterError(f"{sample_id}: 缺少分析代际/代码身份，或采集期间代码漂移")
+    if not isinstance(meta.get("profile"), dict):
+        raise AdapterError(f"{sample_id}: 缺少显式运行配置")
     result_meta = (status.get("result") or {}).get("meta") or {}
+    if not result_meta.get("rule_policy_version") or not result_meta.get("rule_registry_version"):
+        raise AdapterError(f"{sample_id}: 缺少规则/政策版本")
     return {"sample_id": sample_id, "pdf_sha256": pdf_sha, "analysis_revision": revision,
             "code_digest": code, "profile_digest": digest(meta.get("profile")),
             "rules_digest": digest({k: result_meta.get(k) for k in

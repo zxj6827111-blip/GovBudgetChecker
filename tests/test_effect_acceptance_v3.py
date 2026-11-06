@@ -39,7 +39,8 @@ def case(tmp_path):
                "reason_codes": ["operand_missing"], "next_action": "tech_fix", "operand_fact_ids": [],
                "formula": "total = sum(parts) (万元)"}
     status = {"checksum": sha, "analysis_revision": "rev-a", "fiscal_year": 2025,
-              "organization_name": "unit", "report_kind": "final", "result": {"meta": {}},
+              "organization_name": "unit", "report_kind": "final", "result": {"meta": {
+                  "rule_policy_version": "v3_3_portable", "rule_registry_version": "fixture-registry-v1"}},
               "review_report": {"issues": [issue], "candidate_findings": [], "tips": [], "manual_review": [],
                                 "check_receipts": [receipt]}}
     record = {"sample_id": "S", "sha256": sha, "receipts": [receipt], "run": {},
@@ -200,3 +201,26 @@ def test_missing_relation_requires_precise_replacement_evidence(case, approved):
             'old_digest': h.digest(old), 'new_digest': h.digest(r['receipts']),
             'reason': 'source now located', 'sources': [{'page': 1, 'quote': '10.00'}]})
     assert check(case)['overall'] == ('PASS' if approved else 'FAIL')
+
+
+@pytest.mark.parametrize('fault', ['missing_status', 'unknown_status', 'duplicate_receipt', 'duplicate_issue_id',
+                                  'missing_rule_version', 'missing_issue_content'])
+def test_invalid_source_shape_never_means_no_problem(case, fault):
+    _, _, _, r, s, _ = case
+    if fault == 'missing_status':
+        del r['receipts'][0]['status']
+        s['review_report']['check_receipts'] = copy.deepcopy(r['receipts'])
+    elif fault == 'unknown_status':
+        r['receipts'][0]['status'] = 'anything'
+        s['review_report']['check_receipts'] = copy.deepcopy(r['receipts'])
+    elif fault == 'duplicate_receipt':
+        r['receipts'].append(copy.deepcopy(r['receipts'][0]))
+        s['review_report']['check_receipts'] = copy.deepcopy(r['receipts'])
+    elif fault == 'duplicate_issue_id':
+        s['review_report']['issues'].append(copy.deepcopy(s['review_report']['issues'][0]))
+    elif fault == 'missing_rule_version':
+        del s['result']['meta']['rule_registry_version']
+    else:
+        s['review_report']['issues'][0].pop('message')
+        s['review_report']['issues'][0].pop('title')
+    assert check(case)['overall'] == 'FAIL'
