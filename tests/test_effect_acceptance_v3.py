@@ -164,11 +164,21 @@ def test_missing_layer_is_not_zero(case, layer):
 def test_same_version_repeat_compares_all_layers_and_code(case, tmp_path):
     _, c, _, r, s, _ = case
     other = tmp_path / "repeat"
+    s = copy.deepcopy(s)
+    s['analysis_revision'] = 'rev-independent-repeat'
     write(other, r, s, "new-code")
     assert h.reproducibility(c, other)["verdict"] == "PASS"
     s["review_report"]["tips"].append({"title": "changed"})
     write(other, r, s, "new-code")
     assert h.reproducibility(c, other)["verdict"] == "FAIL"
+
+
+def test_reusing_same_artifact_is_not_independent_repeat(case, tmp_path):
+    _, c, _, r, s, _ = case
+    assert h.reproducibility(c, c)['verdict'] == 'FAIL'
+    copied = tmp_path / 'copied'
+    write(copied, r, s, 'new-code')
+    assert h.reproducibility(c, copied)['verdict'] == 'FAIL'
 
 
 def test_adapter_keeps_revision_binding_outside_problem_content(case):

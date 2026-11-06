@@ -335,10 +335,14 @@ def reproducibility(first_dir, second_dir):
     try:
         a, b = load_collection(first_dir), load_collection(second_dir)
         problems = []
+        if first_dir.resolve() == second_dir.resolve():
+            problems.append("重复采集不能指向同一份工件")
         if a.keys() != b.keys():
             problems.append("双跑样本集合不一致")
         for sid in a.keys() & b.keys():
             left, right = dict(a[sid]), dict(b[sid])
+            if left["source_binding"]["analysis_revision"] == right["source_binding"]["analysis_revision"]:
+                problems.append(f"{sid}: 复用同一分析代际，不能声明独立双跑")
             for row in (left, right):
                 row.pop("_raw_status")
                 row.pop("raw_status_digest")
