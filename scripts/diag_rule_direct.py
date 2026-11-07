@@ -69,13 +69,13 @@ def run(pdf: str, codes: list[str], org: str, year: int, legacy: bool = False) -
             print(f"{code}: 抛异常")
             traceback.print_exc(limit=3)
             continue
-        # 关系回执里的未决
+        # 关系回执里的未决（回执是 dict：键读取；关系身份用 sub_check_id）
         receipts = [r for r in getattr(doc, "fact_receipts", [])
-                    if str(getattr(r, "rule_id", "")) == code]
-        unresolved = [r for r in receipts if getattr(r, "status", "") == "insufficient_data"]
+                    if isinstance(r, dict) and str(r.get("rule_id", "")) == code]
+        unresolved = [r for r in receipts if r.get("status") == "insufficient_data"]
         print(f"{code}: 问题 {len(issues)} 条；回执 {len(receipts)} 条，其中 insufficient_data {len(unresolved)} 条")
         for r in unresolved[:6]:
-            print(f"    - {getattr(r, 'relation_id', '')}: {str(getattr(r, 'incomplete_reason', ''))[:90]}")
+            print(f"    - {r.get('sub_check_id') or r.get('check_relation_id') or ''}: {str(r.get('incomplete_reason', ''))[:90]}")
 
 
 if __name__ == "__main__":
