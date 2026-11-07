@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from decimal import Decimal
 
 from .amount_math import classify_amount_diff
@@ -253,6 +254,133 @@ def _record_text_gap(doc, text, item, *, codes, role):
         row_key=str(level_value('xiang') or level_value('kuan') or level_value('klass') or ''),
         column='决算金额', stage='决算', year=year if isinstance(year, int) and year >= 1900 else None)])
 
+def _name_difference_hint(doc, item):
+    """A2：类/款/项名差异提示的原文出处（只取页码，不伪造 bbox）。"""
+    text = _Text.from_pages(getattr(doc, 'page_texts', []) or [])
+    source = text.refs(item.start(), item.end(), '原文科目')
+    return source[0]['page'] if source else None
+
+
+def _chain_visible_in_original(doc, chain):
+    """A2 判据 2 的原件核对：链上每级「编码+名称」在同一原文行共现。
+
+    只读 doc.page_texts 原始文本行（表格行里编码独立成词、名称同在），
+    不借解析产物自证（"已解析唯一"不等于原件唯一——A2 负控：原件两个
+    候选而解析只产出一个时不得绑定）。任一级核不进原件行即视为身份链
+    来源不完整，返回 False 不绑定。
+    """
+    pages = [str(p or '') for p in (getattr(doc, 'page_texts', []) or [])]
+    for code, name in chain:
+        code_re = re.compile(rf'(?<!\d){re.escape(str(code))}(?!\d)')
+        name_n = _name(name)
+        found = False
+        for page in pages:
+            for line in page.splitlines():
+                if code_re.search(line) and name_n and name_n in _name(line):
+                    found = True
+                    break
+            if found:
+                break
+        if not found:
+            return False
+    return True
+
+
+def _item_source_line(doc, item):
+    """A2：条目在原始页文本中的所在行（显式编码通常印在行首科目名旁）。
+
+    行与 head 都按引擎同款管道归一（NFKC + 去空白），全角/半角括号不致错配。
+    """
+    try:
+        head = re.sub(r'\s+', '', str(item[0] or ''))[:10]
+        if not head:
+            return ''
+        for page in (getattr(doc, 'page_texts', []) or []):
+            for line in str(page or '').splitlines():
+                normalized = ''.join(
+                    ch for ch in unicodedata.normalize('NFKC', line) if not ch.isspace())
+                if head in normalized:
+                    return line
+    except Exception:  # noqa: BLE001 - item 非 Match 或页文本缺失时无原文行
+        return ''
+    return ''
+
+
+def _bind_klass_via_independent_chain(doc, facts, item, paths, aliases):
+    """A2（R2.2 附页 QP-04）：类名缺口时按独立身份链绑定类级，不用近似名称。
+
+    准入（全部成立才绑定；修正编码不等于已证明绑定，链必须原件可核）：
+    1) 说明原文条目行带显式 3 位类编码，且该编码在表内唯一 → 直接身份约束；
+    2) 无编码时：款名、项名在**完整原表**逐字同名各唯一命中（非近似、非
+       金额反推），项路径挂在款路径之下、款路径给出唯一 3 位类，且链上每级
+       「编码+名称」在原件原文行共现（来源完整性）。
+    返回绑定的 3 位类编码；不成立返回 None（金额保持未知，名称差异照报）。
+    """
+    # 判据 1：原文显式编码（条目所在行）
+    line = _item_source_line(doc, item)
+    explicit = [c for c in re.findall(r'(?<!\d)(\d{3})(?!\d)', line)
+                if len(paths.get(c, '')) == 3]
+    if len(explicit) == 1:
+        table_name = next((_name(f.subject_name) for f in facts
+                           if str(f.subject_code) == explicit[0]
+                           and f.indicator == 'total_actual' and _name(f.subject_name)), '')
+        if table_name and _chain_visible_in_original(doc, [(explicit[0], table_name)]):
+            if aliases is not None:
+                aliases.append({'role': 'explicit_klass_code_in_narrative',
+                                'klass_code': explicit[0]})
+            return explicit[0]
+        return None
+    # 判据 2：独立层级链（款名/项名逐字唯一 + 链一致 + 原件共现）
+    def unique_by_name(width, name):
+        if not name:
+            return None
+        hits = {code for code, path in paths.items()
+                if len(path) == width
+                and {_name(f.subject_name) for f in facts
+                     if str(f.subject_code) == code
+                     and f.indicator == 'total_actual'
+                     and _name(f.subject_name)} == {_name(name)}}
+        return next(iter(hits)) if len(hits) == 1 else None
+
+    kuan_code = unique_by_name(5, item['kuan'])
+    if kuan_code is None:
+        return None
+    xiang_code = unique_by_name(7, item['xiang'])
+    if xiang_code is None or not paths[xiang_code].startswith(paths[kuan_code]):
+        return None
+    klass_path = paths[kuan_code][:3]
+    klass_code = next((code for code, path in paths.items() if path == klass_path), None)
+    if klass_code is None:
+        return None
+    table_klass_name = next((_name(f.subject_name) for f in facts
+                             if str(f.subject_code) == klass_code
+                             and f.indicator == 'total_actual'
+                             and _name(f.subject_name)), '')
+    table_klass_name_raw = next((str(f.subject_name) for f in facts
+                                 if str(f.subject_code) == klass_code
+                                 and f.indicator == 'total_actual'
+                                 and _name(f.subject_name)), '')
+    chain = [
+        (klass_code, table_klass_name),
+        (kuan_code, item['kuan']),
+        (xiang_code, item['xiang']),
+    ]
+    if not all(table_klass_name and _name(name) for _c, name in chain[1:]):
+        return None
+    if not _chain_visible_in_original(doc, chain):
+        return None
+    if aliases is not None:
+        aliases.append({'role': 'independent_hierarchy_chain',
+                        'klass_code': klass_code, 'kuan_code': kuan_code,
+                        'xiang_code': xiang_code})
+        if _name(item['klass']) != table_klass_name:
+            aliases.append({'role': 'klass_name_difference',
+                            'narrative_name': str(item['klass']),
+                            'table_name': table_klass_name_raw or table_klass_name,
+                            'klass_code': klass_code})
+    return klass_code
+
+
 def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
     paths = hierarchy_paths({str(f.subject_code) for f in facts
                              if str(f.subject_code or '').isdigit()})
@@ -292,6 +420,15 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
                       and str(f.subject_code).isdigit()
                       and paths[str(f.subject_code)].startswith(parent)
                       and _name(f.subject_name) == _name(item[group])}
+        if group == 'klass' and not candidates:
+            # A2（R2.2 QP-04）：类名缺口按独立身份链处理——显式编码或
+            # 款/项逐字唯一的层级链 + 原件共现核验。不成立则落入既有的
+            # "找不到同名科目"失败（金额仍未知，名称差异照报）。
+            chain_klass = _bind_klass_via_independent_chain(doc, facts, item, paths, aliases)
+            if chain_klass is not None:
+                parent = paths[chain_klass]
+                klass = parent
+                continue
         if len(candidates) != 1:
             if group == 'xiang' and not candidates:
                 matches = []
@@ -465,6 +602,21 @@ def check_function_disclosures(rule, doc):
         key = f'general:text:item:{item.start()}'
         aliases = []
         fact, error = _hierarchy_fact(doc, facts, item, siblings=items, aliases=aliases)
+        # A2（R2.2 QP-04）：类名差异在身份链成立时只作提示，金额照常核对。
+        name_hint = next((a for a in aliases if isinstance(a, dict)
+                          and a.get('role') == 'klass_name_difference'), None)
+        if name_hint and not error:
+            hint_page = _name_difference_hint(doc, item)
+            issues.append(rule._issue(
+                f"说明写类名“{name_hint['narrative_name']}”，表内编码 "
+                f"{name_hint['klass_code']} 科目为“{name_hint['table_name']}”；"
+                "本条目已按款/项独立身份链核对金额，类名差异请核对是否漏字。",
+                {'page': hint_page} if hint_page else {},
+                'info',
+                evidence_text=(f"说明类名：{name_hint['narrative_name']}；"
+                               f"表内类名：{name_hint['table_name']}（编码 {name_hint['klass_code']}）"),
+                check_relation_id=f'{rule.code}:general:text:item:{item.start()}:klass_name',
+            ))
         # 博物馆、图书馆等 are literal fiscal subjects, not publisher names.
         # Their hierarchy is already validated above; only the declaration
         # prefix can introduce a foreign owner or year for this item.
