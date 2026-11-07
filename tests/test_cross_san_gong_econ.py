@@ -118,7 +118,31 @@ def _clone(payload: Dict[str, Any], mutate: Any) -> Any:
 
 
 def _run(doc: Any) -> List[Any]:
+    """执行规则并取回**已确认的 finding**（含未完成态的 partial_issues）。
+
+    R2.2 附页 A1 起空白格零授权需要独立零依据：真值样张的购置费空白在材料里
+    没有零披露 → 该项保持未知、整体状态记 insufficient_data；三项已确认冲突
+    按 Contract C1 经 partial_issues 保留。本助手把两种结局的 finding 统一
+    取回，调用方断言与旧契约一致；未完成态本身由
+    test_blank_without_independent_zero_basis_defers_to_unknown 单独锁定。
+    """
+    try:
+        return list(R33CrossSanGongEcon().apply(doc))
+    except RuleDeferred as deferred:
+        return list(getattr(deferred, "partial_issues", []) or [])
+
+
+def _apply(doc: Any) -> List[Any]:
+    """原始执行：RuleDeferred 直接抛出（defer 语义测试专用）。"""
     return list(R33CrossSanGongEcon().apply(doc))
+
+
+def _run_outcome(doc: Any) -> Tuple[List[Any], Any]:
+    """同 _run，但把未完成态（RuleDeferred）一并返回，供断言未知项。"""
+    try:
+        return list(R33CrossSanGongEcon().apply(doc)), None
+    except RuleDeferred as deferred:
+        return list(getattr(deferred, "partial_issues", []) or []), deferred
 
 
 def _by_item(issues: Sequence[Any]) -> Dict[str, Any]:
@@ -147,6 +171,48 @@ def _fin07_amount_row(page_tables: List[Any], page: int = PAGE_FIN_07) -> int:
 # ---------------------------------------------------------------------------
 # 正例：Y02 真值必须命中
 # ---------------------------------------------------------------------------
+
+
+def test_blank_without_independent_zero_basis_defers_to_unknown(truth):
+    """R2.2 附页 A1 关键负控：平衡表 + 空白格无独立零依据 → 必须保持未知。
+
+    真值样张的公务用车购置费空白在材料里没有任何零披露（只有运行维护
+    19.56 与购置及运行维护合计 19.56——差额为 0 是算术推断，不是独立表文
+    金额）。旧行为按勾稽平衡把空白当 0 用；新契约下等式平衡只是一致性
+    校验，该项必须保持未知，而已确认的三项冲突经 partial_issues 保留。
+    """
+    issues, deferred = _run_outcome(_document(truth))
+    assert deferred is not None, "无零依据的空白不得让规则以完成态放行"
+    assert deferred.status == "insufficient_data"
+    reason = f"{deferred.detail} {' '.join(deferred.unresolved_reasons or [])}"
+    assert "无独立零依据" in reason
+    assert "公务用车购置费" in reason
+    # 未授权空白不得以 0 参与比较：购置不产生 finding
+    assert "vehicle_purchase" not in _by_item(issues)
+    # 已确认冲突保留（C1）：出国（有说明零披露）/接待/运行维护
+    assert set(_by_item(issues)) == {"overseas", "reception", "vehicle_operation"}
+
+
+def test_blank_with_narrative_zero_disclosure_completes(truth):
+    """R2.2 附页 A1 正控（端到端）：注入合法说明零披露后，空白格授权为 0。
+
+    宜川真值材料本身对因公出国（境）费就有零披露（p35/p36），此处对购置费
+    补一句同身份 assertive 零声明，规则应完成（不再有未决），购置比较照常。
+    """
+    def mutate(payload: Dict[str, Any]) -> None:
+        page_tables = payload["page_tables"]
+        row_purchase = _find_row(page_tables, PAGE_FIN_06, "公务用车购置")
+        _replace_cell(page_tables, PAGE_FIN_06, row_purchase, 5, "20.00")
+        # 在三公情况说明页（p36）追加同身份 assertive 零披露
+        payload["page_texts"][35] = payload["page_texts"][35] + (
+            "公务用车购置支出为 0 万元。")
+
+    issues, deferred = _run_outcome(_clone(truth, mutate))
+    assert deferred is None, f"合法零披露后规则应完成：{deferred and deferred.detail}"
+    purchase = _by_item(issues)["vehicle_purchase"]
+    assert purchase.location["code"] == "31013"
+    assert purchase.location["basic_amount"] == "20.00"
+    assert purchase.location["three_public_amount"] == "0.00"
 
 
 def test_y02_truth_reports_all_three_cross_table_conflicts(truth):
@@ -310,12 +376,20 @@ def test_amounts_are_bound_by_business_identity_not_proximity(truth):
 
 
 def test_vehicle_purchase_binds_through_the_310_economic_class(truth):
-    """公务用车购置（31013 资本性支出）也按「名称 + 精确编码」绑定，不能只扫 302 类。"""
+    """公务用车购置（31013 资本性支出）也按「名称 + 精确编码」绑定，不能只扫 302 类。
+
+    R2.2 附页 A1：三公表购置费是空白格，须有独立零依据才能按 0 比较——
+    测试文本注入同身份 assertive 零披露（说明明确该项决算为 0）后再断言
+    31013 的绑定行为；无零披露时的未知行为由
+    test_blank_without_independent_zero_basis_defers_to_unknown 锁定。
+    """
 
     def mutate(payload: Dict[str, Any]) -> None:
         page_tables = payload["page_tables"]
         row_purchase = _find_row(page_tables, PAGE_FIN_06, "公务用车购置")
         _replace_cell(page_tables, PAGE_FIN_06, row_purchase, 5, "20.00")
+        payload["page_texts"][35] = payload["page_texts"][35] + (
+            "公务用车购置支出为 0 万元。")
 
     issues = _run(_clone(truth, mutate))
     purchase = _by_item(issues)["vehicle_purchase"]
@@ -375,7 +449,7 @@ def test_same_class_wrong_code_is_an_identity_conflict_not_a_finding(truth):
         _replace_cell(page_tables, PAGE_FIN_06, row, 3, "30231")  # 原值 30217
 
     with pytest.raises(RuleDeferred) as excinfo:
-        _run(_clone(truth, mutate))
+        _apply(_clone(truth, mutate))
     assert excinfo.value.status == "insufficient_data"
     reason = f"{excinfo.value.detail} {' '.join(excinfo.value.unresolved_reasons or [])}"
     assert "expected 30217" in reason
@@ -400,7 +474,7 @@ def test_missing_code_never_produces_a_formal_finding(truth):
         _replace_cell(page_tables, PAGE_FIN_06, row, 3, "")  # 原值 30212
 
     with pytest.raises(RuleDeferred) as excinfo:
-        _run(_clone(truth, mutate))
+        _apply(_clone(truth, mutate))
     assert excinfo.value.status == "insufficient_data"
     reason = f"{excinfo.value.detail} {' '.join(excinfo.value.unresolved_reasons or [])}"
     assert "expected 30212" in reason
@@ -473,7 +547,7 @@ def test_missing_economic_classification_table_defers(truth):
         payload["page_tables"][PAGE_FIN_06] = []  # 续页 23
 
     with pytest.raises(RuleDeferred):
-        _run(_clone(truth, mutate))
+        _apply(_clone(truth, mutate))
 
 
 def test_missing_three_public_table_defers(truth):
@@ -481,7 +555,7 @@ def test_missing_three_public_table_defers(truth):
         payload["page_tables"][PAGE_FIN_07 - 1] = []
 
     with pytest.raises(RuleDeferred):
-        _run(_clone(truth, mutate))
+        _apply(_clone(truth, mutate))
 
 
 def test_unknown_amount_unit_defers(truth):
@@ -493,7 +567,7 @@ def test_unknown_amount_unit_defers(truth):
         ].replace("单位：万元", "")
 
     with pytest.raises(RuleDeferred):
-        _run(_clone(truth, mutate))
+        _apply(_clone(truth, mutate))
 
 
 def test_unresolved_fiscal_year_defers(truth):
@@ -503,7 +577,7 @@ def test_unresolved_fiscal_year_defers(truth):
         payload["page_texts"] = [text.replace("2025", "") for text in payload["page_texts"]]
 
     with pytest.raises(RuleDeferred):
-        _run(_clone(truth, mutate))
+        _apply(_clone(truth, mutate))
 
 
 def test_ambiguous_three_public_column_identity_defers(truth):
@@ -515,7 +589,7 @@ def test_ambiguous_three_public_column_identity_defers(truth):
         _replace_cell(page_tables, PAGE_FIN_07, 1, 2, "公务接待费")
 
     with pytest.raises(RuleDeferred):
-        _run(_clone(truth, mutate))
+        _apply(_clone(truth, mutate))
 
 
 def test_non_numeric_cell_in_amount_column_defers(truth):
@@ -527,7 +601,7 @@ def test_non_numeric_cell_in_amount_column_defers(truth):
         _replace_cell(page_tables, PAGE_FIN_07, row, 11, "见说明")
 
     with pytest.raises(RuleDeferred):
-        _run(_clone(truth, mutate))
+        _apply(_clone(truth, mutate))
 
 
 def _retitle_vehicle_subtotal(payload: Dict[str, Any]) -> None:
@@ -563,7 +637,7 @@ def test_missing_vehicle_subtotal_plus_blank_cell_defers(truth):
         _replace_cell(payload["page_tables"], PAGE_FIN_07, row, 3, "0.00")
 
     with pytest.raises(RuleDeferred) as excinfo:
-        _run(_clone(truth, mutate))
+        _apply(_clone(truth, mutate))
     # 公务用车购置仍为空白且勾稽复算不可能 → 不参与正式比较
     partial = list(getattr(excinfo.value, "partial_issues", []) or [])
     assert "vehicle_purchase" not in {
@@ -588,7 +662,7 @@ def test_blank_cell_is_zero_only_when_the_table_closes(truth):
         _replace_cell(page_tables, PAGE_FIN_07, row, 1, "20.10")
 
     with pytest.raises(RuleDeferred) as excinfo:
-        _run(_clone(truth, mutate))
+        _apply(_clone(truth, mutate))
     partial = list(getattr(excinfo.value, "partial_issues", []) or [])
     assert [issue.location["san_gong_item"] for issue in partial] == ["vehicle_operation"]
     assert excinfo.value.status == "insufficient_data"
@@ -620,7 +694,9 @@ def test_truth_defect_survives_the_real_final_pipeline(truth):
         for outcome in outcomes
         if outcome.rule_id == RULE_ID
     }
-    assert statuses == {RULE_ID: "fail"}
+    # R2.2 附页 A1：购置费空白无独立零依据 → 整体状态由 fail 变为
+    # insufficient_data；已确认的三项冲突仍按 Contract C1 保留在 findings。
+    assert statuses == {RULE_ID: "insufficient_data"}
 
 
 def _profile(kind: str = "final") -> DocumentProfile:

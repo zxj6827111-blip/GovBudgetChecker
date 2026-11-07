@@ -217,6 +217,8 @@ class ParsedTable:
 
 _CODE_RE = re.compile(r"^\d{3}(\d{2}(\d{2})?)?$")
 _NUM_RE = re.compile(r"^-?\s*(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$")
+# 纯横线/破折号占位格：全角/半角连字符、em/en dash 及其与空白的组合。
+_DASH_ONLY_TEXT_RE = re.compile(r"^[\s\-—–―－﹣]+$")
 
 
 def _cell_from_raw(raw: Any, page: int) -> ParsedCell:
@@ -573,7 +575,14 @@ def materialize_table(
             code_right, level_right = _row_code(
                 cells, code_column=parsed.named_columns["code_right"]
             )
-        label = "".join((c.text or "") for c in cells if c.text)
+        # 纯横线/破折号占位格不是业务名称：拼 label 时排除，避免"金额数据行
+        # 只剩 '-----' 这类横线 label"被误当成有标签行（R2.2 附页 A1/4.3，
+        # 残联 p15 三公表实证：数据行 5 个 '-' 格拼出 label='-----'，规则级
+        # deferred 零回执）。只影响"除横线外无任何文字"的行——有真实文字的
+        # 行 label 不变，行角色判定输入不受影响。
+        label = "".join(
+            (c.text or "") for c in cells if c.text and not _DASH_ONLY_TEXT_RE.fullmatch(c.text)
+        )
         numeric_count = sum(1 for c in cells if c.is_numeric)
         row_role = (
             "header" if r_idx < header_rows else _row_role_from_label(label, code, numeric_count)

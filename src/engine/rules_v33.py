@@ -102,6 +102,7 @@ from decimal import Decimal, ROUND_HALF_UP
 import numpy as np
 
 from .amount_math import classify_amount_diff, compute_dynamic_envelope, half_unit_for_term, rounding_envelope
+from .narrative_zero_evidence import narrative_zero_sources
 from .rule_policy import (
     AMOUNT_TOLERANCE_WAN,
     amount_difference_exceeds_policy,
@@ -10673,11 +10674,15 @@ def _three_public_data_row(table: Any) -> Tuple[Optional[Any], str]:
 
     表头/科目名/「预算数决算数」标签行都带文本标签，唯一无标签行才是金额行。
     出现 0 行或 2 行以上（无法确定取哪一行）都按取数不足返回。
+    破折号占位格不计入标签（structured_rules 侧已排除），但横线分隔行通常
+    一个数字都没有——无标签行必须至少有一个数字格才算"金额行"（R2.2 4.3：
+    排除横线后仍保持唯一性纪律，防止分隔行顶替数据行）。
     """
     rows = [
         row
         for row in table.rows
         if row.row_role != "header" and not _normalize_item_label(row.label)
+        and any(c.is_numeric for c in row.cells)
     ]
     if not rows:
         return None, "三公表未找到无标签金额行"
@@ -10715,6 +10720,8 @@ class R33CrossSanGongEcon(Rule):
     desc = "三公经费表 与 基本支出经济分类表 跨表资金来源一致性"
 
     def apply(self, doc: Document) -> List[Issue]:
+        # 每次执行重建空白零依据台账（供证据文本引用，R2.2 附页 A1 出处完整）
+        self._zero_basis_note_by_subject = {}
         if not _ensure_parsed_tables(doc):
             raise RuleDeferred(self.code, "结构化表模型不可用（page_tables/page_texts 不足）")
 
@@ -10827,6 +10834,7 @@ class R33CrossSanGongEcon(Rule):
         # ---- 三公表（FIN_07）：逐业务项取决算数列 ----
         three_public: Dict[str, Decimal] = {}
         three_public_pages: Dict[str, int] = {}
+        three_public_columns: Dict[str, int] = {}
         blank_keys: Set[str] = set()
         scales: Dict[str, int] = {}
         item_groups: Dict[str, str] = {}
@@ -10871,20 +10879,91 @@ class R33CrossSanGongEcon(Rule):
             )
             three_public_pages[key] = int(getattr(evidence_cell, "page", None) or page7)
             item_groups[key] = subject
+            three_public_columns[key] = int(column)
 
-        # 空白单元格当 0 用之前，先用本表勾稽确认：合计 = 出国 + 公车小计 + 接待，
-        # 公车小计 = 购置 + 运行维护。两式不成立时"空白=0"只是猜测，必须记账。
+        # 空白单元格当 0 用之前，先定"零授权"来源，再作本表勾稽一致性校验。
+        # R2.2 附页 A1：等式平衡只是一致性校验，**不是**空白=0 的授权——旧实现
+        # 对平衡表无独立零依据也放行（zero_basis_probes 之
+        # balanced_without_independent_zero_basis 负控实证）。零授权来源只有
+        # 两个：说明里同身份 assertive 零披露（经 narrative_zero_evidence 的
+        # 语气守卫），或经审定的空白值约定（cell_value_policy）。无依据的
+        # 空白保持未知，即使本表勾稽平衡。
         if blank_keys:
+            zero_authorized: Set[str] = set()
+            zero_basis_by_subject: Dict[str, str] = {}
+            self._zero_basis_note_by_subject = zero_basis_by_subject
+            fact_ctx = getattr(doc, "fact_context", None)
+            row_idx = next(
+                (i for i, r in enumerate(table7.rows) if r is data_row), None)
+            for key in sorted(blank_keys):
+                indicator = "total_actual" if key == "total" else key
+                refs = narrative_zero_sources(
+                    doc, table_code="FIN_07_three_public",
+                    indicator=indicator, stage="决算",
+                    org_name=getattr(doc, "org_name", None),
+                    fiscal_year=year,
+                )
+                if refs:
+                    zero_authorized.add(key)
+                    zero_basis_by_subject[item_groups.get(key, key)] = (
+                        f"说明零披露（第{refs[0].get('page')}页）")
+                    continue
+                convention = None
+                if row_idx is not None and key in three_public_columns:
+                    raw_text = ""
+                    key_column = three_public_columns[key]
+                    if 0 <= key_column < len(data_row.cells):
+                        raw_text = str(getattr(data_row.cells[key_column], "text", "") or "")
+                    try:
+                        from .cell_value_policy import interpret_cell_value
+                        _value, _presence, convention = interpret_cell_value(
+                            raw_text,
+                            native_blank_verified=False,
+                            region=getattr(fact_ctx, "org_name", None),
+                            year=getattr(fact_ctx, "fiscal_year", None),
+                            table_code="FIN_07_three_public",
+                            row=row_idx, column=key_column,
+                            presence="dash" if raw_text in {"-", "—", "–", "－"} else "blank",
+                        )
+                    except Exception:  # noqa: BLE001 — 约定查找失败等同无约定
+                        convention = None
+                if convention:
+                    zero_authorized.add(key)
+                    zero_basis_by_subject[item_groups.get(key, key)] = "经审定空白值约定"
+            unauthorized = blank_keys - zero_authorized
             confirmed, closure_note = self._blank_cells_confirmed(
                 three_public, item_groups, blank_keys, scales, unit
             )
-            if not confirmed:
+            # 零授权与勾稽一致性是"与"关系：
+            # - 无独立零依据 → 未知（勾稽平衡也不授权）；
+            # - 有依据但勾稽不成立 → 该格 0 与表格其他格矛盾，同样不能用；
+            # - 有依据且勾稽成立 → 才允许以 0 参与比较。
+            if unauthorized:
+                blocked.update(unauthorized)
                 unresolved.append(
-                    "三公表分项单元格为空白且本表勾稽不成立（"
-                    + closure_note
-                    + "），空白无法确认为 0"
+                    "三公表分项单元格为空白且无独立零依据（"
+                    + "、".join(item_groups.get(k, k) for k in sorted(unauthorized))
+                    + "）；本表勾稽"
+                    + ("平衡，但平衡不构成空白=0 的授权" if confirmed
+                       else f"不成立（{closure_note}）")
+                    + "，相关项保持未知"
                 )
-                blocked.update(blank_keys)
+                # 未授权空白不得以 0 参与后续比较：撤下取数（比较段跳过 blocked 项）
+                for key in unauthorized:
+                    three_public.pop(key, None)
+            if not confirmed:
+                # 授权项也依赖勾稽一致：勾稽失败时"空白=0"与表内其他金额矛盾，
+                # 全部空白一起失效（旧契约保持：勾稽不成立时不得当 0 用）。
+                still_open = blank_keys - unauthorized if unauthorized else blank_keys
+                if still_open:
+                    unresolved.append(
+                        "三公表分项单元格为空白且本表勾稽不成立（"
+                        + closure_note
+                        + "），空白无法确认为 0"
+                    )
+                    blocked.update(still_open)
+                    for key in still_open:
+                        three_public.pop(key, None)
 
         # ---- 逐业务项比较：部分 ≤ 整体 ----
         issues: List[Issue] = []
@@ -11065,11 +11144,21 @@ class R33CrossSanGongEcon(Rule):
             "（含项目支出）的组成部分，可比关系为「分项 ≤ 合计」。",
         ]
         if from_blank:
-            lines.append(
-                "说明：三公经费表该业务项单元格为空白，已按本表勾稽"
-                "（合计 = 出国费 + 公务用车购置及运行维护费小计 + 公务接待费；"
-                "小计 = 公务用车购置费 + 公务用车运行维护费）确认为 0。"
-            )
+            # R2.2 附页 A1：空白=0 的依据是独立零依据（说明零披露/审定约定），
+            # 本表勾稽只是一致性校验——证据里如实写明依据来源。
+            basis = getattr(self, "_zero_basis_note_by_subject", {}).get(subject)
+            if basis:
+                lines.append(
+                    "说明：三公经费表该业务项单元格为空白，依据" + basis +
+                    "确认为 0；本表勾稽（合计 = 出国费 + 公务用车购置及运行维护费小计"
+                    " + 公务接待费；小计 = 购置费 + 运行维护费）通过，仅作一致性校验。"
+                )
+            else:
+                lines.append(
+                    "说明：三公经费表该业务项单元格为空白，已按本表勾稽"
+                    "（合计 = 出国费 + 公务用车购置及运行维护费小计 + 公务接待费；"
+                    "小计 = 公务用车购置费 + 公务用车运行维护费）确认为 0。"
+                )
         return "\n".join(lines)
 
 
