@@ -397,18 +397,48 @@ _SECTION_HINTS = (
 _DEFAULT_SECTION_HINTS = ("情况说明", "决算")
 
 
+_ANCHOR_LINE_MAX = 48
+#: 章节标题行前缀（中文序号形态：一、/（一）；阿拉伯"1、"是正文条目不是标题）。
+_HEADING_PREFIX_RE = re.compile(r"^\s*(?:[（(][一二三四五六七八九十]{1,3}[)）]|[一二三四五六七八九十]{1,3}、)")
+#: 目录行尾部：点线引导 + 页码，或行尾孤立页码。
+_TOC_TAIL_RE = re.compile(r"(?:……|…{2,}|\.{2,}|·{2,})\s*\d+\s*$|\s\d{1,3}\s*$")
+
+
+def _section_anchor_page(doc: Any, hints) -> Optional[int]:
+    """只接受"章节标题行"锚（R2.2 §5）。
+
+    标题行 = 中文序号前缀行，或"提示词几乎占满整行"的短标题；须无句内句号、
+    非目录行（点线/行尾页码）。全文关键词首命中已删除——正文任意一句提到
+    "决算"不再把缺数位置错标到第 1 页。
+    """
+    pages = getattr(doc, "page_texts", None) or []
+    for page_number, page in enumerate(pages, 1):
+        for raw_line in str(page or "").splitlines():
+            stripped = raw_line.strip()
+            if not stripped or len(stripped) > _ANCHOR_LINE_MAX:
+                continue
+            body = stripped.rstrip("。")
+            if not body or "。" in body:
+                continue
+            if _TOC_TAIL_RE.search(body):
+                continue
+            hint_hit = next((hint for hint in hints if hint in stripped), None)
+            if hint_hit is None:
+                continue
+            if _HEADING_PREFIX_RE.match(stripped) or len(stripped) - len(hint_hit) <= 16:
+                return page_number
+    return None
+
+
 def _section_page(doc: Any, text: str) -> Optional[int]:
     hints: tuple = _DEFAULT_SECTION_HINTS
     for token, values in _SECTION_HINTS:
         if token in text:
             hints = values
             break
-    pages = getattr(doc, "page_texts", None) or []
-    for page_number, page in enumerate(pages, 1):
-        content = str(page or "")
-        if any(hint in content for hint in hints):
-            return page_number
-    return None
+    # R2.2 §5：删全文关键词首命中，只接受章节锚；无锚返回 None（未知页码
+    # 优先于错误页码——反例见 tests/remediation/test_r22_section_anchor.py）。
+    return _section_anchor_page(doc, hints)
 
 
 _TABLE_REF_RE = re.compile(r"第(\d+)页([A-Za-z_][A-Za-z0-9_]*)")
@@ -692,10 +722,24 @@ def fields_for_text(doc: Any, text: Any, *, status: Any = "insufficient_data", r
 # ---------------------------------------------------------------------------
 # 取数缺口登记：表格/文字两种来源的定位对象
 # ---------------------------------------------------------------------------
+def _clean_bbox(bbox: Any) -> Optional[List[float]]:
+    """R2.2 §5：缺数位置坐标——原格 bbox 可得才写（4 个数值），取不到写 null。"""
+    if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+        return None
+    try:
+        values = [float(value) for value in bbox]
+    except (TypeError, ValueError):
+        return None
+    if any(value != value for value in values):  # NaN 防御
+        return None
+    return values
+
+
 def table_missing_operand(*, table_code: str, role: str, page: Optional[int], row_key: Any = None,
                           column: Optional[str] = None, fund_scope: Optional[str] = None,
-                          stage: Optional[str] = None, year: Optional[int] = None) -> Dict[str, Any]:
-    """缺数位置：source=table，表代码必须真实；页码未知写 null，不编造。"""
+                          stage: Optional[str] = None, year: Optional[int] = None,
+                          bbox: Any = None) -> Dict[str, Any]:
+    """缺数位置：source=table，表代码必须真实；页码/坐标未知写 null，不编造。"""
     return {
         "source": "table",
         "table_code": str(table_code),
@@ -706,13 +750,15 @@ def table_missing_operand(*, table_code: str, role: str, page: Optional[int], ro
         "fund_scope": str(fund_scope) if fund_scope else None,
         "stage": str(stage) if stage else None,
         "year": int(year) if isinstance(year, int) and year >= 1900 else None,
+        "bbox": _clean_bbox(bbox),
     }
 
 
 def text_missing_operand(*, section: str, role: str, page: Optional[int], row_key: Any = None,
                          column: Optional[str] = None, fund_scope: Optional[str] = None,
-                         stage: Optional[str] = None, year: Optional[int] = None) -> Dict[str, Any]:
-    """缺数位置：source=text，章节必须真实；页码未知写 null，不编造。"""
+                         stage: Optional[str] = None, year: Optional[int] = None,
+                         bbox: Any = None) -> Dict[str, Any]:
+    """缺数位置：source=text，章节必须真实；页码/坐标未知写 null，不编造。"""
     return {
         "source": "text",
         "section": str(section),
@@ -723,6 +769,7 @@ def text_missing_operand(*, section: str, role: str, page: Optional[int], row_ke
         "fund_scope": str(fund_scope) if fund_scope else None,
         "stage": str(stage) if stage else None,
         "year": int(year) if isinstance(year, int) and year >= 1900 else None,
+        "bbox": _clean_bbox(bbox),
     }
 
 

@@ -76,6 +76,15 @@ def _cell_locations(fact):
     return locations
 
 
+def _fact_bbox(fact):
+    """R2.2 §5：事实证据的原格 bbox；多证据取第一个带坐标的，取不到 None。"""
+    for ref in (getattr(fact, 'extra_dims', None) or {}).get('evidence_refs', []) or []:
+        bbox = ref.get('bbox')
+        if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+            return bbox
+    return None
+
+
 def _operand_year(doc):
     value = getattr(getattr(doc, 'fact_context', None), 'fiscal_year', None)
     return value if isinstance(value, int) and value >= 1900 else None
@@ -117,7 +126,7 @@ def _record_operand_gap(doc, facts, candidates, reason, *, indicator, code, name
         missing_operands=[table_missing_operand(
             table_code=table_code, role=f'{indicator}/{stage}操作数', page=page,
             row_key=code or name, column=indicator,
-            fund_scope=getattr(facts[0], 'fund_scope', None), stage=stage, year=year)],
+            fund_scope=getattr(facts[0], 'fund_scope', None), stage=stage, year=year, bbox=next((ref.get('bbox') for fact in facts for ref in (getattr(fact, 'extra_dims', None) or {}).get('evidence_refs', []) or [] if ref.get('bbox')), None))],
     )
 
 
@@ -160,7 +169,8 @@ def _record_operand_rejection(doc, fact, reason, *, indicator, stage):
         missing_operands=[table_missing_operand(
             table_code=table_code, role=f'{indicator}/{stage}操作数', page=page,
             row_key=getattr(fact, 'subject_code', None), column=indicator,
-            fund_scope=getattr(fact, 'fund_scope', None), stage=stage, year=_operand_year(doc))],
+            fund_scope=getattr(fact, 'fund_scope', None), stage=stage, year=_operand_year(doc),
+            bbox=_fact_bbox(fact))],
     )
 
 
