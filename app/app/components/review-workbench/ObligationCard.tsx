@@ -93,7 +93,9 @@ export function ObligationCard({
             data-blocked-count={blocked.length}
           >
             <h3 className={SECTION_TITLE}>
-              {noDetail ? "阻断范围" : `阻断点清单（缺数位置 ${missing.length} 项 · 结构卡点 ${blocked.length} 项）`}
+              {noDetail
+                ? "阻断范围"
+                : `阻断点清单（${missing.length + blocked.length}）· 缺数位置 ${missing.length} 项 · 结构卡点 ${blocked.length} 项`}
             </h3>
             {noDetail ? (
               <p className="text-[0.85em] leading-relaxed text-slate-700">

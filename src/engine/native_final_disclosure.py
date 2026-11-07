@@ -321,8 +321,14 @@ def _original_table_rows(doc, pages):
     return rows
 
 
-def _general_table_pages(facts):
-    """FIN_05 逻辑表的全部证据页（1 基）——原表完整扫描范围。"""
+def _general_table_pages(doc, facts):
+    """原表扫描范围（1 基页码）——逐级回退：
+
+    1. FIN_05 事实证据页（生产路径，最精确）；
+    2. 解析产物里 FIN_05 表片段所在页；
+    3. 都拿不到（最小化测试桩/严重降级输入）→ 全部页（候选唯一性以
+       "全文档同名行数"裁决——过宽只会更难唯一，fail-closed 不误绑）。
+    """
     pages = set()
     for fact in facts:
         if getattr(fact, 'table_code', '') != GENERAL:
@@ -331,7 +337,19 @@ def _general_table_pages(facts):
             page = ref.get('physical_page')
             if isinstance(page, int) and page > 0:
                 pages.add(page)
-    return sorted(pages)
+    if pages:
+        return sorted(pages)
+    artifact = getattr(doc, 'parse_artifact', None)
+    for fragment in getattr(artifact, 'table_fragments', None) or []:
+        if getattr(fragment, 'table_code', '') != GENERAL:
+            continue
+        for cell in getattr(fragment, 'cells', None) or []:
+            page = getattr(cell, 'page_number', None)
+            if isinstance(page, int) and page > 0:
+                pages.add(page)
+    if pages:
+        return sorted(pages)
+    return sorted(range(1, len(getattr(doc, 'page_texts', []) or []) + 1))
 
 
 def _original_name_candidates(doc, pages, name, width):
@@ -395,7 +413,7 @@ def _bind_klass_via_independent_chain(doc, facts, item, paths, aliases):
                      and _name(f.subject_name)} == {_name(name)}}
         return next(iter(hits)) if len(hits) == 1 else None
 
-    table_pages = _general_table_pages(facts)
+    table_pages = _general_table_pages(doc, facts)
     if not table_pages:
         return None  # 原表范围拿不到 → 不绑定（fail-closed）
     # 原件权威候选集：名称在**完整原表**中的全部同宽度编码。

@@ -155,7 +155,7 @@ export function ObligationDecisionPanel({
           <h3 className="mb-1 text-xs font-semibold text-slate-600">
             {noDetail
               ? "阻断范围"
-              : `阻断点清单（缺数位置 ${counts.missing} 项 · 结构卡点 ${counts.blocked} 项）`}
+              : `阻断点清单（${counts.missing + counts.blocked}）· 缺数位置 ${counts.missing} 项 · 结构卡点 ${counts.blocked} 项`}
           </h3>
           {noDetail ? (
             <p className="text-xs leading-relaxed text-slate-600">

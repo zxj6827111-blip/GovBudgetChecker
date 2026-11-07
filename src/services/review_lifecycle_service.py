@@ -1462,6 +1462,12 @@ LOCAL_CONFIRM_DRAFT_MARKER = "〔局部确认草稿〕"
 #: verified_ok 的正文须指明核对了哪些关系/哪些数：接受"数字"或关系词，
 #: 拒收"核对无误"式通用表态（A3：通用预填位置不够，局部取数确认≠关系通过）。
 _RELATION_MENTION_RE = re.compile(r"\d|合计|分项|关系|逐项|其中|一致|相符|等于|勾稽|加总|之和")
+#: not_applicable 的正文须指向**整条义务/整份材料**的适用性结论（IR04）：
+#: "第8页经营收入列空白，本人确认为无此项"这类单格局部说明不含任何整项
+#: 指向词，不得作为整条义务不适用的依据。与 verified_ok 的关系词门同一
+#: 纪律：结构性关键词门槛，不做任意自然语言语义判定。
+_WHOLE_SCOPE_MENTION_RE = re.compile(
+    r"整条|整个|全部|所有|本材料|该义务|此项检查|该项义务|整体|本年度无|未开展|未发生|不涉及")
 
 
 def _strip_local_confirm_drafts(note: Optional[str]) -> str:
@@ -1560,14 +1566,23 @@ def _obligation_evidence_error(
             return None
         message = "确认存在问题必须写明发现了什么问题（补核说明）"
     elif decision == OBLIGATION_DECISION_NOT_APPLICABLE:
+        whole_item_note = _strip_scope_confirm_sentences(residual_note)
         if not note:
             message = "判定不适用必须写明原因（为什么本材料不涉及该项检查）"
-        elif not _strip_scope_confirm_sentences(residual_note):
+        elif not whole_item_note:
             return {
                 "error": ERROR_OBLIGATION_DECISION_EVIDENCE_REQUIRED,
                 "message": ("原因标签、局部确认草稿与范围确认话术都不构成整条义务"
                             "不适用的依据；请另写明整条义务对本材料不适用的依据"
                             "和覆盖范围"),
+                "decision": decision,
+            }
+        elif not _WHOLE_SCOPE_MENTION_RE.search(whole_item_note):
+            return {
+                "error": ERROR_OBLIGATION_DECISION_EVIDENCE_REQUIRED,
+                "message": ("适用性依据须指向整条义务/整份材料（写明如“本材料无该项业务、"
+                            "该义务整体不适用”及覆盖范围）；单格局部说明"
+                            "（某页某列空白确认为无此项）不能关闭整条义务"),
                 "decision": decision,
             }
         else:

@@ -58,12 +58,16 @@ def test_ui_stitched_label_plus_draft_rejected():
     stitched = f"已有空表或无此项说明：{OPERATING_INCOME_DRAFT}"
     assert _obligation_evidence_error("not_applicable", stitched, None,
                                       scope_confirmed=True) is not None
-    # 无标记的裸局部说明在旧协议下可通过；新协议下它就是用户显式提交的
-    # 正文——UI 保证不产生该形态（草稿保留标记），用户显式改写并勾选范围
-    # 后按其本人整项结论接受（系统不做任意自然语言语义判定）。
+    # IR04 实证B 收口：无标记的裸局部说明（单格形态、无整项指向词）在
+    # scope_confirmed=True 下同样拒绝——整项指向词门（结构性关键词，与
+    # verified_ok 的关系词门同一纪律）。
     assert _obligation_evidence_error(
         "not_applicable", "第8页经营收入列空白，本人确认为无此项", None,
-        scope_confirmed=True) is None
+        scope_confirmed=True) is not None
+    # 含整项指向词的用户正文 → 放行
+    assert _obligation_evidence_error(
+        "not_applicable", "本材料本年度无经营收入业务，该义务整体不涉及，覆盖全部阻断点",
+        None, scope_confirmed=True) is None
 
 
 def test_whole_item_basis_passes_and_generic_note_rejected():
