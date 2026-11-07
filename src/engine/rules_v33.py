@@ -10763,9 +10763,6 @@ class R33CrossSanGongEcon(Rule):
         lanes, lane_error = _econ_lanes(table6)
         if lane_error:
             unresolved.append(lane_error)
-        # §4.2（IR01）：左右车道分组守卫——两栏版式中同一车道内的经济科目编码
-        # 必须同组（左组 301/303，右组 302/310）；混组说明列身份错乱，fail-closed。
-        lane_codes: Dict[int, Set[str]] = {index: set() for index in range(len(lanes))}
 
         groups, group_errors = _three_public_column_groups(table7)
         unresolved.extend(group_errors)
@@ -10796,7 +10793,7 @@ class R33CrossSanGongEcon(Rule):
             normalized_names = tuple(_normalize_item_label(name) for name in names)
             found: List[Dict[str, Any]] = []
             conflict = ""
-            for lane_index, lane in enumerate(lanes):
+            for lane in lanes:
                 for row in table6.rows:
                     if row.row_role == "header":
                         continue
@@ -10809,9 +10806,6 @@ class R33CrossSanGongEcon(Rule):
                         conflict = str(hit["conflict"])
                         break
                     found.append(hit)
-                    code_text = str(hit.get("code") or "")
-                    if code_text.isdigit() and len(code_text) >= 3:
-                        lane_codes[lane_index].add(code_text[:3])
                 if conflict:
                     break
             if conflict:
@@ -10837,13 +10831,22 @@ class R33CrossSanGongEcon(Rule):
             if found:
                 basic[key] = found[0]
 
-        # §4.2 错组负控：两栏版式下同一车道混入左右两组编码（301/303 与
-        # 302/310）说明列身份错乱——车道边界失效，全部取数 fail-closed。
-        # 单车道表没有左右之分，不适用本守卫。
-        if len(lanes) >= 2:
+        # §4.2 错组负控（IR01 复核收口：全行扫描，守卫可达）——两栏版式下
+        # 每条车道的行首编码必须同组（左组 301/303，右组 302/310）；混组说明
+        # 列身份错乱，车道边界失效，全部取数 fail-closed。单车道表无左右
+        # 之分，不适用。
+        if len(lanes) == 2:
             _LEFT_GROUP, _RIGHT_GROUP = {"301", "303"}, {"302", "310"}
-            for lane_index, codes_in_lane in lane_codes.items():
-                if codes_in_lane & _LEFT_GROUP and codes_in_lane & _RIGHT_GROUP:
+            lane_prefixes: List[Set[str]] = [set(), set()]
+            for row in table6.rows:
+                if row.row_role == "header":
+                    continue
+                for lane_index, code in enumerate((row.code, row.code_right)):
+                    text_code = str(code or "")
+                    if len(text_code) >= 3 and text_code[:3].isdigit():
+                        lane_prefixes[lane_index].add(text_code[:3])
+            for lane_index, prefixes in enumerate(lane_prefixes):
+                if prefixes & _LEFT_GROUP and prefixes & _RIGHT_GROUP:
                     unresolved.append(
                         "基本支出表左右栏分组异常：同一车道内混有 301/303 与 302/310 "
                         f"经济科目编码（车道 {lane_index + 1}），列身份不可信"

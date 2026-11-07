@@ -269,6 +269,25 @@ def test_all_four_items_covered_on_canliang_style_material(truth):
     assert receipts["reception"] == "insufficient_data"  # 0.30 非零、无据 → 未知
 
 
+def test_lane_group_mixing_is_fail_closed(truth):
+    """§4.2 错组负控（可达形态）：左栏编码混入右组（302）→ 列身份不可信，
+    规则 fail-closed；全行扫描使守卫真实可达（非仅命中行）。"""
+    def mutate(payload: Dict[str, Any]) -> None:
+        row = _find_row(payload["page_tables"], PAGE_FIN_06, "住房公积金")
+        _replace_cell(payload["page_tables"], PAGE_FIN_06, row, 0, "30299")
+
+    doc = _clone(truth, mutate)
+    doc.relation_receipts = []
+    doc.fact_receipts = []
+    issues, deferred = _run_outcome(doc)
+    assert deferred is not None, "左右栏混组必须 fail-closed"
+    reason = f"{deferred.detail} {' '.join(deferred.unresolved_reasons or [])}"
+    assert "左右栏分组异常" in reason, reason[:200]
+    assert "301/303" in reason and "302/310" in reason
+    # 四个分项全部阻塞：不产生任何跨表比较 finding
+    assert issues == []
+
+
 def test_y02_truth_reports_all_three_cross_table_conflicts(truth):
     """Y02（高）：三项基本支出分项大于三公表同一业务项的决算数，必须各报一条。"""
     issues = _run(_document(truth))
