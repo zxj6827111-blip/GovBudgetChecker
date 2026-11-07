@@ -731,6 +731,7 @@ export function IssuesTab({
             decision={obligationPanelTarget.decision}
             checkName={obligationItems[obligationPanelTarget.problem.id]?.title ?? obligationPanelTarget.problem.title}
             defaultNote={readableObligationReason(obligationItems[obligationPanelTarget.problem.id]?.detail)}
+            item={obligationItems[obligationPanelTarget.problem.id] ?? null}
             isSubmitting={obligationSubmitting}
             onSubmit={(note) => void handleObligation(obligationPanelTarget.problem, obligationPanelTarget.decision, note)}
             onCancel={() => setObligationPanel(null)}

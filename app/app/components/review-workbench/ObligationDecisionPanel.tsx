@@ -3,8 +3,14 @@
  *
  * 服务端依据纪律不变（见 review_lifecycle_service._obligation_evidence_error）：
  * - 确认有问题：写明发现了什么问题，预填系统卡点原文，可改后提交；
- * - 不适用：选原因（“其他”须写说明），原因与说明拼成补核说明；
- * - 核对无误：条目有系统定位时一键提交，不经过本面板；没有定位时才要求写一句核对了哪里。
+ * - 不适用：选原因（“其他”须写说明），原因与说明拼成补核说明；局部确认
+ *   草稿（单列空白确认为无此项）不能单独作为整条义务不适用的依据；
+ * - 核对无误：条目有系统定位时一键提交，不经过本面板；没有定位时才要求
+ *   写一句核对了哪一页、哪张表——须写明核对的关系/数字，局部取数确认
+ *   （草稿）不构成关系核对结论。
+ *
+ * R2.2 附页 A3（轻路径）：面板展示该义务的全量阻断点与覆盖范围确认；
+ * 局部“无此项/数值正确”只预填〔局部确认草稿〕，不自动选择或提交整项决定。
  */
 "use client";
 
@@ -12,6 +18,7 @@ import { useState } from "react";
 import { X } from "lucide-react";
 
 import { OBLIGATION_DECISION_LABELS } from "./obligationProblems";
+import type { ObligationReviewItemRecord } from "./reviewLifecycleAdapters";
 
 export type ObligationPanelDecision = "verified_ok" | "verified_issue" | "not_applicable";
 
@@ -31,12 +38,12 @@ const PANEL_COPY: Record<ObligationPanelDecision, { heading: string; hint: strin
   },
   not_applicable: {
     heading: "不适用 · 记录原因",
-    hint: "选择本材料为什么不涉及这项检查，原因会随处理记录保存。",
+    hint: "选择本材料为什么不涉及这项检查，原因会随处理记录保存。局部“无此项”草稿不能单独作为整条义务不适用的依据。",
     placeholder: "补充说明（选“其他”时必填）",
   },
   verified_ok: {
     heading: "核对无误 · 写明核对位置",
-    hint: "系统没有定位到具体页码，请写一句核对了哪一页、哪张表。",
+    hint: "系统没有定位到具体页码，请写一句核对了哪一页、哪张表。须写明核对的关系/数字（如“合计=分项之和”）；局部取数草稿不算关系核对结论。",
     placeholder: "例如：第 12 页基本支出决算表，人员经费与公用经费合计与说明一致",
   },
 };
@@ -46,15 +53,35 @@ export interface ObligationDecisionPanelProps {
   checkName: string;
   /** 确认有问题时预填的系统卡点（后端 detail）。 */
   defaultNote?: string | null;
+  /** 义务条目（R2.2 A3：用于展示全量阻断点与覆盖范围确认）。 */
+  item?: ObligationReviewItemRecord | null;
   isSubmitting: boolean;
   onSubmit: (note: string) => void;
   onCancel: () => void;
+}
+
+/** 阻断点数量：缺数位置 + 结构卡点；两者都空 = 规则级阻断（无关系级回执）。 */
+function blockerCount(item: ObligationReviewItemRecord | null | undefined): number {
+  const missing = item?.missing_operands?.length ?? 0;
+  const blocked = item?.blocked_by?.length ?? 0;
+  return Math.max(missing, blocked);
+}
+
+function describeOperands(item: ObligationReviewItemRecord | null | undefined): string[] {
+  return (item?.missing_operands ?? []).slice(0, 6).map((operand) => {
+    const page = typeof operand.page === "number" ? `第${operand.page}页` : "";
+    const row = typeof operand.row_key === "string" && operand.row_key ? operand.row_key : "";
+    const column = typeof operand.column === "string" && operand.column ? operand.column : "";
+    const role = typeof operand.role === "string" && operand.role ? operand.role : "缺数";
+    return [role, page, row, column].filter(Boolean).join(" · ");
+  });
 }
 
 export function ObligationDecisionPanel({
   decision,
   checkName,
   defaultNote,
+  item,
   isSubmitting,
   onSubmit,
   onCancel,
@@ -62,6 +89,7 @@ export function ObligationDecisionPanel({
   const copy = PANEL_COPY[decision];
   const [reasonCode, setReasonCode] = useState("");
   const [text, setText] = useState(decision === "verified_issue" ? (defaultNote ?? "").slice(0, NOTE_MAX_LENGTH) : "");
+  const [scopeConfirmed, setScopeConfirmed] = useState(false);
   const reasonLabel = NOT_APPLICABLE_REASONS.find((option) => option.code === reasonCode)?.label ?? "";
   const note = decision === "not_applicable"
     ? reasonCode === "other" ? text.trim() : [reasonLabel, text.trim()].filter(Boolean).join("：")
@@ -69,6 +97,28 @@ export function ObligationDecisionPanel({
   const complete = decision === "not_applicable"
     ? Boolean(reasonCode) && (reasonCode !== "other" || Boolean(text.trim()))
     : Boolean(text.trim());
+  // R2.2 A3：整项决定须确认覆盖范围（verified_ok / not_applicable 面板路径）。
+  const needsScope = decision === "verified_ok" || decision === "not_applicable";
+  const blockers = blockerCount(item);
+  const operandLines = describeOperands(item);
+  const ruleLevel = blockers === 0;
+
+  const prefillLocalDraft = (kind: "none" | "correct") => {
+    const operand = item?.missing_operands?.[0];
+    const page = typeof operand?.page === "number" ? `第${operand.page}页` : "";
+    const target = [page,
+      typeof operand?.row_key === "string" && operand.row_key ? operand.row_key : "",
+      typeof operand?.column === "string" && operand.column ? operand.column : "",
+    ].filter(Boolean).join("") || "对应位置";
+    const draft = kind === "none"
+      ? `〔局部确认草稿〕${target}空白，本人确认为无此项`
+      : `〔局部确认草稿〕${target}取数与原文一致`;
+    setText((current) => {
+      const base = current.trim();
+      if (base.includes("〔局部确认草稿〕")) return base;
+      return [draft, base].filter(Boolean).join("\n").slice(0, NOTE_MAX_LENGTH);
+    });
+  };
 
   return (
     <div
@@ -86,6 +136,30 @@ export function ObligationDecisionPanel({
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 text-sm">
         <p className="mb-1 font-medium text-slate-800">{checkName}</p>
         <p className="mb-3 text-xs leading-relaxed text-slate-500">{copy.hint}</p>
+
+        {/* R2.2 A3：全量阻断点清单（规则级 0 回执时展示整条规则阻断）。 */}
+        <section
+          className="mb-3 rounded-md bg-surface-50 px-3 py-2.5"
+          data-testid="gbc-review-obligation-blockers"
+          data-blocker-count={blockers}
+          data-rule-level={ruleLevel ? "true" : "false"}
+        >
+          <h3 className="mb-1 text-xs font-semibold text-slate-600">
+            {ruleLevel ? "规则级阻断" : `阻断点清单（${blockers}）`}
+          </h3>
+          {ruleLevel ? (
+            <p className="text-xs leading-relaxed text-slate-600">
+              该检查整条规则未完成（无关系级回执）：请对整条检查项核对，不能只按个别位置表态。
+            </p>
+          ) : (
+            <ul className="grid gap-1 text-xs leading-relaxed text-slate-600">
+              {operandLines.map((line, index) => (
+                <li key={index}>{index + 1}. {line}</li>
+              ))}
+            </ul>
+          )}
+        </section>
+
         {decision === "not_applicable" ? (
           <fieldset className="mb-4 grid gap-2" aria-label="不适用原因">
             {NOT_APPLICABLE_REASONS.map((option) => (
@@ -109,6 +183,24 @@ export function ObligationDecisionPanel({
             ))}
           </fieldset>
         ) : null}
+
+        {decision === "not_applicable" ? (
+          <button
+            type="button"
+            onClick={() => prefillLocalDraft("none")}
+            data-testid="gbc-review-obligation-prefill-none"
+            className="mb-2 rounded-md border border-border px-2.5 py-1.5 text-xs text-slate-600 hover:bg-surface-100"
+          >从缺数位置预填“确认为无此项”（仅草稿，须另写整项依据）</button>
+        ) : null}
+        {decision === "verified_ok" ? (
+          <button
+            type="button"
+            onClick={() => prefillLocalDraft("correct")}
+            data-testid="gbc-review-obligation-prefill-correct"
+            className="mb-2 rounded-md border border-border px-2.5 py-1.5 text-xs text-slate-600 hover:bg-surface-100"
+          >从缺数位置预填“取数一致”（仅草稿，须另写关系核对结论）</button>
+        ) : null}
+
         <textarea
           value={text}
           maxLength={NOTE_MAX_LENGTH}
@@ -119,13 +211,30 @@ export function ObligationDecisionPanel({
           data-testid="gbc-review-obligation-note"
           className="w-full rounded-md border border-border px-3 py-2 text-sm text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
         />
+
+        {needsScope ? (
+          <label className="mt-3 flex cursor-pointer items-start gap-2 text-xs leading-relaxed text-slate-700">
+            <input
+              type="checkbox"
+              checked={scopeConfirmed}
+              onChange={(event) => setScopeConfirmed(event.target.checked)}
+              data-testid="gbc-review-obligation-scope-confirm"
+              className="mt-0.5 accent-primary-600"
+            />
+            <span data-testid="gbc-review-obligation-scope-text">
+              {ruleLevel
+                ? "本人确认：本决定覆盖该检查整条规则（全部阻断点）。范围确认不能代替适用性/核对依据。"
+                : `本人确认：本决定覆盖该义务全部 ${blockers} 个阻断点。范围确认不能代替适用性/核对依据。`}
+            </span>
+          </label>
+        ) : null}
       </div>
       <div className="flex shrink-0 justify-end gap-2 border-t border-border px-4 py-2.5">
         <button type="button" onClick={onCancel} className="rounded-md border border-border px-3 py-1.5 text-xs text-slate-600 hover:bg-surface-100">取消</button>
         <button
           type="button"
-          disabled={!complete || isSubmitting}
-          onClick={() => { if (complete) onSubmit(note); }}
+          disabled={!complete || isSubmitting || (needsScope && !scopeConfirmed)}
+          onClick={() => { if (complete && (!needsScope || scopeConfirmed)) onSubmit(note); }}
           data-testid="gbc-review-obligation-save"
           className="rounded-md border border-primary-600 bg-primary-600 px-3.5 py-1.5 text-xs font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50"
         >{isSubmitting ? "保存中…" : OBLIGATION_DECISION_LABELS[decision]}</button>

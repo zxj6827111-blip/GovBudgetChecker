@@ -51,6 +51,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -1453,39 +1454,120 @@ async def reopen_review(
     )
 
 
+#: R2.2 附页 A3（轻路径）：局部确认预填进 note 的草稿标记。带此标记的段落
+#: 是"单格/单列局部判断"，不是整项核对结论——not_applicable / verified_ok
+#: 的依据必须来自标记之外的正文。
+LOCAL_CONFIRM_DRAFT_MARKER = "〔局部确认草稿〕"
+
+#: verified_ok 的正文须指明核对了哪些关系/哪些数：接受"数字"或关系词，
+#: 拒收"核对无误"式通用表态（A3：通用预填位置不够，局部取数确认≠关系通过）。
+_RELATION_MENTION_RE = re.compile(r"\d|合计|分项|关系|逐项|其中|一致|相符|等于|勾稽|加总|之和")
+
+
+def _strip_local_confirm_drafts(note: Optional[str]) -> str:
+    """去掉 note 里的〔局部确认草稿〕…段落（草稿为单段，到换行/下一标记为止）。"""
+    if not note:
+        return ""
+    segments = re.split(r"〔局部确认草稿〕[^\n〔〕]*", str(note))
+    return "".join(segment for segment in segments if segment).strip()
+
+
+def _is_pure_scope_confirm_sentence(sentence: str) -> bool:
+    """判断一句话是否只是"确认全部 N 个阻断点"式的范围确认（不携带适用性依据）。"""
+    compact = re.sub(r"\s+", "", str(sentence or ""))
+    if "阻断点" not in compact:
+        return False
+    residue = re.sub(r"确认|决定|本次|覆盖|该|本|义务|全部|所有|以上|的|已|均|个|条|项|\d+", "", compact)
+    residue = residue.replace("阻断点", "")
+    return len(residue) <= 2
+
+
+def _strip_scope_confirm_sentences(residual: str) -> str:
+    """剥掉纯范围确认句，保留携带真实依据的句子。"""
+    kept = [s for s in re.split(r"[。；;\n]", str(residual or ""))
+            if s.strip() and not _is_pure_scope_confirm_sentence(s)]
+    return "".join(kept).strip()
+
+
 def _obligation_evidence_error(
     decision: str, note: Optional[str], evidence_reference: Optional[str]
 ) -> Optional[Dict[str, Any]]:
     """依据纪律（任务书 §十）：resolved 决定不允许"零依据"关闭门禁。
 
-    规则（独立评审裁决版）：
+    规则（独立评审裁决版 + R2.2 附页 A3 轻路径升级）：
 
     - ``pending``：允许空依据（它只是"置回待处理"，不产生放行效果）；
     - ``verified_ok``：``note`` 或 ``evidence_reference`` 至少填一项——
-      "我核对过"必须能回答"核对了什么/在哪里"；
+      "我核对过"必须能回答"核对了什么/在哪里"；只有 ``note`` 时，正文不能
+      是局部确认草稿（单格取数确认≠关系核对通过），且须指明核对了哪些
+      关系/哪些数（数字或关系词）——通用表态不够（A3：总10、基本8、项目
+      0 补齐后仍须对"10=8+0"整项关系给明确核对结论，不从"局部证据齐全"
+      自动推 verified_ok）；
     - ``verified_issue``：``note`` 必填——"确认存在问题"却不写发现了什么问题，
       审计无法回答"这项问题到底是什么"（任务书允许 note-OR-evidence 的放宽，
       但"问题描述"属于补核结论本体，不是可选附件）；
     - ``not_applicable``：``note`` 必填——人工改变适用性必须解释
-      "为什么这条义务对本材料不适用"。
+      "为什么这条义务对本材料不适用"；且不能只有局部确认草稿——单列空白
+      确认为无此项不等于整条义务不适用（A3 负控：总额10、财政拨款10、
+      经营收入空白，仅确认经营收入为 0 不得整项 not_applicable；
+      "确认全部 N 个阻断点"的范围确认也不能代替适用性依据）。
 
     一律 422：请求结构合法、缺的是业务必填字段，属输入校验，不是状态冲突
     （任务书 §十二 的 422/409 二选一，本批全接口统一 422）。
     """
     if decision == OBLIGATION_DECISION_PENDING:
         return None
+    residual_note = _strip_local_confirm_drafts(note)
     if decision == OBLIGATION_DECISION_VERIFIED_OK:
-        if note or evidence_reference:
+        if evidence_reference:
+            # 一键提交路径：证据位置由系统定位自动带上（页码/表名），不受草稿影响。
             return None
-        message = "补核通过必须填写补核说明或证据位置（页码/表名/章节）"
-    elif decision == OBLIGATION_DECISION_VERIFIED_ISSUE:
+        if not note:
+            return {
+                "error": ERROR_OBLIGATION_DECISION_EVIDENCE_REQUIRED,
+                "message": "补核通过必须填写补核说明或证据位置（页码/表名/章节）",
+                "decision": decision,
+            }
+        if not residual_note:
+            return {
+                "error": ERROR_OBLIGATION_DECISION_EVIDENCE_REQUIRED,
+                "message": ("局部确认草稿（如“某列空白确认为无此项”）只是单格判断，"
+                            "不构成关系核对结论；请另写明本次核对了哪些关系/哪些数"
+                            "（如“合计=分项之和”或具体金额）"),
+                "decision": decision,
+            }
+        if not _RELATION_MENTION_RE.search(residual_note):
+            return {
+                "error": ERROR_OBLIGATION_DECISION_EVIDENCE_REQUIRED,
+                "message": ("补核说明须指明核对了哪些关系/哪些数"
+                            "（写明金额、“合计=分项之和”类关系或逐项核对范围）"),
+                "decision": decision,
+            }
+        return None
+    if decision == OBLIGATION_DECISION_VERIFIED_ISSUE:
         if note:
             return None
         message = "确认存在问题必须写明发现了什么问题（补核说明）"
     elif decision == OBLIGATION_DECISION_NOT_APPLICABLE:
-        if note:
+        if not note:
+            message = "判定不适用必须写明原因（为什么本材料不涉及该项检查）"
+        elif not residual_note:
+            return {
+                "error": ERROR_OBLIGATION_DECISION_EVIDENCE_REQUIRED,
+                "message": ("局部确认草稿（如“某列空白确认为无此项”）只覆盖单个阻断点，"
+                            "不能作为整条义务不适用的依据；请写明整条义务不适用的"
+                            "依据和覆盖范围"),
+                "decision": decision,
+            }
+        elif not _strip_scope_confirm_sentences(residual_note):
+            return {
+                "error": ERROR_OBLIGATION_DECISION_EVIDENCE_REQUIRED,
+                "message": ("“确认全部 N 个阻断点”的范围确认不能代替适用性依据；"
+                            "请写明整条义务对本材料不适用的依据和覆盖范围"),
+                "decision": decision,
+            }
+        else:
             return None
-        message = "判定不适用必须写明原因（为什么本材料不涉及该项检查）"
     else:
         # 未知决定值在参数校验处已被拒绝；这里是防御性兜底，永远不会到达。
         return None
