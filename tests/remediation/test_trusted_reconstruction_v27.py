@@ -160,14 +160,24 @@ def chemical_item(doc):
 
 
 def test_real_truncated_names_have_local_evidence_and_keep_real_conflict(chemical):
+    """截断名绑定带原文证据；类名缺口按 R2.2 A2 身份链处理。
+
+    R2.2 A2 起，"资源勘探信息等支出"vs 表内 215"资源勘探工业信息等支出"
+    的类名缺口在款/项逐字唯一+原件共现核验通过时按身份链绑定：规则以
+    完成态收尾，类名差异降为 info 提示；金额照常核对（变异例见
+    test_truncated_name_binding_still_checks_actual_amount）。截断名
+    本身的原文补全证据（basis/page/raw_subject_name）纪律不变。
+    """
     from src.engine.rules_v33 import R33222_Narrative5_T5
     from src.engine.rule_outcome import RuleDeferred
     doc = deepcopy(chemical)
     original = doc.fact_context.to_dict()
-    with pytest.raises(RuleDeferred) as signal:
-        R33222_Narrative5_T5().apply(doc)
-    # 另一条原文类名与原表不一致仍需复核，不能把整条规则改成通过。
-    assert '资源勘探信息等支出' in str(signal.value)
+    issues = list(R33222_Narrative5_T5().apply(doc))
+    # 类名差异提示仍在（不再是取数不足）：说明"资源勘探信息等支出"，
+    # 表内 215"资源勘探工业信息等支出"。
+    hints = [i for i in issues if i.severity == 'info' and '资源勘探信息等支出' in str(i.message)]
+    assert hints, [str(i.message)[:80] for i in issues]
+    assert '资源勘探工业信息等支出' in str(hints[0].message)
     assert doc.fact_context.to_dict()==original
     aliases=[(r,s) for r in doc.fact_receipts for s in r.get('disclosure_sources',[])
              if s.get('basis')=='unique_native_code_parent_and_narrative_prefix']
@@ -213,5 +223,10 @@ def test_truncated_name_binding_still_checks_actual_amount(chemical):
     target=next(f for f in doc.fact_context.facts if f.table_code=='FIN_05_general_public_expenditure'
                 and f.subject_code=='2080505' and f.indicator=='total_actual')
     target.normalized_value+=Decimal('10')
-    with pytest.raises(RuleDeferred) as signal:R33222_Narrative5_T5().apply(doc)
-    assert any(target.fact_uid in issue.fact_ids for issue in signal.value.partial_issues)
+    # R2.2 A2：类名缺口按身份链解决后规则可完成；金额检查不被跳过——
+    # 变异金额的表文不一致作为正式 finding 报出（fact_ids 保留目标事实）。
+    issues = list(R33222_Narrative5_T5().apply(doc))
+    assert any(target.fact_uid in issue.fact_ids for issue in issues), [str(i.message)[:90] for i in issues]
+    mismatch = next(i for i in issues if target.fact_uid in i.fact_ids)
+    assert mismatch.severity == 'error'
+    assert '相差10' in str(mismatch.message)

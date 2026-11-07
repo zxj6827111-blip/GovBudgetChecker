@@ -495,6 +495,16 @@ def test_finals_unresolved_total_le_11(final_replays):
         item = next(x for x in final_replays[alias]["summary"]["unresolved_rules"] if x["rule_id"] == "CMM-019")
         assert item["status"] == "insufficient_data" and "封面文种缺少独立依据" in item["detail"]
         added += 1
+    # R2.2 附页 A1：三公表空白格无独立零依据 → 保持未知（勾稽平衡只是
+    # 一致性校验）。宜川的公务用车购置费、石泉的因公出国(境)费空白在冻结
+    # 材料里没有说明零披露，按新契约登记为计划内取数不足。
+    for alias, blank_item in (("yichuan", "公务用车购置费"), ("shiquan", "因公出国(境)费")):
+        item = next((x for x in final_replays[alias]["summary"]["unresolved_rules"]
+                     if x["rule_id"] == "V33-CROSS-SAN-GONG-ECON"), None)
+        if item:
+            assert item["status"] == "insufficient_data", (alias, item["detail"])
+            assert "无独立零依据" in item["detail"] and blank_item in item["detail"], item["detail"]
+            added += 1
     assert total - added <= 11, f"除已核实的原文缺操作数外仍有计划外回升: {total} - {added} > 11"
 
 

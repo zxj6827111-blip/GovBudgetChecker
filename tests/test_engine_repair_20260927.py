@@ -196,6 +196,15 @@ def test_unresolved_total_le_15(replays):
         assert item['status']=='insufficient_data'
         assert item['detail']=='封面文种缺少独立依据'
         planned_missing+=1
+    # R2.2 附页 A1：三公表空白格无独立零依据 → 保持未知（等式平衡只是
+    # 一致性校验，不作零授权）。宜川的公务用车购置费、石泉的因公出国(境)费
+    # 空白在冻结材料里没有说明零披露，按新契约登记为计划内取数不足。
+    for alias, blank_item in (("yichuan", "公务用车购置费"), ("shiquan", "因公出国(境)费")):
+        item = replays[alias]["unresolved"].get("V33-CROSS-SAN-GONG-ECON")
+        if item:
+            assert item["status"] == "insufficient_data", (alias, item["detail"])
+            assert "无独立零依据" in item["detail"] and blank_item in item["detail"], item["detail"]
+            planned_missing += 1
     assert total - planned_missing <= 15, f"排除已核实缺分项预算后 unresolved {total} 超出验收线"
     # 2026-09-29 MR-B 批次计划内收敛：4 份决算 unresolved 14 → ≤10（实测 10），
     # 验收重走并固化于 tests/test_budget_intake_20260929.py（BUD-105/107/108/109
