@@ -187,3 +187,25 @@ def test_chain_visible_in_original_requires_every_level():
                                                 ("2130399", "防汛")])  # 编码不在原件
     assert not _chain_visible_in_original(doc, [("213", "农林水支出"), ("21303", "乡镇水利"),
                                                 ("2130314", "防汛")])  # 名称对不上
+
+
+def test_amount_digits_on_item_line_are_not_codes():
+    """负控：条目行内（项）之后的金额数字（如 7,650 里的 650）不当作类编码。
+
+    判据 1 只扫类名标记之前的行前缀；金额数字不进显式编码判据，
+    也不得阻断判据 2 的合法链绑定。
+    """
+    doc = _doc(TABLE_PAGES)
+    facts = [_fact("213", "农林水支出"), _fact("21303", "水利"), _fact("2130314", "防汛")]
+    paths = hierarchy_paths({str(f.subject_code) for f in facts})
+    # 行内带大额金额（含 3 位数字段 650），且页文本把该行印在说明页
+    doc.page_texts = [
+        "一般公共预算财政拨款支出决算表\n单位：万元\n",
+        "  213 农林水支出 100.00\n  21303 水利 100.00\n  2130314 防汛 60.00\n",
+        "23、农林支出（类）水利（款）防汛（项）。支出决算为 7,650.32 万元。\n",
+    ]
+    item = _item_match("农林支出", "水利", "防汛")
+    aliases = []
+    # 判据 2 正常走链绑定（金额数字不干扰）
+    assert _bind_klass_via_independent_chain(doc, facts, item, paths, aliases) == "213"
+    assert any(a["role"] == "independent_hierarchy_chain" for a in aliases)

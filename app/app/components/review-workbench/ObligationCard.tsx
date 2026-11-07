@@ -151,7 +151,7 @@ export function ObligationCard({
                 <span className="mt-0.5 grid h-[1.6em] w-[1.6em] place-items-center rounded bg-surface-100 text-[0.75em] text-slate-500">{String.fromCharCode(65 + (index % 26))}</span>
                 <span className="min-w-0">
                   <span className="block break-words text-[0.88em] leading-relaxed text-slate-800">{ref.locationText}</span>
-                  <span className="block text-[0.72em] text-slate-500">{ref.bbox ? "精确定位" : "整页"} ↖</span>
+                  <span className="block text-[0.72em] text-slate-500">{ref.bbox ? "定位框（表级/证据框）" : "整页"} ↖</span>
                 </span>
               </button>
             ))}

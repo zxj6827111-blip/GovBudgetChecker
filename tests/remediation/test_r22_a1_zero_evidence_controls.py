@@ -105,8 +105,8 @@ def test_balanced_table_without_independent_zero_basis_stays_unknown():
     # 等式本身平衡（旧实现即返回 True 的行为保持可复现）——
     assert confirmed is True
     # 但授权边界由独立零依据决定：无依据时规则不得把空白写成 0。
-    # 该断言在规则主链（_blank_cells_confirmed 的调用方）实现，见
-    # test_blank_without_independent_basis_blocks_fill。
+    # 规则主链（_blank_cells_confirmed 的调用方）的行为由
+    # tests/test_cross_san_gong_econ.py::test_blank_without_independent_zero_basis_defers_to_unknown 锁定。
 
 
 def test_unbalanced_table_still_blocks():

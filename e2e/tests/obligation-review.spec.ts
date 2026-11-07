@@ -470,6 +470,8 @@ test.describe("人工补核（WP3-B）：并入必须处理", () => {
     await expect(page.getByTestId("gbc-review-obligation-save")).toBeDisabled();
     await page.getByTestId("gbc-review-obligation-reason-not_involved").check();
     await page.getByTestId("gbc-review-obligation-note").fill("本单位本年度无政府性基金预算");
+    // R2.2 A3：整项决定须先确认覆盖范围（"本决定覆盖该义务全部阻断点"）。
+    await page.getByTestId("gbc-review-obligation-scope-confirm").check();
     await page.getByTestId("gbc-review-obligation-save").click();
     expect(state.decideCalls[1].body).toMatchObject({ decision: "not_applicable", note: "本材料不涉及此项：本单位本年度无政府性基金预算" });
 
@@ -500,6 +502,8 @@ test.describe("人工补核（WP3-B）：并入必须处理", () => {
     await expect(page.getByTestId("gbc-review-obligation-save")).toBeDisabled();
     expect(state.decideCalls).toHaveLength(0);
     await page.getByTestId("gbc-review-obligation-note").fill("第 20 页基金表与第 26 页说明逐项一致");
+    // R2.2 A3：核对无误的面板路径同样须确认覆盖范围后才能提交。
+    await page.getByTestId("gbc-review-obligation-scope-confirm").check();
     await page.getByTestId("gbc-review-obligation-save").click();
     expect(state.decideCalls[0].body).toMatchObject({ decision: "verified_ok", note: "第 20 页基金表与第 26 页说明逐项一致" });
     await expect(page.getByTestId("gbc-review-complete")).toBeEnabled();

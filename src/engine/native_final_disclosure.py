@@ -316,9 +316,14 @@ def _bind_klass_via_independent_chain(doc, facts, item, paths, aliases):
        「编码+名称」在原件原文行共现（来源完整性）。
     返回绑定的 3 位类编码；不成立返回 None（金额保持未知，名称差异照报）。
     """
-    # 判据 1：原文显式编码（条目所在行）
+    # 判据 1：原文显式编码（条目行内、类名标记之前的行前缀——金额印在
+    # （项）之后的同一物理行上，不截前缀会把"7,650.32"里的"650"误当类编码）。
+    # dash 连接形态的条目没有（类）标记，前缀即整行：金额段恰为表内 3 位
+    # 类编码且与类名原件共现的概率趋零，且共现核验不过只导致"不救回"
+    # （fail-closed，维持原有 text_binding_failed 路径），不会误绑。
     line = _item_source_line(doc, item)
-    explicit = [c for c in re.findall(r'(?<!\d)(\d{3})(?!\d)', line)
+    prefix = re.split(r"[（(]类[)）]", line, maxsplit=1)[0]
+    explicit = [c for c in re.findall(r'(?<!\d)(\d{3})(?!\d)', prefix)
                 if len(paths.get(c, '')) == 3]
     if len(explicit) == 1:
         table_name = next((_name(f.subject_name) for f in facts

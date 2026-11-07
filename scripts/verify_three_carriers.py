@@ -25,9 +25,12 @@
 （@0420d472，KIT v1-regression-r2），本工具不改写它。
 
 用法：
-    python scripts/verify_three_carriers.py scan   --record collect.json
+    python scripts/verify_three_carriers.py scan   --record status.json
     python scripts/verify_three_carriers.py compare --before a.json --after b.json
     python scripts/verify_three_carriers.py selftest
+
+（--record/--before/--after 接**原始任务状态 JSON**；冻结验收器的 collect
+记录格式不在本工具输入口径内，见 three_carrier_snapshot 文档。）
 """
 from __future__ import annotations
 
@@ -36,7 +39,7 @@ import hashlib
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 _MAIN_CARRIER = "rule_findings"
 _RECEIPT_CARRIER = "check_receipts"
@@ -47,15 +50,11 @@ def _canonical(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def _carrier_state(container: Any, key: str, list_keys: Tuple[str, ...]) -> Dict[str, Any]:
+def _carrier_state(container: Any, key: str) -> Dict[str, Any]:
     """载体读取：区分"键缺失（未知）"与"键存在且为空列表（合法空）"。"""
     if not isinstance(container, dict) or key not in container:
         return {"present": False, "count": None, "items": [], "missing": True}
     raw = container.get(key)
-    for list_key in list_keys:
-        if isinstance(raw, dict) and list_key in raw:
-            raw = raw.get(list_key)
-            break
     if raw is None:
         return {"present": True, "count": None, "items": [], "missing": False, "null_value": True}
     if isinstance(raw, list):
@@ -74,13 +73,17 @@ def finding_identity(finding: Dict[str, Any]) -> str:
 
 
 def three_carrier_snapshot(result: Any, review_report: Any, meta_coverage: Any) -> Dict[str, Any]:
-    """按契约产出三载体快照（纯函数，可独立核验）。"""
-    main = _carrier_state(result, _MAIN_CARRIER, ())
-    receipts = _carrier_state(review_report, _RECEIPT_CARRIER, ())
-    coverage = _carrier_state(meta_coverage, "instances", ())
-    # 覆盖台账的 instances 藏在 dict 里：meta_coverage 本身就是 obligation_coverage dict。
-    if not coverage["present"] and isinstance(meta_coverage, dict) and "instances" in meta_coverage:
-        coverage = _carrier_state(meta_coverage, "instances", ())
+    """按契约产出三载体快照（纯函数，可独立核验）。
+
+    输入口径：**原始任务状态 JSON**（含 result / review_report /
+    result.meta.obligation_coverage），不是冻结验收器的 collect 记录——
+    collect 记录里回执的 issue_refs 已被验收器替换为内容指纹（sha256），
+    与本工具的 id 映射口径不同；采集格式适配属于独立核验后的后续工作，
+    本工具不猜映射。
+    """
+    main = _carrier_state(result, _MAIN_CARRIER)
+    receipts = _carrier_state(review_report, _RECEIPT_CARRIER)
+    coverage = _carrier_state(meta_coverage, "instances")
 
     main_identities = {
         finding_identity(f): f for f in main["items"] if isinstance(f, dict)

@@ -63,7 +63,14 @@ def engine_dimension(status: str, *, has_confirmed_findings: bool = False) -> st
 
 
 def engine_from_instance(instance: Mapping[str, Any]) -> str:
-    """台账 instance（dict）→ 引擎维度。已确认 finding 以 findings_count>0 表达。"""
+    """台账 instance（dict）→ 引擎维度。
+
+    输入契约：``findings_count``/``has_confirmed_findings`` 由**报告层**在
+    组装 relations 时提供（把规则结果里该义务 checkers 的已确认 finding
+    数对回关系）；当前义务台账 dict（ObligationInstance.to_dict）本身不含
+    该字段——台账只有引擎状态，"完成且发现问题"的二分依据在报告侧组装，
+    不在本模块猜。两个字段都缺省时 completed 一律映射为 completed_pass。
+    """
     findings = instance.get("findings_count")
     has_findings = bool(findings) or bool(instance.get("has_confirmed_findings"))
     return engine_dimension(str(instance.get("status", "")), has_confirmed_findings=has_findings)

@@ -62,14 +62,16 @@ function locationRefs(item: ObligationReviewItemRecord, id: string): ProblemEvid
     .filter((location) => Number.isInteger(location.page) && location.page > 0)
     .map((location, index) => {
       const bbox = Array.isArray(location.bbox) && location.bbox.length === 4 ? location.bbox : undefined;
+      // R2.2 §7：补核位置链的 bbox（表框/finding 证据框）不得标 exact_span/verified——
+      // 它是结构/证据框定位，不是对缺数位置的已验证精确跨度。
       return {
         key: `${id}|location|${index}`,
         role: "原文位置",
         page: location.page,
         locationText: locationText(location.page, location.label),
         bbox,
-        locationLevel: bbox ? "exact_span" : "page",
-        verificationStatus: bbox ? "verified" : "unverified",
+        locationLevel: bbox ? "search_region" : "page",
+        verificationStatus: "unverified",
       };
     });
 }
