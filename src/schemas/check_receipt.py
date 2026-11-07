@@ -61,6 +61,14 @@ class CheckReceipt:
     explained_by: Optional[str] = None
     residual_difference_wan: Optional[str] = None
     cascade_of: Optional[str] = None
+    # R2-01（第二轮复核）：证据性质分账——
+    # - real_amount_comparison：比较双方均来自真实取数或 A1 合法授权零
+    #   （说明零披露/审定约定），可计独立金额核对；
+    # - applicability_judgment：适用性/披露判断（如未列项+总额0 → 不适用），
+    #   不是金额核对；
+    # - 零推导比较（以被核对另一侧反推本侧空白为0）**不允许**出现在 pass
+    #   回执里，此类关系只能保持未知。
+    evidence_nature: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.status not in SUB_CHECK_STATUSES:
@@ -101,6 +109,7 @@ class CheckReceipt:
             explained_by=_opt_str(data.get("explained_by")),
             residual_difference_wan=_opt_str(data.get("residual_difference_wan")),
             cascade_of=_opt_str(data.get("cascade_of")),
+            evidence_nature=_opt_str(data.get("evidence_nature")),
             formula=_opt_str(data.get("formula")),
             tolerance=dict(data.get("tolerance") or {}),
             status=str(data.get("status") or "insufficient_data"),

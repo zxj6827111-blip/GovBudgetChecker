@@ -228,3 +228,63 @@ def test_amount_digits_on_item_line_are_not_codes():
     # 判据 2 正常走链绑定（金额数字不干扰）
     assert _bind_klass_via_independent_chain(doc, facts, item, paths, aliases) == "213"
     assert any(a["role"] == "independent_hierarchy_chain" for a in aliases)
+
+
+def test_r203_continuation_page_candidate_never_misbinds():
+    """R2-03（审核方跨页控制复刻）：facts 只剩 213 链且证据在第 1 页时，
+    逻辑表范围（1—2 页）第 2 页续表里的 214/21403 水利/2140314 防汛候选
+    必须参与唯一性裁决——解析幸存事实不能自证续页不存在，范围完整性不能
+    由 facts 证明。旧实现看到事实证据页就提前返回，只扫第 1 页误绑 213。"""
+    from src.engine.native_final_disclosure import GENERAL
+
+    facts = [
+        SimpleNamespace(subject_code=c, subject_name=n, indicator="total_actual",
+                        table_code=GENERAL,
+                        extra_dims={"evidence_refs": [{"physical_page": 1}]})
+        for c, n in [("213", "农林水支出"), ("21303", "水利"), ("2130314", "防汛")]
+    ]
+    paths = hierarchy_paths({"213", "21303", "2130314"})
+    item = _item_match("农林支出", "水利", "防汛")
+    first = "一般公共预算财政拨款支出决算表\n213 农林水支出\n21303 水利\n2130314 防汛\n"
+    second = "一般公共预算财政拨款支出决算表（续）\n214 交通运输支出\n21403 水利\n2140314 防汛\n"
+
+    # 形态一：解析产物声明逻辑表范围 1—2 → 扫描完整范围 → 两候选不唯一
+    doc = SimpleNamespace(
+        page_texts=[first, second],
+        parse_artifact=SimpleNamespace(logical_tables=[
+            SimpleNamespace(table_code=GENERAL, page_start=1, page_end=2)]))
+    assert _bind_klass_via_independent_chain(doc, facts, item, paths, []) is None
+
+    # 形态二：无产物范围信息 → 全页扫描（按构造完整）→ 同样不绑定
+    doc_no_artifact = SimpleNamespace(page_texts=[first, second])
+    assert _bind_klass_via_independent_chain(doc_no_artifact, facts, item, paths, []) is None
+
+    # 形态三：产物声明范围越界（1—9 > 文档 2 页）→ 产物不完整，退全页
+    doc_overrun = SimpleNamespace(
+        page_texts=[first, second],
+        parse_artifact=SimpleNamespace(logical_tables=[
+            SimpleNamespace(table_code=GENERAL, page_start=1, page_end=9)]))
+    assert _bind_klass_via_independent_chain(doc_overrun, facts, item, paths, []) is None
+
+
+def test_r203_single_page_with_complete_range_still_binds():
+    """R2-03 正控：范围完整（1—1 页）且原表唯一候选 → 照常绑定（水务局
+    真件路径不回退）；事实证据页与产物范围取并集参与扫描。"""
+    from src.engine.native_final_disclosure import GENERAL
+
+    facts = [
+        SimpleNamespace(subject_code=c, subject_name=n, indicator="total_actual",
+                        table_code=GENERAL,
+                        extra_dims={"evidence_refs": [{"physical_page": 1}]})
+        for c, n in [("213", "农林水支出"), ("21303", "水利"), ("2130314", "防汛")]
+    ]
+    paths = hierarchy_paths({"213", "21303", "2130314"})
+    item = _item_match("农林支出", "水利", "防汛")
+    first = "一般公共预算财政拨款支出决算表\n213 农林水支出\n21303 水利\n2130314 防汛\n"
+    doc = SimpleNamespace(
+        page_texts=[first],
+        parse_artifact=SimpleNamespace(logical_tables=[
+            SimpleNamespace(table_code=GENERAL, page_start=1, page_end=1)]))
+    aliases = []
+    assert _bind_klass_via_independent_chain(doc, facts, item, paths, aliases) == "213"
+    assert any(a.get("role") == "independent_hierarchy_chain" for a in aliases)

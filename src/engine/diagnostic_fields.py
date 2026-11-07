@@ -402,18 +402,71 @@ _ANCHOR_LINE_MAX = 48
 _HEADING_PREFIX_RE = re.compile(r"^\s*(?:[（(][一二三四五六七八九十]{1,3}[)）]|[一二三四五六七八九十]{1,3}、)")
 #: 目录行尾部：点线引导 + 页码，或行尾孤立页码。
 _TOC_TAIL_RE = re.compile(r"(?:……|…{2,}|\.{2,}|·{2,})\s*\d+\s*$|\s\d{1,3}\s*$")
+#: 目录页标题："目 录"独占一行（R2-06：目录页可整页不带页码尾巴）。
+_TOC_TITLE_RE = re.compile(r"^\s*目\s*[录錄]\s*$")
+#: 目录行形态：部分标题（第X部分/第N部分 …）或中文序号条目，短行、无句内
+#: 句号。部分序号汉字/阿拉伯两种形态都认（自检补强：部分单位目录用"第1部分"，
+#: 若只认汉字形态，该类无页码尾巴目录会漏检）。
+_TOC_ENTRY_LIKE_RE = re.compile(
+    r"^\s*(?:第[一二三四五六七八九十]{1,3}部分"
+    r"|第\d{1,3}部分"
+    r"|[（(][一二三四五六七八九十]{1,3}[)）]"
+    r"|[一二三四五六七八九十]{1,3}、)"
+    r"[^。]{0,40}$")
+#: 连续 ≥3 行目录形态行（之间只允许空行）= 目录区：正文标题被正文段落
+#: 隔开，不会这样连排（残联 p2 实证：目录无页码尾巴，"三、支出决算情况
+#: 说明"满足标题形态却位于条目连排区）。
+_TOC_RUN_MIN = 3
+
+
+def _toc_line_indexes(page_text: Any) -> set:
+    """页内目录行下标集合（0 基）。
+
+    两类信号：
+    1. 页内出现"目 录"标题行 → 整页按目录处理；
+    2. 连续 ≥ _TOC_RUN_MIN 行目录形态行（空行不打断连续性）→ 该行段为
+       目录区（目录续页混排正文时，正文标题在行段之外仍可用）。
+    不能只靠"行末有无页码"判目录（R2-06）。
+    """
+    lines = str(page_text or "").splitlines()
+    if any(_TOC_TITLE_RE.match(line) for line in lines):
+        return set(range(len(lines)))
+    toc: set = set()
+    run: list = []
+
+    def _flush() -> None:
+        if len(run) >= _TOC_RUN_MIN:
+            toc.update(run)
+        run.clear()
+
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped and _TOC_ENTRY_LIKE_RE.match(stripped):
+            run.append(index)
+        elif not stripped:
+            continue  # 空行不打断目录条目连排
+        else:
+            _flush()
+    _flush()
+    return toc
 
 
 def _section_anchor_page(doc: Any, hints) -> Optional[int]:
     """只接受"章节标题行"锚（R2.2 §5）。
 
     标题行 = 中文序号前缀行，或"提示词几乎占满整行"的短标题；须无句内句号、
-    非目录行（点线/行尾页码）。全文关键词首命中已删除——正文任意一句提到
-    "决算"不再把缺数位置错标到第 1 页。
+    非目录行（点线/行尾页码），且不落在目录页/目录条目连排区（R2-06：残联
+    /知产/水务局真实原件的目录页无页码尾巴，曾被当正文锚落第 2 页）。
+    全文关键词首命中已删除——正文任意一句提到"决算"不再把缺数位置错标到
+    第 1 页。无法确定正文锚时返回 None（未知页码优先于错误页码）。
     """
     pages = getattr(doc, "page_texts", None) or []
     for page_number, page in enumerate(pages, 1):
-        for raw_line in str(page or "").splitlines():
+        lines = str(page or "").splitlines()
+        toc_lines = _toc_line_indexes(page)
+        for line_index, raw_line in enumerate(lines):
+            if line_index in toc_lines:
+                continue
             stripped = raw_line.strip()
             if not stripped or len(stripped) > _ANCHOR_LINE_MAX:
                 continue

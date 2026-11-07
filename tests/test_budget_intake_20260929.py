@@ -505,6 +505,16 @@ def test_finals_unresolved_total_le_11(final_replays):
             assert item["status"] == "insufficient_data", (alias, item["detail"])
             assert "无独立零依据" in item["detail"] and blank_item in item["detail"], item["detail"]
             added += 1
+    # R2-01（第二轮复核 2026-11-07）：三公表该项 0 不得反推 FIN_06 空白
+    # 为 0——文旅因公出国（境）费 FIN_06 空白此前靠同源推导自动通过，
+    # 现按 A1 边界保持未知，计划内契约收紧（+1）。
+    wenlv_cross = next((x for x in final_replays["wenlv"]["summary"]["unresolved_rules"]
+                        if x["rule_id"] == "V33-CROSS-SAN-GONG-ECON"), None)
+    if wenlv_cross:
+        assert wenlv_cross["status"] == "insufficient_data", wenlv_cross["detail"]
+        assert "因公出国（境）费" in wenlv_cross["detail"], wenlv_cross["detail"]
+        assert "不得以三公表该项反推" in wenlv_cross["detail"], wenlv_cross["detail"]
+        added += 1
     assert total - added <= 11, f"除已核实的原文缺操作数外仍有计划外回升: {total} - {added} > 11"
 
 

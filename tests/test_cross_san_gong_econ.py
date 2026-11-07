@@ -244,29 +244,46 @@ def test_only_one_item_compared_others_stay_unknown(truth):
 
 
 def test_all_four_items_covered_on_canliang_style_material(truth):
-    """IR01 正控：三公侧显式/授权为 0 的项，FIN_06 空白或未列分项按
-    非负分解授权为 0 或记有据不适用——四个分项全部落回执，不静默跳过。"""
+    """R2-01（第二轮复核）正控：四个分项全部落回执，不静默跳过；但 FIN_06
+    空白分项**不得**以三公表该项零（显式或说明授权）反推为 0 再比较——
+    说明零披露与三公表零同源，0≤0 两边来自同一零结论，不构成独立金额核对。
+    有真实双侧金额的项照常比较（fail/pass）；空白无独立取数依据 → 未知，
+    三公侧零披露的披露判断由零台账另行呈现。"""
     def mutate(payload: Dict[str, Any]) -> None:
         page_tables = payload["page_tables"]
-        # 接待金额清空（三公侧接待 0.30 非零 → 无据 → 未知）
+        # 接待金额清空（三公侧接待 0.30 非零 → FIN_06 空白无据 → 未知）
         row = _find_row(page_tables, PAGE_FIN_06, "公务接待费")
         _replace_cell(page_tables, PAGE_FIN_06, row, 5, "")
-        # 购置行整行保留（三公侧购置 0 经说明零披露授权 → 分项必为 0 → 比较）
+        # 购置行 FIN_06 空白保留；三公侧购置 0 经说明零披露授权——
+        # 旧实现据此反推 FIN_06=0 再比较 0≤0（R2-01 已禁止）。
 
     doc = _clone(truth, mutate)
     doc.relation_receipts = []
     doc.fact_receipts = []
-    # 追加购置的说明零披露（p36），使购置 FIN_06 空白获得独立依据
     doc.page_texts[35] = doc.page_texts[35] + "公务用车购置支出为 0 万元。"
     issues, deferred = _run_outcome(doc)
-    receipts = {str(r.get("sub_check_id")).rsplit(":", 1)[-1]: str(r.get("status"))
-                for r in getattr(doc, "fact_receipts", []) or []
-                if str(r.get("rule_id")) == RULE_ID
-                and str(r.get("sub_check_id", "")).startswith(f"{RULE_ID}:cross:san_gong:")}
+    receipts = {}
+    reasons = {}
+    natures = {}
+    for r in getattr(doc, "fact_receipts", []) or []:
+        if str(r.get("rule_id")) == RULE_ID \
+                and str(r.get("sub_check_id", "")).startswith(f"{RULE_ID}:cross:san_gong:"):
+            key = str(r.get("sub_check_id")).rsplit(":", 1)[-1]
+            receipts[key] = str(r.get("status"))
+            reasons[key] = str(r.get("incomplete_reason") or "")
+            natures[key] = str(r.get("evidence_nature") or "")
     assert set(receipts) == {"overseas", "reception", "vehicle_purchase", "vehicle_operation"}
-    assert receipts["overseas"] == "fail"          # 13.24 > 0 真冲突
-    assert receipts["vehicle_purchase"] == "pass"  # 授权 0 ≤ 0
-    assert receipts["reception"] == "insufficient_data"  # 0.30 非零、无据 → 未知
+    assert receipts["overseas"] == "fail"          # 13.24 > 0 双侧真实金额 → 真冲突
+    assert receipts["vehicle_operation"] == "fail"  # 81.11 > 19.56 双侧真实金额
+    assert natures["overseas"] == "real_amount_comparison"
+    assert natures["vehicle_operation"] == "real_amount_comparison"
+    # R2-01：三公侧零（显式或说明授权）不得反推 FIN_06 空白为 0 → 保持未知
+    assert receipts["vehicle_purchase"] == "insufficient_data"
+    assert "不得以三公表该项反推" in reasons["vehicle_purchase"]
+    assert "保持未知" in reasons["vehicle_purchase"]
+    assert receipts["reception"] == "insufficient_data"  # 三公侧 0.30 非零、无据 → 未知
+    # 未完成回执不携带证据性质（无金额核对发生）
+    assert natures["vehicle_purchase"] == "" and natures["reception"] == ""
 
 
 def test_lane_group_mixing_is_fail_closed(truth):

@@ -116,6 +116,48 @@ def test_ir02_positive_controls_survive_frame_guard():
         assert refs, text
 
 
+def test_r202_frame_scope_covers_following_statements():
+    """R2-02 负控（审核方原形态）：宣告帧是作用域不是单句修饰——宣告后的
+    **每一条**零陈述都拒收。旧实现只拒紧邻第一条，第二条漏网被当真实零。"""
+    for frame in ("以下为模板示例。", "以下为假设情形。"):
+        text = (f"甲局2024年度部门决算。{frame}"
+                "财政拨款公务接待费支出决算0万元。因公出国（境）费支出决算0万元。")
+        doc = _doc(text)
+        assert narrative_zero_sources(doc, table_code="FIN_07_three_public",
+                                      indicator="reception", stage="决算") is None, text
+        assert narrative_zero_sources(doc, table_code="FIN_07_three_public",
+                                      indicator="overseas", stage="决算") is None, text
+
+
+def test_r202_frame_scope_survives_intervening_text():
+    """R2-02 负控：宣告与零陈述之间隔着同作用域演示文字仍拒收。"""
+    text = ("甲局2024年度部门决算。以下为模板示例。"
+            + "用于演示该指标的填报方式和文字格式，" * 4
+            + "财政拨款公务接待费支出决算0万元。")
+    assert narrative_zero_sources(_doc(text), table_code="FIN_07_three_public",
+                                  indicator="reception", stage="决算") is None
+
+
+def test_r202_frame_scope_rejects_across_paragraph_gap():
+    """R2-02 负控（作用域歧义即拒收）：宣告句后隔段落的零陈述仍在未闭合
+    作用域内——不存在"隔段自动出框架"的默认豁免。"""
+    text = "甲局2024年度部门决算。以下为模板示例。\n\n财政拨款公务接待费支出决算0万元。"
+    assert narrative_zero_sources(_doc(text), table_code="FIN_07_three_public",
+                                  indicator="reception", stage="决算") is None
+
+
+def test_r202_explicit_frame_closure_ends_scope():
+    """R2-02 正控：显式闭合（"以上为模板示例"式）结束作用域——闭合前的
+    零陈述拒收，闭合后的合法零披露照常授权。"""
+    text = ("甲局2024年度部门决算。以下为模板示例。财政拨款公务接待费支出决算0万元。"
+            "以上为模板示例。因公出国（境）费支出决算0万元。")
+    doc = _doc(text)
+    assert narrative_zero_sources(doc, table_code="FIN_07_three_public",
+                                  indicator="reception", stage="决算") is None
+    assert narrative_zero_sources(doc, table_code="FIN_07_three_public",
+                                  indicator="overseas", stage="决算")
+
+
 def test_fin02_income_narrative_zero_capability():
     """§4.1/IR 范围澄清：FIN_02 收入表的叙述零能力已实现——同身份 assertive
     零声明为收入空白格作证；无声明（知识产权局形态）保持未知是材料边界，

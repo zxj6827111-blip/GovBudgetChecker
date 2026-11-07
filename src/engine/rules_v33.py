@@ -773,8 +773,15 @@ def _v33_relation_receipt(
     explained_by: Optional[str] = None,
     residual_difference_wan: Optional[str] = None,
     cascade_of: Optional[str] = None,
+    evidence_nature: Optional[str] = None,
 ) -> None:
-    """RC-04：V33 族关系级回执——每条适用关系一条，携带真实操作数 ID。"""
+    """RC-04：V33 族关系级回执——每条适用关系一条，携带真实操作数 ID。
+
+    evidence_nature（R2-01 第二轮复核：证据性质分账）缺省按状态映射：
+    pass/fail=real_amount_comparison（操作数为真实取数或 A1 合法授权零，
+    可计独立金额核对）；not_applicable=applicability_judgment（适用性判断，
+    不计金额核对）。pass 回执不允许携带"以被核对另一侧反推零"的操作数。
+    """
     from src.engine.fact_context import make_fact_receipt
 
     receipts = getattr(doc, "fact_receipts", None)
@@ -818,6 +825,13 @@ def _v33_relation_receipt(
             explained_by=explained_by,
             residual_difference_wan=residual_difference_wan,
             cascade_of=cascade_of,
+            evidence_nature=(
+                evidence_nature
+                if evidence_nature is not None
+                else {"pass": "real_amount_comparison",
+                      "fail": "real_amount_comparison",
+                      "not_applicable": "applicability_judgment"}.get(status)
+            ),
         )
     )
 
@@ -11014,11 +11028,14 @@ class R33CrossSanGongEcon(Rule):
                 # 不存在可超分项（非负分解）→ 有据不适用；否则分项大小无法
                 # 核实 → 保持未知（不得静默跳过）。
                 if total == 0:
+                    # 适用性判断（R2-01 分账）：未列项+总额0 → 不存在可超分项。
+                    # 显式标注性质，统计侧不计为独立金额核对。
                     _v33_relation_receipt(
                         doc, self.code, relation_id,
                         status="not_applicable",
                         formula=(f"三公表「{subject}」决算数为0（第{three_public_pages.get(key) or page7}页），"
                                  "基本支出表未列该经济科目，不存在可超分项"),
+                        evidence_nature="applicability_judgment",
                     )
                     continue
                 reason = (f"基本支出表未列「{subject}」，且三公表该项决算数为 "
@@ -11031,34 +11048,35 @@ class R33CrossSanGongEcon(Rule):
                 )
                 continue
             if hit.get("amount") is None:
-                # FIN_06 空白金额（IR01）：整项为 0（显式或说明零披露授权）时
-                # 分项必为 0（非负分解）；否则保持未知，不得静默跳过。
+                # FIN_06 空白金额（R2-01 第二轮复核收口）：**不得**以被核对的
+                # 另一侧（三公表该项，无论显式 0 还是说明零披露授权的 0）反推
+                # 本表空白为 0，再把 0≤0 包装成独立金额比较——"基本支出分项
+                # 是三公该项的组成部分"正是本关系要核的前提，先假定它成立来
+                # 造操作数等于用结论证明前提（审核方同源反推控制实证）。
+                # A1 边界：推断零只用于适用性/披露判断，不作金额比较操作数。
+                # 三公侧零披露的披露判断已在零台账记账（zero_basis_note），
+                # 与本分项的金额未知分开呈现；FIN_06 无独立取数依据 → 未知。
                 zero_refs = None
-                authorized = total == 0
-                if not authorized:
+                if total == 0:
                     indicator = "total_actual" if key == "total" else key
                     zero_refs = narrative_zero_sources(
                         doc, table_code="FIN_07_three_public", indicator=indicator,
                         stage="决算", org_name=getattr(doc, "org_name", None),
                         fiscal_year=year,
                     )
-                    authorized = bool(zero_refs)
-                if authorized:
-                    hit["amount"] = Decimal("0.00")
-                    basis = ("三公表该项决算数为0（显式），基本支出分项必为0" if total == 0
-                             else f"说明零披露（第{zero_refs[0].get('page')}页）：整项决算为0，基本支出分项必为0")
-                    hit["zero_basis"] = basis
-                    self._zero_basis_note_by_subject.setdefault(item_groups.get(key, key), basis)
-                else:
-                    reason = (f"基本支出表「{subject}」决算数为空白且无独立零依据"
-                              f"（三公表该项为 {total} {unit}），该分项保持未知")
-                    unresolved.append(reason)
-                    blocked.add(key)
-                    _v33_relation_receipt(
-                        doc, self.code, relation_id,
-                        status="insufficient_data", incomplete_reason=reason,
-                    )
-                    continue
+                disclosure_note = ("三公表该项为0（说明零披露已按披露判断另行记账）"
+                                   if total == 0 else f"三公表该项为 {total} {unit}")
+                reason = (f"基本支出表「{subject}」决算数为空白且无独立取数依据，"
+                          f"不得以三公表该项反推本表空白为0，该分项保持未知"
+                          f"（{disclosure_note}；待人工复核）")
+                unresolved.append(reason)
+                blocked.add(key)
+                _v33_relation_receipt(
+                    doc, self.code, relation_id,
+                    status="insufficient_data", incomplete_reason=reason,
+                    disclosure_sources=[dict(ref) for ref in (zero_refs or [])],
+                )
+                continue
             total = three_public[key]
             component: Decimal = hit["amount"]
             # 证据页码 = 证据所在单元格的真实页（续页行不得标成表起始页）

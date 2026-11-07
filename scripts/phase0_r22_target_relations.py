@@ -241,6 +241,9 @@ def probe_pdf(target: dict) -> dict:
         relations_by_rule[rid].append({
             "relation_id": str(r.get("sub_check_id") or r.get("check_relation_id") or ""),
             "status": str(r.get("status") or ""),
+            # R2-01/R2-05：证据性质随关系落账——恢复质量按性质分账，
+            # 推导/适用性不冒计独立金额恢复。
+            "evidence_nature": str(r.get("evidence_nature") or ""),
             "incomplete_reason": str(r.get("incomplete_reason") or "")[:400],
             "formula": str(r.get("formula") or "")[:300],
         })
@@ -291,7 +294,8 @@ def _run_relations_stats(before_path: str, after_path: str, output: str) -> None
                 for rel in info.get("relations") or []:
                     out[f"{pdf_key}::{rid}::{rel.get('relation_id')}"] = {
                         "rule_id": rid, "relation_id": rel.get("relation_id"),
-                        "status": rel.get("status")}
+                        "status": rel.get("status"),
+                        "evidence_nature": rel.get("evidence_nature") or ""}
         return out
 
     before_rels, after_rels = _relations(before), _relations(after)
@@ -325,7 +329,11 @@ def _run_relations_stats(before_path: str, after_path: str, output: str) -> None
     relations = []
     for key in all_keys:
         b, a = _to_ledger(before_rels.get(key)), _to_ledger(after_rels.get(key))
-        status = (a or b or {}).get("status", "")
+        # after 无记录（R2-05）：当前引擎结果=记录缺失（未知），**不得**用
+        # (a or b) 把 before 的旧 pass 填进当前引擎维度；before 历史状态单列
+        # 保留展示，归因走 record_missing。
+        after_missing = a is None
+        status = (a or {}).get("status", "") if not after_missing else "record_missing"
         attributions = derive_attribution(b or {}, a or {})
         # before 无回执的两种因果分开（IR06）：before 规则级未完成
         # （insufficient_data/parse_error/execution_error → 关系当时未被评估）
@@ -341,8 +349,35 @@ def _run_relations_stats(before_path: str, after_path: str, output: str) -> None
             "engine_dimension": engine_dimension(status,
                                                  has_confirmed_findings=bool((a or {}).get("has_confirmed_findings"))),
             "attributions": attributions,
+            "evidence_nature": str((after_rels.get(key) or {}).get("evidence_nature") or ""),
+            "after_record_missing": after_missing,
+            "before_status": str((before_rels.get(key) or {}).get("status") or ""),
         })
     report_stats = aggregate_three_dimensions(relations, manual_decisions={})
+    # 关系明细回填审计字段（采集缺失标记 / before 历史状态 / 证据性质）——
+    # aggregate 的 detail 只保留三维度字段，这里把来源侧字段并回，供复核。
+    extras = {rel["relation_id"]: rel for rel in relations}
+    for entry in report_stats.get("relations") or []:
+        extra = extras.get(entry.get("relation_id")) or {}
+        for field in ("evidence_nature", "after_record_missing", "before_status"):
+            if field in extra:
+                entry[field] = extra[field]
+    # 恢复质量分账（R2-01/R2-05）：本轮恢复的关系按证据性质拆分——
+    # 独立金额核对只认 real_amount_comparison；适用性判断与未标注性质
+    # 的恢复单列，不冒计。
+    quality = {"independent_amount_comparison": 0,
+               "applicability_judgment": 0,
+               "unspecified": 0}
+    for rel in relations:
+        if "recovered_this_round" in (rel.get("attributions") or []):
+            nature = rel.get("evidence_nature") or ""
+            if nature == "real_amount_comparison":
+                quality["independent_amount_comparison"] += 1
+            elif nature == "applicability_judgment":
+                quality["applicability_judgment"] += 1
+            else:
+                quality["unspecified"] += 1
+    report_stats["recovery_quality"] = quality
     report_stats["before_meta"] = {k: before.get(k) for k in ("generated_at", "head_commit", "repo_root")}
     report_stats["after_meta"] = {k: after.get(k) for k in ("generated_at", "head_commit", "repo_root")}
     out_path = Path(output)
@@ -355,6 +390,9 @@ def _run_relations_stats(before_path: str, after_path: str, output: str) -> None
     print(f"归因: 恢复={att['recovered_this_round']} 新发现={att['new_finding']} "
           f"仍未解={att['tech_unresolved']} resolved_before={att['resolved_before_this_plan']} "
           f"记录缺失={att['record_missing']}")
+    q = report_stats["recovery_quality"]
+    print(f"恢复质量分账: 独立金额核对={q['independent_amount_comparison']} "
+          f"适用性判断={q['applicability_judgment']} 未标注={q['unspecified']}")
     print(f"written: {out_path}")
 
 

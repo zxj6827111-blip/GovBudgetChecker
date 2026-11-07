@@ -205,6 +205,16 @@ def test_unresolved_total_le_15(replays):
             assert item["status"] == "insufficient_data", (alias, item["detail"])
             assert "无独立零依据" in item["detail"] and blank_item in item["detail"], item["detail"]
             planned_missing += 1
+    # R2-01（第二轮复核 2026-11-07）：三公表该项 0（显式或说明授权）不得
+    # 反推 FIN_06 空白为 0 再比较 0≤0——文旅的因公出国（境）费 FIN_06
+    # 空白此前靠该同源推导自动通过，现按 A1 边界保持未知，属计划内契约
+    # 收紧（+1）；三公侧零披露的披露判断由零台账另行呈现。
+    wenlv_cross = replays["wenlv"]["unresolved"].get("V33-CROSS-SAN-GONG-ECON")
+    if wenlv_cross:
+        assert wenlv_cross["status"] == "insufficient_data", wenlv_cross["detail"]
+        assert "因公出国（境）费" in wenlv_cross["detail"], wenlv_cross["detail"]
+        assert "不得以三公表该项反推" in wenlv_cross["detail"], wenlv_cross["detail"]
+        planned_missing += 1
     assert total - planned_missing <= 15, f"排除已核实缺分项预算后 unresolved {total} 超出验收线"
     # 2026-09-29 MR-B 批次计划内收敛：4 份决算 unresolved 14 → ≤10（实测 10），
     # 验收重走并固化于 tests/test_budget_intake_20260929.py（BUD-105/107/108/109

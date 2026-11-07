@@ -12,7 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from scripts.verify_three_carriers import three_carrier_snapshot
+from scripts.verify_three_carriers import _canonical, three_carrier_snapshot
 
 TOOL = Path(__file__).resolve().parents[2] / "scripts" / "verify_three_carriers.py"
 
@@ -91,3 +91,35 @@ def test_tool_selftest_and_real_record_smoke():
     snapshot = json.loads(out.stdout)
     assert snapshot["formal_total_deduped"] >= 1
     assert snapshot["no_cross_carrier_sum"] is True
+
+
+def test_r204_same_id_content_change_is_never_identical():
+    """R2-04 控制A（审核方形态）：同 id/rule/page、仅正文金额 10→100 →
+    两份快照必须判异；快照保留规范化问题内容，内容差异可见。"""
+    issue = {"id": "F1", "rule": "V33-X", "message": "合计10万元与分项8万元不一致", "page": 8}
+    snap_before = three_carrier_snapshot({"rule_findings": [issue]}, {}, {})
+    snap_after = three_carrier_snapshot(
+        {"rule_findings": [{**issue, "message": "合计100万元与分项8万元不一致"}]}, {}, {})
+    assert _canonical(snap_before) != _canonical(snap_after)
+    content_before = snap_before["formal_findings"][0]["content"]
+    content_after = snap_after["formal_findings"][0]["content"]
+    assert content_before["message"] != content_after["message"]
+    assert content_before["id"] == "F1"  # 确定性 id 保留在内容里参与比较
+
+
+def test_r204_volatile_uuid_id_dedupes_to_one():
+    """R2-04 控制B（审核方形态）：两正式载体承载同一内容、仅易变 id 不同
+    （uuid:one/uuid:two）→ 去重计 1；id 作为来源引用另存不丢失。"""
+    same = {"id": "uuid:one", "rule": "V33-X", "message": "同一问题", "page": 8}
+    snapshot = three_carrier_snapshot(
+        {"rule_findings": [same]}, {"issues": [{**same, "id": "uuid:two"}]}, {})
+    assert snapshot["formal_total_deduped"] == 1
+    assert snapshot["multi_carrier_projection"]["count"] == 1
+    assert sorted(snapshot["formal_findings"][0]["sources"]) == ["uuid:one", "uuid:two"]
+    # 时间戳同样不进入指纹：同一问题采集两次时间戳不同仍判同
+    older = {**same, "id": "uuid:a", "created_at": "2026-11-07T08:00:00"}
+    newer = {**same, "id": "uuid:b", "created_at": "2026-11-07T09:00:00"}
+    snapshot_ts = three_carrier_snapshot({"rule_findings": [older]}, {}, {})
+    snapshot_ts2 = three_carrier_snapshot({"rule_findings": [newer]}, {}, {})
+    assert (snapshot_ts["formal_findings"][0]["content_digest"]
+            == snapshot_ts2["formal_findings"][0]["content_digest"])

@@ -6,7 +6,9 @@
   （``减少 0.08 万元``/``增加 0.13 万元``）；
 - **只认事实断言语境**：否定（"不成立/并非/没有证据"）、条件（"若/如果/假设"）、
   引用/模板/示例（含金额整体处于引号内）、疑问一律不作零依据；支配范围覆盖
-  整个零陈述句（含前缀引导句与"以下表述不成立"式指前否定）；
+  整个零陈述句（含前缀引导句与"以下表述不成立"式指前否定），并覆盖宣告帧
+  **作用域**（"以下为模板示例/假设情形"宣告后、显式闭合前的全部零陈述，
+  R2-02：作用域歧义即拒收，不存在隔句自动出框架）；
 - 阶段必须匹配：决算格只接受决算语境的零声明；年初预算格不接受决算声明；
 - 年度、主体必须与材料一致，出现他年度或他主体一律拒绝；
 - 同一指标在同类语境里只要出现一条**非零水平陈述**，就不形成零证据；
@@ -67,14 +69,38 @@ _QUESTION_RE = re.compile(r"[？?]")
 # 前导句的指前否定："以下表述不成立"式——隔句号仍支配本句。
 _FORWARD_NEGATION_RE = re.compile(r"(?:以下|下列|下述|如下)(?:表述|说法|内容|情况)?(?:均)?(?:不成立|并非|不属实)")
 # 前导宣告帧（IR02）：宣告句（以下/下列/… + 假设/示例/模板…）宣布其后内容
-# 处于非断言框架，支配紧随的零陈述。真实语序"具体情况如下："不含框架名词，
-# 不受影响。
+# 处于非断言框架。真实语序"具体情况如下："不含框架名词，不受影响。
 _FORWARD_REF_RE = re.compile(r"以下|下列|下述|如下|下面")
 _FRAME_NOUN_RE = re.compile(r"假设|假定|示例|样例|模板|虚构|演示")
-_FRAME_ANNOUNCEMENT_RE = re.compile(
-    rf"(?:(?:{_FORWARD_REF_RE.pattern})[^。；;]{{0,24}}(?:{_FRAME_NOUN_RE.pattern})"
-    rf"|(?:{_FRAME_NOUN_RE.pattern})[^。；;]{{0,24}}(?:{_FORWARD_REF_RE.pattern}))"
-    rf"[^。；;]*[。；;]?\s*$")
+# R2-02（第二轮复核）：宣告帧是**作用域**不是单句修饰——旧实现只检查紧邻
+# 前导片段且要求宣告句贴着零陈述（$ 锚），宣告后的第二条零陈述就漏网。
+# 现在：宣告句开启非断言框架，作用域自宣告处起支配其后全部内容，直到
+# 显式闭合或文本结束；作用域内的每一条零陈述都拒收（fail-closed）。
+_FRAME_ANNOUNCEMENT_OPEN_RE = re.compile(
+    rf"(?:{_FORWARD_REF_RE.pattern})[^。；;]{{0,24}}(?:{_FRAME_NOUN_RE.pattern})"
+    rf"|(?:{_FRAME_NOUN_RE.pattern})[^。；;]{{0,24}}(?:{_FORWARD_REF_RE.pattern})")
+#: 显式闭合："以上为模板示例/以上情形系假设/示例到此结束"式——提前结束
+#: 作用域。闭合词表同为保守下界：识别不出闭合只会让作用域更长（更保守）。
+_FRAME_CLOSURE_RE = re.compile(
+    r"以上[^。；;]{0,16}?(?:假设|假定|示例|样例|模板|虚构|演示)"
+    r"|(?:假设|假定|示例|样例|模板|虚构|演示)情形?[^。；;]{0,6}?(?:到此)?(?:结束|为止)"
+    r"|到此(?:为止|结束)")
+#: 兼容旧名：宣告帧开启形态（无 $ 锚——锚定语义已由作用域机制取代）。
+_FRAME_ANNOUNCEMENT_RE = _FRAME_ANNOUNCEMENT_OPEN_RE
+
+
+def _frame_scope_spans(compact: str) -> Tuple[Tuple[int, int], ...]:
+    """宣告帧作用域区间（R2-02）。
+
+    每个宣告句开启一个作用域：自宣告处起，到最早的显式闭合处或文本末尾
+    为止。作用域内的零陈述一律不是本材料的事实断言——不存在"隔了几个
+    句子/段落就自动出框架"的默认豁免；作用域歧义时按拒收处理。
+    """
+    spans: list = []
+    for match in _FRAME_ANNOUNCEMENT_OPEN_RE.finditer(compact):
+        closure = _FRAME_CLOSURE_RE.search(compact, match.end())
+        spans.append((match.start(), closure.start() if closure else len(compact)))
+    return tuple(spans)
 _QUOTE_PAIRS = (("“", "”"), ("\"", "\""))
 
 #: 明确不属于财政拨款的资金口径：不能证明“财政拨款三公表”的空格为零。
@@ -116,14 +142,16 @@ def _inside_quote_span(clause: str, start: int, end: int) -> bool:
     return False
 
 
-def _is_assertive_context(compact: str, begin: int, clause: str) -> bool:
-    """语气守卫：零陈述必须处于 assertive 语境（A1 准入 1；IR02 加固）。
+def _is_assertive_context(compact: str, begin: int, clause: str,
+                          frame_spans: Tuple[Tuple[int, int], ...] = ()) -> bool:
+    """语气守卫：零陈述必须处于 assertive 语境（A1 准入 1；IR02/R2-02 加固）。
 
     支配范围 = 整个零陈述句（含前缀引导句）：
     - 否定/条件/模板示例/疑问出现在同一句读单元内 → 拒收；
     - 前导文字以冒号/逗号直连本句且带否定/条件/模板语气 → 拒收；
-    - 前导句是指前否定（"以下表述不成立"）或宣告帧（"以下为假设情形/
-      模板示例"）→ 支配紧随的零陈述，隔句号仍拒收。
+    - 前导句是指前否定（"以下表述不成立"）→ 支配紧随的零陈述，隔句号仍拒收；
+    - **宣告帧作用域**（R2-02）：零陈述落在任一宣告帧作用域区间内（宣告句
+      之后、显式闭合之前——不管隔了多少句）→ 拒收。作用域歧义即拒收。
     语气命中的后果是"该句不作零依据"（fail-closed），不会产生错误证据。
     词表是保守下界：无法确认断言语境时不授权。
     """
@@ -139,7 +167,7 @@ def _is_assertive_context(compact: str, begin: int, clause: str) -> bool:
                 return False
     if _FORWARD_NEGATION_RE.search(lead):
         return False
-    if _FRAME_ANNOUNCEMENT_RE.search(lead):
+    if any(span_begin <= begin < span_end for span_begin, span_end in frame_spans):
         return False
     return True
 
@@ -177,13 +205,15 @@ def narrative_zero_sources(doc: Any, *, table_code: str, indicator: str,
         rf"(?:{ '|'.join(labels) })\s*(?:支出)?\s*(?:决算(?:数)?)?\s*(?:为|是)?\s*"
         r"(?P<num>\d[\d,]*(?:\.\d+)?)\s*万元"
     )
+    # R2-02：宣告帧作用域按整份说明文本计算一次（宣告句到显式闭合/文末）。
+    frame_spans = _frame_scope_spans(compact)
     zero_ranges = []
     for begin, end in _clauses(compact):
         clause = compact[begin:end]
         if not pattern.search(clause):
             continue
-        # A1 准入 1：语气守卫（否定/条件/引用模板/疑问 → 非事实断言）。
-        if not _is_assertive_context(compact, begin, clause):
+        # A1 准入 1：语气守卫（否定/条件/引用模板/疑问/宣告帧作用域 → 非事实断言）。
+        if not _is_assertive_context(compact, begin, clause, frame_spans):
             continue
         if table_code == "FIN_07_three_public" and _NON_FISCAL_SCOPE_RE.search(clause):
             # “非财政拨款…决算0万元”说的是另一资金口径，不能补财政拨款表。

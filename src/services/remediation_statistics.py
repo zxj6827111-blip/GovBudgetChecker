@@ -55,6 +55,8 @@ _LEDGER_STATUS_TO_ENGINE: Dict[str, str] = {
     "not_executed": ENGINE_NOT_EXECUTED,
     "parse_error": ENGINE_UNKNOWN,
     "execution_error": ENGINE_UNKNOWN,
+    # R2-05：after 采集记录缺失——当前引擎结果=未知，绝不沿用 before 状态。
+    "record_missing": ENGINE_UNKNOWN,
 }
 
 
@@ -90,6 +92,8 @@ def derive_attribution(
     - 修复前已完成、修复后有记录 → resolved_before_this_plan（本轮不计量）；
       修复后记录缺失时附加 record_missing（IR06：不能凭漏采断言退化，
       也不能凭 before 已完成就无视后续不可见）；
+    - 修复前已完成、修复后**退化出现 finding** → resolved_before + 新发现
+      同时入账（R2-05：resolved_before 不得单独吞掉 after 退化出的技术缺口）；
     - 修复前未完成、修复后完成且发现问题 → 本轮操作数恢复 + 新发现问题；
     - 修复前未完成、修复后完成通过 → 本轮操作数恢复；
     - 修复前后都未完成 → 技术仍未解；标记范围外的 → 范围外（附加）；
@@ -105,6 +109,16 @@ def derive_attribution(
             return [ATTR_RESOLVED_BEFORE_THIS_PLAN, ATTR_RECORD_MISSING]
         return [ATTR_RECORD_MISSING]
     if before_done:
+        after_findings = bool(after.get("findings_count")) or bool(after.get("has_confirmed_findings"))
+        if after_findings:
+            before_findings = bool(before.get("findings_count")) or bool(before.get("has_confirmed_findings"))
+            if before_findings:
+                # before/after 都带 finding：问题持续存在，不是本轮新发现
+                # （R2-05 细化：resolved_before 单独保留即可，不虚增新发现）。
+                return [ATTR_RESOLVED_BEFORE_THIS_PLAN]
+            # R2-05：before 完成通过、after 退化出 finding——两个归因同时
+            # 保留，不允许 resolved_before 把退化显示成"与 before 一致"。
+            return [ATTR_RESOLVED_BEFORE_THIS_PLAN, ATTR_NEW_FINDING]
         return [ATTR_RESOLVED_BEFORE_THIS_PLAN]
     after_done = after_status == "completed" or after_status == "not_applicable"
     after_findings = bool(after.get("findings_count")) or bool(after.get("has_confirmed_findings"))

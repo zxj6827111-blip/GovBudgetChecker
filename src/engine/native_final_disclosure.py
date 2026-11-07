@@ -322,34 +322,49 @@ def _original_table_rows(doc, pages):
 
 
 def _general_table_pages(doc, facts):
-    """原表扫描范围（1 基页码）——逐级回退：
+    """原表扫描范围（1 基页码）——必须是**可证明完整**的逻辑表范围（R2-03）。
 
-    1. FIN_05 事实证据页（生产路径，最精确）；
-    2. 解析产物里 FIN_05 表片段所在页；
-    3. 都拿不到（最小化测试桩/严重降级输入）→ 全部页（候选唯一性以
-       "全文档同名行数"裁决——过宽只会更难唯一，fail-closed 不误绑）。
+    事实证据页只说明"解析幸存的事实落在哪"，不能自证续页不存在：facts 只
+    覆盖第 1 页时，第 2 页续表里的同名候选会被漏掉，候选集被人为缩小后
+    "唯一性"误通过（审核方跨页负控实证）。因此：
+
+    1. 解析产物声明了 FIN_05 逻辑表范围（logical_tables 的 page_start/
+       page_end，或 table_fragments 片段所在页）→ 范围与事实证据页取并集；
+    2. 解析产物没有任何 FIN_05 范围信息 → 全部页（按构造完整；过宽只会
+       让唯一性更难满足，fail-closed 不误绑）。
+
+    范围完整性核验：声明的页必须落在文档页数内，越界声明视为产物不完整，
+    退回全部页——绝不在"只扫了事实页"的不完整范围上做唯一性裁决。
     """
-    pages = set()
+    fact_pages = set()
     for fact in facts:
         if getattr(fact, 'table_code', '') != GENERAL:
             continue
         for ref in (getattr(fact, 'extra_dims', None) or {}).get('evidence_refs', []) or []:
             page = ref.get('physical_page')
             if isinstance(page, int) and page > 0:
-                pages.add(page)
-    if pages:
-        return sorted(pages)
+                fact_pages.add(page)
+    total_pages = len(getattr(doc, 'page_texts', []) or [])
+    artifact_pages = set()
     artifact = getattr(doc, 'parse_artifact', None)
+    for table in getattr(artifact, 'logical_tables', None) or []:
+        if getattr(table, 'table_code', '') != GENERAL:
+            continue
+        start, end = getattr(table, 'page_start', None), getattr(table, 'page_end', None)
+        if isinstance(start, int) and isinstance(end, int) and 1 <= start <= end:
+            artifact_pages.update(range(start, end + 1))
     for fragment in getattr(artifact, 'table_fragments', None) or []:
         if getattr(fragment, 'table_code', '') != GENERAL:
             continue
         for cell in getattr(fragment, 'cells', None) or []:
             page = getattr(cell, 'page_number', None)
             if isinstance(page, int) and page > 0:
-                pages.add(page)
-    if pages:
-        return sorted(pages)
-    return sorted(range(1, len(getattr(doc, 'page_texts', []) or []) + 1))
+                artifact_pages.add(page)
+    if artifact_pages and (not total_pages or max(artifact_pages) <= total_pages):
+        return sorted(fact_pages | artifact_pages)
+    # 无可信产物范围（或范围越界=产物不完整）→ 全部页：完整按构造成立，
+    # 候选只会更多、唯一性只会更难——不会在缩小后的候选集上误绑。
+    return sorted(range(1, total_pages + 1))
 
 
 def _original_name_candidates(doc, pages, name, width):

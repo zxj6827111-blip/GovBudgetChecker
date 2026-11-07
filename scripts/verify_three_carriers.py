@@ -66,12 +66,27 @@ def _carrier_state(container: Any, key: str) -> Dict[str, Any]:
     return {"present": True, "count": None, "items": [], "missing": False, "non_list": True}
 
 
+#: 易变字段：不进入稳定内容指纹（R2-04：uuid:one→uuid:two 的同内容投影
+#: 曾因指纹含 id 被计成两个问题；采集时间戳同理）。
+_VOLATILE_CONTENT_KEYS = {"created_at", "updated_at"}
+
+
 def finding_content(finding: Dict[str, Any]) -> Dict[str, Any]:
-    return {k: v for k, v in finding.items() if k not in {"created_at", "updated_at"}}
+    """规范化问题内容 = 全字段剔除易变键（含非确定性 id）。
+
+    确定性 id 参与身份（finding_identity），但**不进入内容指纹**：同一问题
+    换发 id 后内容未变仍须视为同一问题；内容变化（如金额 10→100）则必须
+    判异。id 作为来源引用单列在 finding 的 sources 里，不丢失。
+    """
+    finding_id = str(finding.get("id") or "")
+    volatile = set(_VOLATILE_CONTENT_KEYS)
+    if finding_id.startswith("uuid:"):
+        volatile.add("id")
+    return {k: v for k, v in finding.items() if k not in volatile}
 
 
 def finding_identity(finding: Dict[str, Any]) -> str:
-    """身份：确定性 id 优先；UUID/无 id 用内容指纹。"""
+    """身份：确定性 id 优先；UUID/无 id 用**稳定内容**指纹（不含易变 id）。"""
     finding_id = str(finding.get("id") or "")
     if finding_id and not finding_id.startswith("uuid:"):
         return f"id:{finding_id}"
@@ -104,7 +119,10 @@ def three_carrier_snapshot(result: Any, review_report: Any, meta_coverage: Any) 
     for identity, occurrences in identities.items():
         if len(occurrences) > 1:
             contents = {_canonical(finding_content(f)) for f in occurrences.values()}
-            entry: Dict[str, Any] = {"identity": identity, "carriers": sorted(occurrences)}
+            entry: Dict[str, Any] = {
+                "identity": identity, "carriers": sorted(occurrences),
+                "sources": sorted(str(f.get("id")) for f in occurrences.values() if f.get("id")),
+            }
             if len(contents) > 1:
                 entry.update({
                     "kind": "carrier_content_mismatch",
@@ -116,6 +134,18 @@ def three_carrier_snapshot(result: Any, review_report: Any, meta_coverage: Any) 
                 entry["kind"] = "duplicate_projection"
                 multi_carrier.append(entry)
     formal_total = len(identities)
+    formal_findings = [
+        {
+            "identity": identity,
+            "carriers": sorted(occurrences),
+            "sources": sorted({str(f.get("id")) for f in occurrences.values() if f.get("id")}),
+            "content_digest": "sha1:" + hashlib.sha1(
+                _canonical(finding_content(next(iter(occurrences.values())))).encode("utf-8")
+            ).hexdigest()[:16],
+            "content": finding_content(next(iter(occurrences.values()))),
+        }
+        for identity, occurrences in sorted(identities.items())
+    ]
 
     # 投影对接（回执引用 → 并集身份）
     receipts = _carrier_state(review_report, _RECEIPT_CARRIER)
@@ -155,6 +185,7 @@ def three_carrier_snapshot(result: Any, review_report: Any, meta_coverage: Any) 
         },
         "main_carrier": main_carrier_key,
         "formal_total_deduped": formal_total,
+        "formal_findings": formal_findings,
         "multi_carrier_projection": {
             "count": len(multi_carrier),
             "items": multi_carrier[:50],
@@ -179,6 +210,8 @@ def three_carrier_snapshot(result: Any, review_report: Any, meta_coverage: Any) 
             "正式问题载体=result.rule_findings / result.issues / review_report.issues（IR05 勘误）；"
             "check_receipts 与 obligation_coverage 是投影，不替代正式载体。",
             "formal_total_deduped 是三载体按身份去重的并集，不是三者相加。",
+            "去重与比较用稳定内容指纹：易变 id（uuid:*）与时间戳不进入指纹，"
+            "同内容换 id 计同一问题；同 id 内容变化（如金额 10→100）判异。",
             "键缺失=未知；键存在且为[]=合法空。本快照不签发验收结论（待审工具）。",
         ],
     }
@@ -202,8 +235,14 @@ def scan(record_path: Path) -> int:
 def compare(before_path: Path, after_path: Path) -> int:
     before, after = _snapshot_from_status(before_path), _snapshot_from_status(after_path)
     identical = _canonical(before) == _canonical(after)
+    before_contents = {f["identity"]: f["content"] for f in before["formal_findings"]}
+    after_contents = {f["identity"]: f["content"] for f in after["formal_findings"]}
+    content_changes = sorted(
+        identity for identity in set(before_contents) & set(after_contents)
+        if _canonical(before_contents[identity]) != _canonical(after_contents[identity]))
     print(json.dumps({
         "deterministic_identical": identical,
+        "content_changed_identities": content_changes,
         "before_formal_total": before["formal_total_deduped"],
         "after_formal_total": after["formal_total_deduped"],
         "conflicts_before": before["conflicts"],
@@ -263,6 +302,32 @@ def selftest() -> int:
     checks.append(("投影命中/独有分账", snapshot["receipt_projection"]["mapped_refs"] == 1
                    and snapshot["receipt_projection"]["projection_only_count"] == 1))
     checks.append(("无引用正式问题登记", set(snapshot["unreferenced_main_findings"]) == {"id:F-2"}))
+
+    # R2-04 控制A：同 id 内容变化（金额10→100）必须判异——快照未保留内容时
+    # 曾被误判 deterministic_identical=true。
+    base_issue = {"id": "F1", "rule": "V33-X", "message": "合计10万元与分项8万元不一致", "page": 8}
+    snap_a = three_carrier_snapshot({"rule_findings": [base_issue]}, {}, {})
+    snap_b = three_carrier_snapshot(
+        {"rule_findings": [{**base_issue, "message": "合计100万元与分项8万元不一致"}]}, {}, {})
+    checks.append(("同id内容变化判异（金额10→100）", _canonical(snap_a) != _canonical(snap_b)))
+
+    # R2-04 控制B：同内容仅换易变 id（uuid:one→uuid:two）→ 去重计 1——
+    # 内容指纹含 id 时曾被计成 2。
+    same = {"id": "uuid:one", "rule": "V33-X", "message": "同一问题", "page": 8}
+    snap_c = three_carrier_snapshot(
+        {"rule_findings": [same]}, {"issues": [{**same, "id": "uuid:two"}]}, {})
+    checks.append(("易变id同内容去重计一次", snap_c["formal_total_deduped"] == 1
+                   and snap_c["multi_carrier_projection"]["count"] == 1))
+
+    # 内容变化在 compare 维度可见：content_changed_identities 报出身份
+    changed_a = three_carrier_snapshot({"rule_findings": [base_issue]}, {}, {})
+    changed_b = three_carrier_snapshot(
+        {"rule_findings": [{**base_issue, "message": "合计100万元与分项8万元不一致"}]}, {}, {})
+    diff_ids = {f["identity"] for f in changed_a["formal_findings"]} & \
+               {f["identity"] for f in changed_b["formal_findings"]}
+    checks.append(("内容变化身份可见", diff_ids == {"id:F1"}
+                   and [f["content"] for f in changed_a["formal_findings"]][0]["message"]
+                   != [f["content"] for f in changed_b["formal_findings"]][0]["message"]))
 
     failed = [name for name, ok in checks if not ok]
     for name, ok in checks:
