@@ -93,6 +93,9 @@ _INFRA_ONLY: Dict[str, str] = {
 
 #: 只在测试 / 本地诊断里用，刻意不进 .env.example
 _INTERNAL_ONLY: Dict[str, str] = {
+    # R2.2 IR06：离线取证探针的被测代码根重定向（指向 main 检出采集
+    # before 集），只在专项验证脚本里读，不是可部署配置。
+    "R22_PROBE_REPO_ROOT": "scripts/phase0_r22_target_relations.py 的离线取证开关，不进部署环境",
     "TESTING": "pytest 环境标记",
     "PDF_PARSE_TEST_ALLOCATE_MB": "解析隔离测试钩子",
     "PDF_PARSE_TEST_DELAY_SECONDS": "解析隔离测试钩子",

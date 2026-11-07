@@ -284,14 +284,27 @@ def _run_relations_stats(before_path: str, after_path: str, output: str) -> None
     def _relations(report):
         out = {}
         for target in report.get("targets", []):
+            # 关系身份必须含 PDF 维度：sub_check_id 在不同原件间会重名
+            # （同构表的同名子检查），跨原件合并会伪造分母。
+            pdf_key = str(target.get("job_uuid") or target.get("sha256") or target.get("label"))
             for rid, info in (target.get("rules") or {}).items():
                 for rel in info.get("relations") or []:
-                    out[f"{rid}::{rel.get('relation_id')}"] = {
+                    out[f"{pdf_key}::{rid}::{rel.get('relation_id')}"] = {
                         "rule_id": rid, "relation_id": rel.get("relation_id"),
                         "status": rel.get("status")}
         return out
 
     before_rels, after_rels = _relations(before), _relations(after)
+
+    def _rule_status(report):
+        out = {}
+        for target in report.get("targets", []):
+            pdf_key = str(target.get("job_uuid") or target.get("sha256") or target.get("label"))
+            for rid, info in (target.get("rules") or {}).items():
+                out[f"{pdf_key}::{rid}"] = str(info.get("status") or "")
+        return out
+
+    before_rule_status, after_rule_status = _rule_status(before), _rule_status(after)
 
     def _to_ledger(relation):
         """回执状态 → 台账状态（engine_dimension/derive_attribution 的输入词汇）：
@@ -313,12 +326,21 @@ def _run_relations_stats(before_path: str, after_path: str, output: str) -> None
     for key in all_keys:
         b, a = _to_ledger(before_rels.get(key)), _to_ledger(after_rels.get(key))
         status = (a or b or {}).get("status", "")
+        attributions = derive_attribution(b or {}, a or {})
+        # before 无回执的两种因果分开（IR06）：before 规则级未完成
+        # （insufficient_data/parse_error/execution_error → 关系当时未被评估）
+        # 且 after 完成 → 本轮恢复；before 规则级已完成（main 无回执机制，
+        # 比较实际跑过）→ resolved_before_this_plan，不冒领恢复。
+        if b is None and a is not None:
+            before_status = before_rule_status.get(key.rsplit("::", 1)[0], "")
+            if before_status in ("pass", "fail", "not_applicable"):
+                attributions = ["resolved_before_this_plan"]
         relations.append({
             "relation_id": key,
             "status": status,
             "engine_dimension": engine_dimension(status,
                                                  has_confirmed_findings=bool((a or {}).get("has_confirmed_findings"))),
-            "attributions": derive_attribution(b or {}, a or {}),
+            "attributions": attributions,
         })
     report_stats = aggregate_three_dimensions(relations, manual_decisions={})
     report_stats["before_meta"] = {k: before.get(k) for k in ("generated_at", "head_commit", "repo_root")}
