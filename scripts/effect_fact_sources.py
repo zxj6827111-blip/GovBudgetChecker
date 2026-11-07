@@ -110,20 +110,65 @@ def _row_label_indices(page, text, positions, row, columns):
         bounds = [min(g['bbox'][0] for g in glyphs), 0, max(g['bbox'][2] for g in glyphs), 0]
         if not any(_overlaps_x(bounds, c) for c in amount_columns):
             continue
-        # 行标自身可以含横线。仅当它是完整、独立、位于全部金额列左侧
-        # 的原页文字组件时，才有依据将其与后面的金额分开；否则保留歧义。
-        complete_label = False
-        for block in page.get_text('rawdict')['blocks']:
-            for line in block.get('lines', []):
-                chars = [c for s in line.get('spans', []) for c in s.get('chars', []) if not c['c'].isspace()]
-                if (chars and all(_contains(row['bbox'], c) for c in chars)
-                        and _norm(''.join(c['c'] for c in chars)) == _norm(row['quote'])
-                        and any(c['c'].isalpha() for c in chars)
-                        and line['bbox'][2] <= min(c[0] for c in amount_columns)):
-                    complete_label = True
-        if not complete_label:
+        # 行标自身可以含横线，但删除前已识别到它与完整金额表示冲突时，
+        # 只能由画出且贯穿该行的竖向原格分界裁决；文字行/span 分组和列头
+        # 文字位置都不证明原格边界，不能据此覆盖已识别的金额语义冲突。
+        if not _conflict_glyphs_outside_amount(page, positions, label, indices, row):
             raise ValueError('行标消除会改变完整金额表示')
     return label
+
+
+def _vertical_boundaries(page, top, bottom):
+    """原页画出、贯穿 [top, bottom] 的竖向分界；表格线与格边框均可。"""
+    found = []
+    for drawing in page.get_drawings():
+        for item in drawing.get('items', []):
+            if item[0] == 'l':
+                p1, p2 = item[1], item[2]
+                if (abs(p1.x - p2.x) <= .1 and min(p1.y, p2.y) <= top + .1
+                        and max(p1.y, p2.y) >= bottom - .1):
+                    found.append(p1.x)
+            elif item[0] == 're':
+                box = item[1]
+                if box.y0 <= top + .1 and box.y1 >= bottom - .1:
+                    found.extend((box.x0, box.x1))
+    return found
+
+
+def _conflict_glyphs_outside_amount(page, positions, label, indices, row):
+    """冲突字形可删除需要独立于文字分段的原格边界证据；不能证明即拒收。
+
+    原页存在贯穿该行的画出竖向分界时由结构裁决：分界必须位于行标全部
+    字形与金额表示其余字形之间，否则冲突字形仍在金额一侧。原页没有任
+    何此类分界结构时，才允许以行标自身文字组件的逐字归属作为证据。
+    """
+    glyphs = {i: positions[i] for i in label | indices if positions[i]}
+    if not any(i not in label for i in glyphs):
+        return False
+    low = max(g['bbox'][2] for i, g in glyphs.items() if i in label)
+    high = min(g['bbox'][0] for i, g in glyphs.items() if i not in label)
+    top = min(g['bbox'][1] for g in glyphs.values())
+    bottom = max(g['bbox'][3] for g in glyphs.values())
+    vertical = _vertical_boundaries(page, top, bottom)
+    if vertical:
+        return any(low - .1 <= x <= high + .1 for x in vertical)
+    return all(_in_label_component(page, positions[i], row) for i in indices & label)
+
+
+def _in_label_component(page, glyph, row):
+    """冲突字形必须属于已逐字验证的行标自身的原页文字组件。"""
+    for block in page.get_text('rawdict')['blocks']:
+        for line in block.get('lines', []):
+            if not _contains(line['bbox'], glyph):
+                continue
+            if max(line['bbox'][1], row['bbox'][1]) >= min(line['bbox'][3], row['bbox'][3]):
+                continue
+            chars = [c for s in line.get('spans', []) for c in s.get('chars', []) if not c['c'].isspace()]
+            if (chars and all(_contains(row['bbox'], c) for c in chars)
+                    and _norm(''.join(c['c'] for c in chars)) == _norm(row['quote'])
+                    and any(c['c'].isalpha() for c in chars)):
+                return True
+    return False
 
 
 def _unit_field(page, text, positions, anchors):
