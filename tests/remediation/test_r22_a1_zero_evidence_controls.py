@@ -136,6 +136,53 @@ def test_fin02_income_narrative_zero_capability():
         table_code="FIN_02_income", indicator="operational_income", stage="决算") is None
 
 
+def test_fin02_blank_term_end_to_end_narrative_zero():
+    """§4.1 端到端收口：FIN_02 收入表空白格 → blank_term → 叙述零授权。
+
+    验证能力链路（空白原格+列身份+叙述零 → 0 操作数），而不止
+    narrative_zero_sources 单元层；V33-240 的 select 走同一条链路。
+    """
+    from types import SimpleNamespace as NS
+    from src.engine.native_empty_operands import blank_term
+    from src.engine.pipeline import build_document
+    from src.engine.fact_context import build_fact_context_from_artifact
+    from src.schemas.parse_artifact import LogicalTableInstance, ParseArtifact, ParsedCell, ParsedTable
+    from src.services.pdf_parser import PDFParser
+
+    headers = ['科目编码', '科目名称', '本年收入合计', '财政拨款收入', '事业收入',
+               '经营收入', '其他收入']
+    rows = [headers,
+            ['201', '合计', '10.00', '8.00', '2.00', '', '0.00']]
+    text = '甲局2024年度部门决算。经营收入0万元。'
+    cells = []
+    parser = PDFParser(None)
+    for r, row in enumerate(rows):
+        for c, value in enumerate(row):
+            raw = str(value or '')
+            cells.append(ParsedCell(r, c, raw, raw, parser._parse_numeric(raw), 1,
+                                    (c*70, r*25+50, (c+1)*70, r*25+75), r < 1,
+                                    .99, '万元', 'lines', native_blank_verified=not raw))
+    table = ParsedTable('FIN_02_income', '收入决算表', 1, 0,
+                        (0, 50, len(rows[0])*70, len(rows)*25+50), 1, .99,
+                        'lines', '万元', rows, cells, 'fragment')
+    instance = LogicalTableInstance('instance', 'FIN_02_income', table.title,
+                                    ['fragment'], 1, 1, org_name='甲局', fiscal_year=2024)
+    artifact = ParseArtifact(source_file_hash='a'*64, parse_run_uid='run',
+                             table_fragments=[table], physical_fragments=[table],
+                             logical_tables=[instance])
+    context = build_fact_context_from_artifact(artifact, org_name='甲局', fiscal_year=2024,
+                                               report_kind='final', doc_type='dept_final')
+    doc = build_document('income.pdf', [text], [[rows]], 0)
+    doc.parse_artifact, doc.fact_context = artifact, context
+    doc.report_kind = 'final'  # 生产路径由 run_rules_with_outcomes 设置；直跑需补
+    term = blank_term(doc, 'FIN_02_income', 'operational_income', code='201', stage='决算')
+    assert term is not None, 'FIN_02 空白收入格应能经叙述零授权（能力端到端）'
+    observation = term.extra_dims['native_blank_observation']
+    assert observation['convention'] == 'narrative_explicit_zero'
+    assert observation['narrative_sources'], observation
+    assert str(term.normalized_value) == '0'
+
+
 # ---------------------------------------------------- 空白=0 授权边界（成对）
 
 def _rule_with_tables():
