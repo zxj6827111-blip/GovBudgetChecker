@@ -261,31 +261,6 @@ def _name_difference_hint(doc, item):
     return source[0]['page'] if source else None
 
 
-def _chain_visible_in_original(doc, chain):
-    """A2 判据 2 的原件核对：链上每级「编码+名称」在同一原文行共现。
-
-    只读 doc.page_texts 原始文本行（表格行里编码独立成词、名称同在），
-    不借解析产物自证（"已解析唯一"不等于原件唯一——A2 负控：原件两个
-    候选而解析只产出一个时不得绑定）。任一级核不进原件行即视为身份链
-    来源不完整，返回 False 不绑定。
-    """
-    pages = [str(p or '') for p in (getattr(doc, 'page_texts', []) or [])]
-    for code, name in chain:
-        code_re = re.compile(rf'(?<!\d){re.escape(str(code))}(?!\d)')
-        name_n = _name(name)
-        found = False
-        for page in pages:
-            for line in page.splitlines():
-                if code_re.search(line) and name_n and name_n in _name(line):
-                    found = True
-                    break
-            if found:
-                break
-        if not found:
-            return False
-    return True
-
-
 def _item_source_line(doc, item):
     """A2：条目在原始页文本中的所在行（显式编码通常印在行首科目名旁）。
 
@@ -306,14 +281,87 @@ def _item_source_line(doc, item):
     return ''
 
 
+def _chain_visible_in_original(doc, chain):
+    """A2：链上每级「编码+名称」在同一原文行共现（判据 1 与链收尾核验用）。"""
+    pages = [str(p or '') for p in (getattr(doc, 'page_texts', []) or [])]
+    for code, name in chain:
+        code_re = re.compile(rf'(?<!\d){re.escape(str(code))}(?!\d)')
+        name_n = _name(name)
+        found = False
+        for page in pages:
+            for line in page.splitlines():
+                if code_re.search(line) and name_n and name_n in _name(line):
+                    found = True
+                    break
+            if found:
+                break
+        if not found:
+            return False
+    return True
+
+
+def _original_table_rows(doc, pages):
+    """完整原表行清单（A2/IR03）：给定 1 基页码集合上的「行首编码+名称」。
+
+    只读 doc.page_texts 原始文本行，不经解析产物——"已解析唯一"不等于
+    原件唯一。行形态：行首 3-7 位编码 + 名称（NFKC 归一）；名称取编码后
+    的连续非数字前缀（金额数字跟在名称之后，不属名称）。
+    """
+    rows = []
+    all_pages = getattr(doc, 'page_texts', []) or []
+    for page_number in pages:
+        if not isinstance(page_number, int) or not 1 <= page_number <= len(all_pages):
+            continue
+        for line in str(all_pages[page_number - 1] or '').splitlines():
+            normalized = ''.join(
+                ch for ch in unicodedata.normalize('NFKC', line) if not ch.isspace())
+            match = re.match(r'^(\d{3,7})(\D+)', normalized)
+            if match:
+                rows.append((match.group(1), match.group(2)))
+    return rows
+
+
+def _general_table_pages(facts):
+    """FIN_05 逻辑表的全部证据页（1 基）——原表完整扫描范围。"""
+    pages = set()
+    for fact in facts:
+        if getattr(fact, 'table_code', '') != GENERAL:
+            continue
+        for ref in (getattr(fact, 'extra_dims', None) or {}).get('evidence_refs', []) or []:
+            page = ref.get('physical_page')
+            if isinstance(page, int) and page > 0:
+                pages.add(page)
+    return sorted(pages)
+
+
+def _original_name_candidates(doc, pages, name, width):
+    """原表中与给定名称同宽度的全部编码候选（IR03：原件权威唯一性）。
+
+    行名与目标名同名，或行名是目标名的前缀（原表行名截断形态，如
+    "机关事业单位基本养老保"）。任何宽度过滤按编码位数执行。
+    """
+    name_n = _name(name)
+    if not name_n:
+        return set()
+    candidates = set()
+    for code, row_name in _original_table_rows(doc, pages):
+        if len(code) != width:
+            continue
+        row_n = _name(row_name)
+        if row_n and (row_n == name_n or name_n.startswith(row_n)):
+            candidates.add(code)
+    return candidates
+
+
 def _bind_klass_via_independent_chain(doc, facts, item, paths, aliases):
     """A2（R2.2 附页 QP-04）：类名缺口时按独立身份链绑定类级，不用近似名称。
 
-    准入（全部成立才绑定；修正编码不等于已证明绑定，链必须原件可核）：
+    准入（全部成立才绑定；修正编码不等于已证明绑定）：
     1) 说明原文条目行带显式 3 位类编码，且该编码在表内唯一 → 直接身份约束；
-    2) 无编码时：款名、项名在**完整原表**逐字同名各唯一命中（非近似、非
-       金额反推），项路径挂在款路径之下、款路径给出唯一 3 位类，且链上每级
-       「编码+名称」在原件原文行共现（来源完整性）。
+    2) 无编码时：款名、项名的**权威候选集来自完整原表行扫描**（IR03）——
+       原表中该名称各唯一命中、项编码挂在款编码之下、类行在原表存在，且
+       与已解析 facts 的唯一命中一致（双向一致：原件多候选而解析只产出一个、
+       或原件与解析各指不同编码，一律拒绝）。
     返回绑定的 3 位类编码；不成立返回 None（金额保持未知，名称差异照报）。
     """
     # 判据 1：原文显式编码（条目行内、类名标记之前的行前缀——金额印在
@@ -335,7 +383,7 @@ def _bind_klass_via_independent_chain(doc, facts, item, paths, aliases):
                                 'klass_code': explicit[0]})
             return explicit[0]
         return None
-    # 判据 2：独立层级链（款名/项名逐字唯一 + 链一致 + 原件共现）
+    # 判据 2：独立层级链（IR03：唯一性以**完整原表行扫描**为权威）
     def unique_by_name(width, name):
         if not name:
             return None
@@ -347,15 +395,29 @@ def _bind_klass_via_independent_chain(doc, facts, item, paths, aliases):
                      and _name(f.subject_name)} == {_name(name)}}
         return next(iter(hits)) if len(hits) == 1 else None
 
-    kuan_code = unique_by_name(5, item['kuan'])
-    if kuan_code is None:
+    table_pages = _general_table_pages(facts)
+    if not table_pages:
+        return None  # 原表范围拿不到 → 不绑定（fail-closed）
+    # 原件权威候选集：名称在**完整原表**中的全部同宽度编码。
+    kuan_original = _original_name_candidates(doc, table_pages, item['kuan'], 5)
+    if len(kuan_original) != 1:
         return None
-    xiang_code = unique_by_name(7, item['xiang'])
-    if xiang_code is None or not paths[xiang_code].startswith(paths[kuan_code]):
+    xiang_original = _original_name_candidates(doc, table_pages, item['xiang'], 7)
+    if len(xiang_original) != 1:
         return None
-    klass_path = paths[kuan_code][:3]
-    klass_code = next((code for code, path in paths.items() if path == klass_path), None)
-    if klass_code is None:
+    kuan_code = next(iter(kuan_original))
+    xiang_code = next(iter(xiang_original))
+    if not xiang_code.startswith(kuan_code):
+        return None
+    # 与解析 facts 双向一致：facts 的唯一命中（若存在）必须同码；facts 缺行
+    # 或多行同名的（解析漏行/重复行）同样拒绝。
+    if unique_by_name(5, item['kuan']) != kuan_code:
+        return None
+    if unique_by_name(7, item['xiang']) != xiang_code:
+        return None
+    klass_code = kuan_code[:3]
+    # 类行必须在原表存在（层级链来源完整性：款行挂在真实类行之下）
+    if not any(code == klass_code for code, _row_name in _original_table_rows(doc, table_pages)):
         return None
     table_klass_name = next((_name(f.subject_name) for f in facts
                              if str(f.subject_code) == klass_code

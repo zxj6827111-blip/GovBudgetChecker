@@ -215,6 +215,60 @@ def test_blank_with_narrative_zero_disclosure_completes(truth):
     assert purchase.location["three_public_amount"] == "0.00"
 
 
+def test_only_one_item_compared_others_stay_unknown(truth):
+    """IR01 负控：FIN_06 分项金额空白且无独立零依据 → 只比较有据项，
+    其余保持未知并有关系级回执；真实冲突（出国 13.24>0）保留报出。"""
+    def mutate(payload: Dict[str, Any]) -> None:
+        page_tables = payload["page_tables"]
+        for needle in ("公务接待费", "公务用车购置"):
+            row = _find_row(page_tables, PAGE_FIN_06, needle)
+            _replace_cell(page_tables, PAGE_FIN_06, row, 5, "")
+
+    doc = _clone(truth, mutate)
+    doc.relation_receipts = []
+    doc.fact_receipts = []
+    issues, deferred = _run_outcome(doc)
+    assert deferred is not None
+    reason = f"{deferred.detail} {' '.join(deferred.unresolved_reasons or [])}"
+    assert "公务接待费" in reason and "保持未知" in reason
+    assert "公务用车购置费" in reason and "保持未知" in reason
+    # 真实冲突保留：出国 13.24 > 三公 0（说明零披露授权分项为 0）
+    partial = _by_item(issues)
+    assert "overseas" in partial and partial["overseas"].severity == "error"
+    # 四个分项的关系级回执齐全（无静默缺口）：出国 fail、接待/购置/运行覆盖
+    receipts = [r for r in getattr(doc, "fact_receipts", []) or []
+                if str(r.get("rule_id")) == RULE_ID
+                and str(r.get("sub_check_id", "")).startswith(f"{RULE_ID}:cross:san_gong:")]
+    assert {str(r.get("sub_check_id")).rsplit(":", 1)[-1] for r in receipts} == {
+        "overseas", "reception", "vehicle_purchase", "vehicle_operation"}
+
+
+def test_all_four_items_covered_on_canliang_style_material(truth):
+    """IR01 正控：三公侧显式/授权为 0 的项，FIN_06 空白或未列分项按
+    非负分解授权为 0 或记有据不适用——四个分项全部落回执，不静默跳过。"""
+    def mutate(payload: Dict[str, Any]) -> None:
+        page_tables = payload["page_tables"]
+        # 接待金额清空（三公侧接待 0.30 非零 → 无据 → 未知）
+        row = _find_row(page_tables, PAGE_FIN_06, "公务接待费")
+        _replace_cell(page_tables, PAGE_FIN_06, row, 5, "")
+        # 购置行整行保留（三公侧购置 0 经说明零披露授权 → 分项必为 0 → 比较）
+
+    doc = _clone(truth, mutate)
+    doc.relation_receipts = []
+    doc.fact_receipts = []
+    # 追加购置的说明零披露（p36），使购置 FIN_06 空白获得独立依据
+    doc.page_texts[35] = doc.page_texts[35] + "公务用车购置支出为 0 万元。"
+    issues, deferred = _run_outcome(doc)
+    receipts = {str(r.get("sub_check_id")).rsplit(":", 1)[-1]: str(r.get("status"))
+                for r in getattr(doc, "fact_receipts", []) or []
+                if str(r.get("rule_id")) == RULE_ID
+                and str(r.get("sub_check_id", "")).startswith(f"{RULE_ID}:cross:san_gong:")}
+    assert set(receipts) == {"overseas", "reception", "vehicle_purchase", "vehicle_operation"}
+    assert receipts["overseas"] == "fail"          # 13.24 > 0 真冲突
+    assert receipts["vehicle_purchase"] == "pass"  # 授权 0 ≤ 0
+    assert receipts["reception"] == "insufficient_data"  # 0.30 非零、无据 → 未知
+
+
 def test_y02_truth_reports_all_three_cross_table_conflicts(truth):
     """Y02（高）：三项基本支出分项大于三公表同一业务项的决算数，必须各报一条。"""
     issues = _run(_document(truth))

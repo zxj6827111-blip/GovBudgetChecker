@@ -32,6 +32,8 @@ YEAR = 2024
 
 
 def _fact(code, name, raw="100.00"):
+    from src.schemas.parse_artifact import EvidenceRef
+
     return FiscalFact(
         fact_uid=f"fact-{code}",
         indicator="total_actual",
@@ -48,6 +50,9 @@ def _fact(code, name, raw="100.00"):
         subject_name=name,
         table_code="FIN_05_general_public_expenditure",
         instance_uid="instance-1",
+        extra_dims={"evidence_refs": [EvidenceRef(
+            file_hash="a" * 64, physical_page=2, source_cell_id=f"cell-{code}",
+            quote=f"{code} {name}", location_level="exact_cell").to_dict()]},
     )
 
 
@@ -126,19 +131,33 @@ def test_same_kuan_name_under_two_klasses_never_binds():
 
 
 def test_original_two_candidates_parsed_one_never_binds():
-    """负控：原件两个候选而解析只产出一个 → "已解析唯一"不足以绑定。
+    """IR03 关键负控：原件两个候选而**解析只产出一个** → 不得绑定。
 
-    原件同页出现两行"2130314 防汛"（跨页重复列示），解析只产出一条事实；
-    共现核验虽能命中，但全表唯一性成立与否以表事实为准——此处用款级同名
-    反例（原件两行"水利"款）阻断：唯一性要求在 facts 上已经不成立。
+    解析 facts 只含 213/21303/2130314 链；第二条 214/21403 水利/2140314 防汛
+    链只存在于原件页文本（解析漏行）。旧实现"facts 唯一 + 原文至少出现一次"
+    会误绑 213；正确行为是唯一性以完整原表扫描为权威 → 拒绝绑定。
     """
-    doc = _doc(TABLE_PAGES)
-    facts = [
-        _fact("213", "农林水支出"),
-        _fact("21303", "水利"),
-        _fact("21403", "水利"),  # 解析产出的第二个"水利"款（另一父级）
-        _fact("2130314", "防汛"),
-    ]
+    doc = _doc([
+        "一般公共预算财政拨款支出决算表\n单位：万元\n",
+        "  213 农林水支出 100.00\n  21303 水利 100.00\n  2130314 防汛 60.00\n"
+        "  214 交通运输支出 200.00\n  21403 水利 200.00\n  2140314 防汛 200.00\n",
+    ])
+    facts = [_fact("213", "农林水支出"), _fact("21303", "水利"), _fact("2130314", "防汛")]
+    paths = hierarchy_paths({str(f.subject_code) for f in facts})
+    item = _item_match("农林支出", "水利", "防汛")
+    aliases = []
+    assert _bind_klass_via_independent_chain(doc, facts, item, paths, aliases) is None
+    assert aliases == []
+
+
+def test_original_duplicates_parsed_one_never_binds():
+    """IR03 负控（同页重复形态）：原件同表两行同名款，解析只留一条 → 拒绝。"""
+    doc = _doc([
+        "一般公共预算财政拨款支出决算表\n单位：万元\n",
+        "  213 农林水支出 100.00\n  21303 水利 100.00\n  2130314 防汛 60.00\n"
+        "  215 农林水支出 90.00\n  21503 水利 90.00\n  2150314 防汛 90.00\n",
+    ])
+    facts = [_fact("213", "农林水支出"), _fact("21303", "水利"), _fact("2130314", "防汛")]
     paths = hierarchy_paths({str(f.subject_code) for f in facts})
     item = _item_match("农林支出", "水利", "防汛")
     assert _bind_klass_via_independent_chain(doc, facts, item, paths, []) is None

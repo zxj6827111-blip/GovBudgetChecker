@@ -394,7 +394,7 @@ _SECTION_HINTS = (
     ("决算情况说明", ("决算情况说明",)),
     ("三公", ("三公",)),
 )
-_DEFAULT_SECTION_HINTS = ("情况说明", "决算")
+_DEFAULT_SECTION_HINTS = ("情况说明",)
 
 
 _ANCHOR_LINE_MAX = 48

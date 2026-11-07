@@ -63,6 +63,8 @@ async def _decide_with_current_basis(conn, slot_id, **kwargs):
         "analysis_basis_token",
         state.current_analysis.analysis_basis_token,
     )
+    # R2.2 A3/IR04：关闭性决定统一协议——范围确认随请求提交。
+    kwargs.setdefault("scope_confirmed", True)
     return await review_lifecycle_service.decide_obligation(conn, slot_id, **kwargs)
 
 MIGRATION_ID = "2026-09-23_0021_review_obligation_decisions"
@@ -486,6 +488,7 @@ async def test_stale_analysis_basis_is_rejected_even_with_active_session(review_
                 actor="reviewer-a",
                 note="旧页面无依据写回",
                 analysis_basis_token="",
+                scope_confirmed=True,  # 先过 422 依据协议，才能到达 409 代际保护
             )
         assert missing.value.status_code == 409
         assert missing.value.error == ERROR_ANALYSIS_BASIS_REQUIRED

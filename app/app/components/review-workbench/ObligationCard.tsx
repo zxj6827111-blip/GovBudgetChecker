@@ -78,35 +78,38 @@ export function ObligationCard({
         </p>
       </section>
 
-      {/* R2.2 附页 A3：全量阻断点清单——规则级 0 回执时展示整条规则阻断，
-          不只列有 ID 子集；位置来自真实原页（缺数位置），不伪造坐标。 */}
+      {/* R2.2 附页 A3/IR08：全量阻断清单——缺数位置与结构卡点分维列出、
+          不截断（可滚动核对完整集合）；两个数组都空时只能说"未登记关系级
+          明细"，不能凭空数组断言规则零回执。 */}
       {(() => {
         const missing = item.missing_operands ?? [];
         const blocked = item.blocked_by ?? [];
-        const ruleLevel = missing.length === 0 && blocked.length === 0;
+        const noDetail = missing.length === 0 && blocked.length === 0;
         return (
           <section
             className="mb-4 rounded-md bg-surface-50 px-3.5 py-3"
             data-testid={`gbc-obligation-blockers-${item.obligation_id}`}
-            data-blocker-count={Math.max(missing.length, blocked.length)}
-            data-rule-level={ruleLevel ? "true" : "false"}
+            data-missing-count={missing.length}
+            data-blocked-count={blocked.length}
           >
-            <h3 className={SECTION_TITLE}>{ruleLevel ? "阻断范围" : `阻断点清单（${Math.max(missing.length, blocked.length)}）`}</h3>
-            {ruleLevel ? (
+            <h3 className={SECTION_TITLE}>
+              {noDetail ? "阻断范围" : `阻断点清单（缺数位置 ${missing.length} 项 · 结构卡点 ${blocked.length} 项）`}
+            </h3>
+            {noDetail ? (
               <p className="text-[0.85em] leading-relaxed text-slate-700">
-                该检查整条规则未完成（无关系级回执）：人工表态须覆盖整条检查项。
+                该义务未登记关系级明细（可能为规则级阻断）：人工表态须覆盖整条检查项。
               </p>
             ) : (
-              <ul className="grid gap-1 text-[0.85em] leading-relaxed text-slate-700">
-                {missing.slice(0, 6).map((operand, index) => {
+              <ul className="grid max-h-48 gap-1 overflow-y-auto text-[0.85em] leading-relaxed text-slate-700">
+                {missing.map((operand, index) => {
                   const page = typeof operand.page === "number" ? `第${operand.page}页` : "";
                   const row = typeof operand.row_key === "string" && operand.row_key ? operand.row_key : "";
                   const column = typeof operand.column === "string" && operand.column ? operand.column : "";
                   const role = typeof operand.role === "string" && operand.role ? operand.role : "缺数";
                   return <li key={`m-${index}`}>{[role, page, row, column].filter(Boolean).join(" · ")}</li>;
                 })}
-                {blocked.slice(0, 6).map((block, index) => (
-                  <li key={`b-${index}`}>卡点 · {block.dimension} · {block.reason_code}</li>
+                {blocked.map((block, index) => (
+                  <li key={`b-${index}`}>结构卡点 · {block.dimension} · {block.reason_code}</li>
                 ))}
               </ul>
             )}

@@ -301,4 +301,40 @@ assert.equal(
 assert.equal(readableObligationReason("PDF/表8 未识别到"), "PDF/表8 未识别到");
 assert.equal(readableObligationReason(null), "");
 
+// IR09 跨层往返：后端 related 关联框必须成为可选证据引用（bbox 保留、
+// search_region/unverified 诚实粒度），预览按选中 key 取框即可画到。
+{
+  const item = {
+    obligation_id: "OBL-TEST-RELATED",
+    group_id: null,
+    group_title: null,
+    title: "测试义务",
+    status: "insufficient_data",
+    reason: "insufficient_data",
+    reason_label: "取数不足",
+    detail: "",
+    decision: null,
+    decision_revision: null,
+    decided_by: null,
+    decided_at: null,
+    note: null,
+    evidence_reference: null,
+    locations: [
+      { page: 15, label: "三公经费表", bbox: [10, 20, 30, 40],
+        related: [{ page: 15, label: "三公经费说明", bbox: [50, 60, 70, 80] }] },
+    ],
+  };
+  const problems = toObligationProblems({
+    available: true, reason: null, pending_total: 1,
+    items: [item],
+  }, "job-related");
+  const refs = problems[0]?.evidenceRefs ?? [];
+  assert.equal(refs.length, 2, "主框+关联框都成为可选证据引用");
+  assert.deepEqual(refs[0].bbox, [10, 20, 30, 40]);
+  assert.deepEqual(refs[1].bbox, [50, 60, 70, 80], "第二个框不再丢失");
+  assert.equal(refs[1].locationLevel, "search_region", "关联框同样是诚实粒度");
+  assert.equal(refs[1].verificationStatus, "unverified");
+  assert.ok(refs[1].key.startsWith(`${refs[0].key}|r1`), "关联框 key 可追溯到主框");
+}
+
 console.log("reviewObligationAdapters.test.ts passed");

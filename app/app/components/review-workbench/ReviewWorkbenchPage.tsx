@@ -854,7 +854,7 @@ export function ReviewWorkbenchPage() {
    * 补核并入「必须处理」后由问题队列调用：返回是否已保存，队列据此接续下一条。
    */
   const handleObligationDecision = useCallback(
-    async (problem: Problem, decision: ObligationDecision, note: string, evidenceReference: string): Promise<boolean> => {
+    async (problem: Problem, decision: ObligationDecision, note: string, evidenceReference: string, scopeConfirmed: boolean): Promise<boolean> => {
       const item = obligationItems[problem.id];
       if (reviewContext.kind !== "available" || !item) {
         return false;
@@ -880,6 +880,7 @@ export function ReviewWorkbenchPage() {
               decision,
               note: note.trim() || undefined,
               evidence_reference: evidenceReference.trim() || undefined,
+              scope_confirmed: scopeConfirmed === true,
               job_uuid: jobId,
               analysis_basis_token: basisToken,
               ...(item.decision_revision !== null

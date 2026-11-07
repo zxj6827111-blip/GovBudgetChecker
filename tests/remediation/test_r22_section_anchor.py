@@ -62,3 +62,14 @@ def test_no_anchor_returns_none():
     """无锚 → None（缺数位置页码未知，不编页码）。"""
     doc = _doc(["完全没有相关内容的页面\n"])
     assert _section_page(doc, "说明文本中未提取到项目支出") is None
+
+
+def test_ir02_cover_year_line_is_not_an_anchor():
+    """IR07：封面"2025年度单位决算"不是章节锚（裸"决算"提示词已移除），
+    真正的"支出决算情况说明"标题才定位。"""
+    doc = _doc([
+        "上海市某局\n2025年度单位决算\n",
+        "目录\n一、支出决算情况说明……3\n",
+        "一、支出决算情况说明。\n本年收入合计…\n",
+    ])
+    assert _section_page(doc, "说明文本中未提取到决算数") == 3

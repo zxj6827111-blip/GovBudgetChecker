@@ -81,6 +81,61 @@ def test_nonzero_conflict_still_rejected():
                                   indicator="reception", stage="决算") is None
 
 
+def test_ir02_forward_frame_announcements_reject():
+    """IR02 负控：前导宣告帧（假设/模板）支配紧随的零陈述，隔句号仍拒收。"""
+    for text in (
+        "甲局2024年度部门决算。以下为假设情形。财政拨款公务接待费支出决算0万元。",
+        "甲局2024年度部门决算。以下为模板示例。财政拨款公务接待费支出决算0万元。",
+        "甲局2024年度部门决算。假设情形如下。财政拨款公务接待费支出决算0万元。",
+        "甲局2024年度部门决算。以下为假设：财政拨款公务接待费支出决算0万元。",
+    ):
+        assert narrative_zero_sources(_doc(text), table_code="FIN_07_three_public",
+                                      indicator="reception", stage="决算") is None, text
+
+
+def test_ir02_direct_denial_operators_reject():
+    """IR02 负控：认定/视为/推定类直接否定操作词 → 非断言。"""
+    for text in (
+        "甲局2024年度部门决算。不得认定财政拨款公务接待费支出决算0万元。",
+        "甲局2024年度部门决算。不能认定财政拨款公务接待费支出决算0万元。",
+        "甲局2024年度部门决算。不得视为财政拨款公务接待费支出决算0万元。",
+    ):
+        assert narrative_zero_sources(_doc(text), table_code="FIN_07_three_public",
+                                      indicator="reception", stage="决算") is None, text
+
+
+def test_ir02_positive_controls_survive_frame_guard():
+    """IR02 正控：真实语序（其中：/具体情况如下/情况说明标题）不受宣告帧守卫误伤。"""
+    for text in (
+        "甲局2024年度部门决算。支出决算为0.85万元，其中：财政拨款公务接待费支出决算0万元。",
+        "甲局2024年度部门决算。具体情况如下。财政拨款公务接待费支出决算0万元。",
+        "甲局2024年度部门决算。七、财政拨款“三公”经费支出决算情况说明。财政拨款公务接待费支出决算0万元。",
+    ):
+        refs = narrative_zero_sources(_doc(text), table_code="FIN_07_three_public",
+                                      indicator="reception", stage="决算")
+        assert refs, text
+
+
+def test_fin02_income_narrative_zero_capability():
+    """§4.1/IR 范围澄清：FIN_02 收入表的叙述零能力已实现——同身份 assertive
+    零声明为收入空白格作证；无声明（知识产权局形态）保持未知是材料边界，
+    不是能力缺失。"""
+    income_text = ("甲局2024年度部门决算。"
+                   "本年收入合计0万元，其中：财政拨款收入0万元，经营收入0万元。")
+    refs = narrative_zero_sources(
+        _doc(income_text), table_code="FIN_02_income",
+        indicator="operational_income", stage="决算")
+    assert refs and refs[0]["page"] == 1
+    # 非零声明一票否决（同指标既有守卫不回退）
+    assert narrative_zero_sources(
+        _doc(income_text.replace("经营收入0万元", "经营收入3.20万元")),
+        table_code="FIN_02_income", indicator="operational_income", stage="决算") is None
+    # 语气守卫跨表生效
+    assert narrative_zero_sources(
+        _doc("甲局2024年度部门决算。以下为假设情形。经营收入0万元。"),
+        table_code="FIN_02_income", indicator="operational_income", stage="决算") is None
+
+
 # ---------------------------------------------------- 空白=0 授权边界（成对）
 
 def _rule_with_tables():

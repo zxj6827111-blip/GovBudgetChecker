@@ -25,12 +25,17 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, Dict, List
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
+# IR06：被测代码根可经环境变量重定向（before 集采集指向 main 检出，
+# 不在 main 工作树写任何文件）；缺省为本脚本所在 worktree。
+_REPO_ROOT = Path(os.environ.get(
+    "R22_PROBE_REPO_ROOT", str(Path(__file__).resolve().parents[1])))
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
@@ -216,42 +221,145 @@ def probe_pdf(target: dict) -> dict:
         rule_issues = [issue_brief(i) for i in issues if getattr(i, "rule", None) == rule_id]
         result["rules"][rule_id] = {
             "status": outcome.status,
-            "detail": str(outcome.detail or "")[:500],
+            "detail": str(outcome.detail or ""),
             "partial_findings_count": outcome.partial_findings_count,
-            "unresolved_reasons": [str(r)[:400] for r in outcome.unresolved_reasons],
+            "unresolved_reasons": [str(r) for r in outcome.unresolved_reasons],
             "reason_codes": list(outcome.reason_codes),
-            "diagnostics": outcome.diagnostics[:40],
+            "diagnostics": list(outcome.diagnostics),
             "issues": rule_issues,
         }
-    # 回执级未决（关系 ID 粒度）：含规则级 deferred 时回执可能为 0——这正是
-    # 计划要求保留规则级阻断的原因，两者都要记。
-    receipts = []
+    # 关系级回执全集（IR06：fact_receipts 元素是 dict——用键读取；
+    # 关系身份用真实 sub_check_id/check_relation_id，不编 relation_id；
+    # 全状态保留，不截断；规则级零回执显式登记）。
+    relations_by_rule: Dict[str, List[Dict[str, Any]]] = {code: [] for code in TARGET_RULES}
     for r in getattr(doc, "fact_receipts", []) or []:
-        rid = str(getattr(r, "rule_id", ""))
+        if not isinstance(r, dict):
+            continue
+        rid = str(r.get("rule_id") or "")
         if rid not in target_codes:
             continue
-        if str(getattr(r, "status", "")) != "insufficient_data":
-            continue
-        receipts.append({
-            "rule_id": rid,
-            "relation_id": str(getattr(r, "relation_id", "") or ""),
-            "incomplete_reason": str(getattr(r, "incomplete_reason", "") or "")[:400],
+        relations_by_rule[rid].append({
+            "relation_id": str(r.get("sub_check_id") or r.get("check_relation_id") or ""),
+            "status": str(r.get("status") or ""),
+            "incomplete_reason": str(r.get("incomplete_reason") or "")[:400],
+            "formula": str(r.get("formula") or "")[:300],
         })
-    result["insufficient_receipts"] = receipts
+    for rid, info in result["rules"].items():
+        relations = relations_by_rule.get(rid, [])
+        statuses = {r["status"] for r in relations} | {"pass", "fail", "insufficient_data", "not_applicable"}
+        info["relations"] = relations
+        info["receipt_counts_by_status"] = {
+            status: sum(1 for r in relations if r["status"] == status)
+            for status in sorted(statuses)
+        }
+        # 规则级零回执：规则跑完但一条关系回执都没有——"覆盖不可见"形态，
+        # 显式记录而不是当作全覆盖。
+        info["rule_level_zero_receipt"] = len(relations) == 0
+    result["insufficient_receipts"] = [
+        {"rule_id": rid, "relation_id": r["relation_id"],
+         "incomplete_reason": r["incomplete_reason"]}
+        for rid in TARGET_RULES for r in relations_by_rule[rid]
+        if r["status"] in ("insufficient_data", "parse_error", "execution_error")
+    ]
     result["elapsed_seconds"] = round(elapsed, 1)
     return result
 
 
+def _git_head(repo_root: Path) -> str:
+    import subprocess
+    try:
+        return subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=15).stdout.strip()
+    except Exception:  # noqa: BLE001 — 无 git 环境时如实留空
+        return ""
+
+
+def _run_relations_stats(before_path: str, after_path: str, output: str) -> None:
+    from src.services.remediation_statistics import (
+        aggregate_three_dimensions, derive_attribution, engine_dimension)
+    before = json.loads(Path(before_path).read_text(encoding="utf-8"))
+    after = json.loads(Path(after_path).read_text(encoding="utf-8"))
+
+    def _relations(report):
+        out = {}
+        for target in report.get("targets", []):
+            for rid, info in (target.get("rules") or {}).items():
+                for rel in info.get("relations") or []:
+                    out[f"{rid}::{rel.get('relation_id')}"] = {
+                        "rule_id": rid, "relation_id": rel.get("relation_id"),
+                        "status": rel.get("status")}
+        return out
+
+    before_rels, after_rels = _relations(before), _relations(after)
+
+    def _to_ledger(relation):
+        """回执状态 → 台账状态（engine_dimension/derive_attribution 的输入词汇）：
+        pass→completed；fail→completed 且带已确认 finding；其余原样。"""
+        if not relation:
+            return relation
+        translated = dict(relation)
+        status = str(relation.get("status") or "")
+        if status == "pass":
+            translated["status"] = "completed"
+        elif status == "fail":
+            translated["status"] = "completed"
+            translated["has_confirmed_findings"] = True
+        return translated
+
+    # 固定分母 = 前后并集；单侧漏采按 record_missing 归因（IR06：不冒认原件缺失）
+    all_keys = sorted(set(before_rels) | set(after_rels))
+    relations = []
+    for key in all_keys:
+        b, a = _to_ledger(before_rels.get(key)), _to_ledger(after_rels.get(key))
+        status = (a or b or {}).get("status", "")
+        relations.append({
+            "relation_id": key,
+            "status": status,
+            "engine_dimension": engine_dimension(status,
+                                                 has_confirmed_findings=bool((a or {}).get("has_confirmed_findings"))),
+            "attributions": derive_attribution(b or {}, a or {}),
+        })
+    report_stats = aggregate_three_dimensions(relations, manual_decisions={})
+    report_stats["before_meta"] = {k: before.get(k) for k in ("generated_at", "head_commit", "repo_root")}
+    report_stats["after_meta"] = {k: after.get(k) for k in ("generated_at", "head_commit", "repo_root")}
+    out_path = Path(output)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(report_stats, ensure_ascii=False, indent=2), encoding="utf-8")
+    eng, att = report_stats["engine"], report_stats["attribution"]
+    print(f"固定关系分母: {report_stats['denominator']}")
+    print(f"引擎: pass={eng['completed_pass']} 完成且发现问题={eng['completed_with_findings']} "
+          f"不适用={eng['not_applicable']} 未知={eng['unknown']} 未执行={eng['not_executed']}")
+    print(f"归因: 恢复={att['recovered_this_round']} 新发现={att['new_finding']} "
+          f"仍未解={att['tech_unresolved']} resolved_before={att['resolved_before_this_plan']} "
+          f"记录缺失={att['record_missing']}")
+    print(f"written: {out_path}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--output", required=True)
+    sub = ap.add_subparsers(dest="command", required=True)
+    p_run = sub.add_parser("run", help="采集四份原件的目标关系全集")
+    p_run.add_argument("--output", required=True)
+    p_run.add_argument("--repo-root", default=str(_REPO_ROOT),
+                       help="被测代码根（缺省本 worktree；指向 main 检出即得 before 集）")
+    p_stats = sub.add_parser("stats", help="按前后两份关系全集生成实际三维统计")
+    p_stats.add_argument("--before", required=True)
+    p_stats.add_argument("--after", required=True)
+    p_stats.add_argument("--output", required=True)
     args = ap.parse_args()
+    if args.command == "stats":
+        _run_relations_stats(args.before, args.after, args.output)
+        return
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    repo_root = Path(args.repo_root)
 
     report = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "baseline_commit": "47581360966191d180880f7fb07dab48974948bb",
+        "head_commit": _git_head(repo_root),
+        "repo_root": str(repo_root),
         "branch": "codex/auto-check-remediation-r22",
         "worktree": str(_REPO_ROOT),
         "frozen_config": {
@@ -279,9 +387,10 @@ def main() -> None:
                   f"  unresolved={len(info['unresolved_reasons'])}")
             for u in info["unresolved_reasons"][:4]:
                 print(f"      - {u[:150]}")
-        print(f"  回执级insufficient: {len(t['insufficient_receipts'])}")
-        for r in t["insufficient_receipts"][:8]:
-            print(f"      - {r['rule_id']} {r['relation_id']}: {r['incomplete_reason'][:120]}")
+        for rid, info in t["rules"].items():
+            counts = info.get("receipt_counts_by_status", {})
+            print(f"  {rid}: 回执 {sum(counts.values())} {counts}"
+                  f"{'  [规则级零回执]' if info.get('rule_level_zero_receipt') else ''}")
     print(f"\nwritten: {out_path}")
 
 

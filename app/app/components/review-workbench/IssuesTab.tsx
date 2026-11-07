@@ -97,7 +97,7 @@ export interface IssuesTabProps {
   /** 「未能自动核对」条目（补核义务）的原记录，键为条目 id。 */
   obligationItems?: Record<string, ObligationReviewItemRecord>;
   /** 提交补核结论；返回是否已保存（用于处理后接续下一条）。 */
-  onObligationDecision?: (problem: Problem, decision: ObligationDecision, note: string, evidenceReference: string) => Promise<boolean>;
+  onObligationDecision?: (problem: Problem, decision: ObligationDecision, note: string, evidenceReference: string, scopeConfirmed: boolean) => Promise<boolean>;
   /** 文种口径类补核需要先确认材料口径时的入口。 */
   onOpenScope?: () => void;
   onSelectEvidenceRef: (problem: Problem, refKey: string) => void;
@@ -384,13 +384,14 @@ export function IssuesTab({
     }
   };
 
-  // 「未能自动核对」条目：核对无误有系统定位时一键提交（证据位置自动带上），
-  // 需要文字依据的先开填写面板；保存后与确认/忽略一样接续到下一条。
+  // 「未能自动核对」条目（R2.2 A3/IR04）：所有关闭性决定一律经过填写面板——
+  // 范围确认（覆盖全部阻断点）与核对关系/依据是必填协议；系统定位只作
+  // evidence_reference 附件自动带上，不再构成"一键绕过"。
   const handleObligation = async (problem: Problem, decision: ObligationDecision, note?: string) => {
     const item = obligationItems[problem.id];
     if (!item || !onObligationDecision) return;
     const autoEvidence = decision === "verified_ok" ? obligationAutoEvidence(item) : null;
-    if (note === undefined && (decision === "verified_issue" || decision === "not_applicable" || (decision === "verified_ok" && !autoEvidence))) {
+    if (note === undefined && decision !== "pending") {
       setListOpen(false);
       setObligationPanel({ problem, decision, queue });
       return;
@@ -402,7 +403,7 @@ export function IssuesTab({
       pendingNavigationRef.current = { issueId: problem.id, status: decision, nextId: next?.id ?? null, viewKey };
     }
     setObligationSubmitting(true);
-    const saved = await onObligationDecision(problem, decision, note ?? "", autoEvidence ?? "");
+    const saved = await onObligationDecision(problem, decision, note ?? "", autoEvidence ?? "", true);
     setObligationSubmitting(false);
     if (!saved && pendingNavigationRef.current?.issueId === problem.id) pendingNavigationRef.current = null;
     if (saved) setObligationPanel(null);

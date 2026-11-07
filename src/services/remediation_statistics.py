@@ -34,6 +34,9 @@ ENGINE_NOT_EXECUTED = "not_executed"
 ATTR_RECOVERED_THIS_ROUND = "recovered_this_round"
 ATTR_NEW_FINDING = "new_finding"
 ATTR_ORIGINAL_MATERIAL_MISSING = "original_material_missing"
+#: IR06：采集记录缺失 ≠ 原件缺失——after 无记录只证明"这条关系的重放记录
+#: 没采到"，因果不能冒认，单独归因并保留待人工核。
+ATTR_RECORD_MISSING = "record_missing"
 ATTR_TECH_UNRESOLVED = "tech_unresolved"
 ATTR_OUT_OF_SCOPE = "out_of_scope"
 ATTR_RESOLVED_BEFORE_THIS_PLAN = "resolved_before_this_plan"
@@ -84,21 +87,25 @@ def derive_attribution(
 ) -> List[str]:
     """按定义从修复前/后台账实例推导单条关系的变化归因（不读人工状态）。
 
-    - 修复前已完成 → resolved_before_this_plan（本轮不计量）；
+    - 修复前已完成、修复后有记录 → resolved_before_this_plan（本轮不计量）；
+      修复后记录缺失时附加 record_missing（IR06：不能凭漏采断言退化，
+      也不能凭 before 已完成就无视后续不可见）；
     - 修复前未完成、修复后完成且发现问题 → 本轮操作数恢复 + 新发现问题；
     - 修复前未完成、修复后完成通过 → 本轮操作数恢复；
     - 修复前后都未完成 → 技术仍未解；标记范围外的 → 范围外（附加）；
-    - 修复前未完成、修复后缺失（无记录）→ 原件缺失。
+    - 修复前未完成、修复后**记录缺失** → record_missing（IR06：采集漏读
+      不能证明原件缺失——"原件缺失"只在有独立证据时由报告层显式标注）。
     """
     before_status = str(before.get("status", "")) if before else ""
     after_status = str(after.get("status", "")) if after else ""
     before_done = before_status == "completed" or before_status == "not_applicable"
-    if before_done:
-        return [ATTR_RESOLVED_BEFORE_THIS_PLAN]
     attributions: List[str] = []
     if not after:
-        attributions.append(ATTR_ORIGINAL_MATERIAL_MISSING)
-        return attributions
+        if before_done:
+            return [ATTR_RESOLVED_BEFORE_THIS_PLAN, ATTR_RECORD_MISSING]
+        return [ATTR_RECORD_MISSING]
+    if before_done:
+        return [ATTR_RESOLVED_BEFORE_THIS_PLAN]
     after_done = after_status == "completed" or after_status == "not_applicable"
     after_findings = bool(after.get("findings_count")) or bool(after.get("has_confirmed_findings"))
     if after_done:
@@ -135,6 +142,7 @@ def aggregate_three_dimensions(
         ATTR_RECOVERED_THIS_ROUND,
         ATTR_NEW_FINDING,
         ATTR_ORIGINAL_MATERIAL_MISSING,
+        ATTR_RECORD_MISSING,
         ATTR_TECH_UNRESOLVED,
         ATTR_OUT_OF_SCOPE,
         ATTR_RESOLVED_BEFORE_THIS_PLAN,

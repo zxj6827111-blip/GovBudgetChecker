@@ -378,6 +378,10 @@ class ObligationDecisionRequest(BaseModel):
     expected_revision: Optional[int] = Field(default=None, ge=1)
     job_uuid: Optional[str] = None
     analysis_basis_token: Optional[str] = Field(default=None, max_length=300)
+    #: R2.2 A3/IR04：整项范围确认——"本决定覆盖该义务全部阻断点"由用户显式
+    #: 勾选并随请求提交。verified_ok / verified_issue / not_applicable 三个
+    #: 关闭性决定的必填协议字段；范围确认不能代替依据，但缺它一律 422。
+    scope_confirmed: bool = False
 
     @field_validator("decision")
     @classmethod

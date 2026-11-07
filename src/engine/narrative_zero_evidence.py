@@ -18,33 +18,63 @@ from __future__ import annotations
 
 import re
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from .native_narrative_checks import _Text, _foreign_owner
 
-#: 指标 → 名称片段（按最具体优先排列，避免“公务用车购置”吞掉“购置及运行维护费”）。
-_LABELS = {
-    "overseas": (r"因公出国（境）费|因公出国\(境\)费",),
-    "reception": (r"公务接待费",),
-    "vehicle_purchase": (r"公务用车购置(?!及运行)",),
-    "vehicle_purchase_operation": (r"公务用车购置及运行维护费",),
-    "vehicle_operation": (r"公务用车运行维护费",),
-    "total_actual": (r"“三公”经费|三公经费",),
+#: 表 → 指标 → 名称片段（§4.1：零依据能力按表分域；FIN_02 收入表为
+#: V33-240 的落点，IR 范围澄清明确其在本计划目标内）。
+#: 片段按最具体优先排列，避免“公务用车购置”吞掉“购置及运行维护费”。
+_TABLE_LABELS: Dict[str, Dict[str, Tuple[str, ...]]] = {
+    "FIN_07_three_public": {
+        "overseas": (r"因公出国（境）费|因公出国\(境\)费",),
+        "reception": (r"公务接待费",),
+        "vehicle_purchase": (r"公务用车购置(?!及运行)",),
+        "vehicle_purchase_operation": (r"公务用车购置及运行维护费",),
+        "vehicle_operation": (r"公务用车运行维护费",),
+        "total_actual": (r"“三公”经费|三公经费",),
+    },
+    "FIN_02_income": {
+        "total_actual": (r"本年收入合计|收入合计",),
+        "fiscal_allocation": (r"财政拨款收入",),
+        "superior_subsidy_income": (r"上级补助收入",),
+        "business_income": (r"事业收入",),
+        "operational_income": (r"经营收入",),
+        "subsidiary_income": (r"附属单位上缴收入",),
+        "other_income": (r"其他收入",),
+    },
 }
+
+#: 兼容旧引用：三公域标签。
+_LABELS = _TABLE_LABELS["FIN_07_three_public"]
 
 _NONZERO_DELTA_RE = re.compile(r"(?:增加|减少|增长|下降)")
 
-# ---- A1 来源 A 准入 1：语气守卫（R2.2 定向补正）----
+# ---- A1 来源 A 准入 1：语气守卫（R2.2 定向补正；独立复核 IR02 加固）----
 # 零陈述必须处于事实断言（assertive）语境。否定/条件/引用模板/疑问语气一律
-# 拒收；支配范围覆盖整个零陈述句（含前缀引导句）。zero_basis_probes.json 的
-# 三个语气负控（否定句/条件句/模板示例句）在旧实现里均误收为合法零依据。
-_NEGATION_RE = re.compile(r"不成立|并非|并不是|没有证据|无证据|不属实")
+# 拒收；支配范围覆盖整个零陈述句（含前缀引导句与"以下为假设情形/模板示例"
+# 式宣告帧——宣告句支配紧随其后的零陈述，即使隔了句号）。
+# 边界（诚实声明）：下列词表是保守**下界**，不宣称对任意自然语言一般安全；
+# 设计原则是 fail-closed——无法确认断言语境时一律不授权零。
+_NEGATION_RE = re.compile(
+    r"不成立|并非|并不是|没有证据|无证据|不属实"
+    r"|不得认定|不能认定|不得认为|不能认为|不应认定|不应认为"
+    r"|不得视为|不能视为|不应视为|不得推定|不能推定")
 # “若”排除“若干”；条件句把零陈述变成假设结果，不是本期事实。
 _CONDITIONAL_RE = re.compile(r"如果|假设|假如|倘若|如若|若(?!干)")
 _QUOTE_TEMPLATE_RE = re.compile(r"示例|样例|模板|仅供参考")
 _QUESTION_RE = re.compile(r"[？?]")
-# 前导句的"以下表述不成立"式否定：即使与零陈述隔了句号，"以下"仍明确指向前方。
+# 前导句的指前否定："以下表述不成立"式——隔句号仍支配本句。
 _FORWARD_NEGATION_RE = re.compile(r"(?:以下|下列|下述|如下)(?:表述|说法|内容|情况)?(?:均)?(?:不成立|并非|不属实)")
+# 前导宣告帧（IR02）：宣告句（以下/下列/… + 假设/示例/模板…）宣布其后内容
+# 处于非断言框架，支配紧随的零陈述。真实语序"具体情况如下："不含框架名词，
+# 不受影响。
+_FORWARD_REF_RE = re.compile(r"以下|下列|下述|如下|下面")
+_FRAME_NOUN_RE = re.compile(r"假设|假定|示例|样例|模板|虚构|演示")
+_FRAME_ANNOUNCEMENT_RE = re.compile(
+    rf"(?:(?:{_FORWARD_REF_RE.pattern})[^。；;]{{0,24}}(?:{_FRAME_NOUN_RE.pattern})"
+    rf"|(?:{_FRAME_NOUN_RE.pattern})[^。；;]{{0,24}}(?:{_FORWARD_REF_RE.pattern}))"
+    rf"[^。；;]*[。；;]?\s*$")
 _QUOTE_PAIRS = (("“", "”"), ("\"", "\""))
 
 #: 明确不属于财政拨款的资金口径：不能证明“财政拨款三公表”的空格为零。
@@ -87,13 +117,15 @@ def _inside_quote_span(clause: str, start: int, end: int) -> bool:
 
 
 def _is_assertive_context(compact: str, begin: int, clause: str) -> bool:
-    """语气守卫：零陈述必须处于 assertive 语境（A1 准入 1）。
+    """语气守卫：零陈述必须处于 assertive 语境（A1 准入 1；IR02 加固）。
 
     支配范围 = 整个零陈述句（含前缀引导句）：
     - 否定/条件/模板示例/疑问出现在同一句读单元内 → 拒收；
     - 前导文字以冒号/逗号直连本句且带否定/条件/模板语气 → 拒收；
-    - 前导句是"以下表述不成立"式指前否定 → 拒收（隔句号仍支配本句）。
+    - 前导句是指前否定（"以下表述不成立"）或宣告帧（"以下为假设情形/
+      模板示例"）→ 支配紧随的零陈述，隔句号仍拒收。
     语气命中的后果是"该句不作零依据"（fail-closed），不会产生错误证据。
+    词表是保守下界：无法确认断言语境时不授权。
     """
     for regex in (_NEGATION_RE, _CONDITIONAL_RE, _QUOTE_TEMPLATE_RE):
         if regex.search(clause):
@@ -106,6 +138,8 @@ def _is_assertive_context(compact: str, begin: int, clause: str) -> bool:
             if regex.search(lead):
                 return False
     if _FORWARD_NEGATION_RE.search(lead):
+        return False
+    if _FRAME_ANNOUNCEMENT_RE.search(lead):
         return False
     return True
 
@@ -123,9 +157,9 @@ def narrative_zero_sources(doc: Any, *, table_code: str, indicator: str,
     纪律不变：传入值与事实上下文不一致时以传入值参与守卫，两处都不认他
     年度/他主体。
     """
-    if table_code != "FIN_07_three_public" or stage != "决算":
+    if table_code not in _TABLE_LABELS or stage != "决算":
         return None
-    labels = _LABELS.get(indicator)
+    labels = _TABLE_LABELS[table_code].get(indicator)
     if not labels:
         return None
     pattern = re.compile("|".join(labels))
@@ -151,8 +185,10 @@ def narrative_zero_sources(doc: Any, *, table_code: str, indicator: str,
         # A1 准入 1：语气守卫（否定/条件/引用模板/疑问 → 非事实断言）。
         if not _is_assertive_context(compact, begin, clause):
             continue
-        if _NON_FISCAL_SCOPE_RE.search(clause):
+        if table_code == "FIN_07_three_public" and _NON_FISCAL_SCOPE_RE.search(clause):
             # “非财政拨款…决算0万元”说的是另一资金口径，不能补财政拨款表。
+            # （仅三公域适用：FIN_02 收入表的指标本身就是各收入来源名，
+            # "经营收入"等字样是指标身份，不是外来口径——IR 范围澄清。）
             return None
         # 含“增加/减少”的句子未必没有水平值：
         # “决算1万元，比上年增加0.20万元”仍披露了本期值 1 万元。

@@ -454,13 +454,20 @@ test.describe("人工补核（WP3-B）：并入必须处理", () => {
     await expect(page.getByTestId("gbc-review-pdf-page-input")).toHaveValue("11");
     await expect(page.getByTestId("gbc-review-pdf-locator")).toContainText("未能自动核对");
 
-    // 核对无误：有系统定位时一键提交，证据位置自动带上并注明来源；不用填两个输入框。
+    // 核对无误（R2.2 A3/IR04）：系统定位只作证据位置附件；仍须经面板写明
+    // 核对关系/数字并确认覆盖范围后提交——一键绕过已取消。
     await page.getByTestId(`gbc-review-obligation-verified_ok-${entry("OBL-CROSS-SAN-GONG-ECON")}`).click();
+    await expect(page.getByTestId("gbc-review-obligation-panel")).toHaveAttribute("data-obligation-decision", "verified_ok");
+    await expect(page.getByTestId("gbc-review-obligation-save")).toBeDisabled();
+    await page.getByTestId("gbc-review-obligation-note").fill("第 11 页三公表与基本支出经济分类表逐项比较一致");
+    await page.getByTestId("gbc-review-obligation-scope-confirm").check();
+    await page.getByTestId("gbc-review-obligation-save").click();
     const firstCall = state.decideCalls[0];
     expect(firstCall.obligationId).toBe("OBL-CROSS-SAN-GONG-ECON");
     expect(firstCall.body.decision).toBe("verified_ok");
     expect(firstCall.body.evidence_reference).toBe("第 11 页 · 测试表（按系统定位核对）");
-    expect(firstCall.body.note).toBeUndefined();
+    expect(firstCall.body.note).toBe("第 11 页三公表与基本支出经济分类表逐项比较一致");
+    expect(firstCall.body.scope_confirmed).toBe(true);
     await expect(tab).toContainText("必须处理 1");
     await expectGateBlockers(page, "还有 1 项“未能自动核对”的检查待处理");
 

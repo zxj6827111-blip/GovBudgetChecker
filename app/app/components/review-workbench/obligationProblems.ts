@@ -56,24 +56,28 @@ function locationText(page: number, label: string | null): string {
   return label ? `第 ${page} 页 · ${label}` : `第 ${page} 页`;
 }
 
-/** 补核位置转成证据引用：有框的可直接高亮，没有框的只翻页。 */
+/** 补核位置转成证据引用（IR09）：主框与其**同页关联框**都生成可选引用——
+ * 有框的可直接高亮，没有框的只翻页；related 只在后端保存不算贯通。
+ * bbox（表框/finding 证据框）不标 exact_span/verified（§7 诚实粒度）。 */
 function locationRefs(item: ObligationReviewItemRecord, id: string): ProblemEvidenceRef[] {
-  return (item.locations ?? [])
-    .filter((location) => Number.isInteger(location.page) && location.page > 0)
-    .map((location, index) => {
-      const bbox = Array.isArray(location.bbox) && location.bbox.length === 4 ? location.bbox : undefined;
-      // R2.2 §7：补核位置链的 bbox（表框/finding 证据框）不得标 exact_span/verified——
-      // 它是结构/证据框定位，不是对缺数位置的已验证精确跨度。
-      return {
-        key: `${id}|location|${index}`,
-        role: "原文位置",
-        page: location.page,
-        locationText: locationText(location.page, location.label),
+  const refs: ProblemEvidenceRef[] = [];
+  (item.locations ?? []).forEach((location, index) => {
+    if (!Number.isInteger(location.page) || location.page <= 0) return;
+    const frames = [location, ...(location.related ?? [])];
+    frames.forEach((frame, frameIndex) => {
+      const bbox = Array.isArray(frame.bbox) && frame.bbox.length === 4 ? frame.bbox : undefined;
+      refs.push({
+        key: frameIndex === 0 ? `${id}|location|${index}` : `${id}|location|${index}|r${frameIndex}`,
+        role: frameIndex === 0 ? "原文位置" : "原文位置（同页关联框）",
+        page: frame.page,
+        locationText: locationText(frame.page, frame.label),
         bbox,
         locationLevel: bbox ? "search_region" : "page",
         verificationStatus: "unverified",
-      };
+      });
     });
+  });
+  return refs;
 }
 
 /** 一条补核义务在问题队列里的样子：标题是检查项名称，“未能自动核对”由分组与徽标说明。 */

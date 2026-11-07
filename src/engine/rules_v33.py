@@ -10763,6 +10763,9 @@ class R33CrossSanGongEcon(Rule):
         lanes, lane_error = _econ_lanes(table6)
         if lane_error:
             unresolved.append(lane_error)
+        # §4.2（IR01）：左右车道分组守卫——两栏版式中同一车道内的经济科目编码
+        # 必须同组（左组 301/303，右组 302/310）；混组说明列身份错乱，fail-closed。
+        lane_codes: Dict[int, Set[str]] = {index: set() for index in range(len(lanes))}
 
         groups, group_errors = _three_public_column_groups(table7)
         unresolved.extend(group_errors)
@@ -10793,7 +10796,7 @@ class R33CrossSanGongEcon(Rule):
             normalized_names = tuple(_normalize_item_label(name) for name in names)
             found: List[Dict[str, Any]] = []
             conflict = ""
-            for lane in lanes:
+            for lane_index, lane in enumerate(lanes):
                 for row in table6.rows:
                     if row.row_role == "header":
                         continue
@@ -10806,6 +10809,9 @@ class R33CrossSanGongEcon(Rule):
                         conflict = str(hit["conflict"])
                         break
                     found.append(hit)
+                    code_text = str(hit.get("code") or "")
+                    if code_text.isdigit() and len(code_text) >= 3:
+                        lane_codes[lane_index].add(code_text[:3])
                 if conflict:
                     break
             if conflict:
@@ -10830,6 +10836,19 @@ class R33CrossSanGongEcon(Rule):
                 continue
             if found:
                 basic[key] = found[0]
+
+        # §4.2 错组负控：两栏版式下同一车道混入左右两组编码（301/303 与
+        # 302/310）说明列身份错乱——车道边界失效，全部取数 fail-closed。
+        # 单车道表没有左右之分，不适用本守卫。
+        if len(lanes) >= 2:
+            _LEFT_GROUP, _RIGHT_GROUP = {"301", "303"}, {"302", "310"}
+            for lane_index, codes_in_lane in lane_codes.items():
+                if codes_in_lane & _LEFT_GROUP and codes_in_lane & _RIGHT_GROUP:
+                    unresolved.append(
+                        "基本支出表左右栏分组异常：同一车道内混有 301/303 与 302/310 "
+                        f"经济科目编码（车道 {lane_index + 1}），列身份不可信"
+                    )
+                    blocked.update(key for key, _s, _n, _c in _SAN_GONG_ECON_ITEM_SPECS)
 
         # ---- 三公表（FIN_07）：逐业务项取决算数列 ----
         three_public: Dict[str, Decimal] = {}
@@ -10888,8 +10907,9 @@ class R33CrossSanGongEcon(Rule):
         # 两个：说明里同身份 assertive 零披露（经 narrative_zero_evidence 的
         # 语气守卫），或经审定的空白值约定（cell_value_policy）。无依据的
         # 空白保持未知，即使本表勾稽平衡。
+        zero_authorized: Set[str] = set()
+        zero_refs_by_key: Dict[str, List[Dict[str, Any]]] = {}
         if blank_keys:
-            zero_authorized: Set[str] = set()
             zero_basis_by_subject: Dict[str, str] = {}
             self._zero_basis_note_by_subject = zero_basis_by_subject
             fact_ctx = getattr(doc, "fact_context", None)
@@ -10907,6 +10927,7 @@ class R33CrossSanGongEcon(Rule):
                     zero_authorized.add(key)
                     zero_basis_by_subject[item_groups.get(key, key)] = (
                         f"说明零披露（第{refs[0].get('page')}页）")
+                    zero_refs_by_key[key] = list(refs)
                     continue
                 convention = None
                 if row_idx is not None and key in three_public_columns:
@@ -10965,21 +10986,90 @@ class R33CrossSanGongEcon(Rule):
                     for key in still_open:
                         three_public.pop(key, None)
 
-        # ---- 逐业务项比较：部分 ≤ 整体 ----
+        # ---- 逐业务项比较：部分 ≤ 整体（R2.2 IR01：逐项覆盖 + 关系级回执）----
+        # 四个分项逐一落到四种结局之一：比较（pass/fail）、有据不适用、
+        # 保持未知。禁止"取不到金额就静默跳过"——那是 pass 掩盖未比较项的
+        # 缺陷形态（残联 p14 FIN_06 三个空白决算格实证）。
         issues: List[Issue] = []
+        item_relation_prefix = f"{self.code}:cross:san_gong"
         for key, subject, _names, _expected_code in _SAN_GONG_ECON_ITEM_SPECS:
+            relation_id = f"{item_relation_prefix}:{key}"
             if key in blocked or key not in three_public:
+                # 取数侧已记账为未知：补关系级回执，覆盖不留空。
+                reason = next((u for u in unresolved if f"「{subject}」" in u
+                               or f"{subject}" in u), None)
+                _v33_relation_receipt(
+                    doc, self.code, relation_id,
+                    status="insufficient_data",
+                    incomplete_reason=reason or f"「{subject}」取数未完成，保持未知",
+                )
                 continue
             hit = basic.get(key)
-            if hit is None or hit.get("amount") is None:
-                # 基本支出表未列该业务项金额：没有可比的"部分"，跳过（不伪造 0）
+            total = three_public[key]
+            if hit is None:
+                # 基本支出表未列该经济科目：整项决算数为 0（显式或经授权）时
+                # 不存在可超分项（非负分解）→ 有据不适用；否则分项大小无法
+                # 核实 → 保持未知（不得静默跳过）。
+                if total == 0:
+                    _v33_relation_receipt(
+                        doc, self.code, relation_id,
+                        status="not_applicable",
+                        formula=(f"三公表「{subject}」决算数为0（第{three_public_pages.get(key) or page7}页），"
+                                 "基本支出表未列该经济科目，不存在可超分项"),
+                    )
+                    continue
+                reason = (f"基本支出表未列「{subject}」，且三公表该项决算数为 "
+                          f"{total} {unit}，分项大小无法核实，保持未知")
+                unresolved.append(reason)
+                blocked.add(key)
+                _v33_relation_receipt(
+                    doc, self.code, relation_id,
+                    status="insufficient_data", incomplete_reason=reason,
+                )
                 continue
+            if hit.get("amount") is None:
+                # FIN_06 空白金额（IR01）：整项为 0（显式或说明零披露授权）时
+                # 分项必为 0（非负分解）；否则保持未知，不得静默跳过。
+                zero_refs = None
+                authorized = total == 0
+                if not authorized:
+                    indicator = "total_actual" if key == "total" else key
+                    zero_refs = narrative_zero_sources(
+                        doc, table_code="FIN_07_three_public", indicator=indicator,
+                        stage="决算", org_name=getattr(doc, "org_name", None),
+                        fiscal_year=year,
+                    )
+                    authorized = bool(zero_refs)
+                if authorized:
+                    hit["amount"] = Decimal("0.00")
+                    basis = ("三公表该项决算数为0（显式），基本支出分项必为0" if total == 0
+                             else f"说明零披露（第{zero_refs[0].get('page')}页）：整项决算为0，基本支出分项必为0")
+                    hit["zero_basis"] = basis
+                    self._zero_basis_note_by_subject.setdefault(item_groups.get(key, key), basis)
+                else:
+                    reason = (f"基本支出表「{subject}」决算数为空白且无独立零依据"
+                              f"（三公表该项为 {total} {unit}），该分项保持未知")
+                    unresolved.append(reason)
+                    blocked.add(key)
+                    _v33_relation_receipt(
+                        doc, self.code, relation_id,
+                        status="insufficient_data", incomplete_reason=reason,
+                    )
+                    continue
             total = three_public[key]
             component: Decimal = hit["amount"]
             # 证据页码 = 证据所在单元格的真实页（续页行不得标成表起始页）
             basic_page = int(hit.get("page") or page6)
             three_page = int(three_public_pages.get(key) or page7)
+            zero_disclosure = (zero_refs_by_key.get(key)
+                               or []) if key in zero_authorized else []
             if component <= total:
+                _v33_relation_receipt(
+                    doc, self.code, relation_id,
+                    status="pass",
+                    formula=f"基本支出 {component} ≤ 三公表 {total} {unit}",
+                    disclosure_sources=list(zero_disclosure),
+                )
                 continue
             envelope = compute_dynamic_envelope(
                 [(scales.get(key, 2), unit), (_display_scale(component), unit)]
@@ -10997,8 +11087,21 @@ class R33CrossSanGongEcon(Rule):
                                                      year, basic_page, three_page, key in blank_keys),
                     )
                 )
+                _v33_relation_receipt(
+                    doc, self.code, relation_id,
+                    status="fail",
+                    formula=(f"基本支出 {component} vs 三公表 {total} {unit}，差 {excess.normalize()} "
+                             f"在包络内（提示）"),
+                    disclosure_sources=list(zero_disclosure),
+                )
                 continue
             if not amount_difference_exceeds_policy(excess, envelope):
+                _v33_relation_receipt(
+                    doc, self.code, relation_id,
+                    status="pass",
+                    formula=f"基本支出 {component} ≤ 三公表 {total} {unit}（差额在政策容差内）",
+                    disclosure_sources=list(zero_disclosure),
+                )
                 continue
             issues.append(
                 self._issue(
@@ -11013,6 +11116,13 @@ class R33CrossSanGongEcon(Rule):
                     evidence_text=self._evidence(hit, subject, total, component, excess, unit,
                                                  year, basic_page, three_page, key in blank_keys),
                 )
+            )
+            _v33_relation_receipt(
+                doc, self.code, relation_id,
+                status="fail",
+                formula=(f"基本支出 {component} > 三公表 {total} {unit}，超额 {excess.normalize()}，"
+                         f"跨表资金来源冲突"),
+                disclosure_sources=list(zero_disclosure),
             )
 
         if unresolved:

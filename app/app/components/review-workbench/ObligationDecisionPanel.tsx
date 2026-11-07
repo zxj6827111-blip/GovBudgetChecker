@@ -42,9 +42,9 @@ const PANEL_COPY: Record<ObligationPanelDecision, { heading: string; hint: strin
     placeholder: "补充说明（选“其他”时必填）",
   },
   verified_ok: {
-    heading: "核对无误 · 写明核对位置",
-    hint: "系统没有定位到具体页码，请写一句核对了哪一页、哪张表。须写明核对的关系/数字（如“合计=分项之和”）；局部取数草稿不算关系核对结论。",
-    placeholder: "例如：第 12 页基本支出决算表，人员经费与公用经费合计与说明一致",
+    heading: "核对无误 · 写明核对结论",
+    hint: "写明本次核对了哪些关系/哪些数字（如“合计=分项之和”）；系统定位只作证据位置自动带上，不构成核对结论。局部取数草稿不算关系核对结论。",
+    placeholder: "例如：第 12 页基本支出决算表，人员经费 120.00 与公用经费 30.00 合计与说明 150.00 一致",
   },
 };
 
@@ -60,21 +60,27 @@ export interface ObligationDecisionPanelProps {
   onCancel: () => void;
 }
 
-/** 阻断点数量：缺数位置 + 结构卡点；两者都空 = 规则级阻断（无关系级回执）。 */
-function blockerCount(item: ObligationReviewItemRecord | null | undefined): number {
-  const missing = item?.missing_operands?.length ?? 0;
-  const blocked = item?.blocked_by?.length ?? 0;
-  return Math.max(missing, blocked);
+/** 阻断点分维计数（IR08）：缺数位置与结构卡点分开列出，不混为一个数。 */
+function blockerCounts(item: ObligationReviewItemRecord | null | undefined): { missing: number; blocked: number } {
+  return {
+    missing: item?.missing_operands?.length ?? 0,
+    blocked: item?.blocked_by?.length ?? 0,
+  };
 }
 
 function describeOperands(item: ObligationReviewItemRecord | null | undefined): string[] {
-  return (item?.missing_operands ?? []).slice(0, 6).map((operand) => {
+  return (item?.missing_operands ?? []).map((operand) => {
     const page = typeof operand.page === "number" ? `第${operand.page}页` : "";
     const row = typeof operand.row_key === "string" && operand.row_key ? operand.row_key : "";
     const column = typeof operand.column === "string" && operand.column ? operand.column : "";
     const role = typeof operand.role === "string" && operand.role ? operand.role : "缺数";
     return [role, page, row, column].filter(Boolean).join(" · ");
   });
+}
+
+function describeBlocks(item: ObligationReviewItemRecord | null | undefined): string[] {
+  return (item?.blocked_by ?? []).map(
+    (block) => `结构卡点 · ${block.dimension} · ${block.reason_code}`);
 }
 
 export function ObligationDecisionPanel({
@@ -97,11 +103,13 @@ export function ObligationDecisionPanel({
   const complete = decision === "not_applicable"
     ? Boolean(reasonCode) && (reasonCode !== "other" || Boolean(text.trim()))
     : Boolean(text.trim());
-  // R2.2 A3：整项决定须确认覆盖范围（verified_ok / not_applicable 面板路径）。
-  const needsScope = decision === "verified_ok" || decision === "not_applicable";
-  const blockers = blockerCount(item);
+  // R2.2 A3/IR04：所有关闭性决定（verified_ok/verified_issue/not_applicable）
+  // 都须确认覆盖范围；pending 不经过本面板。
+  const needsScope = true;
+  const counts = blockerCounts(item);
   const operandLines = describeOperands(item);
-  const ruleLevel = blockers === 0;
+  const blockLines = describeBlocks(item);
+  const noDetail = counts.missing === 0 && counts.blocked === 0;
 
   const prefillLocalDraft = (kind: "none" | "correct") => {
     const operand = item?.missing_operands?.[0];
@@ -137,24 +145,29 @@ export function ObligationDecisionPanel({
         <p className="mb-1 font-medium text-slate-800">{checkName}</p>
         <p className="mb-3 text-xs leading-relaxed text-slate-500">{copy.hint}</p>
 
-        {/* R2.2 A3：全量阻断点清单（规则级 0 回执时展示整条规则阻断）。 */}
+        {/* R2.2 A3/IR08：全量阻断清单（分维、不截断、可滚动）。 */}
         <section
           className="mb-3 rounded-md bg-surface-50 px-3 py-2.5"
           data-testid="gbc-review-obligation-blockers"
-          data-blocker-count={blockers}
-          data-rule-level={ruleLevel ? "true" : "false"}
+          data-missing-count={counts.missing}
+          data-blocked-count={counts.blocked}
         >
           <h3 className="mb-1 text-xs font-semibold text-slate-600">
-            {ruleLevel ? "规则级阻断" : `阻断点清单（${blockers}）`}
+            {noDetail
+              ? "阻断范围"
+              : `阻断点清单（缺数位置 ${counts.missing} 项 · 结构卡点 ${counts.blocked} 项）`}
           </h3>
-          {ruleLevel ? (
+          {noDetail ? (
             <p className="text-xs leading-relaxed text-slate-600">
-              该检查整条规则未完成（无关系级回执）：请对整条检查项核对，不能只按个别位置表态。
+              该义务未登记关系级明细（可能为规则级阻断）：请对整条检查项核对，不能只按个别位置表态。
             </p>
           ) : (
-            <ul className="grid gap-1 text-xs leading-relaxed text-slate-600">
+            <ul className="grid max-h-48 gap-1 overflow-y-auto text-xs leading-relaxed text-slate-600">
               {operandLines.map((line, index) => (
-                <li key={index}>{index + 1}. {line}</li>
+                <li key={`m-${index}`}>{index + 1}. {line}</li>
+              ))}
+              {blockLines.map((line, index) => (
+                <li key={`b-${index}`}>{line}</li>
               ))}
             </ul>
           )}
@@ -222,9 +235,9 @@ export function ObligationDecisionPanel({
               className="mt-0.5 accent-primary-600"
             />
             <span data-testid="gbc-review-obligation-scope-text">
-              {ruleLevel
-                ? "本人确认：本决定覆盖该检查整条规则（全部阻断点）。范围确认不能代替适用性/核对依据。"
-                : `本人确认：本决定覆盖该义务全部 ${blockers} 个阻断点。范围确认不能代替适用性/核对依据。`}
+              {noDetail
+                ? "本人确认：本决定覆盖该义务全部阻断点（上方清单即完整集合）。范围确认不能代替适用性/核对依据。"
+                : `本人确认：本决定覆盖该义务全部阻断点（缺数位置 ${counts.missing} 项、结构卡点 ${counts.blocked} 项，上方清单即完整集合）。范围确认不能代替适用性/核对依据。`}
             </span>
           </label>
         ) : null}

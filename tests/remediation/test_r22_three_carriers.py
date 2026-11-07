@@ -1,8 +1,10 @@
 """R2.2 §8.1 三载体数据契约（待审工具 scripts/verify_three_carriers.py）。
 
-契约：主载体=rule_findings；投影=check_receipts/obligation_coverage；
-投影命中去重、fail-缺主载体冲突、缺字段（未知）与合法空列表区分、
-三载体不直接相加。双采一致只证明确定性，不签发零回归。
+正式问题载体（IR05 勘误）= result.rule_findings / result.issues /
+review_report.issues；check_receipts 与 obligation_coverage 是投影。
+契约：主载体保守次序、跨载体身份去重、同 id 异内容冲突以主载体为准、
+缺字段（未知）与合法空列表区分、三载体不直接相加；每种正式载体独占
+问题都必须被计数。双采一致只证明确定性，不签发零回归。
 """
 from __future__ import annotations
 
@@ -17,48 +19,61 @@ TOOL = Path(__file__).resolve().parents[2] / "scripts" / "verify_three_carriers.
 
 def test_missing_key_is_unknown_not_zero():
     snapshot = three_carrier_snapshot({}, {}, {})
-    assert snapshot["main_carrier"]["missing"] is True
-    assert snapshot["main_carrier"]["count"] is None
-    assert snapshot["main_carrier"]["legal_empty"] is False
+    assert all(snapshot["formal_carriers"][key]["missing"] for key in (
+        "result.rule_findings", "result.issues", "review_report.issues"))
 
 
 def test_present_empty_list_is_legal_empty():
-    snapshot = three_carrier_snapshot({"rule_findings": []}, {"check_receipts": []}, {"instances": []})
-    assert snapshot["main_carrier"]["legal_empty"] is True
-    assert snapshot["main_carrier"]["count"] == 0
+    snapshot = three_carrier_snapshot({"rule_findings": []}, {"issues": []}, {"instances": []})
+    assert snapshot["formal_carriers"]["result.rule_findings"]["legal_empty"] is True
+    assert snapshot["formal_carriers"]["review_report.issues"]["legal_empty"] is True
 
 
-def test_projection_refs_dedupe_against_main():
-    result = {"rule_findings": [{"id": "F-1", "rule": "V33-X", "message": "m"}]}
+def test_single_formal_carrier_exclusive_problems_counted():
+    """IR05 单载体负控：正式问题只出现在某一载体时必须被计数。"""
+    # rule_findings=[] 合法空 + result.issues 独占 1 条
+    snapshot = three_carrier_snapshot(
+        {"rule_findings": [], "issues": [{"id": "I-1", "rule": "V33-X"}]}, {}, {})
+    assert snapshot["formal_total_deduped"] == 1
+    assert snapshot["main_carrier"] == "result.issues"
+    # review_report.issues 独占 1 条
+    snapshot = three_carrier_snapshot({"rule_findings": []}, {"issues": [{"id": "R-1"}]}, {})
+    assert snapshot["formal_total_deduped"] == 1
+
+
+def test_main_carrier_missing_others_still_counted():
+    """真实水务局旧任务形态：rule_findings 缺失、review_report.issues=2。"""
+    snapshot = three_carrier_snapshot({}, {"issues": [{"id": "a"}, {"id": "b"}]}, {})
+    assert snapshot["formal_total_deduped"] == 2
+    assert snapshot["formal_carriers"]["result.rule_findings"]["missing"] is True
+    assert snapshot["main_carrier"] == "review_report.issues"
+
+
+def test_cross_carrier_dedupe_and_content_conflict():
+    finding = {"id": "F-1", "rule": "V33-X", "message": "m"}
+    snapshot = three_carrier_snapshot(
+        {"rule_findings": [finding]}, {"issues": [dict(finding)]}, {})
+    assert snapshot["formal_total_deduped"] == 1
+    assert snapshot["multi_carrier_projection"]["count"] == 1
+    snapshot = three_carrier_snapshot(
+        {"rule_findings": [finding]},
+        {"issues": [{"id": "F-1", "rule": "V33-X", "message": "不同内容"}]}, {})
+    assert len(snapshot["conflicts"]) == 1
+    assert snapshot["conflicts"][0]["resolution"].startswith("以主载体")
+
+
+def test_projection_mapping_against_union():
+    result = {"rule_findings": [{"id": "F-1", "rule": "V33-X", "message": "m"},
+                                {"id": "F-2", "rule": "V33-W", "message": "n"}]}
     report = {"check_receipts": [
         {"rule_id": "V33-X", "status": "fail", "issue_refs": ["F-1"]},
-        {"rule_id": "V33-W", "status": "fail", "issue_refs": ["F-1"]},
         {"rule_id": "V33-Y", "status": "fail", "issue_refs": ["F-9"]},
     ]}
     snapshot = three_carrier_snapshot(result, report, {})
-    assert snapshot["receipt_projection"]["mapped_refs"] == 2
+    assert snapshot["receipt_projection"]["mapped_refs"] == 1
     assert snapshot["receipt_projection"]["projection_only_count"] == 1
-    # V33-X/V33-W 的 fail 都有主载体依据（F-1）；V33-Y 的 F-9 主载体缺席 → 冲突。
-    assert [c["rule_id"] for c in snapshot["conflicts"]] == ["V33-Y"]
-
-
-def test_fail_without_main_finding_is_conflict_resolved_by_main():
-    result = {"rule_findings": [{"id": "F-1", "rule": "V33-X", "message": "m"}]}
-    report = {"check_receipts": [
-        {"rule_id": "V33-Y", "status": "fail", "issue_refs": ["F-9"]},
-        {"rule_id": "V33-Z", "status": "pass", "issue_refs": []},
-    ]}
-    snapshot = three_carrier_snapshot(result, report, {})
-    assert len(snapshot["conflicts"]) == 1
-    assert snapshot["conflicts"][0]["rule_id"] == "V33-Y"
-    assert snapshot["conflicts"][0]["resolution"].startswith("以主载体为准")
-
-
-def test_main_finding_without_receipt_reference_is_projection_gap():
-    result = {"rule_findings": [{"id": "F-1", "rule": "V33-X", "message": "m"}]}
-    snapshot = three_carrier_snapshot(result, {"check_receipts": []}, {})
-    assert snapshot["unreferenced_main_findings"] == ["id:F-1"]
-    assert snapshot["conflicts"] == []
+    assert set(snapshot["unreferenced_main_findings"]) == {"id:F-2"}
+    assert snapshot["no_cross_carrier_sum"] is True
 
 
 def test_tool_selftest_and_real_record_smoke():
@@ -74,5 +89,5 @@ def test_tool_selftest_and_real_record_smoke():
     assert out.returncode == 0
     import json
     snapshot = json.loads(out.stdout)
-    assert snapshot["main_carrier"]["present"] is True
+    assert snapshot["formal_total_deduped"] >= 1
     assert snapshot["no_cross_carrier_sum"] is True
