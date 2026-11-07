@@ -459,10 +459,16 @@ def _bind_klass_via_independent_chain(doc, facts, item, paths, aliases):
                         'klass_code': klass_code, 'kuan_code': kuan_code,
                         'xiang_code': xiang_code})
         if _name(item['klass']) != table_klass_name:
+            table_page = next((ref.get('physical_page') for f in facts
+                               if str(f.subject_code) == klass_code
+                               and f.indicator == 'total_actual'
+                               for ref in (getattr(f, 'extra_dims', None) or {}).get('evidence_refs', []) or []
+                               if ref.get('physical_page')), None)
             aliases.append({'role': 'klass_name_difference',
                             'narrative_name': str(item['klass']),
                             'table_name': table_klass_name_raw or table_klass_name,
-                            'klass_code': klass_code})
+                            'klass_code': klass_code,
+                            'table_page': table_page})
     return klass_code
 
 
@@ -692,11 +698,15 @@ def check_function_disclosures(rule, doc):
                           and a.get('role') == 'klass_name_difference'), None)
         if name_hint and not error:
             hint_page = _name_difference_hint(doc, item)
+            # A2/复核矩阵：类名提示带**双侧位置**（说明页 + 表内页），
+            # 不能只有说明单侧。
+            hint_pages = sorted({p for p in (hint_page, name_hint.get('table_page')) if p})
             issues.append(rule._issue(
-                f"说明写类名“{name_hint['narrative_name']}”，表内编码 "
+                f"说明第{hint_page or '?'}页写类名“{name_hint['narrative_name']}”，表内第"
+                f"{name_hint.get('table_page') or '?'}页编码 "
                 f"{name_hint['klass_code']} 科目为“{name_hint['table_name']}”；"
                 "本条目已按款/项独立身份链核对金额，类名差异请核对是否漏字。",
-                {'page': hint_page} if hint_page else {},
+                {'pages': hint_pages, 'page': hint_pages[0] if hint_pages else None} if hint_pages else {},
                 'info',
                 evidence_text=(f"说明类名：{name_hint['narrative_name']}；"
                                f"表内类名：{name_hint['table_name']}（编码 {name_hint['klass_code']}）"),
