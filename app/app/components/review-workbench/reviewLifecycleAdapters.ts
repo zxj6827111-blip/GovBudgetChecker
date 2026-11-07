@@ -91,6 +91,8 @@ export interface ObligationLocationRecord {
   page: number;
   label: string | null;
   bbox: number[] | null;
+  /** 同页关联框（R2.2 §7：同页主框+关联框）；旧后端没有该字段。 */
+  related?: ObligationLocationRecord[];
 }
 
 /** 人工补核（WP3-B）的一条义务：引擎判定的阻塞实例 + 当前会话的人工决定。 */

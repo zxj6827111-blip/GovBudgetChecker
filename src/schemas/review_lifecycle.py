@@ -278,11 +278,16 @@ class ObligationLocation(BaseModel):
     页码/bbox 必须来自当前分析代际的结构化表清单或 finding 证据；
     取不到就不给，**不在本层猜页码**。``label`` 只说明"这是哪张表/哪条证据"，
     不是新的判定结论。
+
+    ``related`` 是同一页上的其余关联框（R2.2 §7：同页主框+关联框）——旧实现
+    按页去重会整框丢弃同页其余 finding 证据；关联框不另出芯片，随主入口
+    一起供预览框绘制与导出。
     """
 
     page: int = Field(ge=1)
     label: Optional[str] = None
     bbox: Optional[List[float]] = None
+    related: List["ObligationLocation"] = Field(default_factory=list)
 
 
 class ObligationReviewItem(BaseModel):

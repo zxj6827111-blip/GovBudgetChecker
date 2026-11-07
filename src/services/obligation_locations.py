@@ -20,7 +20,8 @@ PDF 页文本，若在前端用正则猜页码，必然随材料版式漂移；�
   当成另一张表）；
 - ``detail`` 里明写的"第 N 页/第 N、M 页"只作为补充位置，且页码必须落在
   1..999；
-- 同一页同一 bbox 只保留一次，最多 6 个位置，避免补核卡被位置芯片淹没。
+- 同一页同一 bbox 只保留一次；同页其余位置作为关联框挂在主入口上
+  （R2.2 §7 同页主框+关联框），最多 6 个位置，避免补核卡被位置芯片淹没。
 """
 
 from __future__ import annotations
@@ -217,35 +218,61 @@ def _finding_locations(
 def _dedupe(
     locations: Sequence[Tuple[int, Optional[List[float]], str]],
 ) -> List[ObligationLocation]:
-    # 页面跳转是页级的：同一页只留一个入口。先出现的位置（表清单）优先，
-    # 后面的同页 finding 证据不重复出芯片；bbox 仍随该入口保留。
-    seen_pages = set()
-    result: List[ObligationLocation] = []
+    # 页面跳转是页级的：同一页留一个主入口；同页其余位置不再丢弃，作为
+    # 关联框挂到主入口（R2.2 §7：同页主框+关联框——旧实现"后面的同页
+    # finding 证据不重复出芯片"会整框丢失，补核卡看不到同页其余证据）。
+    # 关联框按 (bbox, label) 去重，随主入口总数上限一起截断。
+    entries: Dict[int, ObligationLocation] = {}
+    order: List[int] = []
     for page, bbox, label in locations:
-        if page in seen_pages:
-            continue
-        seen_pages.add(page)
-        result.append(
-            ObligationLocation(
+        frame = bbox if isinstance(bbox, list) else None
+        entry = entries.get(page)
+        if entry is None:
+            entries[page] = ObligationLocation(
                 page=page,
                 label=label or None,
-                bbox=bbox if isinstance(bbox, list) else None,
+                bbox=frame,
             )
-        )
+            order.append(page)
+            continue
+        related = ObligationLocation(page=page, label=label or None, bbox=frame)
+        if related.bbox == entry.bbox and (related.label or None) == (entry.label or None):
+            continue
+        if any(
+            existing.bbox == related.bbox and (existing.label or None) == (related.label or None)
+            for existing in entry.related
+        ):
+            continue
+        entry.related.append(related)
+    result = [entries[page] for page in order]
     result.sort(key=lambda item: (item.page, item.label or ""))
     return result[:_MAX_LOCATIONS]
 
 
 def merge_locations(*groups: Sequence[ObligationLocation]) -> List[ObligationLocation]:
-    """同源义务共享位置：按页去重，保留先出现的 label/bbox。"""
-    seen_pages = set()
-    merged: List[ObligationLocation] = []
+    """同源义务共享位置：按页去重，保留先出现的 label/bbox，同页其余框并入关联框。"""
+    entries: Dict[int, ObligationLocation] = {}
+    order: List[int] = []
     for group in groups:
         for location in group:
-            if location.page in seen_pages:
+            entry = entries.get(location.page)
+            if entry is None:
+                entries[location.page] = location
+                order.append(location.page)
                 continue
-            seen_pages.add(location.page)
-            merged.append(location)
+            candidates = [location, *location.related]
+            for related in candidates:
+                if related.bbox == entry.bbox and (related.label or None) == (entry.label or None):
+                    continue
+                if any(
+                    existing.bbox == related.bbox and (existing.label or None) == (related.label or None)
+                    for existing in entry.related
+                ):
+                    continue
+                entry.related.append(
+                    ObligationLocation(page=related.page, label=related.label, bbox=related.bbox)
+                )
+    merged = [entries[page] for page in order]
     merged.sort(key=lambda item: (item.page, item.label or ""))
     return merged[:_MAX_LOCATIONS]
 
