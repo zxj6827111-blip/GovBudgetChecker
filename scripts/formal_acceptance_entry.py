@@ -105,8 +105,39 @@ from typing import Any, Dict, List, Optional, Tuple
 CONTRACT_VERSION = "r22-formal-acceptance-v1"
 #: 证据载体（投影）：before 存在而 after 缺键/null 时登记 evidence_lost。
 _EVIDENCE_CARRIERS = ("check_receipts", "obligation_coverage", "fact_receipts")
+#: FA-01：契约每侧**必选**身份字段与类型校验器。缺一即契约无效——身份未成立的
+#: "门禁全过"不是兼容，是放行未知输入。
+_MANDATORY_CONTRACT_FIELDS: Tuple[Tuple[str, Any], ...] = (
+    ("material.checksum_sha256", lambda v: isinstance(v, str) and len(v) == 64 and all(c in "0123456789abcdefABCDEF" for c in v)),
+    ("generation.analysis_revision", lambda v: isinstance(v, str) and bool(v.strip())),
+    ("code.rule_registry_version", lambda v: isinstance(v, str) and bool(v.strip())),
+    ("code.rule_policy_version", lambda v: isinstance(v, str) and bool(v.strip())),
+    ("config.use_local_rules", lambda v: isinstance(v, bool)),
+    ("config.use_ai_assist", lambda v: isinstance(v, bool)),
+    ("config.mode", lambda v: isinstance(v, str) and bool(v.strip())),
+)
+#: 解析代际字段（离线无库重放可能拿不到 DB 侧代际）：必须**声明**（含显式 null）
+#: 或给出书面依据（parse_generation_basis），不允许靠省略字段豁免。
+_CONDITIONAL_CONTRACT_FIELDS = ("generation.parse_run_id", "generation.document_version_id")
+_VALID_MODES = ("same_identity", "cross_generation")
 
 _COMPONENT_PATH = Path(__file__).resolve().parent / "verify_three_carriers.py"
+
+
+def _tool_identity() -> Dict[str, str]:
+    """工具自身版本分账绑定：入口脚本与三载体组件的 SHA256。"""
+    import hashlib
+
+    def _sha(path: Path) -> str:
+        try:
+            return hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            return "unavailable"
+    return {
+        "entry_script_sha256": _sha(Path(__file__).resolve()),
+        "component_script_sha256": _sha(_COMPONENT_PATH),
+        "contract_version": CONTRACT_VERSION,
+    }
 
 
 def _load_component():
@@ -209,6 +240,90 @@ def _git_head(code_tree: Optional[Path]) -> Tuple[bool, Optional[str]]:
         return False, None
 
 
+# ---- 契约完整性校验（FA-01：先验契约，再谈门禁） ------------------------------
+
+
+def _expected_identity_errors(expected: Any, *, side: str, basis: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """校验单侧 expected：必选身份字段存在、类型/非空合规、解析代际有据。"""
+    errors: List[Dict[str, Any]] = []
+    if not isinstance(expected, dict) or not expected:
+        return [{"field": "*", "kind": "expected_empty",
+                 "message": f"{side}: expected 身份树缺失或为空——材料/代际/代码/配置身份未成立"}]
+    flat = _flat_expected({"expected": expected})
+    for field, validator in _MANDATORY_CONTRACT_FIELDS:
+        if field not in flat:
+            errors.append({"field": field, "kind": "mandatory_field_undeclared",
+                           "message": f"{side}: 必选身份字段未声明，不能靠省略字段豁免"})
+        else:
+            value = flat[field]
+            if value is None or not validator(value):
+                errors.append({"field": field, "kind": "invalid_value",
+                               "expected": "符合类型的非空值", "observed": value})
+    for field in _CONDITIONAL_CONTRACT_FIELDS:
+        if field not in flat and not str(basis.get(field, "")).strip():
+            errors.append({
+                "field": field, "kind": "conditional_field_unjustified",
+                "message": (f"{side}: 解析代际字段 {field} 未声明——离线无库可写"
+                            "parse_generation_basis 有据不适用，但不能靠省略豁免"),
+            })
+    return errors
+
+
+def validate_contract(contract: Any) -> Dict[str, Any]:
+    """FA-01：契约模式与每侧必选身份字段先验证；无效契约拒绝比较。
+
+    - ``contract_version`` 必须匹配；
+    - ``mode`` ∈ {same_identity, cross_generation}；
+    - same_identity：``expected`` 必选字段齐全且类型合规；
+    - cross_generation：``expected_before``/``expected_after`` 各自齐全；
+    - 解析代际字段：声明（含显式 null）或在 ``parse_generation_basis``
+      给出书面依据（如 offline_replay_without_db）；
+    - ``optional_fields`` 只能引用已声明字段（载荷缺键放行，但期望必须存在）；
+    - ``git_commit_declared`` 若声明须为 40 位十六进制。
+    """
+    errors: List[Dict[str, Any]] = []
+    if not isinstance(contract, dict):
+        return {"valid": False, "errors": [{"field": "*", "kind": "not_a_dict"}]}
+    if contract.get("contract_version") != CONTRACT_VERSION:
+        errors.append({"field": "contract_version", "kind": "version_mismatch",
+                       "expected": CONTRACT_VERSION,
+                       "observed": contract.get("contract_version")})
+    mode = contract.get("mode") or "same_identity"
+    if mode not in _VALID_MODES:
+        errors.append({"field": "mode", "kind": "invalid_mode",
+                       "expected": list(_VALID_MODES), "observed": mode})
+    basis = contract.get("parse_generation_basis")
+    if not isinstance(basis, dict):
+        basis = {}
+    if mode == "cross_generation":
+        for side in ("before", "after"):
+            errors.extend(_expected_identity_errors(
+                contract.get(f"expected_{side}"), side=f"expected_{side}", basis=basis))
+    else:
+        errors.extend(_expected_identity_errors(
+            contract.get("expected"), side="expected", basis=basis))
+    optional = contract.get("optional_fields") or []
+    if not isinstance(optional, list):
+        errors.append({"field": "optional_fields", "kind": "invalid_type"})
+    else:
+        if mode == "cross_generation":
+            declared = set(_flat_expected({"expected": contract.get("expected_before")})) | \
+                set(_flat_expected({"expected": contract.get("expected_after")}))
+        else:
+            declared = set(_flat_expected({"expected": contract.get("expected")}))
+        for field in optional:
+            if field not in declared:
+                errors.append({"field": field, "kind": "optional_field_undeclared",
+                               "message": "optional_fields 只能引用已在 expected 声明的字段"})
+    git_declared = contract.get("git_commit_declared")
+    if git_declared is not None and (
+            not isinstance(git_declared, str) or len(git_declared) != 40
+            or any(c not in "0123456789abcdef" for c in git_declared.lower())):
+        errors.append({"field": "git_commit_declared", "kind": "invalid_value",
+                       "expected": "40 位十六进制提交哈希或 null", "observed": git_declared})
+    return {"valid": not errors, "errors": errors}
+
+
 # ---- 门禁 -------------------------------------------------------------------
 
 
@@ -279,24 +394,163 @@ def check_gates(
 # ---- 载体提取与证据丢失登记 --------------------------------------------------
 
 
-def _evidence_state(status: Dict[str, Any]) -> Dict[str, Any]:
+def _copies(status: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """返回 (result.meta, review_report) 两个容器（可能为空 dict）。"""
     result = status.get("result") if isinstance(status.get("result"), dict) else {}
     meta = result.get("meta") if isinstance(result.get("meta"), dict) else {}
     report = status.get("review_report") if isinstance(status.get("review_report"), dict) else {}
+    return meta, report
+
+
+def _identity_set(items: Any) -> Tuple[Optional[set], Optional[int], Optional[str]]:
+    """载体内容的身份集合：条目级 canonical 指纹（FA-02 按内容比较）。
+
+    返回 (identity_set, count, kind)；非 list/非 dict 投影返回 kind=type 名。
+    """
+    if items is None:
+        return None, None, "null"
+    if isinstance(items, list):
+        return ({_canonical(item) for item in items if isinstance(item, dict)}
+                if items else set()), len(items), "list"
+    if isinstance(items, dict):
+        # dict 形态（如 obligation_coverage）：其语义内容由调用方下钻 instances。
+        return None, len(items), "dict"
+    return None, None, type(items).__name__
+
+
+def _coverage_instance_state(coverage: Any) -> Dict[str, Any]:
+    """obligation_coverage 的实例级状态（FA-02：{}与删实例都要显式登记）。"""
+    if not isinstance(coverage, dict):
+        return {"kind": type(coverage).__name__ if coverage is not None else "null",
+                "present": coverage is not None, "instance_count": None, "ids": None}
+    raw = coverage.get("instances")
+    if raw is None:
+        return {"kind": "dict_without_instances", "present": True,
+                "instance_count": None, "ids": None}
+    if not isinstance(raw, list):
+        return {"kind": "instances_wrong_type", "present": True,
+                "instance_count": None, "ids": None}
+    ids = {str(item.get("obligation_id")) for item in raw if isinstance(item, dict) and item.get("obligation_id")}
+    return {"kind": "instances", "present": True, "instance_count": len(raw), "ids": ids}
+
+
+def _evidence_content_state(status: Dict[str, Any]) -> Dict[str, Any]:
+    """FA-02：证据载体的**内容级**状态（两份投影各自取，键缺失与空分清）。"""
+    meta, report = _copies(status)
+    result = status.get("result") if isinstance(status.get("result"), dict) else {}
     states: Dict[str, Any] = {}
     for key in _EVIDENCE_CARRIERS:
-        found: Tuple[bool, Any] = (False, None)
-        for container in (report, meta):
-            if isinstance(container, dict) and key in container:
-                found = (True, container.get(key))
-                break
-        present, value = found
-        states[key] = {
-            "present": present,
-            "null_value": present and value is None,
-            "count": len(value) if present and isinstance(value, list) else None,
-        }
+        copies: Dict[str, Any] = {}
+        for name, container in (("result.meta", meta), ("review_report", report)):
+            if key in container:
+                value = container.get(key)
+                if key == "obligation_coverage":
+                    state = _coverage_instance_state(value)
+                    state["raw_kind"] = type(value).__name__ if value is not None else "null"
+                else:
+                    ids, count, kind = _identity_set(value)
+                    state = {"kind": kind, "present": value is not None,
+                             "count": count, "ids": ids}
+                copies[name] = state
+            else:
+                copies[name] = {"kind": "missing_key", "present": False,
+                                "count": None, "ids": None}
+        states[key] = copies
+    # fact_receipts 也在 result.meta（_EVIDENCE_CARRIERS 已覆盖）；rule_execution_summary 不在此列。
+    states["_containers"] = {"result_present": isinstance(result, dict),
+                              "review_report_present": isinstance(status.get("review_report"), dict)}
     return states
+
+
+def compare_evidence(before_status: Dict[str, Any],
+                     after_status: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """FA-02：按内容/关系/义务身份比较证据丢失；任何静默清空都不允许。
+
+    登记种类：missing_key / null_value / emptied / type_changed /
+    partial_loss（带丢失身份，截断展示）/ coverage_emptied /
+    coverage_instances_dropped（带丢失 obligation_id）/ projection_mismatch。
+    合法关系变化不算丢失——关系级变化由正式问题比较显式归因，这里只对
+    **证据容器**（回执/覆盖）负责。
+    """
+    before = _evidence_content_state(before_status)
+    after = _evidence_content_state(after_status)
+    lost: List[Dict[str, Any]] = []
+    summary: Dict[str, Any] = {}
+    for key in _EVIDENCE_CARRIERS:
+        for copy_name in ("result.meta", "review_report"):
+            b = before[key][copy_name]
+            a = after[key][copy_name]
+            summary[f"{key}@{copy_name}"] = {
+                "before_count": b.get("count", b.get("instance_count")),
+                "after_count": a.get("count", a.get("instance_count")),
+                "before_kind": b.get("kind"), "after_kind": a.get("kind"),
+            }
+        # 投影一致性：两侧同容器拷贝之间的差异
+        for copy_name in ("result.meta", "review_report"):
+            b, a = before[key][copy_name], after[key][copy_name]
+            if b.get("kind") == "missing_key" and a.get("kind") == "missing_key":
+                continue
+            if a.get("kind") == "missing_key":
+                lost.append({"carrier": key, "copy": copy_name, "kind": "missing_key",
+                             "before_count": b.get("count", b.get("instance_count"))})
+                continue
+            if a.get("kind") == "null" and b.get("kind") != "null":
+                lost.append({"carrier": key, "copy": copy_name, "kind": "null_value",
+                             "before_count": b.get("count", b.get("instance_count"))})
+                continue
+            # obligation_coverage：实例级比较优先于泛化 type_changed
+            if key == "obligation_coverage":
+                if b.get("kind") == "instances" and a.get("kind") in (
+                        "dict_without_instances", "instances_wrong_type"):
+                    lost.append({"carrier": key, "copy": copy_name, "kind": "coverage_schema_lost",
+                                 "before_count": b.get("instance_count")})
+                    continue
+                if b.get("kind") == "instances" and a.get("kind") == "instances":
+                    b_ids, a_ids = b.get("ids") or set(), a.get("ids") or set()
+                    dropped = sorted(b_ids - a_ids)
+                    if b.get("instance_count") and not a.get("instance_count"):
+                        lost.append({"carrier": key, "copy": copy_name, "kind": "coverage_emptied",
+                                     "before_count": b.get("instance_count"),
+                                     "after_count": a.get("instance_count")})
+                    elif dropped:
+                        lost.append({"carrier": key, "copy": copy_name,
+                                     "kind": "coverage_instances_dropped",
+                                     "before_count": b.get("instance_count"),
+                                     "after_count": a.get("instance_count"),
+                                     "dropped_obligation_ids": dropped[:20],
+                                     "dropped_total": len(dropped)})
+                    continue
+            if b.get("kind") != a.get("kind") and b.get("kind") not in ("missing_key", None) \
+                    and a.get("kind") not in ("null",):
+                lost.append({"carrier": key, "copy": copy_name, "kind": "type_changed",
+                             "before_kind": b.get("kind"), "after_kind": a.get("kind"),
+                             "before_count": b.get("count", b.get("instance_count")),
+                             "after_count": a.get("count", a.get("instance_count"))})
+                continue
+            # list 型：内容级比较
+            if key != "obligation_coverage":
+                b_ids, b_count = b.get("ids"), b.get("count")
+                a_ids, a_count = a.get("ids"), a.get("count")
+                if b_ids is not None and a_ids is not None:
+                    lost_ids = sorted(b_ids - a_ids)
+                    if b_count and a_count == 0:
+                        lost.append({"carrier": key, "copy": copy_name, "kind": "emptied",
+                                     "before_count": b_count, "after_count": a_count})
+                    elif lost_ids:
+                        lost.append({"carrier": key, "copy": copy_name, "kind": "partial_loss",
+                                     "before_count": b_count, "after_count": a_count,
+                                     "lost_identities": lost_ids[:20],
+                                     "lost_identities_total": len(lost_ids)})
+        # 两份投影互相不一致（一份清空一份保留）
+        kinds_after = {name: after[key][name].get("kind") for name in ("result.meta", "review_report")}
+        if kinds_after.get("result.meta") == kinds_after.get("review_report") == "list":
+            ids_meta = after[key]["result.meta"].get("ids") or set()
+            ids_report = after[key]["review_report"].get("ids") or set()
+            if ids_meta != ids_report:
+                lost.append({"carrier": key, "kind": "projection_mismatch",
+                             "result_meta_count": after[key]["result.meta"].get("count"),
+                             "review_report_count": after[key]["review_report"].get("count")})
+    return lost, summary
 
 
 def _receipt_refs(status: Dict[str, Any]) -> set:
@@ -317,6 +571,32 @@ def _status(payload: Dict[str, Any]) -> Dict[str, Any]:
     return payload.get("status") if isinstance(payload.get("status"), dict) else payload
 
 
+def _carrier_readability(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    """FA-03：单侧三正式载体可读性评估——合法空/缺失/不可读分开。"""
+    carriers = snapshot.get("formal_carriers", {})
+    details: Dict[str, Any] = {}
+    readable_any = False
+    for key, state in carriers.items():
+        if state.get("missing") or not state.get("present"):
+            verdict = "missing"
+        elif state.get("null_value"):
+            verdict = "null"
+        elif state.get("non_list") and not state.get("dict_format"):
+            verdict = "unreadable_type"
+        elif state.get("unreadable_projection") or state.get("projection_inconsistent"):
+            verdict = "unreadable_projection"
+        elif state.get("count") is not None:
+            # 合法空（legal_empty）与有内容都算"可靠读取"
+            verdict = "readable"
+            readable_any = True
+        else:
+            verdict = "unknown"
+        details[key] = {"verdict": verdict, "count": state.get("count"),
+                         "legal_empty": state.get("legal_empty", False),
+                         "dict_format": state.get("dict_format", False)}
+    return {"readable_any": readable_any, "carriers": details}
+
+
 def compare_payloads(
     before: Dict[str, Any],
     after: Dict[str, Any],
@@ -324,18 +604,33 @@ def compare_payloads(
     *,
     verify_code_tree: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    """门禁全过才比较；任何拒绝都返回 rejected 且不含比较结论。
+    """先验契约完整性（FA-01），门禁全过才比较；结论三态外新增待核。
 
-    契约两种模式：
+    结论取值：
 
-    - ``same_identity``（默认）：两侧都必须等于同一份 ``expected``——用于
-      同代际双采/重放比较。
-    - ``cross_generation``：``expected_before`` / ``expected_after`` 各自
-      门禁（main 基线 vs 候选，代际与代码身份本来就不同），另加
-      ``require_same_material``（默认 true）：两侧材料 checksum 必须一致，
-      否则按错材料拒绝。
+    - ``rejected``：契约无效或身份门禁未全过——不产生比较结论；
+    - ``pending_review``：身份全过但**任一侧三正式载体无一可靠读取**
+      （全缺失/null/错类型/损坏投影）——不能出"零回归"，转人工/待核；
+    - ``compared``：可读且比较已产出。``zero_regression_claim`` 只有在
+      内容无变化、证据零丢失（FA-02 内容级）、投影一致且代码身份
+      （若声明）已核验时才为 True；任何 False 都带 ``claim_reasons``。
+
+    工具自身版本（入口脚本+组件 SHA256）随输出分账绑定。
     """
-    mode = str(contract.get("mode") or "same_identity")
+    contract_check = validate_contract(contract)
+    mode = str(contract.get("mode") or "same_identity") if isinstance(contract, dict) else "?"
+    if not contract_check["valid"]:
+        return {
+            "entry": "r22-formal-acceptance",
+            "contract_version": CONTRACT_VERSION,
+            "mode": mode,
+            "tool_identity": _tool_identity(),
+            "verdict": "rejected",
+            "reject_reason": "contract_invalid",
+            "contract_errors": contract_check["errors"],
+            "statement": "契约完整性校验未过：身份未成立的比较一律拒绝。",
+        }
+
     if mode == "cross_generation":
         expected_before = _flat_expected({"expected": contract.get("expected_before")})
         expected_after = _flat_expected({"expected": contract.get("expected_after")})
@@ -363,7 +658,9 @@ def compare_payloads(
             "entry": "r22-formal-acceptance",
             "contract_version": CONTRACT_VERSION,
             "mode": mode,
+            "tool_identity": _tool_identity(),
             "verdict": "rejected",
+            "reject_reason": "identity_gate_failed",
             "gates": gates,
             "statement": "身份门禁未全过：不产生问题载体比较结论。",
         }
@@ -389,13 +686,8 @@ def compare_payloads(
     )
     removed_unexplained = sorted(set(removed) - set(withdrawn_with_evidence))
 
-    evidence_before, evidence_after = _evidence_state(status_before), _evidence_state(status_after)
-    evidence_lost: List[Dict[str, Any]] = []
-    for key in _EVIDENCE_CARRIERS:
-        was = evidence_before[key]
-        now = evidence_after[key]
-        if (was["present"] and not was["null_value"]) and (not now["present"] or now["null_value"]):
-            evidence_lost.append({"carrier": key, "before_count": was["count"], "after": "missing_or_null"})
+    # FA-02：证据丢失按关系/义务/内容身份比较（两份投影各自取 + 投影一致性）。
+    evidence_lost, evidence_summary = compare_evidence(status_before, status_after)
 
     content_changed = sorted(
         identity
@@ -404,15 +696,47 @@ def compare_payloads(
         != _canonical(next(f["content"] for f in snap_after["formal_findings"] if f["identity"] == identity))
     )
 
-    zero_regression_claim = (
-        not added and not removed and not content_changed and not evidence_lost and not snap_after["conflicts"]
-    )
+    # FA-03：任一侧三正式载体无一可靠读取 → 结论只能"待核"，不得零回归。
+    readability = {"before": _carrier_readability(snap_before),
+                    "after": _carrier_readability(snap_after)}
+    if not readability["before"]["readable_any"] or not readability["after"]["readable_any"]:
+        return {
+            "entry": "r22-formal-acceptance",
+            "contract_version": CONTRACT_VERSION,
+            "mode": mode,
+            "tool_identity": _tool_identity(),
+            "verdict": "pending_review",
+            "pending_reason": "formal_carriers_unreadable",
+            "gates": gates,
+            "carrier_readability": readability,
+            "snapshot_before": snap_before,
+            "snapshot_after": snap_after,
+            "evidence_lost": evidence_lost,
+            "evidence_summary": evidence_summary,
+            "zero_regression_claim": False,
+            "claim_reasons": ["formal_carriers_unreadable"],
+            "statement": ("身份门禁全过，但至少一侧三正式问题载体全部缺失/null/"
+                           "错类型/投影损坏——无法证明'零回归'，转待核。"),
+        }
+
+    claim_reasons: List[str] = []
+    if added or removed or content_changed:
+        claim_reasons.append("formal_issue_content_changed")
+    if evidence_lost:
+        claim_reasons.append("evidence_lost_registered")
+    if snap_after["conflicts"]:
+        claim_reasons.append("carrier_conflicts_in_after")
+    if any(gate.get("git_commit") == "declared_not_verified" for gate in gates.values()):
+        claim_reasons.append("code_identity_declared_not_verified")
+    zero_regression_claim = not claim_reasons
     return {
         "entry": "r22-formal-acceptance",
         "contract_version": CONTRACT_VERSION,
         "mode": mode,
+        "tool_identity": _tool_identity(),
         "verdict": "compared",
         "gates": gates,
+        "carrier_readability": readability,
         "snapshot_before": snap_before,
         "snapshot_after": snap_after,
         "added_identities": added,
@@ -422,11 +746,13 @@ def compare_payloads(
         },
         "content_changed_identities": content_changed,
         "evidence_lost": evidence_lost,
+        "evidence_summary": evidence_summary,
         "zero_regression_claim": zero_regression_claim,
+        "claim_reasons": claim_reasons,
         "statement": (
-            "门禁全过，比较已产出。removed/withdrawn/evidence_lost 均为显式登记，"
-            "不计入无变化；zero_regression_claim 只描述本次比较的载体层观察，"
-            "不构成独立验收结论。"
+            "契约完整性、身份门禁、载体可读性全部通过后比较已产出。"
+            "removed/withdrawn/evidence_lost 均为显式登记，不计入无变化；"
+            "zero_regression_claim 只描述本次比较的载体层观察，不构成独立验收结论。"
         ),
     }
 
@@ -569,12 +895,152 @@ def selftest() -> Tuple[int, List[Dict[str, Any]]]:
     after_e["result"]["meta"].pop("check_receipts", None)
     after_e["review_report"].pop("check_receipts", None)
     result = compare_payloads(before_e, after_e, _contract())
+    lost_kinds = {(item["carrier"], item["copy"], item["kind"]) for item in result["evidence_lost"]}
     record("证据丢失负控：after 回执缺键显式登记",
            result["verdict"] == "compared"
-           and result["evidence_lost"] == [{"carrier": "check_receipts", "before_count": 1,
-                                             "after": "missing_or_null"}]
+           and ("check_receipts", "result.meta", "missing_key") in lost_kinds
+           and ("check_receipts", "review_report", "missing_key") in lost_kinds
            and result["zero_regression_claim"] is False,
            {"evidence_lost": result.get("evidence_lost")})
+
+    # FA-02：非空回执清成 []（缺键仍存在）→ emptied 登记，不得静默零丢失
+    after_cleared = json.loads(_canonical(before_e))
+    after_cleared["result"]["meta"]["check_receipts"] = []
+    after_cleared["review_report"]["check_receipts"] = []
+    result = compare_payloads(before_e, after_cleared, _contract())
+    lost_kinds = {(item["carrier"], item["copy"], item["kind"]) for item in result["evidence_lost"]}
+    record("FA-02 负控：非空回执清成 [] 必须 emptied 登记",
+           result["verdict"] == "compared"
+           and ("check_receipts", "result.meta", "emptied") in lost_kinds
+           and result["zero_regression_claim"] is False,
+           {"evidence_lost": result.get("evidence_lost")})
+
+    # FA-02：回执部分丢失（两条删一条）→ partial_loss 带丢失身份
+    before_p = _payload(rule_findings=[findings("F-1", "m")],
+                        check_receipts=[{"rule_id": "V33-X", "status": "fail", "issue_refs": ["F-1"]},
+                                        {"rule_id": "V33-Y", "status": "fail", "issue_refs": []}])
+    after_p = json.loads(_canonical(before_p))
+    after_p["result"]["meta"]["check_receipts"] = before_p["result"]["meta"]["check_receipts"][:1]
+    after_p["review_report"]["check_receipts"] = after_p["result"]["meta"]["check_receipts"]
+    result = compare_payloads(before_p, after_p, _contract())
+    partial = [item for item in result["evidence_lost"] if item.get("kind") == "partial_loss"]
+    record("FA-02 负控：删一条回执 → partial_loss 登记丢失身份",
+           result["verdict"] == "compared" and partial
+           and partial[0]["lost_identities_total"] == 1
+           and result["zero_regression_claim"] is False,
+           {"partial": partial[:1]})
+
+    # FA-02：obligation_coverage 改 {} / 删实例 → 登记
+    base_cov = _payload(rule_findings=[findings("F-1", "m")], check_receipts=receipts)
+    base_cov["result"]["meta"]["obligation_coverage"] = {
+        "instances": [{"obligation_id": "OBL-A", "status": "insufficient_data"},
+                       {"obligation_id": "OBL-B", "status": "insufficient_data"}],
+        "applicable_total": 2, "completed_total": 0, "not_applicable_total": 0,
+        "unresolved_total": 2, "blocking_total": 2,
+    }
+    after_cov_empty = json.loads(_canonical(base_cov))
+    after_cov_empty["result"]["meta"]["obligation_coverage"] = {}
+    result = compare_payloads(base_cov, after_cov_empty, _contract())
+    kinds = {item.get("kind") for item in result["evidence_lost"]}
+    after_cov_partial = json.loads(_canonical(base_cov))
+    after_cov_partial["result"]["meta"]["obligation_coverage"]["instances"] = \
+        base_cov["result"]["meta"]["obligation_coverage"]["instances"][:1]
+    result2 = compare_payloads(base_cov, after_cov_partial, _contract())
+    kinds2 = {item.get("kind") for item in result2["evidence_lost"]}
+    record("FA-02 负控：coverage 改 {} 或删实例必须登记",
+           result["verdict"] == "compared" and "coverage_schema_lost" in kinds
+           and result2["verdict"] == "compared" and "coverage_instances_dropped" in kinds2
+           and result["zero_regression_claim"] is False and result2["zero_regression_claim"] is False,
+           {"cov_empty": result.get("evidence_lost"), "cov_partial": result2.get("evidence_lost")})
+
+    # FA-02：只清空一份投影（meta 清空、review_report 保留）→ projection_mismatch
+    after_proj = json.loads(_canonical(before_e))
+    after_proj["result"]["meta"]["check_receipts"] = []
+    result = compare_payloads(before_e, after_proj, _contract())
+    kinds = {item.get("kind") for item in result["evidence_lost"]}
+    record("FA-02 负控：只清空一份投影 → projection_mismatch 登记",
+           result["verdict"] == "compared" and "projection_mismatch" in kinds,
+           {"evidence_lost": result.get("evidence_lost")})
+
+    # FA-01：空 expected 契约 → contract_invalid 拒绝（身份未成立不得"门禁全过"）
+    result = compare_payloads(_payload(rule_findings=[findings("F-1", "m")], check_receipts=receipts),
+                              json.loads(_canonical(_payload(rule_findings=[findings("F-1", "m")], check_receipts=receipts))),
+                              {"contract_version": CONTRACT_VERSION, "expected": {}})
+    record("FA-01 负控：空 expected 契约拒绝（contract_invalid）",
+           result["verdict"] == "rejected" and result.get("reject_reason") == "contract_invalid",
+           {"reject_reason": result.get("reject_reason"),
+            "errors": (result.get("contract_errors") or [])[:2]})
+
+    # FA-01：解析代际未声明且无书面依据 → 契约无效；有 parse_generation_basis 放行
+    contract_no_parse = _contract()
+    for field in ("parse_run_id", "document_version_id"):
+        contract_no_parse["expected"]["generation"].pop(field, None)
+    result = compare_payloads(_payload(rule_findings=[findings("F-1", "m")], check_receipts=receipts),
+                              json.loads(_canonical(_payload(rule_findings=[findings("F-1", "m")], check_receipts=receipts))),
+                              contract_no_parse)
+    no_basis_ok = result["verdict"] == "rejected" and result.get("reject_reason") == "contract_invalid"
+    contract_basis = json.loads(_canonical(contract_no_parse))
+    contract_basis["parse_generation_basis"] = {
+        "generation.parse_run_id": "offline_replay_without_db",
+        "generation.document_version_id": "offline_replay_without_db",
+    }
+    result2 = compare_payloads(_payload(rule_findings=[findings("F-1", "m")], check_receipts=receipts),
+                               json.loads(_canonical(_payload(rule_findings=[findings("F-1", "m")], check_receipts=receipts))),
+                               contract_basis)
+    record("FA-01 负控：解析代际不声明即契约无效；书面依据后有据放行",
+           no_basis_ok and result2["verdict"] == "compared",
+           {"no_basis": result.get("reject_reason"), "with_basis": result2.get("verdict")})
+
+    # FA-03：两侧三正式载体全部缺失 → pending_review，不得零回归
+    # （解析代际字段保持完整——身份门禁的"缺字段不当空"必须仍然生效）
+    carriers_absent = _payload(rule_findings=None, check_receipts=[])
+    carriers_absent["review_report"].pop("issues", None)
+    carriers_absent["structured_ingest"] = {"parse_run_id": "parse-1", "document_version_id": 7}
+    result = compare_payloads(carriers_absent, json.loads(_canonical(carriers_absent)), _contract())
+    record("FA-03 负控：三载体全缺失 → pending_review 不出零回归",
+           result["verdict"] == "pending_review"
+           and result.get("pending_reason") == "formal_carriers_unreadable"
+           and result["zero_regression_claim"] is False,
+           {"verdict": result["verdict"]})
+
+    # FA-03：dict 载体只有 all 投影且非空 → 损坏投影不得读成 0/合法空
+    proj_only = _payload(check_receipts=[])
+    proj_only["result"]["issues"] = {"all": [{"id": "F-2", "rule": "V33-Y", "message": "x"}]}
+    result = compare_payloads(proj_only, json.loads(_canonical(proj_only)), _contract())
+    carriers = (result.get("carrier_readability") or {}).get("before", {}).get("carriers", {}).get("result.issues", {})
+    record("FA-03 负控：只有 all 投影 → unreadable_projection → pending_review",
+           result["verdict"] == "pending_review"
+           and carriers.get("verdict") == "unreadable_projection",
+           {"verdict": result["verdict"], "carrier": carriers})
+
+    # FA-03：严重度桶在而 all 被清空 → projection_inconsistent → pending_review
+    proj_partial = _payload(check_receipts=[])
+    proj_partial["result"]["issues"] = {"error": [{"id": "F-1", "rule": "V33-X", "message": "m"}],
+                                         "warn": [], "info": [], "all": []}
+    result = compare_payloads(proj_partial, json.loads(_canonical(proj_partial)), _contract())
+    carriers = (result.get("carrier_readability") or {}).get("before", {}).get("carriers", {}).get("result.issues", {})
+    record("FA-03 负控：all 被清空而严重度桶有内容 → pending_review",
+           result["verdict"] == "pending_review"
+           and carriers.get("verdict") == "unreadable_projection",
+           {"verdict": result["verdict"], "carrier": carriers})
+
+    # FA-01/分账：git_commit_declared 只声明未核验 → compared 但零回归被迫 False
+    raw = _payload(rule_findings=[findings("F-1", "m")], check_receipts=receipts)
+    contract_git = _contract()
+    contract_git["git_commit_declared"] = "0" * 40
+    result = compare_payloads(raw, json.loads(_canonical(raw)), contract_git)
+    record("FA-01 负控：代码身份只声明未核验 → 零回归 False 并登记原因",
+           result["verdict"] == "compared"
+           and result["zero_regression_claim"] is False
+           and "code_identity_declared_not_verified" in result["claim_reasons"],
+           {"claim_reasons": result.get("claim_reasons")})
+
+    # 工具版本分账：输出携带入口脚本与组件 SHA256
+    record("工具身份分账绑定：输出携带 tool_identity 双哈希",
+           bool(result.get("tool_identity", {}).get("entry_script_sha256"))
+           and result["tool_identity"]["entry_script_sha256"]
+           != result["tool_identity"]["component_script_sha256"],
+           {"tool_identity": result.get("tool_identity")})
 
     # 错误撤销：before 有 F-1，after 移除 F-1 但回执仍引用
     before_w = _payload(rule_findings=[findings("F-1", "m")], check_receipts=receipts)
@@ -641,16 +1107,19 @@ def main() -> int:
         return code
 
     contract = _load_json(args.contract)
-    if contract.get("contract_version") != CONTRACT_VERSION:
-        print(json.dumps({"verdict": "rejected", "reason": "contract_version_mismatch",
-                          "expected": CONTRACT_VERSION,
-                          "observed": contract.get("contract_version")}, ensure_ascii=False))
+    check = validate_contract(contract)
+    if not check["valid"]:
+        print(json.dumps({"entry": "r22-formal-acceptance", "verdict": "rejected",
+                          "reject_reason": "contract_invalid",
+                          "contract_errors": check["errors"],
+                          "tool_identity": _tool_identity()}, ensure_ascii=False, indent=2))
         return 2
     verify_tree = args.verify_code if getattr(args, "verify_code", None) else None
     if args.record:
         payload = _load_json(args.record)
         gate = check_gates(payload, contract, side="record", verify_code_tree=verify_tree)
         print(json.dumps({"entry": "r22-formal-acceptance", "contract_version": CONTRACT_VERSION,
+                          "tool_identity": _tool_identity(),
                           "verdict": "compared" if gate["verdict"] == "PASS" else "rejected",
                           "gates": {"record": gate}}, ensure_ascii=False, indent=2))
         return 0 if gate["verdict"] == "PASS" else 3

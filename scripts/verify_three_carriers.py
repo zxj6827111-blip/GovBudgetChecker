@@ -79,6 +79,13 @@ def _carrier_state_issues(container: Any, key: str) -> Dict[str, Any]:
 
     dict 形态按严重度键取各 list（排除 ``all`` 投影防双计），登记
     ``dict_format`` 与分键计数；键缺失/None/空 与既有语义一致。
+
+    FA-03（最终验收）：投影一致性必须可核验——
+    - 只有 ``all`` 投影、没有严重度桶且 ``all`` 非空 → ``unreadable_projection``
+      （损坏/不完整投影不得读成合法空 0）；
+    - 严重度桶与 ``all`` 同时存在但内容不一致（桶内条目不在 all 中）→
+      ``projection_inconsistent``，同样不得静默计 0；
+    - 合法空（桶与 all 均为空 list）照常计 0。
     """
     state = _carrier_state(container, key)
     if not state.get("present") or state.get("missing"):
@@ -96,6 +103,31 @@ def _carrier_state_issues(container: Any, key: str) -> Dict[str, Any]:
             key_counts[str(name)] = len(bucket)
             items.extend(bucket)
         state.pop("non_list", None)
+        all_bucket = raw.get("all")
+        projection_consistent: Optional[bool] = None
+        unreadable_projection = False
+        projection_inconsistent = False
+        if isinstance(all_bucket, list):
+            severity_ids = {_canonical(dict(item)) if isinstance(item, dict) else _canonical(item)
+                            for name, bucket in raw.items()
+                            if name not in _ISSUES_DICT_PROJECTION_KEYS and isinstance(bucket, list)
+                            for item in bucket}
+            all_ids = {_canonical(dict(item)) if isinstance(item, dict) else _canonical(item)
+                       for item in all_bucket}
+            if not key_counts:
+                # 只有 all 投影：无法区分合法空与被剥离严重度桶的损坏投影。
+                if all_bucket:
+                    unreadable_projection = True
+                    projection_consistent = False
+                else:
+                    projection_consistent = True
+            elif not all_bucket and severity_ids:
+                # all 被清空而严重度桶仍有内容：投影被部分清空。
+                projection_inconsistent = True
+            elif severity_ids - all_ids:
+                projection_inconsistent = True
+            else:
+                projection_consistent = True
         state.update({
             "dict_format": True,
             "dict_key_counts": key_counts,
@@ -104,7 +136,14 @@ def _carrier_state_issues(container: Any, key: str) -> Dict[str, Any]:
                 if name in _ISSUES_DICT_PROJECTION_KEYS and isinstance(raw.get(name), list)),
             "count": len(items),
             "items": items,
+            "projection_consistent": projection_consistent,
+            "unreadable_projection": unreadable_projection,
+            "projection_inconsistent": projection_inconsistent,
         })
+        if unreadable_projection or projection_inconsistent:
+            # 损坏投影不提供可读计数：交由外层按"未知"处理，不得当 0。
+            state["count"] = None
+            state["items"] = []
         return state
     return state
 
@@ -226,6 +265,9 @@ def three_carrier_snapshot(result: Any, review_report: Any, meta_coverage: Any) 
                 "dict_format": state.get("dict_format", False),
                 "dict_key_counts": state.get("dict_key_counts"),
                 "projection_keys_excluded": state.get("projection_keys_excluded"),
+                "projection_consistent": state.get("projection_consistent"),
+                "unreadable_projection": state.get("unreadable_projection", False),
+                "projection_inconsistent": state.get("projection_inconsistent", False),
             }
             for key, state in carriers.items()
         },
@@ -374,7 +416,25 @@ def selftest() -> int:
                    and carriers.get("dict_format") is True
                    and carriers["count"] == 2
                    and carriers["dict_key_counts"] == {"error": 2, "warn": 0, "info": 0}
-                   and carriers["projection_keys_excluded"] == ["all"]))
+                   and carriers["projection_keys_excluded"] == ["all"]
+                   and carriers.get("projection_consistent") is True))
+
+    # FA-03：只有 all 投影、无严重度桶且 all 非空 → 不可读，不得计 0/合法空。
+    result_all_only = {"issues": {"all": [{"id": "F-2", "rule": "V33-Y", "message": "x"}]}}
+    snapshot = three_carrier_snapshot(result_all_only, {}, {})
+    carriers = snapshot["formal_carriers"]["result.issues"]
+    checks.append(("只有all投影且非空 → unreadable_projection 不计0",
+                   carriers.get("unreadable_projection") is True
+                   and carriers.get("count") is None
+                   and carriers.get("legal_empty") is False))
+
+    # FA-03：严重度桶与 all 内容不一致（all 被清空）→ projection_inconsistent。
+    result_partial = {"issues": {"error": [dict_issue_a], "warn": [], "info": [], "all": []}}
+    snapshot = three_carrier_snapshot(result_partial, {}, {})
+    carriers = snapshot["formal_carriers"]["result.issues"]
+    checks.append(("all被清空而严重度桶仍有内容 → projection_inconsistent 不计0",
+                   carriers.get("projection_inconsistent") is True
+                   and carriers.get("count") is None))
 
     # 跨载体重复投影去重
     duplicated = {"rule_findings": [{"id": "F-1", "rule": "V33-X", "message": "m"}]}

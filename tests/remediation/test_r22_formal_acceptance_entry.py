@@ -111,9 +111,9 @@ def test_evidence_loss_registered_not_zero():
     after["review_report"].pop("check_receipts", None)
     result = entry.compare_payloads(before, after, _contract())
     assert result["verdict"] == "compared"
-    assert result["evidence_lost"] == [
-        {"carrier": "check_receipts", "before_count": 1, "after": "missing_or_null"}
-    ]
+    lost_kinds = {(item["carrier"], item["copy"], item["kind"]) for item in result["evidence_lost"]}
+    assert ("check_receipts", "result.meta", "missing_key") in lost_kinds
+    assert ("check_receipts", "review_report", "missing_key") in lost_kinds
     assert result["zero_regression_claim"] is False
 
 
@@ -150,8 +150,8 @@ def test_obligation_coverage_generation_gap_is_evidence_too():
     after = json.loads(canonical(before))
     after["result"]["meta"].pop("obligation_coverage", None)
     result = entry.compare_payloads(before, after, _contract())
-    assert {"carrier": "obligation_coverage", "before_count": None,
-            "after": "missing_or_null"} in result["evidence_lost"]
+    lost_kinds = {(item["carrier"], item["copy"], item["kind"]) for item in result["evidence_lost"]}
+    assert ("obligation_coverage", "result.meta", "missing_key") in lost_kinds
     assert result["zero_regression_claim"] is False
 
 
@@ -177,7 +177,11 @@ def _cross_contract():
             "config_identity": {"use_local_rules": True, "use_ai_assist": False, "mode": "standard"},
         },
         "require_same_material": True,
-        "optional_fields": ["generation.parse_run_id", "generation.document_version_id"],
+        # FA-01：解析代际不声明必须有书面依据（不能靠省略豁免）
+        "parse_generation_basis": {
+            "generation.parse_run_id": "offline_replay_without_db",
+            "generation.document_version_id": "offline_replay_without_db",
+        },
         "git_commit_declared": None,
     }
 
