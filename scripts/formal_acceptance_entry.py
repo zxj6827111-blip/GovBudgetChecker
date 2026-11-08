@@ -99,6 +99,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -402,6 +403,30 @@ def _copies(status: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     return meta, report
 
 
+def _relation_identities(items: Any, *, carrier: str) -> Optional[Counter]:
+    """回执载体的**关系身份**多重集（FA-02：按关系比较，不按内容指纹）。
+
+    - ``check_receipts``：规则级关系 = ``rule_id``；
+    - ``fact_receipts``：关系级 = ``(rule_id, sub_check_id)``。
+    同一关系的内容增补（如 DH-02 结构化字段）是合法 schema 演进，
+    不算证据丢失；只有关系身份**消失**才算丢失。
+    """
+    if not isinstance(items, list):
+        return None
+    counter: Counter = Counter()
+    for item in items:
+        if not isinstance(item, dict):
+            counter[("non_dict",)] += 1
+            continue
+        rule_id = str(item.get("rule_id") or "")
+        sub = item.get("sub_check_id")
+        if carrier == "fact_receipts" and sub is not None:
+            counter[(rule_id, str(sub))] += 1
+        else:
+            counter[(rule_id,)] += 1
+    return counter
+
+
 def _identity_set(items: Any) -> Tuple[Optional[set], Optional[int], Optional[str]]:
     """载体内容的身份集合：条目级 canonical 指纹（FA-02 按内容比较）。
 
@@ -435,7 +460,11 @@ def _coverage_instance_state(coverage: Any) -> Dict[str, Any]:
 
 
 def _evidence_content_state(status: Dict[str, Any]) -> Dict[str, Any]:
-    """FA-02：证据载体的**内容级**状态（两份投影各自取，键缺失与空分清）。"""
+    """FA-02：证据载体的**关系级**状态（两份投影各自取，键缺失与空分清）。
+
+    回执载体用关系身份多重集（``_relation_identities``）——内容增补是合法
+    schema 演进；覆盖载体用义务 id 集合。
+    """
     meta, report = _copies(status)
     result = status.get("result") if isinstance(status.get("result"), dict) else {}
     states: Dict[str, Any] = {}
@@ -450,13 +479,13 @@ def _evidence_content_state(status: Dict[str, Any]) -> Dict[str, Any]:
                 else:
                     ids, count, kind = _identity_set(value)
                     state = {"kind": kind, "present": value is not None,
-                             "count": count, "ids": ids}
+                             "count": count, "ids": ids,
+                             "relations": _relation_identities(value, carrier=key)}
                 copies[name] = state
             else:
                 copies[name] = {"kind": "missing_key", "present": False,
-                                "count": None, "ids": None}
+                                "count": None, "ids": None, "relations": None}
         states[key] = copies
-    # fact_receipts 也在 result.meta（_EVIDENCE_CARRIERS 已覆盖）；rule_execution_summary 不在此列。
     states["_containers"] = {"result_present": isinstance(result, dict),
                               "review_report_present": isinstance(status.get("review_report"), dict)}
     return states
@@ -527,20 +556,20 @@ def compare_evidence(before_status: Dict[str, Any],
                              "before_count": b.get("count", b.get("instance_count")),
                              "after_count": a.get("count", a.get("instance_count"))})
                 continue
-            # list 型：内容级比较
+            # list 型：关系身份多重集比较（内容增补不算丢失，关系消失才算）
             if key != "obligation_coverage":
-                b_ids, b_count = b.get("ids"), b.get("count")
-                a_ids, a_count = a.get("ids"), a.get("count")
-                if b_ids is not None and a_ids is not None:
-                    lost_ids = sorted(b_ids - a_ids)
-                    if b_count and a_count == 0:
+                b_rel, a_rel = b.get("relations"), a.get("relations")
+                if b_rel is not None and a_rel is not None:
+                    lost_pairs = b_rel - a_rel
+                    lost_total = sum(lost_pairs.values())
+                    if b.get("count") and a.get("count") == 0:
                         lost.append({"carrier": key, "copy": copy_name, "kind": "emptied",
-                                     "before_count": b_count, "after_count": a_count})
-                    elif lost_ids:
+                                     "before_count": b.get("count"), "after_count": a.get("count")})
+                    elif lost_total:
                         lost.append({"carrier": key, "copy": copy_name, "kind": "partial_loss",
-                                     "before_count": b_count, "after_count": a_count,
-                                     "lost_identities": lost_ids[:20],
-                                     "lost_identities_total": len(lost_ids)})
+                                     "before_count": b.get("count"), "after_count": a.get("count"),
+                                     "lost_relations": [list(k) for k in sorted(lost_pairs)][:20],
+                                     "lost_relations_total": lost_total})
         # 两份投影互相不一致（一份清空一份保留）
         kinds_after = {name: after[key][name].get("kind") for name in ("result.meta", "review_report")}
         if kinds_after.get("result.meta") == kinds_after.get("review_report") == "list":
@@ -926,7 +955,7 @@ def selftest() -> Tuple[int, List[Dict[str, Any]]]:
     partial = [item for item in result["evidence_lost"] if item.get("kind") == "partial_loss"]
     record("FA-02 负控：删一条回执 → partial_loss 登记丢失身份",
            result["verdict"] == "compared" and partial
-           and partial[0]["lost_identities_total"] == 1
+           and partial[0]["lost_relations_total"] == 1
            and result["zero_regression_claim"] is False,
            {"partial": partial[:1]})
 
