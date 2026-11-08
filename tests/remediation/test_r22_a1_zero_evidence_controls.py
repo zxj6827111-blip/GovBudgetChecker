@@ -346,3 +346,48 @@ def test_r401_non_frame_colon_fragment_still_authorized():
                                   indicator="reception", stage="决算") is None
     assert narrative_zero_sources(doc2, table_code="FIN_07_three_public",
                                   indicator="overseas", stage="决算")
+
+
+def test_r501_frame_word_length_is_never_an_authorization_basis():
+    """R5（第五轮复核）：长度不作为授零语义依据——识别到帧词后，冒号引导
+    片段不限长度，超长标题同样建帧；不存在"超阈值回退普通事实"的豁免。"""
+    headings = (
+        "示例：",                                        # 3 字
+        "财政拨款三公经费支出填报示例说明：",            # 17 字（审核方控制A）
+        "本年度财政拨款三公经费支出决算填报示例说明：",  # 22 字（审核方控制B）
+        "甲局本年度财政拨款三公经费支出决算填报示例样式及格式说明：",  # 29 字
+    )
+    for heading in headings:
+        text = ("甲局2024年度部门决算。\n" + heading +
+                "\n财政拨款公务接待费支出决算0万元。因公出国（境）费支出决算0万元。")
+        doc = _doc(text)
+        assert narrative_zero_sources(doc, table_code="FIN_07_three_public",
+                                      indicator="reception", stage="决算") is None, heading
+        assert narrative_zero_sources(doc, table_code="FIN_07_three_public",
+                                      indicator="overseas", stage="决算") is None, heading
+
+
+def test_r501_unterminated_frame_line_without_colon_conservative():
+    """R5：布局无法确认是否标题的未终结行（无冒号、无句末终结符、含帧词）
+    → 保守建帧，行后零陈述保持未知，不默认当事实。"""
+    doc = SimpleNamespace(
+        page_texts=["甲局2024年度部门决算。\n本年度财政拨款三公经费支出决算填报示例样式说明\n"
+                    "财政拨款公务接待费支出决算0万元。"],
+        fact_context=SimpleNamespace(org_name="甲局", fiscal_year=2024),
+        report_kind="final")
+    assert narrative_zero_sources(doc, table_code="FIN_07_three_public",
+                                  indicator="reception", stage="决算") is None
+
+
+def test_r501_length_bounds_never_authorize_frame_context():
+    """R5 正控：无帧词的冒号片段与显式闭合后的合法零披露不受影响——
+    保守化只作用于已识别帧词的未定界上下文。"""
+    assert narrative_zero_sources(
+        _doc("甲局2024年度部门决算。填报说明：财政拨款公务接待费支出决算0万元。"),
+        table_code="FIN_07_three_public", indicator="reception", stage="决算")
+    doc2 = _doc("甲局2024年度部门决算。示例样式：接待费0万元。"
+                "以上示例仅供参考。因公出国（境）费支出决算0万元。")
+    assert narrative_zero_sources(doc2, table_code="FIN_07_three_public",
+                                  indicator="reception", stage="决算") is None
+    assert narrative_zero_sources(doc2, table_code="FIN_07_three_public",
+                                  indicator="overseas", stage="决算")
