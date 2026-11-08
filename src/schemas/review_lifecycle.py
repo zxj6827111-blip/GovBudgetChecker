@@ -355,6 +355,20 @@ class ObligationReviewBlock(BaseModel):
     #: 问题本身仍在问题清单里，由人工按问题流程处理一次。
     covered_total: int = 0
     items: List[ObligationReviewItem] = Field(default_factory=list)
+    #: 缺表/空表的连带核对：根问题 issue id → 因它做不下去的核对。它们不计入
+    #: 待办、不阻塞门禁，由审核台挂在根问题下面展示（已计入 covered_total）。
+    cascaded: List["ObligationCascadeGroup"] = Field(default_factory=list)
+
+
+class ObligationCascadeItem(BaseModel):
+    obligation_id: str
+    title: str
+    detail: Optional[str] = None
+
+
+class ObligationCascadeGroup(BaseModel):
+    root_issue_id: str
+    items: List[ObligationCascadeItem] = Field(default_factory=list)
 
 
 class ObligationDecisionRequest(BaseModel):

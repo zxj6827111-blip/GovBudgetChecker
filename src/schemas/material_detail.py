@@ -340,6 +340,9 @@ class CoverageObligationItem(BaseModel):
     blocks_gate: bool = False
     requires_ai: bool = False
     input_gaps: List[str] = Field(default_factory=list)
+    #: 义务依赖的表（如 ``table:FIN_03``）。缺表/空表连带项判定按它确认
+    #: “这条核对确实依赖那张表”；旧结果没有该字段时为空，连带判定不生效。
+    depends_on: List[str] = Field(default_factory=list)
     #: DH-02 结构化卡点（原样透传，不在查询层翻译或推断）。
     reason_codes: List[str] = Field(default_factory=list)
     blocked_by: List[Dict[str, Any]] = Field(default_factory=list)

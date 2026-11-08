@@ -283,7 +283,9 @@ def test_dash_projection_preserves_literal_marker_without_zero_fact():
         "zero_denominator",
     ],
 )
-def test_share_zero_requires_explicit_no_activity_and_positive_current_total(problem):
+def test_share_zero_requires_explicit_no_activity_and_positive_current_total(problem, monkeypatch):
+    # 本用例检验“无空白值约定时只认说明零披露”的路径；U-5 默认约定（2026-11-08）下认证空白直接为 0。
+    monkeypatch.setenv("GOVBUDGET_EMPTY_VALUE_CONVENTIONS", "off")
     from test_native_blank_cells import three_public
     from src.engine.native_three_public_ratios import evaluate
 

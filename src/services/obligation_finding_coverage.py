@@ -542,3 +542,133 @@ def obligation_covered_by_finding(
         if any(term in text for term in terms):
             return True
     return False
+
+
+# ---------------------------------------------------------------------------
+# 连带项：整张表缺失 / 整张表为空表时，依赖这张表金额的核对一律做不下去。
+# 根问题（“缺失表：X”“X 为空表但缺少说明”）已作为正式问题列出；这些核对只是
+# 它的后果，不再单独进入“必须处理”，而是挂在根问题下展示（2026-11-08 用户确认）。
+# 安全边界：只认“义务的每一条未完成原因都指向已报缺失/空表的那张表”；夹带
+# 其他原因（主体冲突、科目名不符等）的义务照常保留。
+# ---------------------------------------------------------------------------
+
+#: 九张表的文字别名（义务 detail 与 finding 文本都用它识别表身份）。按“长名在前”
+#: 逐段扫描：一段文字被长表名吃掉后，其中的“支出决算表”不会再被认成支出决算表。
+_TABLE_TOKENS = (
+    ("FIN_08", r"政府性基金预算财政拨款收入支出决算表"),
+    ("FIN_09", r"国有资本经营预算财政拨款收入支出决算表"),
+    ("FIN_07", r"(?:一般公共预算)?财政拨款三公经费支出决算表"),
+    ("FIN_06", r"(?:一般公共预算财政拨款)?基本支出决算表"),
+    ("FIN_05", r"一般公共预算财政拨款支出决算表"),
+    ("FIN_04", r"财政拨款收入支出决算总表"),
+    ("FIN_01", r"收入支出决算总表"),
+    ("FIN_02", r"收入决算表"),
+    ("FIN_03", r"支出决算表"),
+    ("FIN_07", r"三公"),
+)
+_TABLE_TOKEN_RE = re.compile(
+    "|".join(f"(?P<t{index}>{pattern})" for index, (_code, pattern) in enumerate(_TABLE_TOKENS))
+    + r"|FIN_0(?P<fin>[1-9])|(?<![A-Za-z0-9])T(?P<short>[1-9])(?![0-9])"
+)
+
+#: 旧版结果的 message 前面带“十二、”这样的序号，按包含匹配。
+_MISSING_TABLE_RE = re.compile(r"缺失表[:：]\s*(?P<name>[^，。；,;\s]+)")
+_EMPTY_TABLE_RE = re.compile(r"(?:【(?P<bracket>[^】]+)】为空表|空表缺少说明[:：](?P<plain>.+?)为空表)")
+
+
+def _normalize_table_name(name: str) -> str:
+    text = unicodedata.normalize("NFKC", str(name or ""))
+    return re.sub(r"[\s\"'“”‘’]", "", text)
+
+
+def _table_codes_in(text: str) -> Set[str]:
+    codes: Set[str] = set()
+    for match in _TABLE_TOKEN_RE.finditer(_normalize_table_name(text)):
+        digit = match.group("fin") or match.group("short")
+        if digit:
+            codes.add(f"FIN_0{digit}")
+            continue
+        index = next(int(name[1:]) for name, value in match.groupdict().items()
+                     if value and name.startswith("t"))
+        codes.add(_TABLE_TOKENS[index][0])
+    return codes
+
+
+def _root_table_finding(finding: Mapping[str, Any]) -> Optional[tuple]:
+    """finding 是“整张表缺失/为空表”的根问题时返回 (表代码, 类型)，否则 None。"""
+    message = str(finding.get("message") or finding.get("title") or "")
+    location = _json_dict(finding.get("location"))
+    missing = _MISSING_TABLE_RE.search(message)
+    if missing:
+        name, kind = str(location.get("table") or missing.group("name")), "missing"
+    else:
+        empty = _EMPTY_TABLE_RE.search(message)
+        if not empty:
+            return None
+        name, kind = str(location.get("table") or empty.group("bracket") or empty.group("plain")), "empty"
+    codes = _table_codes_in(name)
+    return (codes.pop(), kind) if len(codes) == 1 else None
+
+
+def _depends_on_tables(item: Any) -> Set[str]:
+    codes: Set[str] = set()
+    for dep in getattr(item, "depends_on", None) or []:
+        text = str(dep or "")
+        if text.startswith("table:"):
+            codes |= _table_codes_in(text.split(":", 1)[1])
+    return codes
+
+
+def cascade_root_issue_id(
+    item: Any,
+    result_row: Any,
+    visible_issue_ids: Optional[Iterable[str]] = None,
+) -> Optional[str]:
+    """该义务若只是“某张表缺失/为空表”的连带后果，返回根问题的 issue id。
+
+    条件（全部满足）：
+    - 义务为 ``insufficient_data``；
+    - 当前可见的正式问题里有“缺失表：X”或“X 为空表”；
+    - 义务声明依赖表 X（``depends_on``）；
+    - 义务 detail 中每一条未完成原因（“；”分隔，忽略“结构：”注记）都指向已报
+      缺失/空表的表，且结构化卡点（``blocked_by``）引用的表也都在其中。
+    """
+    if str(getattr(item, "status", "") or "") != "insufficient_data":
+        return None
+    visible = set(visible_issue_ids) if visible_issue_ids is not None else None
+    roots: Dict[str, str] = {}
+    for finding in _json_list(_json_dict(result_row).get("rule_findings")):
+        if not isinstance(finding, dict) or not is_formal_finding(finding):
+            continue
+        issue_id = str(finding.get("id") or "").strip()
+        if not issue_id or (visible is not None and issue_id not in visible):
+            continue
+        root = _root_table_finding(finding)
+        if root is not None:
+            roots.setdefault(root[0], issue_id)
+    if not roots:
+        return None
+    reported = set(roots)
+    declared = _depends_on_tables(item)
+    # “结构：……”是引擎追加在末尾的结构化卡点注记（内部也用“；”分隔），不是原因本身。
+    reasons = str(getattr(item, "detail", None) or "").split("结构：", 1)[0]
+    clauses = [clause.strip() for clause in reasons.split("；") if clause.strip()]
+    if not clauses:
+        return None
+    cited_all = set().union(*(_table_codes_in(clause) for clause in clauses))
+    # 声明了依赖表的，必须依赖已报的表；旧目录没声明依赖的，以原因里点名的表为准。
+    dependent = (declared if declared else cited_all) & reported
+    if not dependent:
+        return None
+    for clause in clauses:
+        if not (_table_codes_in(clause) & reported):
+            return None
+    for blocker in getattr(item, "blocked_by", None) or []:
+        ref = str((blocker or {}).get("ref") or "") if isinstance(blocker, Mapping) else ""
+        if ref.startswith("规则级:"):
+            continue
+        tables = _table_codes_in(ref)
+        if not tables or not tables <= reported:
+            return None
+    cited = cited_all & reported
+    return roots[sorted(cited & dependent or cited)[0]]

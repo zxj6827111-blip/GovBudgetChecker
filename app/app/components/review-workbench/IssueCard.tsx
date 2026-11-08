@@ -21,6 +21,7 @@ import { evidenceExcerptLabel } from "@/lib/evidenceIdentity";
 import { getSeverityMeta, normalizeSeverityCode, type SeverityCode } from "../../../lib/issueSeverity";
 import type { Problem } from "../../../lib/mock";
 import { parseDecisionNote } from "./reviewDecisionNotes";
+import type { ObligationCascadeItemRecord } from "./reviewLifecycleAdapters";
 import {
   buildAmountComparison,
   buildCalculationGroups,
@@ -117,6 +118,8 @@ export interface IssueCardProps {
   workflowNote?: string;
   selectedEvidenceRefKey?: string | null;
   onSelectEvidenceRef?: (refKey: string) => void;
+  /** 因本问题（缺表/空表）而无法自动进行的核对；不单独处理，随本问题了结。 */
+  cascadedChecks?: ObligationCascadeItemRecord[];
 }
 
 const SECTION_TITLE = "mb-2 text-[0.8em] font-semibold text-slate-500";
@@ -205,6 +208,7 @@ export function IssueCard({
   workflowNote,
   selectedEvidenceRefKey,
   onSelectEvidenceRef,
+  cascadedChecks,
 }: IssueCardProps) {
   const severityCode = normalizeSeverityCode(problem.severity);
   const severityMeta = getSeverityMeta(problem.severity, problem.severityLabel);
@@ -385,6 +389,18 @@ export function IssueCard({
         <section className="mb-5 rounded-md bg-primary-50 px-3.5 py-3">
           <h3 className="mb-1 text-[0.8em] font-semibold text-primary-700">处理建议</h3>
           <p className="whitespace-pre-line text-[0.88em] leading-relaxed text-slate-700">{problem.suggestion}</p>
+        </section>
+      ) : null}
+
+      {cascadedChecks && cascadedChecks.length > 0 ? (
+        <section className="mb-5 border-t border-border pt-3" data-testid="gbc-review-cascaded-checks">
+          <h3 className={SECTION_TITLE}>受此问题影响，以下 {cascadedChecks.length} 项核对未能自动进行</h3>
+          <p className="mb-1.5 text-[0.82em] text-slate-500">无需单独处理：补齐或更正本问题涉及的表格后重新检查即可。</p>
+          <ul className="list-disc space-y-0.5 pl-5 text-[0.88em] leading-relaxed text-slate-700">
+            {cascadedChecks.map((check) => (
+              <li key={check.obligation_id}>{check.title}</li>
+            ))}
+          </ul>
         </section>
       ) : null}
 

@@ -178,12 +178,14 @@ def test_fin02_income_narrative_zero_capability():
         table_code="FIN_02_income", indicator="operational_income", stage="决算") is None
 
 
-def test_fin02_blank_term_end_to_end_narrative_zero():
+def test_fin02_blank_term_end_to_end_narrative_zero(monkeypatch):
     """§4.1 端到端收口：FIN_02 收入表空白格 → blank_term → 叙述零授权。
 
     验证能力链路（空白原格+列身份+叙述零 → 0 操作数），而不止
     narrative_zero_sources 单元层；V33-240 的 select 走同一条链路。
     """
+    # 本用例检验“无空白值约定时只认说明零披露”的路径；U-5 默认约定（2026-11-08）下认证空白直接为 0。
+    monkeypatch.setenv("GOVBUDGET_EMPTY_VALUE_CONVENTIONS", "off")
     from types import SimpleNamespace as NS
     from src.engine.native_empty_operands import blank_term
     from src.engine.pipeline import build_document

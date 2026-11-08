@@ -25,7 +25,7 @@ import { ObligationCard } from "./ObligationCard";
 import { ObligationDecisionPanel, type ObligationPanelDecision } from "./ObligationDecisionPanel";
 import { isObligationProblem, obligationAutoEvidence, readableObligationReason, type ObligationDecision } from "./obligationProblems";
 import type { IgnoreReason } from "./reviewDecisionNotes";
-import type { ObligationReviewItemRecord } from "./reviewLifecycleAdapters";
+import type { ObligationCascadeItemRecord, ObligationReviewItemRecord } from "./reviewLifecycleAdapters";
 import type { Problem } from "../../../lib/mock";
 
 export interface SourceFindingViews {
@@ -96,6 +96,8 @@ export interface IssuesTabProps {
   onUndo: () => Promise<boolean>;
   /** 「未能自动核对」条目（补核义务）的原记录，键为条目 id。 */
   obligationItems?: Record<string, ObligationReviewItemRecord>;
+  /** 根问题 id → 因它（缺表/空表）无法自动进行的核对。 */
+  cascadedChecks?: Record<string, ObligationCascadeItemRecord[]>;
   /** 提交补核结论；返回是否已保存（用于处理后接续下一条）。 */
   onObligationDecision?: (problem: Problem, decision: ObligationDecision, note: string, evidenceReference: string, scopeConfirmed: boolean) => Promise<boolean>;
   /** 文种口径类补核需要先确认材料口径时的入口。 */
@@ -203,6 +205,7 @@ export function IssuesTab({
   lastDecision,
   onUndo,
   obligationItems = {},
+  cascadedChecks = {},
   onObligationDecision,
   onOpenScope,
   onSelectEvidenceRef,
@@ -549,6 +552,7 @@ export function IssuesTab({
               workflowNote={workflowNotes[detailProblem.id]}
               selectedEvidenceRefKey={detailProblem.id === selectedProblemId ? selectedEvidenceRefKey : null}
               onSelectEvidenceRef={(refKey) => onSelectEvidenceRef(detailProblem, refKey)}
+              cascadedChecks={cascadedChecks[detailProblem.id]}
             />
           ) : (
             <div className="p-6 text-center text-sm text-slate-500" data-testid="gbc-review-issues-empty">

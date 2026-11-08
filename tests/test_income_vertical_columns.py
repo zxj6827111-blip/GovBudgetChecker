@@ -50,7 +50,8 @@ def test_all_income_columns_execute_vertical_relations_with_scope_pending():
 
 
 def test_unknown_source_cell_blocks_only_dependent_relations(monkeypatch):
-    monkeypatch.delenv("GOVBUDGET_EMPTY_VALUE_CONVENTIONS", raising=False)
+    # 检验空白未知时的取数路径；U-5 默认约定下认证空白直接为 0，故显式关闭约定。
+    monkeypatch.setenv("GOVBUDGET_EMPTY_VALUE_CONVENTIONS", "off")
     doc = document(unknown=True)
     with pytest.raises(RuleDeferred) as caught:
         R33240_Table2_IncomeAdvancedCheck().apply(doc)
@@ -65,7 +66,8 @@ def test_unknown_source_cell_blocks_only_dependent_relations(monkeypatch):
 
 
 def test_rounding_sized_known_difference_does_not_create_unknown_cell_problem(monkeypatch):
-    monkeypatch.delenv("GOVBUDGET_EMPTY_VALUE_CONVENTIONS", raising=False)
+    # 检验空白未知时的取数路径；U-5 默认约定下认证空白直接为 0，故显式关闭约定。
+    monkeypatch.setenv("GOVBUDGET_EMPTY_VALUE_CONVENTIONS", "off")
     doc = document(unknown=True, known_income="199.99")
     with pytest.raises(RuleDeferred) as caught:
         R33240_Table2_IncomeAdvancedCheck().apply(doc)

@@ -8,7 +8,8 @@ IDENTITY = dict(region="上海市甲中心", year=2025, table_code="FIN_02_incom
 
 
 def test_unknown_blank_dash_and_not_applicable_never_become_zero(monkeypatch):
-    monkeypatch.delenv("GOVBUDGET_EMPTY_VALUE_CONVENTIONS", raising=False)
+    # 关闭约定时空白一律未知；默认 U-5 约定见 test_blank_zero_default_20261108。
+    monkeypatch.setenv("GOVBUDGET_EMPTY_VALUE_CONVENTIONS", "off")
     for raw in ("", "—", "/", "不适用", "无", "abc"):
         assert interpret_cell_value(raw, native_blank_verified=True, **IDENTITY)[0] is None
     assert interpret_cell_value("0.00", **IDENTITY)[:2] == (Decimal("0"), "zero")

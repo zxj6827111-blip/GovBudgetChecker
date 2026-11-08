@@ -14,6 +14,7 @@ import type { Problem, ProblemEvidenceRef } from "@/lib/mock";
 import { obligationGuidance } from "./obligationGuidance";
 import {
   isObligationHandled,
+  type ObligationCascadeItemRecord,
   type ObligationReviewBlockRecord,
   type ObligationReviewItemRecord,
 } from "./reviewLifecycleAdapters";
@@ -128,6 +129,18 @@ export function obligationItemsByProblemId(
 ): Record<string, ObligationReviewItemRecord> {
   if (!block?.available) return {};
   return Object.fromEntries((block.items ?? []).map((item) => [obligationProblemId(item.obligation_id), item]));
+}
+
+/** 根问题 id → 因它无法自动进行的核对（缺表/空表连带项）。 */
+export function cascadedChecksByProblemId(
+  block: ObligationReviewBlockRecord | null | undefined,
+): Record<string, ObligationCascadeItemRecord[]> {
+  if (!block?.available) return {};
+  return Object.fromEntries(
+    (block.cascaded ?? [])
+      .filter((group) => group.root_issue_id && group.items?.length)
+      .map((group) => [group.root_issue_id, group.items]),
+  );
 }
 
 /** 已处理的补核写进处理状态表（值为决定码）；待处理的不写，与问题工作流同一约定。 */

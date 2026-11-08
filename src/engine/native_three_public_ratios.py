@@ -13,6 +13,7 @@ from typing import Any
 from .fact_context import (
     _canonical_budget_stage, operand_rejection_reason, is_total_role_fact,
 )
+from .native_empty_operands import NativeBlankTerm, blank_observations, blank_term
 
 TABLE_CODE = "FIN_07_three_public"
 # 扫描件常把“置”识别成形近字（如 U+81F5）；只在主体识别时归一，不触碰原文。
@@ -132,6 +133,21 @@ def _record_ratio_gap(doc, reason, *, indicator, stage, year, claim):
             page=page, row_key="total", column=LABELS.get(indicator, indicator), stage=stage,
             year=year if isinstance(year, int) and year >= 1900 else None)])
 
+def _blank_fallback(doc, fact, reason, *, indicator, stage):
+    """三公表该项原格为认证空白时（空白值约定 U-5）以 0 参与计算；原格仍保持空白。
+
+    只认原格约定：由说明“决算为0”推出的零（narrative_explicit_zero）不能拿来复核
+    同一句说明的占比/完成率（同源循环），那条路径仍由下方专门分支只登记适用性。
+    """
+    if fact is not None or not reason or "未找到同年度、同口径" not in reason:
+        return fact, reason
+    term = blank_term(doc, TABLE_CODE, indicator, code="total", stage=stage)
+    convention = term.extra_dims["native_blank_observation"].get("convention") if term is not None else None
+    if not convention or convention == "narrative_explicit_zero":
+        return fact, reason
+    return term, None
+
+
 def _rounding_range(numerator: Any, denominator: Any):
     """按两数原件末位的一半推算比例可能范围；单位或精度不明时返回 None。"""
     from src.services.fact_column_arithmetic import _half_display_unit
@@ -158,11 +174,15 @@ def evaluate(rule: Any, doc: Any, claim: dict[str, Any], *, indicator: str,
     from .rules_v33 import _v33_relation_receipt, _v33_fact_identity
     context = getattr(doc, "fact_context", None)
     relation = f"three_public:{'share' if share else 'completion'}:{indicator}:{claim['start']}"
-    numerator, nr = select_fact(context, indicator, "决算", year)
+    numerator, nr = _blank_fallback(doc, *select_fact(context, indicator, "决算", year),
+                                    indicator=indicator, stage="决算")
     if nr:
         _record_ratio_gap(doc, nr, indicator=indicator, stage="决算", year=year, claim=claim)
-    denominator, dr = select_fact(context, "total_actual" if share else indicator,
-                                  denominator_stage, year)
+    denominator, dr = _blank_fallback(doc, *select_fact(context, "total_actual" if share else indicator,
+                                                        denominator_stage, year),
+                                      indicator="total_actual" if share else indicator,
+                                      stage=denominator_stage)
+    blanks = blank_observations([f for f in (numerator, denominator) if f is not None])
     if dr:
         _record_ratio_gap(doc, dr, indicator="total_actual" if share else indicator,
                           stage=denominator_stage, year=year, claim=claim)
@@ -218,7 +238,8 @@ def evaluate(rule: Any, doc: Any, claim: dict[str, Any], *, indicator: str,
     if reason:
         reason = f"{LABELS[indicator]}声明「{claim['phrase']}」：{reason}"
         _v33_relation_receipt(doc, rule.code, relation, status="insufficient_data",
-                              operand_fact_ids=fact_ids, formula=formula, incomplete_reason=reason)
+                              operand_fact_ids=fact_ids, formula=formula, incomplete_reason=reason,
+                              cell_observations=blanks)
         return [], [reason]
     top, bottom = (numerator.normalized_value if numerator is not None else None), denominator.normalized_value
     zero = bottom == 0
@@ -232,7 +253,7 @@ def evaluate(rule: Any, doc: Any, claim: dict[str, Any], *, indicator: str,
     envelope = None if zero or not differs or numerator is None else _rounding_range(numerator, denominator)
     rounding = envelope is not None and envelope[0] <= claim["pct"] <= envelope[1]
     _v33_relation_receipt(doc, rule.code, relation, status="fail" if differs and not rounding else "pass",
-                          operand_fact_ids=fact_ids, formula=formula)
+                          operand_fact_ids=fact_ids, formula=formula, cell_observations=blanks)
     if not differs:
         return [], []
     label = LABELS[indicator]
@@ -245,8 +266,9 @@ def evaluate(rule: Any, doc: Any, claim: dict[str, Any], *, indicator: str,
         message = (f"{label}{relation_label}不成立：说明{claim['pct']}%，" +
                    ("表内分母为0，有限完成率没有数学定义。" if zero else
                     f"表内{top:.2f}÷{bottom:.2f}×100={recomputed}。"))
-    refs = ([operand_ref(numerator, "分子")] if numerator is not None else []) + [operand_ref(denominator, "分母")]
-    pages = {claim["page"]}
+    refs = [operand_ref(fact, role) for fact, role in ((numerator, "分子"), (denominator, "分母"))
+            if fact is not None and not isinstance(fact, NativeBlankTerm)]
+    pages = {claim["page"]} | {item.get("physical_page") for item in blanks if item.get("physical_page")}
     for fact in (numerator, denominator):
         if fact is None:
             continue
@@ -254,7 +276,7 @@ def evaluate(rule: Any, doc: Any, claim: dict[str, Any], *, indicator: str,
                      if ref.get("physical_page"))
     location = {"page": claim["page"], "pages": sorted(pages), "table_code": TABLE_CODE,
                 "section": claim.get("section"), "indicator": indicator,
-                "operand_refs": refs, "table_refs": claim.get("source_refs") or [{"page": claim["page"], "span": quote,
+                "operand_refs": refs, "native_blank_sources": blanks, "table_refs": claim.get("source_refs") or [{"page": claim["page"], "span": quote,
                     "role": "占比声明" if share else "完成率声明"}],
                 "fact_context_version_token": context.version_token,
                 "declared_percent": str(claim["pct"]),

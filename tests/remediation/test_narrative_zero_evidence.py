@@ -87,7 +87,9 @@ def test_foreign_year_or_owner_is_rejected():
                                   indicator='overseas', stage='决算') is None
 
 
-def test_blank_term_uses_narrative_zero_but_keeps_cell_blank():
+def test_blank_term_uses_narrative_zero_but_keeps_cell_blank(monkeypatch):
+    # 本用例检验“无空白值约定时只认说明零披露”的路径；U-5 默认约定（2026-11-08）下认证空白直接为 0。
+    monkeypatch.setenv("GOVBUDGET_EMPTY_VALUE_CONVENTIONS", "off")
     doc = _doc()
     term = blank_term(doc, 'FIN_07_three_public', 'overseas', code='total', stage='决算')
     assert term is not None
@@ -98,7 +100,9 @@ def test_blank_term_uses_narrative_zero_but_keeps_cell_blank():
     assert str(term.normalized_value) == '0'
 
 
-def test_budget_stage_blank_stays_unknown():
+def test_budget_stage_blank_stays_unknown(monkeypatch):
+    # 本用例检验“无空白值约定时只认说明零披露”的路径；U-5 默认约定（2026-11-08）下认证空白直接为 0。
+    monkeypatch.setenv("GOVBUDGET_EMPTY_VALUE_CONVENTIONS", "off")
     doc = _doc()
     assert blank_term(doc, 'FIN_07_three_public', 'vehicle_purchase', code='total',
                       stage='年初预算') is None

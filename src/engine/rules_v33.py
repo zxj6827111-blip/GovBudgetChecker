@@ -4221,51 +4221,45 @@ class R33112_PlaceholderCheck(Rule):
     code, severity = "V33-112", "warn"
     desc = "文本占位符检测"
 
+    #: 连续的 X / × 算一处占位符（“XXXXXXXX”是一处，不是四个“XX”——2026-11-08
+    #: 建管委实样两处“主要是：XXXXXXXX 收入等”被拆成 8 条）。前后紧邻拉丁字母的
+    #: 不算（英文单词、型号）。其余为模板提示语。
+    _PATTERN = re.compile(
+        r"(?<![A-Za-z])[XxＸｘ]{2,}(?![A-Za-z])|×{2,}"
+        r"|待填写|请填写|\(待\)|\(略\)|\[待\]|\[略\]"
+    )
+
     def apply(self, doc: Document) -> List[Issue]:
-        """检测文本中的占位符和敏感信息"""
-        issues: List[Issue] = []
-        
-        # 定义占位符模式（使用re.IGNORECASE避免重复检测）
-        placeholder_patterns = [
-            r'\bxxx\b',  # xxx（独立单词）
-            r'XX',  # XX（不使用单词边界，可以匹配"XX局"、"XX市"等）
-            r'待填写',  # 待填写
-            r'请填写',  # 请填写
-            r'\(待\)',  # （待）
-            r'\(略\)',  # （略）
-            r'\[待\]',  # [待]
-            r'\[略\]',  # [略]
-        ]
-        
-        # 遍历所有页面
-        for page_num, page_text in enumerate(doc.page_texts):
-            # 跳过表格内容（只检查纯文本）
-            lines = page_text.split('\n')
-            for line_num, line in enumerate(lines):
-                # 跳过空行和纯数字行
-                if not line.strip() or line.strip().replace(',', '').replace('.', '').isdigit():
+        """全文占位符按一条问题汇总，逐处保留页码与原文片段。"""
+        from .checklist_support import issue_at, unique_quote
+
+        hits: List[Tuple[int, str, int, int]] = []
+        for page_num, page_text in enumerate(doc.page_texts or [], start=1):
+            text = str(page_text or "")
+            for match in self._PATTERN.finditer(text):
+                line_start = text.rfind("\n", 0, match.start()) + 1
+                line_end = text.find("\n", match.end())
+                line = text[line_start:len(text) if line_end < 0 else line_end].strip()
+                # 纯数字行（表格金额）不会含占位符；空行同理。
+                if not line or line.replace(",", "").replace(".", "").isdigit():
                     continue
-                
-                # 检查每个占位符模式
-                for pattern in placeholder_patterns:
-                    matches = list(re.finditer(pattern, line, re.IGNORECASE))
-                    for match in matches:
-                        # 获取匹配位置
-                        pos = match.start()
-                        
-                        # 获取上下文
-                        context_start = max(0, pos - 20)
-                        context_end = min(len(line), pos + len(match.group()) + 20)
-                        context = line[context_start:context_end]
-                        
-                        issues.append(self._issue(
-                            f"发现占位符：{match.group()}，请检查是否需要填写完整。",
-                            {"page": page_num + 1, "pos": pos},
-                            severity="warn",
-                            evidence_text=context
-                        ))
-        
-        return issues
+                hits.append((page_num, text, match.start(), match.end()))
+        if not hits:
+            return []
+        pad = 20
+        page, text, start, end = hits[0]
+        left, right = max(0, start - pad), min(len(text), end + pad)
+        sample = text[start:end]
+        context = re.sub(r"\s+", "", text[left:right])
+        more = f"共 {len(hits)} 处，" if len(hits) > 1 else ""
+        return [issue_at(
+            self,
+            f"发现占位符“{sample}”：{more}如“{context}”，请检查是否需要填写完整。",
+            page, text, left, right, severity="warn",
+            occurrences=len(hits),
+            table_refs=[{"page": p, "span": unique_quote(t, max(0, a - pad), min(len(t), b + pad)),
+                         "role": "occurrence"} for p, t, a, b in hits],
+        )]
 
 
 #: MR-P6：同字重复词检测的虚词字表（可配）。只收单字虚词——「刚刚/渐渐/
@@ -10946,25 +10940,17 @@ class R33CrossSanGongEcon(Rule):
                         f"说明零披露（第{refs[0].get('page')}页）")
                     zero_refs_by_key[key] = list(refs)
                     continue
+                # 空白值约定（U-5）只认原件网格认证的空白：回到原件同格核实，
+                # 旧实现在这里把认证写死为否并多传参数，约定从未生效（2026-11-08）。
                 convention = None
                 if row_idx is not None and key in three_public_columns:
-                    raw_text = ""
-                    key_column = three_public_columns[key]
-                    if 0 <= key_column < len(data_row.cells):
-                        raw_text = str(getattr(data_row.cells[key_column], "text", "") or "")
-                    try:
-                        from .cell_value_policy import interpret_cell_value
-                        _value, _presence, convention = interpret_cell_value(
-                            raw_text,
-                            native_blank_verified=False,
-                            region=getattr(fact_ctx, "org_name", None),
-                            year=getattr(fact_ctx, "fiscal_year", None),
-                            table_code="FIN_07_three_public",
-                            row=row_idx, column=key_column,
-                            presence="dash" if raw_text in {"-", "—", "–", "－"} else "blank",
-                        )
-                    except Exception:  # noqa: BLE001 — 约定查找失败等同无约定
-                        convention = None
+                    from .native_empty_operands import blank_term
+                    term = blank_term(doc, "FIN_07_three_public", indicator,
+                                      code="total", stage="决算")
+                    if term is not None:
+                        convention = term.extra_dims["native_blank_observation"].get("convention")
+                        if convention == "narrative_explicit_zero":
+                            convention = None  # 说明零披露已在上面单独记账，这里只认原格约定
                 if convention:
                     zero_authorized.add(key)
                     zero_basis_by_subject[item_groups.get(key, key)] = "经审定空白值约定"
@@ -11023,6 +11009,15 @@ class R33CrossSanGongEcon(Rule):
                 continue
             hit = basic.get(key)
             total = three_public[key]
+            blank_observation = None
+            if hit is not None and hit.get("amount") is None and hit.get("code"):
+                # FIN_06 空白金额的独立零依据：原件网格认证空白 + 空白值约定（U-5）。
+                # 依据来自本表原格本身，不取自被核对的三公表，不构成同源反推。
+                from .native_empty_operands import verified_blank_zero_by_code
+                blank_observation = verified_blank_zero_by_code(
+                    doc, "FIN_06_basic_expenditure", int(hit.get("page") or page6), hit["code"])
+                if blank_observation is not None:
+                    hit = {**hit, "amount": Decimal("0.00")}
             if hit is None:
                 # 基本支出表未列该经济科目：整项决算数为 0（显式或经授权）时
                 # 不存在可超分项（非负分解）→ 有据不适用；否则分项大小无法
@@ -11088,8 +11083,10 @@ class R33CrossSanGongEcon(Rule):
                 _v33_relation_receipt(
                     doc, self.code, relation_id,
                     status="pass",
-                    formula=f"基本支出 {component} ≤ 三公表 {total} {unit}",
+                    formula=(f"基本支出 {component} ≤ 三公表 {total} {unit}"
+                             + ("（基本支出表该格原件空白，按空白值约定为0）" if blank_observation else "")),
                     disclosure_sources=list(zero_disclosure),
+                    cell_observations=[blank_observation] if blank_observation else (),
                 )
                 continue
             envelope = compute_dynamic_envelope(
