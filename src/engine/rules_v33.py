@@ -8442,6 +8442,16 @@ def _structure_class_name_issues(rule, doc, table_entries):
              and getattr(f, "indicator", None) == "total_actual"
              and len(str(getattr(f, "subject_code", "") or "")) == 3
              and getattr(f, "normalized_value", None) is not None]
+    derived = {}
+    if not facts:
+        # 项级表（无类/款行）：类金额 = 该类编码前缀下各项合计，类名取同节具体情况
+        # 条目的一致写法（见 native_final_disclosure.leaf_only_classes）。
+        from types import SimpleNamespace
+        from .native_final_disclosure import leaf_only_classes
+        derived = {code: entry for code, entry in leaf_only_classes(doc).items() if entry["name"]}
+        facts = [SimpleNamespace(subject_code=code, subject_name=entry["name"],
+                                 normalized_value=entry["sum"])
+                 for code, entry in sorted(derived.items())]
     if not facts:
         return []
     amount_re = re.compile(
@@ -8504,6 +8514,10 @@ def _structure_class_name_issues(rule, doc, table_entries):
                                        "field": "功能分类科目名称", "code": code,
                                        "subject": narrative_name}]
             location["pages"] = [page]
+        if code in derived:
+            issues.append(_leaf_class_name_issue(rule, doc, location, derived[code], code,
+                                                 narrative_name, match.group(0)))
+            continue
         issues.append(rule._issue(
             f"说明5类级科目名称与T5不一致（{code}）：表格“{table_name}”，说明“{narrative_name}”",
             location,
@@ -8512,6 +8526,50 @@ def _structure_class_name_issues(rule, doc, table_entries):
                            f"说明片段：{match.group(0)}"),
         ))
     return issues
+
+
+def _leaf_class_name_issue(rule, doc, location, entry, code, narrative_name, snippet):
+    """项级表的类名错误：金额与某类各项合计唯一相符，但写的不是该类名称。"""
+    from .native_final_disclosure import _source_refs
+    from .native_three_public_ratios import operand_ref
+
+    def compact_name(fact):
+        return re.sub(r"\s+", "", str(fact.subject_name or ""))
+
+    leaves = entry["leaves"]
+    parts = "＋".join(f"{f.subject_code}{compact_name(f)}{Decimal(str(f.normalized_value)):,.2f}"
+                     for f in leaves)
+    leaf_names = {compact_name(f): str(f.subject_code)
+                  for f in getattr(doc.fact_context, "facts", []) or []
+                  if getattr(f, "table_code", None) == "FIN_05_general_public_expenditure"
+                  and len(str(getattr(f, "subject_code", "") or "")) == 7}
+    expected = entry["name"]
+    # 类名的依据是同节具体情况条目的写法，不是表内类行：只有结构段明显挪用了
+    # 项名时才断言“应为”，其余只报两处写法不一致、请核对。
+    if narrative_name in leaf_names:
+        verdict = (f"“{narrative_name}”是表内{leaf_names[narrative_name]}项的名称，不是类名；"
+                   f"应为“{expected}”。")
+    else:
+        verdict = "两处类名写法不一致，请核对。"
+    location = dict(location)
+    location.update({
+        "expected_name": expected,
+        "source_of_truth": "说明5具体情况（项级表无类级行）",
+        "derived_class_amount_wan": str(entry["sum"]),
+        "fact_source_refs": _source_refs(leaves),
+        "operand_refs": [operand_ref(f, f"V33-227:leaf_class:{code}:{i}") for i, f in enumerate(leaves)],
+        "pages": sorted({p for p in [*(location.get("pages") or [location.get("page")]),
+                                      *(ref["page"] for ref in _source_refs(leaves))] if p}),
+    })
+    return rule._issue(
+        f"说明5类级科目名称错误（{code}类）：结构情况写“{narrative_name}（类）{entry['sum']:,.2f}万元”，"
+        f"该金额等于表内{code}类各项合计（{parts}），同节具体情况把这些项归在“{expected}（类）”；"
+        f"{verdict}",
+        location,
+        severity="warn",
+        evidence_text=(f"编码：{code}（表内只列项级行，按编码前3位汇总）\n各项：{parts}\n"
+                       f"具体情况类名：{expected}\n结构段名称：{narrative_name}\n说明片段：{snippet}"),
+    )
 
 
 # ==================================================================================

@@ -1039,6 +1039,34 @@ def _total_fact(facts: Sequence[Any], indicator: str, names: Sequence[str] = ())
     return candidates[0] if len(candidates) == 1 else None
 
 
+def _top_level_rows_total(facts: Sequence[Any]) -> Optional[Decimal]:
+    """决算表顶层科目行（编码层级里没有上级行的行）本年支出之和；取不全返回 None。
+
+    有类行时就是各类之和；表内只列项级行（如只有 2120803）时就是各项之和。
+    任一顶层编码没有唯一可用金额就放弃推导，交调用方按取数不足上报。
+    """
+    from src.services.fiscal_code_hierarchy import hierarchy_paths
+
+    rows = [f for f in facts if f.indicator == "total_actual" and str(f.subject_code or "").isdigit()
+            and _canonical_budget_stage(f.budget_stage) == "决算"]
+    paths = hierarchy_paths({str(f.subject_code) for f in rows})
+    if not paths or len(set(paths.values())) != len(paths):
+        return None
+    top = {code for code, path in paths.items()
+           if not any(other != path and path.startswith(other) for other in paths.values())}
+    values: Dict[str, Decimal] = {}
+    for fact in rows:
+        code = str(fact.subject_code)
+        if code not in top:
+            continue
+        if fact.normalized_value is None or code in values:
+            return None
+        values[code] = Decimal(str(fact.normalized_value))
+    if set(values) != top:
+        return None
+    return sum(values.values(), Decimal(0))
+
+
 class R33252_FundColumnsCrossTable(Rule):
     code, severity = "V33-252", "error"
     desc = "财政拨款收支总表政府性基金/国有资本经营列与对应决算表一致（清单 C-04）"
@@ -1064,9 +1092,10 @@ class R33252_FundColumnsCrossTable(Rule):
                 continue
             target = _total_fact(detail, "total_actual")
             if target is None:
-                classes = [f for f in detail if f.indicator == "total_actual" and len(str(f.subject_code or "")) == 3
-                           and _canonical_budget_stage(f.budget_stage) == "决算" and f.normalized_value is not None]
-                target_value = sum((Decimal(str(f.normalized_value)) for f in classes), Decimal(0)) if classes else None
+                # 区级模板把“合计/基本支出/项目支出”子表头印在合计行上，合计行本年支出
+                # 没有金额（原件版式，不是解析错误）：按顶层科目行（类行；只列项级行的表
+                # 即全部项级行）之和推导本年支出合计。
+                target_value = _top_level_rows_total(detail)
             else:
                 target_value = Decimal(str(target.normalized_value)) if target.normalized_value is not None else None
             if target_value is None:

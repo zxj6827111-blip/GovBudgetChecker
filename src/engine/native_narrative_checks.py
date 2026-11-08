@@ -307,7 +307,11 @@ def _check_yoy(rule, doc, text, section, start, stop, year, owner, year_refs, is
         declared = Decimal(match['percent'].replace(',', ''))
         difference = abs(computed - declared)
         direction_matches = ((match['direction'] == '减少') == (match['percent_direction'] in {'下降', '减少'}))
-        failed = difference > Decimal('.1') or not direction_matches
+        # 百分比容差 0.1；原文只印到整数（“增长47%”）时，按其显示精度四舍五入的
+        # 误差（半个末位，0.5）同样允许——46.58% 印作 47% 不是计算错误。
+        decimals = max(0, -declared.as_tuple().exponent)
+        tolerance = max(Decimal('.1'), Decimal('.5').scaleb(-decimals))
+        failed = difference > tolerance or not direction_matches
         _receipt(rule, doc, relation, 'fail' if failed else 'pass', formula)
         if not failed:
             continue
@@ -322,7 +326,7 @@ def _check_yoy(rule, doc, text, section, start, stop, year, owner, year_refs, is
                     'current_amount_wan': str(current_amount), 'change_amount_wan': str(change),
                     'previous_amount_wan': str(previous), 'previous_amount_source': '由同条本年金额与增减额推导',
                     'computed_percent': str(computed), 'declared_percent': str(declared),
-                    'difference_pp': str(difference), 'tolerance_pp': '0.1', 'formula': formula,
+                    'difference_pp': str(difference), 'tolerance_pp': str(tolerance), 'formula': formula,
                     'direction': match['direction'], 'declared_percent_direction': match['percent_direction']}
         quote = '\n'.join(ref['span'] for ref in claim_refs)
         issues.append(rule._issue(

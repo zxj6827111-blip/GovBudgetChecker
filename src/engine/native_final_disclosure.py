@@ -487,6 +487,99 @@ def _bind_klass_via_independent_chain(doc, facts, item, paths, aliases):
     return klass_code
 
 
+def _leaf_only_paths(facts):
+    """FIN_05 只列项级（7 位）行、没有任何类/款行时返回层级路径，否则 None。
+
+    有些单位的一般公共预算表只印项级明细（如 2080501、2120101），不印 208、
+    20805 这类汇总行。此时说明里的（类）（款）名称在表内无行可对，只能按项名
+    绑定项级行；类金额按编码前 3 位汇总（见 :func:`leaf_only_classes`）。表内只要
+    有一行 3/5 位（含补零写法）就是常规层级表，不走这里。
+    """
+    paths = hierarchy_paths({str(f.subject_code) for f in facts
+                             if str(f.subject_code or '').isdigit()})
+    if not paths or len(set(paths.values())) != len(paths):
+        return None
+    if any(len(path) != 7 for path in paths.values()):
+        return None
+    return paths
+
+
+def _strict_leaf_fact(doc, facts, code):
+    """与 :func:`select` 同口径地取项级决算数，但不登记取数缺口（用于汇总推导）。"""
+    from .fact_context import _canonical_budget_stage, operand_rejection_reason
+    context = doc.fact_context
+    candidates = [fact for fact in facts
+                  if fact.subject_code == code and fact.indicator == 'total_actual'
+                  and _canonical_budget_stage(fact.budget_stage) == '决算']
+    if len(candidates) > 1:
+        # 同 select：不同原格上整行重复印刷的副本按值收敛；同一原格登记多条仍不唯一。
+        cells = {tuple(sorted({ref.get('source_cell_id') for ref in (fact.extra_dims or {}).get('evidence_refs', [])
+                               if ref.get('source_cell_id')})) for fact in candidates}
+        if len(cells) > 1:
+            unique = {}
+            for fact in candidates:
+                unique.setdefault((str(fact.raw_value), str(fact.normalized_value), fact.unit), fact)
+            candidates = list(unique.values())
+    if len(candidates) != 1:
+        return None
+    fact = candidates[0]
+    if (fact.normalized_value is None or operand_rejection_reason(fact, context.org_name)
+            or context.fiscal_year is None or fact.fiscal_year != context.fiscal_year
+            or fact.period not in (None, '本年')):
+        return None
+    return fact
+
+
+def leaf_only_classes(doc, facts=None):
+    """项级表的类金额与类名：{类编码: {'sum', 'leaves', 'name'}}；常规层级表返回 {}。
+
+    - 金额：该类编码前缀下全部项级行决算数之和；任何一行取不到可用金额，该类不给金额。
+    - 类名：只取同一说明节“具体情况”条目的写法——条目的项名在表内唯一对应某个
+      项级编码，同一类编码下各条目写的（类）名一致才采用。不用科目字典，也不按
+      金额猜名称；取不到类名时 ``name`` 为 None。
+    """
+    if facts is None:
+        facts, reason = table_facts(doc, GENERAL)
+        if reason:
+            return {}
+    paths = _leaf_only_paths(facts)
+    if paths is None:
+        return {}
+    # 项级行必须读全：各项之和等于表内合计行（显示舍入包络内）才推导类金额。
+    # 解析丢了类行、同时也丢了项行时，这里放弃推导，不拿残缺明细冒充类合计。
+    leaves_all = [_strict_leaf_fact(doc, facts, code) for code in sorted(paths)]
+    total = _strict_leaf_fact(doc, facts, 'total')
+    if total is None or any(fact is None for fact in leaves_all):
+        return {}
+    from .amount_math import rounding_envelope
+    leaf_sum = sum((Decimal(str(f.normalized_value)) for f in leaves_all), Decimal('0'))
+    if amount_difference_exceeds_policy(Decimal(str(total.normalized_value)) - leaf_sum,
+                                        rounding_envelope(len(leaves_all))):
+        return {}
+    classes = {}
+    for code in sorted(paths):
+        classes.setdefault(code[:3], []).append(code)
+    names = {}
+    text, ranges = _general_ranges(doc)
+    if ranges:
+        _title, begin, end = ranges[0]
+        for item in [*_ITEM.finditer(text.compact, begin, end), *_DASH_ITEM.finditer(text.compact, begin, end)]:
+            codes = {str(f.subject_code) for f in facts
+                     if str(f.subject_code) in paths and f.indicator == 'total_actual'
+                     and _name(f.subject_name) == _name(item['xiang'])}
+            if len(codes) == 1:
+                names.setdefault(next(iter(codes))[:3], set()).add(re.sub(r'\s+', '', item['klass']))
+    result = {}
+    for prefix, codes in classes.items():
+        leaves = [_strict_leaf_fact(doc, facts, code) for code in codes]
+        if any(fact is None for fact in leaves):
+            continue
+        written = names.get(prefix) or set()
+        result[prefix] = {'sum': sum((Decimal(str(f.normalized_value)) for f in leaves), Decimal('0')),
+                          'leaves': leaves, 'name': next(iter(written)) if len(written) == 1 else None}
+    return result
+
+
 def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
     paths = hierarchy_paths({str(f.subject_code) for f in facts
                              if str(f.subject_code or '').isdigit()})
@@ -494,6 +587,10 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
         return None, '功能分类编码的层级身份有冲突'
     parent = ''
     klass = ''
+    # 项级表没有类/款行：（类）（款）名称在表内无行可对，直接按项名绑定项级行；
+    # 类名是否写对由 V33-227 按同节条目与类金额另行核对。
+    levels = ([('xiang', 7)] if _leaf_only_paths(facts) is not None
+              else [('klass', 3), ('kuan', 5), ('xiang', 7)])
 
     def rebind_leaf_under_class():
         # 款名写错不能阻断独立金额检查：只在原表同类下项名唯一、
@@ -520,7 +617,7 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
                 return None, error
         return select(doc, facts, 'total_actual', code=leaf_code)
 
-    for group, width in [('klass', 3), ('kuan', 5), ('xiang', 7)]:
+    for group, width in levels:
         candidates = {str(f.subject_code) for f in facts
                       if len(paths.get(str(f.subject_code), '')) == width
                       and str(f.subject_code).isdigit()
@@ -693,6 +790,24 @@ def check_function_disclosures(rule, doc):
             else:
                 issues.extend(_amount(rule, doc, text, claim.start(), claim.end(), claim['amount'],
                               claim['unit'], fact, key, label, title))
+    # 项级表：类金额 = 该类下各项合计，类名取同节具体情况条目的写法。
+    for code, entry in sorted(leaf_only_classes(doc, facts).items()):
+        if not entry['name']:
+            continue
+        label = _name(entry['name'])
+        pattern = re.compile(rf'{re.escape(label)}(?:支出)?(?:\(类\))?(?:为)?'
+                             rf'(?P<amount>{_NUMBER})(?P<unit>{_UNIT})')
+        note = (f'表内未列类级行，按{code}类下{len(entry["leaves"])}个项级行合计核算')
+        for claim in pattern.finditer(text.compact, begin, end):
+            key = f'general:text:class:{code}:{claim.start()}'
+            error = _guard(doc, text, begin, claim.start(), claim.end())
+            if error:
+                _unresolved(rule, doc, key, error, unresolved, entry['leaves'])
+                continue
+            issues.extend(_amount_from_derived(
+                rule, doc, text, claim.start(), claim.end(), claim['amount'], claim['unit'],
+                (entry['sum'], tuple(entry['leaves']), note), key, label, title,
+                subject_code=code, derived_from='leaf_rows', basis='该类各项级行合计'))
     items = sorted([*_ITEM.finditer(text.compact, begin, end), *_DASH_ITEM.finditer(text.compact, begin, end)],
                    key=lambda match: match.start())
     for index, item in enumerate(items):
@@ -798,26 +913,30 @@ def _fund_total_from_classes(doc, facts):
         '按类级行合计核算')
 
 
-def _amount_from_derived(rule, doc, text, begin, end, amount, unit, derived, key, label, section):
-    """说明金额 × 推导总额（类级行合计）的比对；推导依据写进 evidence/formula。"""
+def _amount_from_derived(rule, doc, text, begin, end, amount, unit, derived, key, label, section,
+                         *, subject_code='total', derived_from='class_rows', basis='类级行合计'):
+    """说明金额 × 推导金额（类级行合计 / 项级行合计）的比对；推导依据写进 evidence/formula。"""
     value, operands, note = derived
     declared = _wan(amount, unit)
     difference = declared - value
     failed = amount_difference_exceeds_policy(difference)
     refs = text.refs(begin, end, '原文决算金额声明')
+    formula = ('explicit narrative amount == sum of class rows (total cell not printed)'
+               if derived_from == 'class_rows' else
+               'explicit narrative class amount == sum of leaf rows under the class code (no class row printed)')
     ids, evidence = receipt(rule, doc, key, list(operands), status='fail' if failed else 'pass',
-            formula='explicit narrative amount == sum of class rows (total cell not printed)',
+            formula=formula,
             disclosure_sources=[dict(ref, file_hash=doc.fact_context.file_hash) for ref in refs])
     if not failed:
         return []
     location = _location(doc, refs, list(operands), section, 'final_disclosure_amount',
-                         table_code=operands[0].table_code, subject_code='total',
+                         table_code=operands[0].table_code, subject_code=subject_code,
                          indicator='total_actual', declared_amount_wan=str(declared),
                          table_amount_wan=str(value), declared_unit=unit,
                          difference_wan=str(difference), tolerance_wan=str(AMOUNT_TOLERANCE_WAN),
-                         derived_total_from='class_rows', derived_total_note=note)
+                         derived_total_from=derived_from, derived_total_note=note)
     message = (f'{label}表文金额不一致：原文{amount}{unit}折合{declared}万元，'
-               f'表内类级行合计{value:.2f}万元（{note}），'
+               f'表内{basis}{value:.2f}万元（{note}），'
                f'相差{abs(difference):.4f}万元。')
     return [rule._issue(message, location, 'error',
                         evidence_text=_quote(location),

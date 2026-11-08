@@ -9,7 +9,10 @@
 去掉"上海市"后剩下的"退役军人事务局"被判成其他主体，说明四总计、收入结构
 等表文比对整类停在 ``insufficient_data``，转成人工补核。
 
-只在可证明的情形下改用封面单位名：
+目录登记名与封面只差层级标注时（“X单位”“X本级/X（本级）/X本部”对封面“X”），
+单位材料以封面原文名为本单位（``verified_cover_alias``），见函数内注释。
+
+关联到上级节点时，只在可证明的情形下改用封面单位名：
 
 1. 关联节点是市/区级（``city`` / ``district``）；
 2. 封面单位名完整包含关联节点名、比它长，且以部门/单位后缀结尾——即该行政
@@ -68,6 +71,18 @@ def resolve_check_subject(
         return {**subject, "name": cover, "source": "verified_cover_alias",
                 "evidence": [{"page": 1, "text": cover, "source": "cover_literal",
                               "linked_name": linked, "relation": "directory_unit_suffix"}]}
+    # 部门本级单位在目录里登记为“X本级/X（本级）/X本部”，单位决算/预算封面与正文
+    # 却只写“X”。“本级”是层级标注，不是名称，同一份单位材料里的“X”就是本单位。
+    # 部门与本级的区分不放宽：只认目录层级为单位、封面原文写着“X”且没有自称
+    # 部门预决算（“部门决算/部门预算”）的材料；部门节点、部门材料都不走这里。
+    if (organization_id and level == "unit" and linked and cover and not cover_conflicted
+            and subject_level not in {"government", "department"}
+            and _compact(linked) in {_compact(cover) + "本级", _compact(cover) + "本部"}
+            and _compact(cover) in _compact(cover_text)
+            and not re.search(r"部门(?:决算|预算)", _compact(cover_text))):
+        return {**subject, "name": cover, "source": "verified_cover_alias",
+                "evidence": [{"page": 1, "text": cover, "source": "cover_literal",
+                              "linked_name": linked, "relation": "directory_head_unit_marker"}]}
     if (not organization_id or level not in PARENT_LEVELS or not linked or not cover
             or cover_conflicted or subject_level == "government"):
         return subject

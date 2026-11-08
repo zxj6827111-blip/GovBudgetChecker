@@ -17,6 +17,18 @@ from .native_narrative_checks import _Text
 
 
 _SUM_FAMILIES = ({'V33-117', 'V33-243'}, {'V33-120', 'V33-241'}, {'V33-101', 'V33-115'})
+#: “合计 = Σ明细”类规则。分组键是合计原格 + 明细原格的事实身份，与规则族无关：
+#: V33-005（各表通用的合计↔明细）与上面各族就同一组原格各报一次时是同一个算式。
+_SUM_RULES = frozenset().union(*_SUM_FAMILIES) | {'V33-005'}
+#: 同一张表“缺失 / 为空表而无空表说明”的根缺陷：不同规则各报一次时只保留一条，
+#: 其余作为附注（related_findings）留在主条里。按表身份分组，不按文字相似。
+_TABLE_DEFECT_RULES = {
+    'V33-002': 'table_missing', 'V33-201': 'table_missing',
+    'V33-109': 'empty_table_statement', 'V33-114': 'empty_table_statement',
+}
+#: 根缺陷组的主条：缺表取“缺失表：X”（V33-201 的“T3缺失，无法勾稽”只是后果）；
+#: 空表取 V33-114（带表字段与建议语句，表名按原件；V33-109 用九表规范名）。
+_TABLE_DEFECT_PRIMARY = ('V33-002', 'V33-114')
 _YOY = {'V33-234', 'CMM-007'}
 _TEXT = {'CMM-001', 'V33-108', 'V33-105', 'V33-221'}
 _UNIT_MAGNITUDE = {'V33-222', 'CMM-011'}
@@ -149,7 +161,7 @@ def _version(item, context):
     return str(version or getattr(context, 'version_token', '') or '')
 
 
-def _sum_key(item, family, context):
+def _sum_key(item, context):
     refs = _location(item).get('operand_refs') or []
     if len(refs) < 2 or _version(item, context) is None:
         return None
@@ -168,7 +180,7 @@ def _sum_key(item, family, context):
         return None
     parent = parents[0]
     children = [value for index, value in enumerate(identities) if index != parent]
-    return ('sum', tuple(sorted(family)), identities[parent], tuple(sorted(children, key=repr)), _version(item, context))
+    return ('sum', identities[parent], tuple(sorted(children, key=repr)), _version(item, context))
 
 
 def _unit_magnitude_anchor(item, doc=None):
@@ -375,25 +387,71 @@ def _text_key(item, doc, context):
     return ('text_vs_table', identity, position, _version(item, context)) if position is not None else None
 
 
-def _key(item, doc, context):
+def _table_defect_key(item):
+    """缺表/空表无说明的根缺陷键：(类型, 表代码)；认不出唯一表身份时 None。"""
+    rule = _rule(item)
+    kind = _TABLE_DEFECT_RULES.get(rule)
+    if kind is None:
+        return None
+    message = str(_get(item, 'message') or _get(item, 'title') or '')
+    table = str(_location(item).get('table') or '')
+    if rule == 'V33-002':
+        match = re.search(r'缺失表[:：]\s*(?P<name>[^，。；,;\s]+)', message)
+        name = table or (match.group('name') if match else '')
+    elif rule == 'V33-201':
+        # 只有“T3(支出决算表)缺失，无法勾稽”这一句是缺表的后果；金额不一致是独立问题。
+        name = '支出决算表' if re.search(r'T3[（(]支出决算表[)）]缺失', message) else ''
+    elif rule == 'V33-109':
+        match = re.search(r'【(?P<name>[^】]+)】为空表', message)
+        name = match.group('name') if match else ''
+    else:
+        match = re.search(r'空表缺少说明[:：](?P<name>.+?)为空表', message)
+        name = table or (match.group('name') if match else '')
+    if not name:
+        return None
+    from src.services.obligation_finding_coverage import _table_codes_in
+    codes = _table_codes_in(name)
+    return (kind, codes.pop()) if len(codes) == 1 else None
+
+
+def _keys(item, doc, context):
+    """该问题的全部分组键；共享任一键的问题合并为一条（可传递）。"""
     severity = str(_get(item, 'severity') or '')
     if severity == 'manual_review':
-        return None
+        return []
+    table_defect = _table_defect_key(item)
+    if table_defect is not None:
+        return [table_defect]
     rule = _rule(item)
-    for family in _SUM_FAMILIES:
-        if rule in family:
-            key = _sum_key(item, family, context)
-            if key is not None or severity != 'info':
-                return key
+    keys = []
+    if rule in _SUM_RULES:
+        key = _sum_key(item, context)
+        if key is None and severity != 'info':
+            return []
+        if key is not None:
+            keys.append(key)
     if severity == 'info':
-        return _pooled_info_key(item, context)
+        # 同一组原格的取整提示：合计↔明细规则按算式键，其余按原格事实集合键；
+        # 两键都算，V33-005 与 V33-120/V33-241 就同一处 0.02 各报一次时合成一条。
+        pooled = _pooled_info_key(item, context)
+        return keys + ([pooled] if pooled is not None else [])
+    if keys:
+        return keys
     if rule in _YOY:
-        return _yoy_key(item, doc)
-    if rule in _TEXT:
-        return _text_key(item, doc, context)
-    if rule in _UNIT_MAGNITUDE:
-        return _unit_magnitude_key(item, doc)
-    return None
+        key = _yoy_key(item, doc)
+    elif rule in _TEXT:
+        key = _text_key(item, doc, context)
+    elif rule in _UNIT_MAGNITUDE:
+        key = _unit_magnitude_key(item, doc)
+    else:
+        key = None
+    return [key] if key is not None else []
+
+
+def _key(item, doc, context):
+    """单键视图（兼容旧调用）：取 :func:`_keys` 的第一个键。"""
+    keys = _keys(item, doc, context)
+    return keys[0] if keys else None
 
 
 def _pooled_info_key(item, context):
@@ -444,7 +502,11 @@ def _repair_literal_refs(refs, doc):
 
 
 def _merged(group, doc=None, *, key=None):
-    primary = max(group, key=_quality)
+    if key is not None and key and key[0] in set(_TABLE_DEFECT_RULES.values()):
+        # 根缺陷组：主条按规则身份取（缺失表/空表说明本身），证据质量其次。
+        primary = max(group, key=lambda item: (_rule(item) in _TABLE_DEFECT_PRIMARY, _quality(item)))
+    else:
+        primary = max(group, key=_quality)
     result = deepcopy(primary)
     location = deepcopy(_location(primary))
     rules = list(dict.fromkeys(rule for item in group for rule in [
@@ -539,7 +601,16 @@ def deduplicate_native_issues(issues, doc=None, *, receipts=None):
     文本唯一定位；缺文本/缺身份时保留原问题，不能猜测它们是同一问题。
     """
     context = getattr(doc, 'fact_context', None) if doc is not None else None
-    groups, order = {}, []
+    # 共享任一分组键的问题并为一组（并查集，按首次出现的位置排序）。
+    parent = list(range(len(issues)))
+
+    def find(index):
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    owner, item_keys = {}, []
     for index, item in enumerate(issues):
         # 记录“未并组时该条会得到的报告 id”。旧链接/旧客户端仍可按它查询，
         # 但只在当前分析的问题集合内解析，不跨版本。
@@ -550,17 +621,28 @@ def deduplicate_native_issues(issues, doc=None, *, receipts=None):
             location = _location(item)
             location.setdefault("pre_group_issue_id", f"{rule}-{index + 1}")
             _set(item, "location", location)
-        key = _key(item, doc, context)
-        if key is None:
-            order.append(('single', index))
+        keys = _keys(item, doc, context)
+        item_keys.append(keys)
+        for key in keys:
+            if key in owner:
+                left, right = find(owner[key]), find(index)
+                if left != right:
+                    parent[max(left, right)] = min(left, right)
+            else:
+                owner[key] = index
+    members = {}
+    for index in range(len(issues)):
+        members.setdefault(find(index), []).append(index)
+    result = []
+    for root in sorted(members):
+        indices = members[root]
+        if len(indices) == 1:
+            result.append(issues[indices[0]])
             continue
-        if key not in groups:
-            groups[key] = []
-            order.append(('group', key))
-        groups[key].append(item)
-    result = [issues[key] if kind == 'single' else (
-        _merged(groups[key], doc, key=key) if len(groups[key]) > 1 else groups[key][0])
-        for kind, key in order]
+        group = [issues[index] for index in indices]
+        keys = [key for index in indices for key in item_keys[index]]
+        key = next((k for k in keys if k and k[0] == DEFECT_AMOUNT_UNIT_MISSING_WAN), keys[0])
+        result.append(_merged(group, doc, key=key))
     _link_related_symptoms(result)
     receipt_list = receipts if receipts is not None else getattr(doc, 'fact_receipts', None)
     if receipt_list is not None:
