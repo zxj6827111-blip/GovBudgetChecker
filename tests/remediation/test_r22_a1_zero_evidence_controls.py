@@ -391,3 +391,34 @@ def test_r501_length_bounds_never_authorize_frame_context():
                                   indicator="reception", stage="决算") is None
     assert narrative_zero_sources(doc2, table_code="FIN_07_three_public",
                                   indicator="overseas", stage="决算")
+
+
+def test_r502_all_frame_nouns_guard_same_clause():
+    """R5 自检补强：帧名词**全量**入同句守卫——假定/虚构/演示此前只在作用域
+    词表，同句形态漏拒；现在七词同句零陈述一律不作零依据。"""
+    for noun in ("假设", "假定", "示例", "样例", "模板", "虚构", "演示"):
+        text = f"甲局2024年度部门决算。因公出国（境）费支出决算0万元（{noun}数据）。"
+        assert narrative_zero_sources(_doc(text), table_code="FIN_07_three_public",
+                                      indicator="overseas", stage="决算") is None, noun
+
+
+def test_r502_frame_word_in_terminated_prose_conservative():
+    """R5 自检补强（完整判据落地）：帧词出现在已终结正文句（"示例见附表。"）
+    → 作用域无法可靠确定 → 保守建帧，其后零陈述保持未知，不回退普通事实。"""
+    for text, indicator in (
+        ("甲局2024年度部门决算。示例见附表。因公出国（境）费支出决算0万元。", "overseas"),
+        ("甲局2024年度部门决算。本段为模板说明。财政拨款公务接待费支出决算0万元。", "reception"),
+    ):
+        assert narrative_zero_sources(_doc(text), table_code="FIN_07_three_public",
+                                      indicator=indicator, stage="决算") is None, text
+
+
+def test_r502_closure_phrase_does_not_reopen_scope():
+    """R5 自检补强正控：闭合短语内的帧词（"以上示例仅供参考"）是收束引用，
+    不重开作用域——闭合后合法零披露照常授权。"""
+    for text in (
+        "甲局2024年度部门决算。示例样式：接待费0万元。以上示例仅供参考。因公出国（境）费支出决算0万元。",
+        "甲局2024年度部门决算。以下为假设情形。接待费0万元。以上情形到此为止。因公出国（境）费支出决算0万元。",
+    ):
+        assert narrative_zero_sources(_doc(text), table_code="FIN_07_three_public",
+                                      indicator="overseas", stage="决算"), text

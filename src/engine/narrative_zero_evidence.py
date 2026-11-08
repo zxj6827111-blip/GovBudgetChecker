@@ -10,7 +10,9 @@
   **作用域**（"以下为模板示例/假设情形"宣告后、显式闭合前的全部零陈述，
   R2-02：作用域歧义即拒收，不存在隔句自动出框架；R3-01/R4/R5：冒号引导
   片段（句首到冒号不限长度）与未终结行**结构**判据——片段/行内出现帧类词
-  即建帧，帧词无需直接接冒号、长度不作授零依据，支配块内全部零陈述）；
+  即建帧，帧词无需直接接冒号、长度不作授零依据，支配块内全部零陈述；
+  R5 自检补强：帧词出现于任意位置（含已终结正文句"示例见附表"）保守建帧，
+  闭合短语内的帧词不重开作用域）；
 - 阶段必须匹配：决算格只接受决算语境的零声明；年初预算格不接受决算声明；
 - 年度、主体必须与材料一致，出现他年度或他主体一律拒绝；
 - 同一指标在同类语境里只要出现一条**非零水平陈述**，就不形成零证据；
@@ -66,7 +68,9 @@ _NEGATION_RE = re.compile(
     r"|不得视为|不能视为|不应视为|不得推定|不能推定")
 # “若”排除“若干”；条件句把零陈述变成假设结果，不是本期事实。
 _CONDITIONAL_RE = re.compile(r"如果|假设|假如|倘若|如若|若(?!干)")
-_QUOTE_TEMPLATE_RE = re.compile(r"示例|样例|模板|仅供参考")
+# R5 自检补强：帧名词全量入同句守卫——假定/虚构/演示此前只在作用域词表，
+# 同句形态（"因公出国（境）费支出决算0万元（演示数据）"）漏拒。
+_QUOTE_TEMPLATE_RE = re.compile(r"示例|样例|模板|仅供参考|假定|虚构|演示")
 _QUESTION_RE = re.compile(r"[？?]")
 # 前导句的指前否定："以下表述不成立"式——隔句号仍支配本句。
 _FORWARD_NEGATION_RE = re.compile(r"(?:以下|下列|下述|如下)(?:表述|说法|内容|情况)?(?:均)?(?:不成立|并非|不属实)")
@@ -83,8 +87,11 @@ _FRAME_ANNOUNCEMENT_OPEN_RE = re.compile(
     rf"|(?:{_FRAME_NOUN_RE.pattern})[^。；;]{{0,24}}(?:{_FORWARD_REF_RE.pattern})")
 #: 显式闭合："以上为模板示例/以上情形系假设/示例到此结束"式——提前结束
 #: 作用域。闭合词表同为保守下界：识别不出闭合只会让作用域更长（更保守）。
+# 闭合分支1的帧词用 + 量词：复合帧名词短语（"以上为模板示例"）整体作为
+# 闭合——否则闭合匹配止于首个帧词，短语内后续帧词会被词级作用域重开
+# （R5 自检发现的交互缺陷）。
 _FRAME_CLOSURE_RE = re.compile(
-    r"以上[^。；;]{0,16}?(?:假设|假定|示例|样例|模板|虚构|演示)"
+    r"以上[^。；;]{0,16}?(?:假设|假定|示例|样例|模板|虚构|演示)+"
     r"|(?:假设|假定|示例|样例|模板|虚构|演示)情形?[^。；;]{0,6}?(?:到此)?(?:结束|为止)"
     r"|到此(?:为止|结束)")
 # R3-01/R4/R5（第三至五轮复核）：宣告**结构**判据——帧词识别到后，长度
@@ -136,6 +143,16 @@ def _frame_scope_spans(text: "_Text") -> Tuple[Tuple[int, int], ...]:
             continue
         closure = _FRAME_CLOSURE_RE.search(compact, c_start)
         spans.append((c_start, closure.start() if closure else len(compact)))
+    # R5 自检补强（完整判据落地）：帧词出现在**任意**位置——含已终结正文句
+    # （"示例见附表。"）——作用域无法可靠确定时保守建帧，其后零陈述保持
+    # 未知，不回退普通事实。闭合短语内的帧词（"以上示例仅供参考"）是收束
+    # 引用，不再开启新作用域。
+    closure_matches = [(m.start(), m.end()) for m in _FRAME_CLOSURE_RE.finditer(compact)]
+    for word in _FRAME_NOUN_RE.finditer(compact):
+        if any(cs <= word.start() < ce for cs, ce in closure_matches):
+            continue
+        closure = _FRAME_CLOSURE_RE.search(compact, word.end())
+        spans.append((word.start(), closure.start() if closure else len(compact)))
     return tuple(spans)
 _QUOTE_PAIRS = (("“", "”"), ("\"", "\""))
 
