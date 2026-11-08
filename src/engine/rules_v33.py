@@ -1355,7 +1355,12 @@ class R33114_EmptyTableStatementCheck(Rule):
 
                             # 如果非空单元格数量小于等于列数，且表格行数较少，则认为是空表
                             # 或者如果非空单元格数量小于等于2*列数，且表格行数较少，则认为是空表
-                            if rows <= 5 and non_empty_cells <= 2 * cols:
+                            # 有非零金额的表不是空表（窄表的单元格数可能很少，如三公表只有一行数）。
+                            has_amount = any(
+                                (value := parse_number(cell)) is not None and abs(value) > 1e-9
+                                for row in table for cell in row
+                            )
+                            if rows <= 5 and non_empty_cells <= 2 * cols and not has_amount:
                                 is_empty_table = True
                                 break
 
