@@ -66,6 +66,17 @@ def _carrier_state(container: Any, key: str) -> Dict[str, Any]:
     return {"present": True, "count": None, "items": [], "missing": False, "non_list": True}
 
 
+def _validate_finding_items(state: Dict[str, Any]) -> Dict[str, Any]:
+    """正式问题必须是对象列表，坏条目不能被下游去重时静默跳过。"""
+    invalid = [index for index, item in enumerate(state["items"])
+               if not isinstance(item, dict)]
+    if invalid:
+        state = dict(state)
+        state.update({"invalid_items": True, "invalid_item_indices": invalid,
+                      "count": None, "items": []})
+    return state
+
+
 #: 真实生产载荷的 ``result.issues`` 是**按严重度分键的 dict**
 #: （``{"error": [...], "warn": [...], "info": [...], "all": [...]}``，
 #: 见 uploads 旧任务实测）。``all`` 是 error+warn+info 的投影，读它会把
@@ -105,6 +116,13 @@ def _carrier_state_issues(container: Any, key: str) -> Dict[str, Any]:
             items.extend(bucket)
         state.pop("non_list", None)
         all_bucket = raw.get("all")
+        # 已声明的严重度桶与 all 都必须是列表；跳过坏桶会把未读到的问题
+        # 伪装成合法空。未知元数据键沿用既有兼容口径。
+        invalid_bucket_keys = sorted(
+            str(name) for name, bucket in raw.items()
+            if name in (*_ISSUES_DICT_SEVERITY_KEYS, *_ISSUES_DICT_PROJECTION_KEYS)
+            and not isinstance(bucket, list)
+        )
         projection_consistent: Optional[bool] = None
         unreadable_projection = False
         projection_inconsistent = False
@@ -142,8 +160,9 @@ def _carrier_state_issues(container: Any, key: str) -> Dict[str, Any]:
             "projection_consistent": projection_consistent,
             "unreadable_projection": unreadable_projection,
             "projection_inconsistent": projection_inconsistent,
+            "invalid_bucket_keys": invalid_bucket_keys,
         })
-        if unreadable_projection or projection_inconsistent:
+        if unreadable_projection or projection_inconsistent or invalid_bucket_keys:
             # 损坏投影不提供可读计数：交由外层按"未知"处理，不得当 0。
             state["count"] = None
             state["items"] = []
@@ -185,9 +204,9 @@ def three_carrier_snapshot(result: Any, review_report: Any, meta_coverage: Any) 
     result.meta.obligation_coverage）。
     """
     carriers = {
-        "result.rule_findings": _carrier_state(result, "rule_findings"),
-        "result.issues": _carrier_state_issues(result, "issues"),
-        "review_report.issues": _carrier_state_issues(review_report, "issues"),
+        "result.rule_findings": _validate_finding_items(_carrier_state(result, "rule_findings")),
+        "result.issues": _validate_finding_items(_carrier_state_issues(result, "issues")),
+        "review_report.issues": _validate_finding_items(_carrier_state_issues(review_report, "issues")),
     }
     # 身份并集 + 载体归属 + 内容冲突检测
     identities: Dict[str, Dict[str, Dict[str, Any]]] = {}
@@ -263,6 +282,11 @@ def three_carrier_snapshot(result: Any, review_report: Any, meta_coverage: Any) 
                 "present": state["present"],
                 "missing": state["missing"],
                 "null_value": state.get("null_value", False),
+                # 外层门禁需要原始类型诊断；不能在组件投影中丢掉后再当未知放行。
+                "non_list": state.get("non_list", False),
+                "invalid_items": state.get("invalid_items", False),
+                "invalid_item_indices": state.get("invalid_item_indices", []),
+                "invalid_bucket_keys": state.get("invalid_bucket_keys", []),
                 "count": state["count"],
                 "legal_empty": state["present"] and state["count"] == 0,
                 "dict_format": state.get("dict_format", False),

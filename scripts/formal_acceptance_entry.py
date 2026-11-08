@@ -660,8 +660,8 @@ def _status(payload: Dict[str, Any]) -> Dict[str, Any]:
 def _carrier_readability(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     """FA-03：单侧三正式载体可读性评估——合法空/缺失/不可读分开。
 
-    M-03：已出现且被判损坏/不一致的载体（unreadable_type/unreadable_projection）
-    单独登记 damaged——合法旧格式的"键缺失"不算损坏，不得与损坏混同。
+    M-03：已出现但为 null、错类型、坏条目或损坏投影的载体单独登记
+    damaged；未知状态也须待核。合法旧格式的"键缺失"不算损坏。
     """
     carriers = snapshot.get("formal_carriers", {})
     details: Dict[str, Any] = {}
@@ -672,7 +672,8 @@ def _carrier_readability(snapshot: Dict[str, Any]) -> Dict[str, Any]:
             verdict = "missing"
         elif state.get("null_value"):
             verdict = "null"
-        elif state.get("non_list") and not state.get("dict_format"):
+        elif ((state.get("non_list") and not state.get("dict_format"))
+              or state.get("invalid_items") or state.get("invalid_bucket_keys")):
             verdict = "unreadable_type"
         elif state.get("unreadable_projection") or state.get("projection_inconsistent"):
             verdict = "unreadable_projection"
@@ -682,7 +683,9 @@ def _carrier_readability(snapshot: Dict[str, Any]) -> Dict[str, Any]:
             readable_any = True
         else:
             verdict = "unknown"
-        if verdict in ("unreadable_type", "unreadable_projection"):
+        # 缺键可属于合法旧格式；已经出现但为 null/不可读/未知的载体
+        # 不能被另一份空列表豁免。兜底 unknown 也保留为待核，防诊断漏传。
+        if verdict in ("null", "unknown", "unreadable_type", "unreadable_projection"):
             damaged.append(key)
         details[key] = {"verdict": verdict, "count": state.get("count"),
                          "legal_empty": state.get("legal_empty", False),
@@ -702,8 +705,8 @@ def compare_payloads(
     结论取值：
 
     - ``rejected``：契约无效或身份门禁未全过——不产生比较结论；
-    - ``pending_review``：身份全过但**任一侧三正式载体无一可靠读取**
-      （全缺失/null/错类型/损坏投影）——不能出"零回归"，转人工/待核；
+    - ``pending_review``：身份全过但任一侧无可读正式载体，或已出现的
+      载体为 null、错类型、含坏条目/损坏投影——不能出"零回归"，转待核；
     - ``compared``：可读且比较已产出。``zero_regression_claim`` 只有在
       内容无变化、证据零丢失（FA-02 内容级）、投影一致且代码身份
       （若声明）已核验时才为 True；任何 False 都带 ``claim_reasons``。

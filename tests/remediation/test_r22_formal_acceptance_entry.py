@@ -11,6 +11,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -320,3 +322,61 @@ def test_damaged_carrier_not_masked_by_empty_carriers():
     assert result["pending_reason"] == "formal_carrier_damaged"
     assert result["zero_regression_claim"] is False
     assert result["damaged_carriers"]["after"] == ["result.issues"]
+
+
+@pytest.mark.parametrize("path", [
+    ("result", "rule_findings"), ("result", "issues"), ("review_report", "issues"),
+])
+@pytest.mark.parametrize("bad_value", [None, 42, False, "broken"])
+def test_present_invalid_carrier_not_masked_by_empty_carriers(path, bad_value):
+    """全链验证：组件类型诊断必须到达入口，其他合法空载体不能代为担保。"""
+    before = _payload(rule_findings=[], issues=[], report_issues=[], check_receipts=[])
+    after = json.loads(canonical(before))
+    after[path[0]][path[1]] = bad_value
+    result = entry.compare_payloads(before, after, _contract())
+    assert result["verdict"] == "pending_review"
+    assert result["zero_regression_claim"] is False
+    assert result["damaged_carriers"]["after"] == [".".join(path)]
+    carrier = result["snapshot_after"]["formal_carriers"][".".join(path)]
+    assert carrier["legal_empty"] is False
+    if bad_value is not None:
+        assert carrier["non_list"] is True
+
+
+@pytest.mark.parametrize("carrier", ["result", "review_report"])
+@pytest.mark.parametrize("bucket", ["error", "warn", "info", "all"])
+@pytest.mark.parametrize("bad_value", [None, 42, "broken"])
+def test_invalid_severity_bucket_not_treated_as_empty(carrier, bucket, bad_value):
+    before = _payload(rule_findings=[], issues=[], report_issues=[], check_receipts=[])
+    after = json.loads(canonical(before))
+    after[carrier]["issues"] = {"error": [], "warn": [], "info": [], "all": []}
+    after[carrier]["issues"][bucket] = bad_value
+    result = entry.compare_payloads(before, after, _contract())
+    assert result["verdict"] == "pending_review"
+    assert result["zero_regression_claim"] is False
+    state = result["snapshot_after"]["formal_carriers"][f"{carrier}.issues"]
+    assert state["invalid_bucket_keys"] == [bucket]
+    assert state["legal_empty"] is False
+
+
+@pytest.mark.parametrize("path", [
+    ("result", "rule_findings"), ("result", "issues"), ("review_report", "issues"),
+])
+def test_non_object_finding_items_are_not_silently_skipped(path):
+    before = _payload(rule_findings=[], issues=[], report_issues=[], check_receipts=[])
+    after = json.loads(canonical(before))
+    after[path[0]][path[1]] = ["broken", 42, None]
+    result = entry.compare_payloads(before, after, _contract())
+    assert result["verdict"] == "pending_review"
+    assert result["zero_regression_claim"] is False
+    state = result["snapshot_after"]["formal_carriers"][".".join(path)]
+    assert state["invalid_item_indices"] == [0, 1, 2]
+
+
+def test_missing_legacy_carrier_remains_distinct_from_invalid_present_carrier():
+    payload = _payload(rule_findings=[], issues=[], report_issues=[], check_receipts=[])
+    payload["result"].pop("rule_findings")
+    result = entry.compare_payloads(payload, json.loads(canonical(payload)), _contract())
+    assert result["verdict"] == "compared"
+    assert result["zero_regression_claim"] is True
+    assert result["carrier_readability"]["after"]["damaged"] == []
