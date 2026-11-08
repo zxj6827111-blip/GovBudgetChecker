@@ -108,6 +108,35 @@ def real_ai_env(monkeypatch):
     yield pairs
 
 
+# ---------------------------------------------------------------------------
+# 代理 bypass 环境隔离
+#
+# 背景（实测缺陷）：IDE/agent 宿主进程向 shell 注入的 NO_PROXY 含方括号
+# IPv6 条目（如 `[::1]`）；httpx 0.28.1（含 master）的 is_ipv6_hostname
+# 不识别方括号，落入通配分支生成畸形挂载键 `all://*[::1]`，任何
+# trust_env 的 Client 创建即 `InvalidURL: Invalid port: ':1]'`。
+# 这里把条目去方括号（`[::1]` 与 `::1` 语义相同），测试免疫宿主注入。
+# ---------------------------------------------------------------------------
+
+#: 代理 bypass 环境变量（大小写两份都可能出现）
+_PROXY_BYPASS_ENV_KEYS = ("NO_PROXY", "no_proxy")
+
+
+def _normalize_proxy_bypass(value: str) -> str:
+    """逐条目去空白与方括号；无括号条目原样保留。"""
+    return ",".join(entry.strip().strip("[]") for entry in value.split(","))
+
+
+@pytest.fixture(autouse=True)
+def normalize_proxy_bypass_env(monkeypatch):
+    """NO_PROXY 方括号 IPv6 条目规范化为裸地址，防 httpx URLPattern 崩溃。"""
+    for name in _PROXY_BYPASS_ENV_KEYS:
+        value = os.environ.get(name)
+        if value:
+            monkeypatch.setenv(name, _normalize_proxy_bypass(value))
+    yield
+
+
 @pytest.fixture
 def real_database_url(isolate_database_url, monkeypatch):
     """需要真实数据库的测试用的显式 opt-in fixture。

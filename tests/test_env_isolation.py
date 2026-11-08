@@ -16,12 +16,14 @@ import pytest
 
 # pytest 以 prepend 模式把 `tests/conftest.py` 注册为顶层模块 `conftest`，
 # 这样导入拿到的是 pytest 实际加载的同一个模块对象，而不是重复副本。
-from conftest import TEST_DATABASE_URL_ENV, resolve_opt_in_database_url
+from conftest import TEST_DATABASE_URL_ENV, resolve_opt_in_database_url, _normalize_proxy_bypass
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
 #: 子进程回归用的测试节点（必须与下方函数名保持一致）
 _GUARD_NODE_ID = "tests/test_env_isolation.py::test_database_url_absent_inside_tests"
+#: 代理注入端到端回归用的测试节点
+_PROXY_GUARD_NODE_ID = "tests/test_env_isolation.py::test_httpx_client_constructs_under_ide_proxy_bypass"
 
 
 def test_database_url_absent_inside_tests() -> None:
@@ -61,6 +63,62 @@ def test_real_database_fixture_skips_without_opt_in() -> None:
     if resolve_opt_in_database_url():
         pytest.skip(f"本机配置了 {TEST_DATABASE_URL_ENV}，跳过该反例")
     assert resolve_opt_in_database_url() == ""
+
+
+def test_proxy_bypass_normalizer_strips_ipv6_brackets() -> None:
+    """方括号 IPv6 去括号、其余条目原样保留（双向：证明不是恒真变换）。"""
+    assert _normalize_proxy_bypass("localhost,[::1],::1,127.0.0.0/8") == "localhost,::1,::1,127.0.0.0/8"
+    assert _normalize_proxy_bypass("localhost,::1") == "localhost,::1"
+
+
+def test_httpx_client_constructs_under_ide_proxy_bypass() -> None:
+    """隔离核心断言：测试体内 NO_PROXY 无方括号条目，trust_env Client 可创建。
+
+    无隔离时，IDE 注入的 `[::1]` 会让 httpx.Client() 在创建时即 InvalidURL。
+    """
+    import httpx
+
+    for name in ("NO_PROXY", "no_proxy"):
+        assert "[" not in os.environ.get(name, "")
+    with httpx.Client():
+        pass
+
+
+@pytest.mark.slow
+def test_child_pytest_normalizes_injected_proxy_bypass(tmp_path: Path) -> None:
+    """端到端证据：带着 IDE 形态的畸形 NO_PROXY 启动 pytest，Client 仍可创建。"""
+    env = dict(os.environ)
+    env["NO_PROXY"] = "localhost,.localhost,127.0.0.1,127.0.0.0/8,[::1],::1"
+    env["no_proxy"] = env["NO_PROXY"]
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "--basetemp",
+            str(tmp_path / "child-basetemp"),
+            _PROXY_GUARD_NODE_ID,
+        ],
+        cwd=str(_REPO_ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=600,
+    )
+
+    assert completed.returncode == 0, (
+        "带方括号 NO_PROXY 运行时隔离失效：\n"
+        f"stdout=\n{completed.stdout}\nstderr=\n{completed.stderr}"
+    )
+    assert "1 passed" in (completed.stdout or "")
 
 
 @pytest.mark.slow
