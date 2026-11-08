@@ -88,6 +88,22 @@ def test_legacy_format_without_rule_findings_still_counted():
     assert result["snapshot_after"]["formal_carriers"]["result.rule_findings"]["missing"] is True
 
 
+def test_dict_shaped_result_issues_counted_without_all_projection():
+    """真实生产 dict 形态（uploads 实测）：error/warn/info 读全，all 投影不双计。"""
+    payload = _payload(rule_findings=None, check_receipts=[])
+    payload["result"]["issues"] = {
+        "error": [{"id": "V33-109-1", "rule": "V33-109", "message": "m", "severity": "error"}],
+        "warn": [], "info": [],
+        "all": [{"id": "V33-109-1", "rule": "V33-109", "message": "m", "severity": "error"}],
+    }
+    result = entry.compare_payloads(payload, json.loads(canonical(payload)), _contract())
+    assert result["verdict"] == "compared"
+    assert result["snapshot_after"]["formal_total_deduped"] == 1
+    carrier = result["snapshot_after"]["formal_carriers"]["result.issues"]
+    assert carrier["dict_format"] is True
+    assert carrier["projection_keys_excluded"] == ["all"]
+
+
 def test_evidence_loss_registered_not_zero():
     before = _payload()
     after = json.loads(canonical(before))

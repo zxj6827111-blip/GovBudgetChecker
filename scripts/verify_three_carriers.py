@@ -66,6 +66,49 @@ def _carrier_state(container: Any, key: str) -> Dict[str, Any]:
     return {"present": True, "count": None, "items": [], "missing": False, "non_list": True}
 
 
+#: 真实生产载荷的 ``result.issues`` 是**按严重度分键的 dict**
+#: （``{"error": [...], "warn": [...], "info": [...], "all": [...]}``，
+#: 见 uploads 旧任务实测）。``all`` 是 error+warn+info 的投影，读它会把
+#: 同一问题双计；其余未知键若为 list 也读入（以实际内容为准，不猜语义）。
+_ISSUES_DICT_PROJECTION_KEYS = {"all"}
+_ISSUES_DICT_SEVERITY_KEYS = ("error", "warn", "info")
+
+
+def _carrier_state_issues(container: Any, key: str) -> Dict[str, Any]:
+    """``result.issues`` 载体读取：list 形态与 dict 形态都读全。
+
+    dict 形态按严重度键取各 list（排除 ``all`` 投影防双计），登记
+    ``dict_format`` 与分键计数；键缺失/None/空 与既有语义一致。
+    """
+    state = _carrier_state(container, key)
+    if not state.get("present") or state.get("missing"):
+        return state
+    if state.get("non_list"):
+        container_dict = container if isinstance(container, dict) else {}
+        raw = container_dict.get(key)
+        if not isinstance(raw, dict):
+            return state  # 真·非 list 非 dict：保持 non_list 登记，不猜
+        items: List[Any] = []
+        key_counts: Dict[str, int] = {}
+        for name, bucket in raw.items():
+            if name in _ISSUES_DICT_PROJECTION_KEYS or not isinstance(bucket, list):
+                continue
+            key_counts[str(name)] = len(bucket)
+            items.extend(bucket)
+        state.pop("non_list", None)
+        state.update({
+            "dict_format": True,
+            "dict_key_counts": key_counts,
+            "projection_keys_excluded": sorted(
+                str(name) for name in raw
+                if name in _ISSUES_DICT_PROJECTION_KEYS and isinstance(raw.get(name), list)),
+            "count": len(items),
+            "items": items,
+        })
+        return state
+    return state
+
+
 #: 易变字段：不进入稳定内容指纹（R2-04：uuid:one→uuid:two 的同内容投影
 #: 曾因指纹含 id 被计成两个问题；采集时间戳同理）。
 _VOLATILE_CONTENT_KEYS = {"created_at", "updated_at"}
@@ -101,8 +144,8 @@ def three_carrier_snapshot(result: Any, review_report: Any, meta_coverage: Any) 
     """
     carriers = {
         "result.rule_findings": _carrier_state(result, "rule_findings"),
-        "result.issues": _carrier_state(result, "issues"),
-        "review_report.issues": _carrier_state(review_report, "issues"),
+        "result.issues": _carrier_state_issues(result, "issues"),
+        "review_report.issues": _carrier_state_issues(review_report, "issues"),
     }
     # 身份并集 + 载体归属 + 内容冲突检测
     identities: Dict[str, Dict[str, Dict[str, Any]]] = {}
@@ -180,6 +223,9 @@ def three_carrier_snapshot(result: Any, review_report: Any, meta_coverage: Any) 
                 "null_value": state.get("null_value", False),
                 "count": state["count"],
                 "legal_empty": state["present"] and state["count"] == 0,
+                "dict_format": state.get("dict_format", False),
+                "dict_key_counts": state.get("dict_key_counts"),
+                "projection_keys_excluded": state.get("projection_keys_excluded"),
             }
             for key, state in carriers.items()
         },
@@ -314,6 +360,21 @@ def selftest() -> int:
     checks.append(("主载体缺失时其余载体照常计数",
                    snapshot["formal_total_deduped"] == 2
                    and snapshot["formal_carriers"]["result.rule_findings"]["missing"] is True))
+
+    # 真实生产 dict 形态（uploads 实测）：result.issues={"error":[...],"warn":[],"info":[],"all":投影}
+    # ——all 是投影不读，error/warn/info 读全；否则真实格式漏读（QP-06 负控类）。
+    dict_issue_a = {"id": "D-1", "rule": "V33-X", "message": "m1"}
+    dict_issue_b = {"id": "D-2", "rule": "V33-X", "message": "m2"}
+    result_dict = {"issues": {"error": [dict_issue_a, dict_issue_b], "warn": [], "info": [],
+                              "all": [dict_issue_a, dict_issue_b]}}
+    snapshot = three_carrier_snapshot(result_dict, {}, {})
+    carriers = snapshot["formal_carriers"]["result.issues"]
+    checks.append(("dict形态 result.issues 独占计数且all投影不双计",
+                   snapshot["formal_total_deduped"] == 2
+                   and carriers.get("dict_format") is True
+                   and carriers["count"] == 2
+                   and carriers["dict_key_counts"] == {"error": 2, "warn": 0, "info": 0}
+                   and carriers["projection_keys_excluded"] == ["all"]))
 
     # 跨载体重复投影去重
     duplicated = {"rule_findings": [{"id": "F-1", "rule": "V33-X", "message": "m"}]}

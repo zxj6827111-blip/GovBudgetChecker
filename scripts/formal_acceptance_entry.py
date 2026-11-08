@@ -546,6 +546,23 @@ def selftest() -> Tuple[int, List[Dict[str, Any]]]:
            result["verdict"] == "compared" and total == 2,
            {"verdict": result["verdict"], "formal_total_deduped": total})
 
+    # 真实生产 dict 形态：result.issues={"error":[...],"all":投影}——all 不读，
+    # error/warn/info 读全（uploads 旧任务实测形态，QP-06 漏读负控）。
+    dict_payload = _payload(check_receipts=[])
+    dict_payload["result"]["issues"] = {
+        "error": [{"id": "V33-109-1", "rule": "V33-109", "message": "m", "severity": "error"}],
+        "warn": [], "info": [],
+        "all": [{"id": "V33-109-1", "rule": "V33-109", "message": "m", "severity": "error"}],
+    }
+    result = compare_payloads(dict_payload, json.loads(_canonical(dict_payload)), _contract())
+    total = result["snapshot_after"]["formal_total_deduped"] if result["verdict"] == "compared" else None
+    carriers = result["snapshot_after"]["formal_carriers"]["result.issues"] if result["verdict"] == "compared" else {}
+    record("真实格式漏读负控：dict 形态 result.issues 读全且 all 投影不双计",
+           result["verdict"] == "compared" and total == 1
+           and carriers.get("dict_format") is True
+           and carriers.get("projection_keys_excluded") == ["all"],
+           {"verdict": result["verdict"], "formal_total_deduped": total})
+
     # 证据丢失：after 缺 check_receipts 键 → evidence_lost，不得当 0
     before_e = _payload(rule_findings=[findings("F-1", "m")], check_receipts=receipts)
     after_e = json.loads(_canonical(before_e))
