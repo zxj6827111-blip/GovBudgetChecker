@@ -45,6 +45,11 @@
 
 门禁语义（缺字段不当空、不当匹配）：
 
+0. 模式：``mode`` 缺省 ``same_identity``（两侧同一份 expected）；
+   ``cross_generation`` 时用 ``expected_before`` / ``expected_after`` 各自
+   门禁（main 基线 vs 候选的代际与代码身份本就不同），且默认
+   ``require_same_material=true`` 强制两侧同一材料 checksum，不一致按
+   错材料拒绝。
 1. 契约声明的每个身份字段，载荷里**必须存在**（键缺失 = REJECT
    ``missing_identity_field``）；值为 null 时按可选/必选分别处理。
 2. ``optional_fields`` 列出的字段：载荷键缺失 → 登记 ``optional_missing``，
@@ -213,10 +218,15 @@ def check_gates(
     *,
     side: str,
     verify_code_tree: Optional[Path] = None,
+    expected_override: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """对单侧载荷执行全部身份门禁；输出结构化裁决，绝不静默放行。"""
+    """对单侧载荷执行全部身份门禁；输出结构化裁决，绝不静默放行。
+
+    ``expected_override`` 供 cross_generation 模式按侧取各自的期望身份；
+    默认（same_identity 模式）用契约的 ``expected``。
+    """
     identity = extract_payload_identity(payload)
-    expected = _flat_expected(contract)
+    expected = expected_override if expected_override is not None else _flat_expected(contract)
     optional = set(contract.get("optional_fields") or [])
     observed = {key: entry.get("value") for key, entry in identity.items()}
     gate_failures: List[Dict[str, Any]] = []
@@ -314,14 +324,45 @@ def compare_payloads(
     *,
     verify_code_tree: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    """门禁全过才比较；任何拒绝都返回 rejected 且不含比较结论。"""
-    gate_before = check_gates(before, contract, side="before", verify_code_tree=verify_code_tree)
-    gate_after = check_gates(after, contract, side="after", verify_code_tree=verify_code_tree)
+    """门禁全过才比较；任何拒绝都返回 rejected 且不含比较结论。
+
+    契约两种模式：
+
+    - ``same_identity``（默认）：两侧都必须等于同一份 ``expected``——用于
+      同代际双采/重放比较。
+    - ``cross_generation``：``expected_before`` / ``expected_after`` 各自
+      门禁（main 基线 vs 候选，代际与代码身份本来就不同），另加
+      ``require_same_material``（默认 true）：两侧材料 checksum 必须一致，
+      否则按错材料拒绝。
+    """
+    mode = str(contract.get("mode") or "same_identity")
+    if mode == "cross_generation":
+        expected_before = _flat_expected({"expected": contract.get("expected_before")})
+        expected_after = _flat_expected({"expected": contract.get("expected_after")})
+        gate_before = check_gates(before, contract, side="before",
+                                  verify_code_tree=verify_code_tree, expected_override=expected_before)
+        gate_after = check_gates(after, contract, side="after",
+                                 verify_code_tree=verify_code_tree, expected_override=expected_after)
+        if contract.get("require_same_material", True):
+            material_before = gate_before["observed_identity"].get("material.checksum_sha256")
+            material_after = gate_after["observed_identity"].get("material.checksum_sha256")
+            if material_before != material_after or material_before is None:
+                for gate in (gate_before, gate_after):
+                    gate["verdict"] = "REJECT"
+                    gate["gate_failures"].append({
+                        "gate": "material.cross_side", "kind": "identity_mismatch",
+                        "expected": material_before, "observed": material_after,
+                        "note": "跨代际比较要求两侧为同一材料；checksum 不一致即错材料",
+                    })
+    else:
+        gate_before = check_gates(before, contract, side="before", verify_code_tree=verify_code_tree)
+        gate_after = check_gates(after, contract, side="after", verify_code_tree=verify_code_tree)
     gates = {"before": gate_before, "after": gate_after}
     if gate_before["verdict"] != "PASS" or gate_after["verdict"] != "PASS":
         return {
             "entry": "r22-formal-acceptance",
             "contract_version": CONTRACT_VERSION,
+            "mode": mode,
             "verdict": "rejected",
             "gates": gates,
             "statement": "身份门禁未全过：不产生问题载体比较结论。",
@@ -369,6 +410,7 @@ def compare_payloads(
     return {
         "entry": "r22-formal-acceptance",
         "contract_version": CONTRACT_VERSION,
+        "mode": mode,
         "verdict": "compared",
         "gates": gates,
         "snapshot_before": snap_before,

@@ -137,3 +137,58 @@ def test_obligation_coverage_generation_gap_is_evidence_too():
     assert {"carrier": "obligation_coverage", "before_count": None,
             "after": "missing_or_null"} in result["evidence_lost"]
     assert result["zero_regression_claim"] is False
+
+
+# ---- cross_generation 模式（gold33：main 基线 vs 候选） ------------------------
+
+
+def _cross_contract():
+    return {
+        "contract_version": entry.CONTRACT_VERSION,
+        "mode": "cross_generation",
+        "expected_before": {
+            "material": {"checksum_sha256": "a" * 64},
+            "generation": {"analysis_revision": "rev-main-1"},
+            "code_identity": {"rule_registry_version": "obligations-v12-checklist-global-20261022",
+                               "rule_policy_version": "v3_3_portable"},
+            "config_identity": {"use_local_rules": True, "use_ai_assist": False, "mode": "standard"},
+        },
+        "expected_after": {
+            "material": {"checksum_sha256": "a" * 64},
+            "generation": {"analysis_revision": "rev-cand-9"},
+            "code_identity": {"rule_registry_version": "obligations-v12-checklist-global-20261022",
+                               "rule_policy_version": "v3_3_portable"},
+            "config_identity": {"use_local_rules": True, "use_ai_assist": False, "mode": "standard"},
+        },
+        "require_same_material": True,
+        "optional_fields": ["generation.parse_run_id", "generation.document_version_id"],
+        "git_commit_declared": None,
+    }
+
+
+def test_cross_generation_compares_across_revisions_same_material():
+    before = _payload(analysis_revision="rev-main-1")
+    after = _payload(analysis_revision="rev-cand-9")
+    result = entry.compare_payloads(before, after, _cross_contract())
+    assert result["verdict"] == "compared"
+    assert result["mode"] == "cross_generation"
+    assert result["gates"]["before"]["verdict"] == "PASS"
+    assert result["gates"]["after"]["verdict"] == "PASS"
+
+
+def test_cross_generation_rejects_wrong_material_even_with_valid_sides():
+    before = _payload(analysis_revision="rev-main-1")
+    after = _payload(analysis_revision="rev-cand-9", checksum="b" * 64)
+    result = entry.compare_payloads(before, after, _cross_contract())
+    assert result["verdict"] == "rejected"
+    assert any(f["gate"] == "material.cross_side" for f in result["gates"]["after"]["gate_failures"])
+    assert "snapshot_after" not in result
+
+
+def test_cross_generation_rejects_side_from_wrong_generation():
+    before = _payload(analysis_revision="rev-main-1")
+    after = _payload(analysis_revision="rev-unexpected")  # 不等于 expected_after
+    result = entry.compare_payloads(before, after, _cross_contract())
+    assert result["verdict"] == "rejected"
+    failures = {(f["gate"], f["kind"]) for f in result["gates"]["after"]["gate_failures"]}
+    assert ("generation.analysis_revision", "identity_mismatch") in failures
