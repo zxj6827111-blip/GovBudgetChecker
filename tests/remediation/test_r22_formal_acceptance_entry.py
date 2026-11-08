@@ -212,3 +212,19 @@ def test_cross_generation_rejects_side_from_wrong_generation():
     assert result["verdict"] == "rejected"
     failures = {(f["gate"], f["kind"]) for f in result["gates"]["after"]["gate_failures"]}
     assert ("generation.analysis_revision", "identity_mismatch") in failures
+
+
+def test_falsy_mode_and_optional_fields_rejected_not_defaulted():
+    """假值 mode/optional_fields 必须类型拒绝，不得 falsy 短路按缺省放行。"""
+    payload = _payload()
+    for bad_mode in ([], 0, False, "", None):
+        contract = _contract()
+        contract["mode"] = bad_mode
+        result = entry.compare_payloads(payload, json.loads(canonical(payload)), contract)
+        assert result["verdict"] == "rejected", f"mode={bad_mode!r}"
+        assert result["reject_reason"] == "contract_invalid"
+    for bad_optional in ("", 0, False, None, {}):
+        result = entry.compare_payloads(payload, json.loads(canonical(payload)),
+                                        _contract(optional_fields=bad_optional))
+        assert result["verdict"] == "rejected", f"optional_fields={bad_optional!r}"
+        assert result["reject_reason"] == "contract_invalid"

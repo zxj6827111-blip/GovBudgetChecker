@@ -289,7 +289,7 @@ def validate_contract(contract: Any) -> Dict[str, Any]:
         errors.append({"field": "contract_version", "kind": "version_mismatch",
                        "expected": CONTRACT_VERSION,
                        "observed": contract.get("contract_version")})
-    mode = contract.get("mode") or "same_identity"
+    mode = contract.get("mode", "same_identity")
     if mode not in _VALID_MODES:
         errors.append({"field": "mode", "kind": "invalid_mode",
                        "expected": list(_VALID_MODES), "observed": mode})
@@ -303,7 +303,7 @@ def validate_contract(contract: Any) -> Dict[str, Any]:
     else:
         errors.extend(_expected_identity_errors(
             contract.get("expected"), side="expected", basis=basis))
-    optional = contract.get("optional_fields") or []
+    optional = contract.get("optional_fields", [])
     if not isinstance(optional, list):
         errors.append({"field": "optional_fields", "kind": "invalid_type"})
     else:
@@ -1070,6 +1070,20 @@ def selftest() -> Tuple[int, List[Dict[str, Any]]]:
            and result["tool_identity"]["entry_script_sha256"]
            != result["tool_identity"]["component_script_sha256"],
            {"tool_identity": result.get("tool_identity")})
+
+    # FA-01 补强：假值 mode / 非 list optional_fields 不得按缺省放行
+    type_ok = True
+    for bad_mode in ([], 0, False, "", None):
+        bad_contract = _contract()
+        bad_contract["mode"] = bad_mode
+        rr = compare_payloads(base, json.loads(_canonical(base)), bad_contract)
+        type_ok = type_ok and rr["verdict"] == "rejected" and rr.get("reject_reason") == "contract_invalid"
+    for bad_optional in ("", 0, False, None, {}):
+        bad_contract = _contract()
+        bad_contract["optional_fields"] = bad_optional
+        rr = compare_payloads(base, json.loads(_canonical(base)), bad_contract)
+        type_ok = type_ok and rr["verdict"] == "rejected" and rr.get("reject_reason") == "contract_invalid"
+    record("FA-01 负控：假值 mode/optional_fields 类型拒绝（不按缺省放行）", type_ok, {})
 
     # 错误撤销：before 有 F-1，after 移除 F-1 但回执仍引用
     before_w = _payload(rule_findings=[findings("F-1", "m")], check_receipts=receipts)
