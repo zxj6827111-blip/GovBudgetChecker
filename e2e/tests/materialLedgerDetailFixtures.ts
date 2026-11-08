@@ -450,6 +450,12 @@ export const COVERAGE_AVAILABLE = {
       reason: "insufficient_data",
       reason_label: "取数不足",
       detail: "未能定位合计行",
+      // R2.2 §7 承接字段：引擎由已登记结构化缺数派生；旧结果缺键为 null/缺省。
+      card_summary: "取数不足：缺 「FIN_04_fiscal_grant_total」的total_actual/决算操作数（第19页）",
+      suggested_actions: [
+        { action: "人工核对登记的缺数位置" },
+        { action: "核对「FIN_04_fiscal_grant_total」的total_actual/决算操作数（第19页）", page: 19 },
+      ],
       blocks_gate: true,
       requires_ai: false,
       input_gaps: ["table_total"],

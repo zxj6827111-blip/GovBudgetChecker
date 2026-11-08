@@ -85,6 +85,18 @@ test.describe("WP2-B 主链：08 → 09 → 10 → 11 → 12", () => {
       "6 / 7",
     );
 
+    // R2.2 §7 承接字段：逐项明细展开后显示引擎派生的卡片摘要与建议动作
+    await page.getByTestId("gbc-material-coverage-items").click();
+    const cardSummary = page.getByTestId("gbc-material-coverage-card-summary-OBL-T-004");
+    await expect(cardSummary).toBeVisible();
+    await expect(cardSummary).toContainText("取数不足");
+    await expect(cardSummary).toContainText("FIN_04_fiscal_grant_total");
+    await expect(cardSummary).toContainText("第19页");
+    const actions = page.getByTestId("gbc-material-coverage-suggested-actions-OBL-T-004");
+    await expect(actions).toBeVisible();
+    await expect(actions).toContainText("人工核对登记的缺数位置");
+    await expect(actions).toContainText("核对「FIN_04_fiscal_grant_total」的total_actual/决算操作数（第19页）");
+
     // 12：版本与来源 Tab
     await page.getByTestId("gbc-material-detail-tab-versions").click();
     await expect(page.getByTestId("gbc-material-version-22")).toBeVisible();
