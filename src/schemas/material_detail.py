@@ -347,6 +347,12 @@ class CoverageObligationItem(BaseModel):
     candidates: List[Dict[str, Any]] = Field(default_factory=list)
     next_action: Optional[str] = None
     root_cause_key: Optional[str] = None
+    #: R2.2 计划 §7 承接字段：卡片摘要（一行人读，引擎由结构化诊断派生）。
+    #: ``None`` = 旧结果没有该字段或无诊断可摘要；展示层回退 detail/状态标签。
+    card_summary: Optional[str] = None
+    #: R2.2 计划 §7 承接字段：建议动作（首条来自 next_action 路由，其后逐个
+    #: 已登记缺数位置）。空列表 = 无建议动作；旧结果缺键同样返回空列表。
+    suggested_actions: List[Dict[str, Any]] = Field(default_factory=list)
     #: DH-03a 旧兼容字段：原样透传，只供第一阶段 UI 提示，不参与覆盖/关闭/门禁。
     #: ``None`` 表示历史结果没有该字段（允许旧匹配器回退）；新生产结果必为列表（含 []）。
     legacy_same_source_keys: Optional[List[str]] = None

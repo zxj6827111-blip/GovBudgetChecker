@@ -171,18 +171,40 @@ export function MaterialDetailCoverageTab({ coverage, aiScopeMeta }: MaterialDet
                 return (
                   <li
                     key={item.obligation_id}
-                    className="flex flex-wrap items-center gap-2 rounded-md border border-border px-3 py-2 text-sm"
+                    className="rounded-md border border-border px-3 py-2 text-sm"
                     data-testid={`gbc-material-coverage-item-${item.obligation_id}`}
                     data-obligation-status={item.status}
                   >
-                    <Badge tone={presentation.tone}>{presentation.label}</Badge>
-                    <span className="text-slate-800">{view.title}</span>
-                    {item.reason ? (
-                      <span className="text-xs text-slate-500">
-                        {presentCoverageReason(item.reason)}
-                      </span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge tone={presentation.tone}>{presentation.label}</Badge>
+                      <span className="text-slate-800">{view.title}</span>
+                      {item.reason ? (
+                        <span className="text-xs text-slate-500">
+                          {presentCoverageReason(item.reason)}
+                        </span>
+                      ) : null}
+                      <span className="ml-auto text-xs text-slate-400">{view.technicalLabel}</span>
+                    </div>
+                    {view.cardSummary ? (
+                      <p
+                        className="mt-1.5 text-xs leading-relaxed text-slate-600"
+                        data-testid={`gbc-material-coverage-card-summary-${item.obligation_id}`}
+                      >
+                        {view.cardSummary}
+                      </p>
                     ) : null}
-                    <span className="ml-auto text-xs text-slate-400">{view.technicalLabel}</span>
+                    {view.suggestedActions.length > 0 ? (
+                      <ul
+                        className="mt-1 space-y-0.5"
+                        data-testid={`gbc-material-coverage-suggested-actions-${item.obligation_id}`}
+                      >
+                        {view.suggestedActions.map((action, index) => (
+                          <li key={index} className="text-xs text-slate-500">
+                            建议：{action.action}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
                   </li>
                 );
               })}

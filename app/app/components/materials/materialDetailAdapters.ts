@@ -186,6 +186,10 @@ export interface CoverageObligationItem {
   reason: string | null;
   reason_label: string | null;
   detail: string | null;
+  /** R2.2 计划 §7 承接字段：卡片摘要；null/缺省 = 旧结果或无诊断可摘要。 */
+  card_summary?: string | null;
+  /** R2.2 计划 §7 承接字段：建议动作；缺省/空列表 = 无建议动作。 */
+  suggested_actions?: Array<{ action: string; page?: number }>;
   blocks_gate: boolean;
   requires_ai: boolean;
   input_gaps: string[];
@@ -617,12 +621,18 @@ export function presentObligationItem(item: CoverageObligationItem): {
   title: string;
   businessLabel: string;
   technicalLabel: string;
+  /** 引擎派生的卡片摘要；null = 旧结果或无诊断可摘要，展示层不编文案。 */
+  cardSummary: string | null;
+  /** 引擎派生的建议动作；空 = 无建议动作。 */
+  suggestedActions: Array<{ action: string; page?: number }>;
 } {
   const presentation = presentCoverageStatus(item.status);
   return {
     title: item.title ?? item.obligation_id,
     businessLabel: presentation.label,
     technicalLabel: [item.obligation_id, item.reason ?? item.status].filter(Boolean).join(" · "),
+    cardSummary: item.card_summary ?? null,
+    suggestedActions: item.suggested_actions ?? [],
   };
 }
 

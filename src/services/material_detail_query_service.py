@@ -1214,6 +1214,14 @@ def build_coverage(raw: Any) -> CoverageBlock:
                 candidates=[dict(value) for value in _json_list(row.get("candidates")) if isinstance(value, dict)],
                 next_action=_text_or_none(row.get("next_action")),
                 root_cause_key=_text_or_none(row.get("root_cause_key")),
+                # R2.2 计划 §7 承接字段：引擎由结构化诊断派生；旧结果没有
+                # 这两个键，同为 None/空列表，不做展示层二次推断。
+                card_summary=_text_or_none(row.get("card_summary")),
+                suggested_actions=[
+                    dict(value)
+                    for value in _json_list(row.get("suggested_actions"))
+                    if isinstance(value, dict)
+                ],
                 legacy_same_source_keys=_optional_string_list(row.get("legacy_same_source_keys")),
                 legacy_coverage_terms=_optional_string_list(row.get("legacy_coverage_terms")),
             )

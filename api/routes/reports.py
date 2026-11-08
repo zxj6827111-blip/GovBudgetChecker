@@ -665,6 +665,10 @@ def _build_check_scope_export(status_payload: Dict[str, Any]) -> Dict[str, Any]:
                     "detail": item.get("detail"),
                     "basis": item.get("basis"),
                     "gap_note": item.get("gap_note"),
+                    # R2.2 计划 §7 承接字段：导出侧同步携带卡片摘要与建议动作；
+                    # 旧结果没有这两个键，导出为 null/缺省，不补默认文案。
+                    "card_summary": item.get("card_summary"),
+                    "suggested_actions": item.get("suggested_actions"),
                 }
                 for item in coverage.get("instances", [])
                 if isinstance(item, dict)

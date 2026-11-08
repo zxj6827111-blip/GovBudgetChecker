@@ -1197,6 +1197,11 @@ class ObligationInstance:
     candidates: Tuple[Dict[str, Any], ...] = ()
     next_action: Optional[str] = None
     root_cause_key: Optional[str] = None
+    # R2.2 计划 §7 全链贯通承接字段：卡片摘要与建议动作。
+    # 只由已登记的结构化诊断派生，不为空结果编造；旧结果没有该键，
+    # 与"无诊断可摘要"同为 None/空，展示层回退既有 detail/状态标签。
+    card_summary: Optional[str] = None
+    suggested_actions: Tuple[Dict[str, Any], ...] = ()
     # DH-03a 旧兼容字段（只供第一阶段 UI 提示；不参与覆盖/关闭/待办/门禁）
     legacy_same_source_keys: Tuple[str, ...] = ()
     legacy_coverage_terms: Tuple[str, ...] = ()
@@ -1252,6 +1257,8 @@ class ObligationInstance:
             "candidates": [dict(item) for item in self.candidates],
             "next_action": self.next_action,
             "root_cause_key": self.root_cause_key,
+            "card_summary": self.card_summary,
+            "suggested_actions": [dict(item) for item in self.suggested_actions],
             "legacy_same_source_keys": list(self.legacy_same_source_keys),
             "legacy_coverage_terms": list(self.legacy_coverage_terms),
         }
@@ -1737,6 +1744,88 @@ def _pair_root_keys(instance: ObligationInstance, fields: Mapping[str, Any]) -> 
     return keys
 
 
+#: DH-02 next_action 枚举的建议动作文案（与 CheckReceipt.next_action 同一口径）。
+_NEXT_ACTION_LABELS: Dict[str, str] = {
+    "system_recheck": "等待系统重查后复核结论",
+    "tech_fix": "按登记卡点修复技术问题后重查",
+    "human_confirm": "人工核对登记的缺数位置",
+    "rerun_ai": "重跑语义复核",
+}
+
+
+def _missing_operand_phrase(operand: Mapping[str, Any]) -> Optional[str]:
+    """由已登记的缺数位置派生展示短语。
+
+    表/章节锚必须真实存在才成句；页码未知就不写页码，绝不编造。
+    """
+    source = str(operand.get("source") or "")
+    page = operand.get("page")
+    role = str(operand.get("role") or "").strip()
+    if source == "table":
+        anchor = str(operand.get("table_code") or "").strip()
+    elif source == "text":
+        anchor = str(operand.get("section") or "").strip()
+    else:
+        return None
+    if not anchor:
+        return None
+    phrase = f"「{anchor}」"
+    if role:
+        phrase += f"的{role}"
+    if isinstance(page, int) and page > 0:
+        phrase += f"（第{page}页）"
+    return phrase
+
+
+def _derive_card_summary(instance: ObligationInstance) -> Optional[str]:
+    """R2.2 计划 §7 承接字段：卡片摘要（一行人读）。
+
+    只由已登记的结构化缺数位置派生；没有可引用的缺数时回退原因中文标签，
+    两者皆无为 ``None``（旧结果没有该键，同为 None，展示层回退 detail/状态）。
+    摘要最多并列 3 个缺数位置，完整清单仍在 missing_operands。
+    """
+    label = OBLIGATION_REASON_LABELS.get(instance.reason or instance.status or "", "")
+    phrases: List[str] = []
+    for operand in instance.missing_operands:
+        text = _missing_operand_phrase(operand)
+        if text and text not in phrases:
+            phrases.append(text)
+    if phrases:
+        head = label or "取数不足"
+        return f"{head}：缺 {('、'.join(phrases[:3]))}"
+    return label or None
+
+
+def _derive_suggested_actions(instance: ObligationInstance) -> Tuple[Dict[str, Any], ...]:
+    """R2.2 计划 §7 承接字段：建议动作列表。
+
+    首条来自 DH-02 的 next_action 路由枚举，其后每条对应一个已登记的
+    缺数位置（带真实页码；页码未知不带页码键）。全部为派生文案，
+    不引入第二套原因码，也不给核对之外的虚构动作。
+    """
+    actions: List[Dict[str, Any]] = []
+    next_label = _NEXT_ACTION_LABELS.get(str(instance.next_action or ""))
+    if next_label:
+        actions.append({"action": next_label})
+    for operand in instance.missing_operands:
+        text = _missing_operand_phrase(operand)
+        if not text:
+            continue
+        action: Dict[str, Any] = {"action": f"核对{text}"}
+        page = operand.get("page")
+        if isinstance(page, int) and page > 0:
+            action["page"] = page
+        actions.append(action)
+    deduped: List[Dict[str, Any]] = []
+    seen = set()
+    for item in actions:
+        key = json.dumps(item, ensure_ascii=False, sort_keys=True)
+        if key not in seen:
+            seen.add(key)
+            deduped.append(item)
+    return tuple(deduped)
+
+
 def _attach_structured_diagnostics(
     instances: Sequence[ObligationInstance],
     *,
@@ -1805,6 +1894,8 @@ def _attach_structured_diagnostics(
                 instance.root_cause_key = min(_ai_keys) if _ai_keys else _ai_root_key(instance)
             else:
                 continue
+            instance.card_summary = OBLIGATION_REASON_LABELS.get(instance.status)
+            instance.suggested_actions = ({"action": _NEXT_ACTION_LABELS["rerun_ai"]},)
             continue
         diagnostics = []
         for rule_id in dict.fromkeys((*instance.checkers, *instance.missing_checkers)):
@@ -1831,6 +1922,8 @@ def _attach_structured_diagnostics(
         })
         # 义务级主根因键取自同一最上游回执；无规则配对时沿用聚合键。
         instance.root_cause_key = min(pair_keys) if pair_keys else summary["root_cause_key"]
+        instance.card_summary = _derive_card_summary(instance)
+        instance.suggested_actions = _derive_suggested_actions(instance)
 
 
 def build_obligation_ledger(

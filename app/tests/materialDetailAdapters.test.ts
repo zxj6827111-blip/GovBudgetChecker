@@ -32,6 +32,7 @@ import {
   materialDetailTabHref,
   partitionRunRows,
   presentAnalysisAvailability,
+  presentObligationItem,
   presentRunFindings,
   presentSlotState,
   presentTimelineCell,
@@ -43,6 +44,7 @@ import {
   resolveDetailTab,
   type AnalysisBlock,
   type CoverageBlock,
+  type CoverageObligationItem,
   type RunSummaryItem,
   type FindingsSection,
   type SlotDetailResponse,
@@ -709,6 +711,59 @@ check(
     sources: [],
     current_analysis: analysis,
   })) as SlotDetailResponse | null) !== null,
+);
+
+// ---- 检查覆盖：R2.2 承接字段（card_summary / suggested_actions） -------------
+
+const carryBase = (overrides: Record<string, unknown> = {}): CoverageObligationItem => ({
+  obligation_id: "OBL-SG-TOTAL",
+  group_id: "TABLE_INTERNAL",
+  group_title: "表内关系",
+  title: "三公经费合计核对",
+  status: "insufficient_data",
+  reason: "insufficient_data",
+  reason_label: "取数不足",
+  detail: "规则 V33-121 判定为 insufficient_data",
+  blocks_gate: true,
+  requires_ai: false,
+  input_gaps: [],
+  ...overrides,
+} as CoverageObligationItem);
+
+check(
+  "承接字段：新结果携带卡片摘要与建议动作",
+  (() => {
+    const view = presentObligationItem(
+      carryBase({
+        card_summary: "取数不足：缺 「FIN_04_fiscal_grant_total」的total_actual/决算操作数（第19页）",
+        suggested_actions: [
+          { action: "人工核对登记的缺数位置" },
+          { action: "核对「FIN_04_fiscal_grant_total」的total_actual/决算操作数（第19页）", page: 19 },
+        ],
+      }),
+    );
+    return view.cardSummary === "取数不足：缺 「FIN_04_fiscal_grant_total」的total_actual/决算操作数（第19页）"
+      && view.suggestedActions.length === 2
+      && view.suggestedActions[1].page === 19;
+  })(),
+);
+
+check(
+  "承接字段：旧结果缺键时摘要为 null、动作为空，不编文案",
+  (() => {
+    const view = presentObligationItem(carryBase());
+    return view.cardSummary === null && view.suggestedActions.length === 0;
+  })(),
+);
+
+check(
+  "承接字段：完成态空列表与无摘要照常展示技术标签",
+  (() => {
+    const view = presentObligationItem(
+      carryBase({ status: "completed", reason: null, card_summary: null, suggested_actions: [] }),
+    );
+    return view.cardSummary === null && view.suggestedActions.length === 0 && view.technicalLabel.includes("OBL-SG-TOTAL");
+  })(),
 );
 
 console.log(labeled.join("\n"));
