@@ -8,8 +8,9 @@
   引用/模板/示例（含金额整体处于引号内）、疑问一律不作零依据；支配范围覆盖
   整个零陈述句（含前缀引导句与"以下表述不成立"式指前否定），并覆盖宣告帧
   **作用域**（"以下为模板示例/假设情形"宣告后、显式闭合前的全部零陈述，
-  R2-02：作用域歧义即拒收，不存在隔句自动出框架；R3-01：冒号引出的裸
-  "示例：/模板示例："块同样建帧，支配块内全部零陈述）；
+  R2-02：作用域歧义即拒收，不存在隔句自动出框架；R3-01/R4：冒号引导片段
+  与独立标题行**结构**判据——短片段/短行内出现帧类词即建帧，帧词无需直接
+  接冒号，支配块内全部零陈述）；
 - 阶段必须匹配：决算格只接受决算语境的零声明；年初预算格不接受决算声明；
 - 年度、主体必须与材料一致，出现他年度或他主体一律拒绝；
 - 同一指标在同类语境里只要出现一条**非零水平陈述**，就不形成零证据；
@@ -86,29 +87,52 @@ _FRAME_CLOSURE_RE = re.compile(
     r"以上[^。；;]{0,16}?(?:假设|假定|示例|样例|模板|虚构|演示)"
     r"|(?:假设|假定|示例|样例|模板|虚构|演示)情形?[^。；;]{0,6}?(?:到此)?(?:结束|为止)"
     r"|到此(?:为止|结束)")
-# R3-01（第三轮复核）：裸宣告也要建帧——"模板示例：/示例："这类**冒号引出**
-# 的模板/示例块没有指前词，旧实现退回逐句检查，块内第二条零陈述漏网。
-# 句首帧名词串（可复合："模板示例"）+冒号即开启作用域；允许 ≤4 字非句读
-# 前缀（"填报示例/本模板"式），前缀含否定词的语义属"并非示例"，此处不特判
-# ——误开帧的后果是多拒收（fail-closed 方向安全）。
+# R3-01/R4（第三、四轮复核）：宣告**结构**判据——不再要求帧词直接接冒号，
+# 也不以固定前缀长度作语义依据。判据是"短冒号引导片段含帧类词"这一结构：
+# 片段 = 句首（文本开头或。；;之后）到冒号之间的无句读短片段，帧词出现在
+# 片段前部（≤16 字，覆盖"填报/关于/模板"等前后修饰），冒号距帧词 ≤24 字
+# （覆盖"样式/说明/及格式"等后置修饰——"示例样式：/模板示例说明："式）。
+# 片段超界或无帧词 → 不是宣告块，按既有逐句守卫处理。
 _FRAME_COLON_OPEN_RE = re.compile(
-    rf"(?:^|[。；;])[^。；;]{{0,4}}?(?:{_FRAME_NOUN_RE.pattern})+[：:]")
+    rf"(?:^|[。；;])[^。；;：:]{{0,16}}?(?:{_FRAME_NOUN_RE.pattern})[^。；;：:]{{0,24}}[：:]")
+# R4：独立**标题行**形态（无冒号）——整行是含帧词的短标题（"示例样式/
+# 模板示例说明"独占一行）同样开启作用域。在 raw 文本行上识别（compact 无
+# 换行结构），经 positions 映射回 compact 区间。
+_FRAME_TITLE_LINE_RE = re.compile(
+    rf"^[^。；;：:]{{0,12}}?(?:{_FRAME_NOUN_RE.pattern})[^。；;：:]{{0,12}}$")
 #: 兼容旧名：宣告帧开启形态（无 $ 锚——锚定语义已由作用域机制取代）。
 _FRAME_ANNOUNCEMENT_RE = _FRAME_ANNOUNCEMENT_OPEN_RE
 
 
-def _frame_scope_spans(compact: str) -> Tuple[Tuple[int, int], ...]:
-    """宣告帧作用域区间（R2-02）。
+def _frame_scope_spans(text: "_Text") -> Tuple[Tuple[int, int], ...]:
+    """宣告帧作用域区间（R2-02/R3-01/R4）。
 
-    每个宣告句开启一个作用域：自宣告处起，到最早的显式闭合处或文本末尾
-    为止。作用域内的零陈述一律不是本材料的事实断言——不存在"隔了几个
-    句子/段落就自动出框架"的默认豁免；作用域歧义时按拒收处理。
+    三类宣告结构各自开启作用域：自宣告处起，到最早的显式闭合处或文本
+    末尾为止——指前词宣告（以下为模板示例…）、冒号引导片段（示例样式：…
+    帧词无需直接接冒号）、独立标题行（含帧词的短行，raw 行上识别）。作用域
+    内的零陈述一律不是本材料的事实断言——不存在"隔了几个句子/段落就自动
+    出框架"的默认豁免；作用域歧义时按拒收处理。
     """
+    compact = text.compact
     spans: list = []
     for open_re in (_FRAME_ANNOUNCEMENT_OPEN_RE, _FRAME_COLON_OPEN_RE):
         for match in open_re.finditer(compact):
             closure = _FRAME_CLOSURE_RE.search(compact, match.end())
             spans.append((match.start(), closure.start() if closure else len(compact)))
+    # 独立标题行（raw 行形态）：含帧词、无句读冒号的短行 → 建帧
+    raw = text.raw
+    offset = 0
+    for line in raw.splitlines(keepends=True):
+        start, end = offset, offset + len(line)
+        offset = end
+        stripped = line.strip()
+        if not stripped or not _FRAME_TITLE_LINE_RE.match(stripped):
+            continue
+        c_start, c_end = text.compact_range(start, end)
+        if c_end <= c_start:
+            continue
+        closure = _FRAME_CLOSURE_RE.search(compact, c_start)
+        spans.append((c_start, closure.start() if closure else len(compact)))
     return tuple(spans)
 _QUOTE_PAIRS = (("“", "”"), ("\"", "\""))
 
@@ -214,8 +238,8 @@ def narrative_zero_sources(doc: Any, *, table_code: str, indicator: str,
         rf"(?:{ '|'.join(labels) })\s*(?:支出)?\s*(?:决算(?:数)?)?\s*(?:为|是)?\s*"
         r"(?P<num>\d[\d,]*(?:\.\d+)?)\s*万元"
     )
-    # R2-02：宣告帧作用域按整份说明文本计算一次（宣告句到显式闭合/文末）。
-    frame_spans = _frame_scope_spans(compact)
+    # R2-02/R4：宣告帧作用域按整份说明文本计算一次（宣告句到显式闭合/文末）。
+    frame_spans = _frame_scope_spans(text)
     zero_ranges = []
     for begin, end in _clauses(compact):
         clause = compact[begin:end]

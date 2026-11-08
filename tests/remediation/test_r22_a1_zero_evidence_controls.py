@@ -299,3 +299,50 @@ def test_r301_bare_colon_declaration_across_pages():
         report_kind="final")
     assert narrative_zero_sources(doc, table_code="FIN_07_three_public",
                                   indicator="overseas", stage="决算") is None
+
+
+def test_r401_declaration_structure_not_word_enumeration():
+    """R4（第四轮复核）：宣告判据是**结构**（短冒号引导片段含帧类词），
+    不是帧词直接接冒号、也不是枚举后置修饰词——同一帧词在标题不同位置/
+    前后修饰下都建帧，块内两条零陈述全部拒收。"""
+    declarations = (
+        "示例：", "填报示例：", "示例样式：", "模板示例说明：",
+        "关于示例的说明：", "示例样式及填表格式说明：", "本表填报格式样式示例：", "模板：",
+    )
+    for declaration in declarations:
+        text = (f"甲局2024年度部门决算。{declaration}"
+                "财政拨款公务接待费支出决算0万元。因公出国（境）费支出决算0万元。")
+        doc = _doc(text)
+        assert narrative_zero_sources(doc, table_code="FIN_07_three_public",
+                                      indicator="reception", stage="决算") is None, text
+        assert narrative_zero_sources(doc, table_code="FIN_07_three_public",
+                                      indicator="overseas", stage="决算") is None, text
+
+
+def test_r401_title_line_without_colon_opens_scope():
+    """R4：独立标题行（无冒号、含帧词的短行）同样开启非断言作用域。"""
+    doc = SimpleNamespace(
+        page_texts=["甲局2024年度部门决算。\n示例样式\n"
+                    "财政拨款公务接待费支出决算0万元。\n因公出国（境）费支出决算0万元。"],
+        fact_context=SimpleNamespace(org_name="甲局", fiscal_year=2024),
+        report_kind="final")
+    assert narrative_zero_sources(doc, table_code="FIN_07_three_public",
+                                  indicator="reception", stage="决算") is None
+    assert narrative_zero_sources(doc, table_code="FIN_07_three_public",
+                                  indicator="overseas", stage="决算") is None
+
+
+def test_r401_non_frame_colon_fragment_still_authorized():
+    """R4 正控：不含帧类词的冒号引导片段（"填报说明："）不是宣告块，
+    合法零披露照常授权；结构判据不做过头。"""
+    text = "甲局2024年度部门决算。填报说明：财政拨款公务接待费支出决算0万元。"
+    assert narrative_zero_sources(_doc(text), table_code="FIN_07_three_public",
+                                  indicator="reception", stage="决算")
+    # 冒号宣告 + 显式闭合 → 闭合后合法零披露照常授权
+    text2 = ("甲局2024年度部门决算。示例样式：接待费0万元。"
+             "以上示例仅供参考。因公出国（境）费支出决算0万元。")
+    doc2 = _doc(text2)
+    assert narrative_zero_sources(doc2, table_code="FIN_07_three_public",
+                                  indicator="reception", stage="决算") is None
+    assert narrative_zero_sources(doc2, table_code="FIN_07_three_public",
+                                  indicator="overseas", stage="决算")
