@@ -888,9 +888,10 @@ function OperationsSection({ onRefresh }: { onRefresh?: () => Promise<void> | vo
             if (jobIds.length === 0) {
               return;
             }
-            const targetPage = jobIds.length === 1 ? "detail" : "tasks";
-            const jobQuery = jobIds.length === 1 ? `&job=${encodeURIComponent(jobIds[0])}` : "";
-            window.location.assign(`/viewer/gbc-ui-demo?page=${targetPage}${jobQuery}`);
+            const target = jobIds.length === 1
+              ? `/queue?job=${encodeURIComponent(jobIds[0])}`
+              : "/queue";
+            window.location.assign(target);
           }}
         />
       ) : null}

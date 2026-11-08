@@ -1701,33 +1701,33 @@ export default function BatchUploadModal({
         switch (status) {
             case "pending":
                 return (
-                    <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                 );
             case "uploading":
             case "triggering":
                 return (
-                    <svg className="w-5 h-5 text-indigo-500 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <svg className="w-5 h-5 text-primary-500 animate-spin" fill="none" viewBox="0 0 24 24">
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                     </svg>
                 );
             case "success":
                 return (
-                    <svg className="w-5 h-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-5 h-5 text-success-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                     </svg>
                 );
             case "failed":
                 return (
-                    <svg className="w-5 h-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-5 h-5 text-danger-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                     </svg>
                 );
             case "skipped":
                 return (
-                    <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
                     </svg>
                 );
@@ -1736,21 +1736,21 @@ export default function BatchUploadModal({
 
     const getMatchBadgeClass = (fileItem: FileItem): string => {
         if (isDepartmentLevelAssignment(fileItem) && fileItem.matchSource === "manual") {
-            return "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400";
+            return "bg-success-100 text-success-700  ";
         }
         if (fileItem.matchSource === "manual") {
-            return "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400";
+            return "bg-success-100 text-success-700  ";
         }
         if (fileItem.matchConfidence === "high") {
-            return "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400";
+            return "bg-primary-100 text-primary-700  ";
         }
         if (fileItem.matchConfidence === "medium") {
-            return "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400";
+            return "bg-warning-100 text-warning-700  ";
         }
         if (fileItem.matchConfidence === "low") {
-            return "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400";
+            return "bg-warning-100 text-warning-700  ";
         }
-        return "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300";
+        return "bg-slate-100 text-slate-600  ";
     };
 
     const getMatchBadgeLabel = (fileItem: FileItem): string => {
@@ -1774,26 +1774,26 @@ export default function BatchUploadModal({
     // ── Render ──
 
     return (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm" data-testid="batch-upload-modal">
-            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90vh] flex flex-col border border-white/20 overflow-hidden animate-in zoom-in-95 duration-300">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm" data-testid="batch-upload-modal" role="dialog" aria-modal="true" aria-label="上传报告">
+            <div className="bg-white rounded-card shadow-dialog max-w-3xl w-full max-h-[90vh] flex flex-col border border-white/20 overflow-hidden animate-in zoom-in-95 duration-300">
                 {/* Header */}
-                <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200/50 dark:border-gray-700/50 bg-gradient-to-r from-indigo-50 to-purple-50 dark:from-gray-800 dark:to-gray-800">
+                <div className="flex items-center justify-between px-6 py-4 border-b border-border/50  bg-dialog-header-wash  ">
                     <div className="flex items-center space-x-3">
-                        <div className="w-8 h-8 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg flex items-center justify-center text-white shadow-lg shadow-indigo-500/30">
+                        <div className="w-8 h-8 bg-primary-600 rounded-md flex items-center justify-center text-white shadow-soft">
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                             </svg>
                         </div>
-                        <h2 className="text-xl font-bold text-gray-900 dark:text-white">
+                        <h2 className="text-xl font-bold text-slate-900 ">
                             {isScopedUpload ? "上传报告" : "批量上传文档"}
                         </h2>
                         {files.length > 0 && (
-                            <span className="px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded-full text-xs font-medium">
+                            <span className="px-2 py-0.5 bg-primary-100 text-primary-700 rounded-full text-xs font-medium">
                                 {files.length} 个文件
                             </span>
                         )}
                         {isScopedUpload && (
-                            <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs font-medium">
+                            <span className="px-2 py-0.5 bg-primary-100 text-primary-700 rounded-full text-xs font-medium">
                                 当前组织
                             </span>
                         )}
@@ -1802,7 +1802,7 @@ export default function BatchUploadModal({
                         data-testid="batch-upload-close"
                         onClick={onClose}
                         disabled={isProcessing}
-                        className="p-2 rounded-lg hover:bg-gray-200/50 dark:hover:bg-gray-700/50 text-gray-400 hover:text-gray-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="p-2 rounded-md hover:bg-slate-200/50  text-slate-400 hover:text-slate-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -1810,21 +1810,21 @@ export default function BatchUploadModal({
                     </button>
                 </div>
 
-                <div className="space-y-2 border-b border-slate-200 bg-slate-50 px-6 py-3" data-testid="batch-ai-options">
+                <div className="space-y-2 border-b border-border bg-slate-50 px-6 py-3" data-testid="batch-ai-options">
                     <div className="flex flex-wrap items-center gap-3 text-sm">
                         <span className="font-medium text-slate-700">本地检查：{useLocalRules ? "已启用" : "未启用"}</span>
                         <label className="flex items-center gap-2"><input type="checkbox" checked={aiEnabled} disabled={isProcessing || submittedJobIds.length > 0 || !aiCapabilities?.enabled} onChange={e => setAiEnabled(e.target.checked)} />大模型检查</label>
                         {aiEnabled && aiCapabilities?.profiles.length ? <select aria-label="本次检查模型" className="rounded-md border border-slate-300 bg-white px-2 py-1" value={aiProfileId} disabled={isProcessing || submittedJobIds.length > 0} onChange={e => setAiProfileId(e.target.value)}>{aiCapabilities.profiles.map(p => <option key={p.id} value={p.id}>{p.name} · {p.model}</option>)}</select> : null}
                     </div>
-                    <p className="text-xs text-slate-500">{aiConfigError || (aiCapabilities ? aiCapabilities.enabled ? "大模型会检查文档文本，进度按已处理的文本段更新。" : "大模型尚未启用，请由管理员在系统设置中添加并启用模型。" : "正在读取大模型配置…")} <a className="text-blue-600 underline" href="/settings?section=settings" target="_blank" rel="noreferrer">系统设置</a></p>
+                    <p className="text-xs text-slate-500">{aiConfigError || (aiCapabilities ? aiCapabilities.enabled ? "大模型会检查文档文本，进度按已处理的文本段更新。" : "大模型尚未启用，请由管理员在系统设置中添加并启用模型。" : "正在读取大模型配置…")} <a className="text-primary-600 underline" href="/settings?section=settings" target="_blank" rel="noreferrer">系统设置</a></p>
                 </div>
                 {/* Drop Zone */}
                 <div className="px-6 pt-4">
                     <div
                         data-testid="batch-upload-dropzone"
-                        className={`border-2 border-dashed rounded-xl p-8 text-center transition-all duration-300 cursor-pointer ${isDragging
-                            ? "border-indigo-500 bg-indigo-50/50 dark:bg-indigo-900/20 scale-[1.02]"
-                            : "border-gray-300 dark:border-gray-600 hover:border-indigo-400 hover:bg-gray-50/50 dark:hover:bg-gray-700/30"
+                        className={`border-2 border-dashed rounded-md p-8 text-center transition-all duration-300 cursor-pointer ${isDragging
+                            ? "border-primary-500 bg-primary-50/50  scale-[1.02]"
+                            : "border-slate-300  hover:border-primary-400 hover:bg-slate-50/50 "
                             }`}
                         onDragOver={handleDragOver}
                         onDragLeave={handleDragLeave}
@@ -1854,14 +1854,14 @@ export default function BatchUploadModal({
                         />
                         <div className="flex flex-col items-center">
                             <div className={`mb-3 transition-transform duration-300 ${isDragging ? "-translate-y-1" : ""}`}>
-                                <svg className="w-10 h-10 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <svg className="w-10 h-10 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                                 </svg>
                             </div>
-                            <p className="text-sm text-gray-700 dark:text-gray-300">
+                            <p className="text-sm text-slate-700 ">
                                 <strong>{isCollectingDrop ? "正在读取拖入内容" : "拖拽 PDF 或文件夹至此"}</strong>
                             </p>
-                            <p className="text-xs text-gray-500 mt-1">
+                            <p className="text-xs text-slate-500 mt-1">
                                 仅支持 PDF，最多 {MAX_FILES} 个 · 文件名和 PDF 首页会自动匹配部门或单位
                             </p>
                             <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
@@ -1873,7 +1873,7 @@ export default function BatchUploadModal({
                                         if (!isProcessing) fileInputRef.current?.click();
                                     }}
                                     disabled={isProcessing || isCollectingDrop}
-                                    className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                    className="rounded-md bg-primary-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
                                 >
                                     选择 PDF 文件
                                 </button>
@@ -1885,13 +1885,13 @@ export default function BatchUploadModal({
                                         void handleFolderSelect();
                                     }}
                                     disabled={isProcessing || isCollectingDrop}
-                                    className="rounded-lg border border-indigo-200 bg-white px-4 py-2 text-sm font-semibold text-indigo-700 transition hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                    className="rounded-md border border-primary-200 bg-white px-4 py-2 text-sm font-semibold text-primary-700 transition hover:bg-primary-50 disabled:cursor-not-allowed disabled:opacity-60"
                                 >
                                     选择文件夹
                                 </button>
                             </div>
                             {selectionNotice ? (
-                                <p data-testid="batch-upload-selection-notice" className="mt-3 text-xs font-medium text-emerald-700">
+                                <p data-testid="batch-upload-selection-notice" className="mt-3 text-xs font-medium text-success-700">
                                     {selectionNotice}
                                 </p>
                             ) : null}
@@ -1903,7 +1903,7 @@ export default function BatchUploadModal({
                 {files.length > 0 && (
                     <div className="flex-1 overflow-hidden flex flex-col px-6 pt-4 min-h-0">
                         <div className="flex items-center justify-between mb-2">
-                            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 flex items-center">
+                            <h3 className="text-sm font-semibold text-slate-700  flex items-center">
                                 <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                                 </svg>
@@ -1912,7 +1912,7 @@ export default function BatchUploadModal({
                             {!isProcessing && (
                                 <button
                                     onClick={() => setFiles([])}
-                                    className="text-xs text-gray-400 hover:text-red-500 transition-colors"
+                                    className="text-xs text-slate-400 hover:text-danger-500 transition-colors"
                                 >
                                     清空全部
                                 </button>
@@ -1920,21 +1920,21 @@ export default function BatchUploadModal({
                         </div>
 
                         {!isScopedUpload && (
-                            <div className="mb-3 rounded-xl border border-indigo-100 bg-indigo-50/60 px-3 py-3">
+                            <div className="mb-3 rounded-md border border-primary-100 bg-primary-50/60 px-3 py-3">
                                 <div className="flex flex-wrap items-center gap-2">
-                                    <span className="text-xs font-medium text-indigo-700">统一设置</span>
+                                    <span className="text-xs font-medium text-primary-700">统一设置</span>
                                     <input
                                         type="text"
                                         value={departmentFilter}
                                         onChange={(e) => setDepartmentFilter(e.target.value)}
                                         placeholder="筛选部门"
-                                        className="w-28 rounded-md border border-indigo-200 bg-white px-2 py-1 text-xs text-gray-700"
+                                        className="w-28 rounded-md border border-primary-200 bg-white px-2 py-1 text-xs text-slate-700"
                                     />
                                     <select
                                         data-testid="batch-bulk-department"
                                         value={bulkDepartmentId}
                                         onChange={(e) => handleBulkDepartmentChange(e.target.value)}
-                                        className="w-40 rounded-md border border-indigo-200 bg-white px-2 py-1 text-xs text-gray-900"
+                                        className="w-40 rounded-md border border-primary-200 bg-white px-2 py-1 text-xs text-slate-900"
                                     >
                                         <option value="">请选择部门</option>
                                         {visibleDepartments.map((department) => (
@@ -1948,7 +1948,7 @@ export default function BatchUploadModal({
                                         value={unitFilter}
                                         onChange={(e) => setUnitFilter(e.target.value)}
                                         placeholder="筛选单位"
-                                        className="w-28 rounded-md border border-indigo-200 bg-white px-2 py-1 text-xs text-gray-700"
+                                        className="w-28 rounded-md border border-primary-200 bg-white px-2 py-1 text-xs text-slate-700"
                                         disabled={!bulkDepartmentId}
                                     />
                                     <select
@@ -1956,7 +1956,7 @@ export default function BatchUploadModal({
                                         value={bulkUnitId}
                                         onChange={(e) => handleBulkUnitChange(e.target.value)}
                                         disabled={!bulkDepartmentId}
-                                        className="w-44 rounded-md border border-indigo-200 bg-white px-2 py-1 text-xs text-gray-900 disabled:bg-gray-100"
+                                        className="w-44 rounded-md border border-primary-200 bg-white px-2 py-1 text-xs text-slate-900 disabled:bg-slate-100"
                                     >
                                         <option value="">
                                             {bulkDepartmentId ? "不选单位则按部门上传" : "请先选择部门"}
@@ -1972,18 +1972,18 @@ export default function BatchUploadModal({
                                         type="button"
                                         onClick={applySelectionToAllFiles}
                                         disabled={!bulkDepartmentId}
-                                        className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                        className="rounded-md bg-primary-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
                                     >
                                         应用到全部文件
                                     </button>
                                 </div>
-                                <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-indigo-700/80">
+                                <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-primary-700/80">
                                     <span>会自动覆盖当前列表中所有文件的部门/单位。</span>
                                     {bulkDepartmentId ? (
-                                        <span className="text-indigo-600">单位可留空，留空时会按部门级上传。</span>
+                                        <span className="text-primary-600">单位可留空，留空时会按部门级上传。</span>
                                     ) : null}
                                     {rememberedSelection.departmentId ? (
-                                        <span className="text-indigo-600">
+                                        <span className="text-primary-600">
                                             已记住上次选择，后续新增文件会优先带入。
                                         </span>
                                     ) : null}
@@ -1991,12 +1991,12 @@ export default function BatchUploadModal({
                             </div>
                         )}
 
-                        <div className="flex-1 overflow-y-auto border border-gray-200/50 dark:border-gray-700/50 rounded-xl bg-gray-50/50 dark:bg-gray-900/30">
+                        <div className="flex-1 overflow-y-auto border border-border/50  rounded-md bg-slate-50/50 ">
                             {files.map((fileItem, index) => (
                                 <div
                                     key={fileItem.id}
-                                    className={`flex items-center gap-3 px-4 py-3 border-b border-gray-100 dark:border-gray-800 last:border-b-0 transition-colors ${currentIndex === index ? "bg-indigo-50/50 dark:bg-indigo-900/10" : ""
-                                        } ${fileItem.status === "success" ? "bg-green-50/30 dark:bg-green-900/10" : ""} ${fileItem.status === "failed" ? "bg-red-50/30 dark:bg-red-900/10" : ""
+                                    className={`flex items-center gap-3 px-4 py-3 border-b border-slate-100  last:border-b-0 transition-colors ${currentIndex === index ? "bg-primary-50/50 " : ""
+                                        } ${fileItem.status === "success" ? "bg-success-50/30 " : ""} ${fileItem.status === "failed" ? "bg-danger-50/30 " : ""
                                         }`}
                                 >
                                     {/* Status Icon */}
@@ -2008,17 +2008,17 @@ export default function BatchUploadModal({
                                     <div className="flex-1 min-w-0">
                                         {fileItem.versionId && liveJobs[fileItem.versionId] && <div className="mb-2">
                                             <AnalysisCheckProgress value={liveJobs[fileItem.versionId].check_progress} />
-                                            {liveJobs[fileItem.versionId].unavailable && <p className="text-xs text-amber-700">暂时无法读取进度，正在重试。</p>}
-                                            {liveJobs[fileItem.versionId].status === "error" && <p className="text-xs text-red-600">分析失败，可在任务详情中查看原因。</p>}
+                                            {liveJobs[fileItem.versionId].unavailable && <p className="text-xs text-warning-700">暂时无法读取进度，正在重试。</p>}
+                                            {liveJobs[fileItem.versionId].status === "error" && <p className="text-xs text-danger-600">分析失败，可在任务详情中查看原因。</p>}
                                         </div>}
-                                        <div className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate" title={fileItem.filename}>
+                                        <div className="text-sm font-medium text-slate-900  truncate" title={fileItem.filename}>
                                             {fileItem.filename}
                                         </div>
 
                                         {editingId === fileItem.id ? (
                                             /* Edit Mode */
                                             <div className="flex flex-wrap items-center gap-2 mt-1.5">
-                                                <label className="text-xs text-gray-500">年份:</label>
+                                                <label className="text-xs text-slate-500">年份:</label>
                                                 <input
                                                     type="text"
                                                     value={fileItem.year}
@@ -2031,10 +2031,10 @@ export default function BatchUploadModal({
                                                         });
                                                         persistRememberedSelection({ year: e.target.value });
                                                     }}
-                                                    className="w-16 px-1.5 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                                                    className="w-16 px-1.5 py-0.5 text-xs border border-slate-300  rounded bg-white  text-slate-900 "
                                                     placeholder="年份"
                                                 />
-                                                <label className="text-xs text-gray-500">类型:</label>
+                                                <label className="text-xs text-slate-500">类型:</label>
                                                 <select
                                                     value={fileItem.docType}
                                                     onChange={(e) => {
@@ -2047,17 +2047,17 @@ export default function BatchUploadModal({
                                                         });
                                                         persistRememberedSelection({ docType });
                                                     }}
-                                                    className="px-1.5 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                                                    className="px-1.5 py-0.5 text-xs border border-slate-300  rounded bg-white  text-slate-900 "
                                                 >
                                                     <option value="dept_final">决算</option>
                                                     <option value="dept_budget">预算</option>
                                                 </select>
-                                                <label className="text-xs text-gray-500">部门:</label>
+                                                <label className="text-xs text-slate-500">部门:</label>
                                                 <select
                                                     value={resolveDepartmentId(fileItem)}
                                                     disabled={isScopedUpload}
                                                     onChange={(e) => handleDepartmentChange(fileItem.id, e.target.value)}
-                                                    className="w-36 px-1.5 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                                                    className="w-36 px-1.5 py-0.5 text-xs border border-slate-300  rounded bg-white  text-slate-900 "
                                                 >
                                                     <option value="">请选择部门</option>
                                                     {visibleDepartments.map((department) => (
@@ -2066,7 +2066,7 @@ export default function BatchUploadModal({
                                                         </option>
                                                     ))}
                                                 </select>
-                                                <label className="text-xs text-gray-500">单位:</label>
+                                                <label className="text-xs text-slate-500">单位:</label>
                                                 <select
                                                     value={resolveUnitId(fileItem)}
                                                     disabled={isScopedUpload || !resolveDepartmentId(fileItem)}
@@ -2077,7 +2077,7 @@ export default function BatchUploadModal({
                                                             e.target.value
                                                         )
                                                     }
-                                                    className="w-40 px-1.5 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:bg-gray-100 dark:disabled:bg-gray-900/50"
+                                                    className="w-40 px-1.5 py-0.5 text-xs border border-slate-300  rounded bg-white  text-slate-900  disabled:bg-slate-100 "
                                                 >
                                                     <option value="">
                                                         {resolveDepartmentId(fileItem) ? "不选单位则按部门上传" : "请先选择部门"}
@@ -2095,7 +2095,7 @@ export default function BatchUploadModal({
                                                 ) : null}
                                                 <button
                                                     onClick={() => setEditingId(null)}
-                                                    className="text-xs text-indigo-600 hover:text-indigo-800 font-medium"
+                                                    className="text-xs text-primary-600 hover:text-primary-800 font-medium"
                                                 >
                                                     完成
                                                 </button>
@@ -2103,22 +2103,22 @@ export default function BatchUploadModal({
                                         ) : (
                                             /* Display Mode */
                                             <div className="flex flex-wrap items-center gap-2 mt-0.5">
-                                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400">
+                                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] bg-primary-100 text-primary-700  ">
                                                     {fileItem.year ? `${fileItem.year}年` : "年份未识别"}
                                                 </span>
                                                 <span
                                                     className={`inline-flex items-center px-1.5 py-0.5 rounded text-[11px] ${fileItem.docType === "dept_budget"
-                                                        ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
-                                                        : "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400"
+                                                        ? "bg-success-100 text-success-700  "
+                                                        : "bg-primary-100 text-primary-700  "
                                                         }`}
                                                 >
                                                     {fileItem.docType === "dept_budget" ? "预算" : "决算"}
                                                 </span>
                                                 <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[11px] ${resolveUnitId(fileItem)
-                                                    ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
+                                                    ? "bg-primary-100 text-primary-700  "
                                                     : resolveDepartmentId(fileItem)
-                                                        ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
-                                                        : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"}`}>
+                                                        ? "bg-warning-100 text-warning-700  "
+                                                        : "bg-danger-100 text-danger-700  "}`}>
                                                     {resolveUnitId(fileItem)
                                                         ? `${resolveDepartmentName(fileItem) ? `${resolveDepartmentName(fileItem)} / ` : ""}${fileItem.orgName || orgMap.get(resolveUnitId(fileItem))?.name || "当前单位"}`
                                                         : resolveDepartmentId(fileItem)
@@ -2131,17 +2131,17 @@ export default function BatchUploadModal({
                                                     {getMatchBadgeLabel(fileItem)}
                                                 </span>
                                                 {fileItem.matchHint && (
-                                                    <span className="text-[11px] text-gray-500 dark:text-gray-400 truncate max-w-[260px]" title={fileItem.matchHint}>
+                                                    <span className="text-[11px] text-slate-500  truncate max-w-[260px]" title={fileItem.matchHint}>
                                                         {fileItem.matchHint}
                                                     </span>
                                                 )}
                                                 {fileItem.metadataHint && (
-                                                    <span className={`text-[11px] ${needsMetadataConfirmation(fileItem) ? "text-orange-700" : "text-gray-500 dark:text-gray-400"}`}>
+                                                    <span className={`text-[11px] ${needsMetadataConfirmation(fileItem) ? "text-warning-700" : "text-slate-500 "}`}>
                                                         {fileItem.metadataHint}
                                                     </span>
                                                 )}
                                                 {fileItem.message && (
-                                                    <span className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                                                    <span className="text-xs text-slate-500  truncate">
                                                         {fileItem.message}
                                                     </span>
                                                 )}
@@ -2150,7 +2150,7 @@ export default function BatchUploadModal({
                                                         type="button"
                                                         data-testid={`batch-confirm-metadata-${fileItem.id}`}
                                                         onClick={() => confirmFileMetadata(fileItem.id)}
-                                                        className="rounded-md border border-orange-300 bg-orange-50 px-2 py-1 text-[11px] font-medium text-orange-800 hover:bg-orange-100"
+                                                        className="rounded-md border border-warning-300 bg-warning-50 px-2 py-1 text-[11px] font-medium text-warning-800 hover:bg-warning-100"
                                                     >
                                                         确认年度和类型
                                                     </button>
@@ -2160,7 +2160,7 @@ export default function BatchUploadModal({
                                                         type="button"
                                                         data-testid={`batch-confirm-organization-${fileItem.id}`}
                                                         onClick={() => confirmFileOrganization(fileItem.id)}
-                                                        className="rounded-md border border-orange-300 bg-orange-50 px-2 py-1 text-[11px] font-medium text-orange-800 hover:bg-orange-100"
+                                                        className="rounded-md border border-warning-300 bg-warning-50 px-2 py-1 text-[11px] font-medium text-warning-800 hover:bg-warning-100"
                                                     >
                                                         确认材料归属
                                                     </button>
@@ -2174,7 +2174,7 @@ export default function BatchUploadModal({
                                         <div className="flex items-center gap-1 flex-shrink-0">
                                             <button
                                                 onClick={() => setEditingId(editingId === fileItem.id ? null : fileItem.id)}
-                                                className="p-1.5 rounded-lg hover:bg-gray-200/50 dark:hover:bg-gray-700/50 text-gray-400 hover:text-indigo-600 transition-colors"
+                                                className="p-1.5 rounded-md hover:bg-slate-200/50  text-slate-400 hover:text-primary-600 transition-colors"
                                                 title="编辑"
                                             >
                                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2183,7 +2183,7 @@ export default function BatchUploadModal({
                                             </button>
                                             <button
                                                 onClick={() => removeFile(fileItem.id)}
-                                                className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 text-gray-400 hover:text-red-500 transition-colors"
+                                                className="p-1.5 rounded-md hover:bg-danger-50  text-slate-400 hover:text-danger-500 transition-colors"
                                                 title="删除"
                                             >
                                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2201,13 +2201,13 @@ export default function BatchUploadModal({
                 {/* Progress Bar */}
                 {isProcessing && (
                     <div className="px-6 pt-3">
-                        <div className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                        <div className="w-full h-2 bg-slate-200  rounded-full overflow-hidden">
                             <div
-                                className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-500 ease-out"
+                                className="h-full bg-gradient-to-r from-primary-500 to-primary-500 transition-all duration-500 ease-out"
                                 style={{ width: `${progress.percent}%` }}
                             />
                         </div>
-                        <p className="text-xs text-gray-500 text-center mt-1.5">
+                        <p className="text-xs text-slate-500 text-center mt-1.5">
                             进度: {progress.completed}/{progress.total} ({progress.percent}%)
                         </p>
                     </div>
@@ -2216,19 +2216,19 @@ export default function BatchUploadModal({
                 {/* Stats */}
                 {!isProcessing && progress.completed > 0 && (
                     <div className="px-6 pt-3 flex items-center justify-center gap-6 text-sm">
-                        <span className="flex items-center gap-1 text-green-600">
+                        <span className="flex items-center gap-1 text-success-600">
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                             </svg>
                             成功: {stats.success}
                         </span>
-                        <span className="flex items-center gap-1 text-red-500">
+                        <span className="flex items-center gap-1 text-danger-500">
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                             </svg>
                             失败: {stats.failed}
                         </span>
-                        <span className="flex items-center gap-1 text-gray-400">
+                        <span className="flex items-center gap-1 text-slate-400">
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
                             </svg>
@@ -2238,13 +2238,13 @@ export default function BatchUploadModal({
                 )}
 
                 {/* Footer Actions */}
-                <div className="flex items-center justify-between px-6 py-4 border-t border-gray-200/50 dark:border-gray-700/50 mt-2">
+                <div className="flex items-center justify-between px-6 py-4 border-t border-border/50  mt-2">
                     <div className="flex items-center gap-2">
-                        {!isProcessing && submittedJobIds.length > 0 && <button type="button" onClick={() => void onComplete(submittedJobIds)} className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white">查看分析任务</button>}
+                        {!isProcessing && submittedJobIds.length > 0 && <button type="button" onClick={() => void onComplete(submittedJobIds)} className="rounded-md bg-primary-600 px-4 py-2 text-sm font-semibold text-white">查看分析任务</button>}
                         <button
                             onClick={onClose}
                             disabled={isProcessing}
-                            className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             {progress.completed > 0 && !isProcessing ? "关闭" : "取消"}
                         </button>
@@ -2253,7 +2253,7 @@ export default function BatchUploadModal({
                                 data-testid="batch-retry-failed"
                                 type="button"
                                 onClick={retryFailedFiles}
-                                className="px-4 py-2 text-sm font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 rounded-xl transition-colors"
+                                className="px-4 py-2 text-sm font-medium text-warning-700 bg-warning-50 hover:bg-warning-100 rounded-md transition-colors"
                             >
                                 仅重试失败项 ({stats.failed})
                             </button>
@@ -2277,7 +2277,7 @@ export default function BatchUploadModal({
                                         ? `有 ${pendingConfirmationCount} 份材料尚未确认年度、类型或归属信息`
                                         : ""
                             }
-                            className="px-6 py-2.5 text-sm font-semibold text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 rounded-xl shadow-lg shadow-indigo-500/30 hover:shadow-xl hover:shadow-indigo-500/40 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none flex items-center gap-2"
+                            className="px-6 py-2.5 text-sm font-semibold text-white bg-primary-600 hover:bg-primary-700 rounded-md shadow-soft transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none flex items-center gap-2"
                         >
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
@@ -2286,7 +2286,7 @@ export default function BatchUploadModal({
                             {isScopedUpload ? "开始上传" : "开始批量上传"} ({files.filter((f) => f.status === "pending").length})
                         </button>
                     ) : (
-                        <div className="flex items-center gap-2 text-sm text-indigo-600 dark:text-indigo-400 font-medium">
+                        <div className="flex items-center gap-2 text-sm text-primary-600  font-medium">
                             <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
                                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />

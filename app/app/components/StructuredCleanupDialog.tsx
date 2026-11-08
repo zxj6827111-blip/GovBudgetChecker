@@ -185,15 +185,15 @@ function SectionCard({
 }) {
   const toneClass =
     tone === "emerald"
-      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+      ? "border-success-200 bg-success-50 text-success-800"
       : tone === "info"
         ? "border-info-200 bg-info-50 text-info-800"
         : tone === "amber"
-          ? "border-amber-200 bg-amber-50 text-amber-800"
-          : "border-slate-200 bg-slate-50 text-slate-800";
+          ? "border-warning-200 bg-warning-50 text-warning-800"
+          : "border-border bg-slate-50 text-slate-800";
 
   return (
-    <div className={`rounded-2xl border p-4 ${toneClass}`}>
+    <div className={`rounded-md border p-4 ${toneClass}`}>
       <div className="text-xs font-semibold uppercase tracking-[0.18em] opacity-70">{title}</div>
       <div className="mt-2 text-3xl font-bold tabular-nums">{formatCount(count)}</div>
       <div className="mt-1 text-sm opacity-80">{subtitle}</div>
@@ -221,7 +221,7 @@ function ScopeBadge({
         {getReportKindLabel(kind)}
       </span>
       {departmentName ? (
-        <span className="inline-flex items-center rounded-full bg-amber-50 px-2 py-1 font-medium text-amber-700">
+        <span className="inline-flex items-center rounded-full bg-warning-50 px-2 py-1 font-medium text-warning-700">
           {TEXT.dept}：{departmentName}
         </span>
       ) : null}
@@ -243,13 +243,13 @@ function JobCard({
 }) {
   const accentClass =
     accent === "emerald"
-      ? "border-emerald-200 bg-emerald-50/50"
+      ? "border-success-200 bg-success-50/50"
       : accent === "info"
         ? "border-info-200 bg-info-50/50"
-        : "border-slate-200 bg-white";
+        : "border-border bg-white";
 
   return (
-    <div className={`rounded-2xl border p-4 ${accentClass}`}>
+    <div className={`rounded-md border p-4 ${accentClass}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold text-slate-900">
@@ -270,7 +270,7 @@ function JobCard({
         </div>
       </div>
       {item.latest_filename && item.latest_job_id ? (
-        <div className="mt-3 rounded-xl border border-white/70 bg-white/70 px-3 py-2 text-xs text-slate-600">
+        <div className="mt-3 rounded-md border border-white/70 bg-white/70 px-3 py-2 text-xs text-slate-600">
           {TEXT.keepTarget}：{item.latest_filename}，job {String(item.latest_job_id).slice(0, 8)}
         </div>
       ) : null}
@@ -289,10 +289,10 @@ function VersionGroupCard({
   const toneClass =
     tone === "info"
       ? "border-info-200 bg-info-50/60"
-      : "border-amber-200 bg-amber-50/60";
+      : "border-warning-200 bg-warning-50/60";
 
   return (
-    <div className={`rounded-2xl border p-4 ${toneClass}`}>
+    <div className={`rounded-md border p-4 ${toneClass}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="text-sm font-semibold text-slate-900">
@@ -308,7 +308,7 @@ function VersionGroupCard({
             </div>
           ) : null}
           {item.reason ? (
-            <div className="mt-2 inline-flex rounded-full bg-white/80 px-2 py-1 text-[11px] font-medium text-amber-700">
+            <div className="mt-2 inline-flex rounded-full bg-white/80 px-2 py-1 text-[11px] font-medium text-warning-700">
               {getSkippedReasonLabel(item.reason)}
             </div>
           ) : null}
@@ -367,7 +367,10 @@ export default function StructuredCleanupDialog({
   return (
     <div
       data-testid="structured-cleanup-dialog"
-      className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-label="清理旧版入库"
+      className="fixed inset-0 z-[120] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
       onClick={() => {
         if (!isExecuting) {
           onClose();
@@ -375,15 +378,15 @@ export default function StructuredCleanupDialog({
       }}
     >
       <div
-        className="flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-[28px] border border-white/60 bg-surface-50 shadow-dialog"
+        className="flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-card border border-white/60 bg-surface-50 shadow-dialog"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="relative overflow-hidden border-b border-slate-200/80 bg-dialog-header-wash px-8 py-7">
+        <div className="relative shrink-0 border-b border-border/80 bg-dialog-header-wash px-6 py-5">
           <div className="max-w-3xl">
             <div className="inline-flex rounded-full border border-info-200 bg-white/80 px-3 py-1 text-xs font-semibold tracking-[0.18em] text-info-700">
               {TEXT.preview}
             </div>
-            <h2 className="mt-3 text-3xl font-semibold tracking-tight text-slate-900">
+            <h2 className="mt-2 text-xl font-semibold text-slate-900">
               {scopeLabel}
               {TEXT.scopeSuffix}
             </h2>
@@ -419,7 +422,7 @@ export default function StructuredCleanupDialog({
             />
           </div>
 
-          <div className="mt-5 rounded-2xl border border-slate-200 bg-white px-5 py-4 text-sm text-slate-600">
+          <div className="mt-5 rounded-md border border-border bg-white px-5 py-4 text-sm text-slate-600">
             <div className="flex flex-wrap items-center gap-4">
               <span>{TEXT.scannedJobs}：{formatCount(preview.scanned_job_count)}</span>
               <span>{TEXT.scopeCount}：{formatCount(preview.scope_count)}</span>
@@ -439,7 +442,7 @@ export default function StructuredCleanupDialog({
                   <JobCard key={`kept:${item.job_id}`} item={item} accent="emerald" />
                 ))
               ) : (
-                <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-5 py-8 text-sm text-slate-500">
+                <div className="rounded-md border border-dashed border-slate-300 bg-white px-5 py-8 text-sm text-slate-500">
                   {TEXT.noKeptReports}
                 </div>
               )}
@@ -461,7 +464,7 @@ export default function StructuredCleanupDialog({
                   />
                 ))
               ) : (
-                <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-5 py-8 text-sm text-slate-500">
+                <div className="rounded-md border border-dashed border-slate-300 bg-white px-5 py-8 text-sm text-slate-500">
                   {TEXT.noCleanup}
                 </div>
               )}
@@ -492,8 +495,8 @@ export default function StructuredCleanupDialog({
                 <h3 className="text-lg font-semibold text-slate-900">{TEXT.skippedGroup}</h3>
                 <span className="text-xs font-medium text-slate-500">{TEXT.skippedGroupDesc}</span>
               </div>
-              <div className="mt-4 rounded-2xl border border-slate-200 bg-white">
-                <div className="grid grid-cols-[minmax(0,1.3fr)_minmax(0,0.9fr)_minmax(0,1.4fr)] gap-4 border-b border-slate-200 px-5 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+              <div className="mt-4 rounded-md border border-border bg-white">
+                <div className="grid grid-cols-[minmax(0,1.3fr)_minmax(0,0.9fr)_minmax(0,1.4fr)] gap-4 border-b border-border px-5 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
                   <div>{TEXT.colFile}</div>
                   <div>{TEXT.colVersion}</div>
                   <div>{TEXT.colReason}</div>
@@ -524,7 +527,7 @@ export default function StructuredCleanupDialog({
           ) : null}
         </div>
 
-        <div className="flex items-center justify-between gap-4 border-t border-slate-200 bg-white px-8 py-5">
+        <div className="flex items-center justify-between gap-4 border-t border-border bg-white px-8 py-5">
           <div className="text-sm text-slate-500">
             {canConfirm ? TEXT.footerReady : TEXT.footerEmpty}
           </div>
@@ -534,7 +537,7 @@ export default function StructuredCleanupDialog({
               data-testid="structured-cleanup-close"
               onClick={onClose}
               disabled={isExecuting}
-              className="rounded-xl border border-slate-200 bg-slate-100 px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
+              className="rounded-md border border-border bg-slate-100 px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {TEXT.close}
             </button>
@@ -544,7 +547,7 @@ export default function StructuredCleanupDialog({
                 data-testid="structured-cleanup-confirm"
                 onClick={onConfirm}
                 disabled={isExecuting}
-                className="inline-flex items-center rounded-xl bg-primary-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex items-center rounded-md bg-primary-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isExecuting ? TEXT.executing : TEXT.confirm}
               </button>

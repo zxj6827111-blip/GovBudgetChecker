@@ -40,6 +40,8 @@ const GUARDED_DIRS = [
 /** 存量组件逐文件纳入守卫（收敛完成后即锁定，防止回退）。 */
 const GUARDED_FILES = [
   "app/components/StructuredCleanupDialog.tsx",
+  "app/components/BatchUploadModal.tsx",
+  "app/components/ReanalyzeProgressDialog.tsx",
   "app/components/OrganizationTree.tsx",
   "app/components/admin/SystemManagementPanel.tsx",
   "app/components/admin/UserManagementPanel.tsx",
@@ -49,6 +51,9 @@ const GUARDED_FILES = [
 
 /** 系统设置页的面板：已统一到设计令牌，比基础守卫多锁语义色、字重、圆角和近黑底色。 */
 const SETTINGS_SURFACE_FILES = [
+  "app/components/BatchUploadModal.tsx",
+  "app/components/ReanalyzeProgressDialog.tsx",
+  "app/components/StructuredCleanupDialog.tsx",
   "app/components/OrganizationTree.tsx",
   "app/components/admin/SystemManagementPanel.tsx",
   "app/components/admin/UserManagementPanel.tsx",

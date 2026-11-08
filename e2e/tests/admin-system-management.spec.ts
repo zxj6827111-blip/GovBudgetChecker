@@ -507,6 +507,7 @@ test.describe("Admin system management actions", () => {
     await page.getByTestId("admin-section-users").click();
     await expect(page.getByTestId("admin-users-panel")).toBeVisible({ timeout: 20_000 });
 
+    await page.getByTestId("admin-users-toggle-create").click();
     await page.getByTestId("admin-users-new-username").fill("new-user");
     await page.getByTestId("admin-users-new-password").fill("secret123");
     await page.getByTestId("admin-users-new-org-unit-001").check();
@@ -585,7 +586,7 @@ test.describe("Admin system management actions", () => {
     await expect.poll(() => state.analysisListRequests.length).toBeGreaterThan(requestCount);
   });
 
-  test("operations buttons call the expected maintenance APIs", async ({ page }) => {
+  test("operations buttons call the expected maintenance APIs", async ({ page }, testInfo) => {
     test.setTimeout(90_000);
     const state = initialState();
     await openSettings(page, state);
@@ -595,6 +596,7 @@ test.describe("Admin system management actions", () => {
 
     await page.getByTestId("admin-operations-open-upload").click();
     await expect(page.getByTestId("batch-upload-modal")).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("settings-upload-modal.png") });
     await page.getByTestId("batch-upload-close").click();
     await expect(page.getByTestId("batch-upload-modal")).toHaveCount(0);
 
@@ -611,6 +613,7 @@ test.describe("Admin system management actions", () => {
       },
     ]);
     await expect(page.getByTestId("reanalyze-progress-dialog")).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("settings-reanalyze-dialog.png") });
     await page.getByTestId("reanalyze-progress-close").click();
 
     await page.getByTestId("admin-operations-repair-preview").click();
@@ -634,6 +637,7 @@ test.describe("Admin system management actions", () => {
     await page.getByTestId("admin-operations-cleanup-preview").click();
     await expect.poll(() => state.cleanupBodies.at(-1)).toEqual({ dry_run: true });
     await expect(page.getByTestId("structured-cleanup-dialog")).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("settings-cleanup-dialog.png") });
     await page.getByTestId("structured-cleanup-confirm").click();
     await expect.poll(() => state.cleanupBodies.at(-1)).toEqual({ dry_run: false });
   });

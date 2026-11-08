@@ -99,6 +99,80 @@ async function installSettingsMocks(page: Page, options: SettingsMockOptions) {
 }
 
 test.describe("Settings page (Task 8.4)", () => {
+  test("adding a user opens only on request and can be collapsed", async ({ page }) => {
+    await page.context().addCookies([sessionCookie]);
+    await installSettingsMocks(page, { isAdmin: true });
+    await page.goto("/settings?section=users");
+    const toggle = page.getByTestId("admin-users-toggle-create");
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByTestId("admin-users-create-panel")).toHaveCount(0);
+    await toggle.click();
+    await expect(page.getByTestId("admin-users-new-username")).toBeVisible();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await toggle.click();
+    await expect(page.getByTestId("admin-users-create-panel")).toHaveCount(0);
+    await expect(page.getByTestId("admin-users-row-admin")).toBeVisible();
+  });
+
+  for (const width of [1280, 1440]) {
+    test(`template forms remain within the panel at ${width}px`, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width, height: 1000 });
+      await page.context().addCookies([sessionCookie]);
+      await installSettingsMocks(page, { isAdmin: true });
+      await page.route("**/api/admin/templates", (route) => route.fulfill({
+        json: { sources: [], drafts: [], bindings: [], current: [], audit: [], packages: [{
+          id: "package-1", version: "2025.1", report_kind: "final", source_report_year: 2025,
+          content_sha256: "a".repeat(64), capability_scope: { writing_auto: true, position_checks: true },
+        }] },
+      }));
+      await page.goto("/settings?section=templates");
+      await page.getByRole("button", { name: "4. 年度适用", exact: true }).click();
+      await page.getByLabel("年度发布包").selectOption("package-1");
+      const panel = page.getByTestId("template-step-3");
+      await expect(panel.getByText("目标年度的能力兼容验证", { exact: true })).toBeVisible();
+      const overflow = await panel.evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        return [...element.querySelectorAll("input,select,textarea")]
+          .filter((field) => field.getBoundingClientRect().width > 0)
+          .filter((field) => {
+            const b = field.getBoundingClientRect();
+            return b.left < box.left - 1 || b.right > box.right + 1;
+          }).length;
+      });
+      expect(overflow).toBe(0);
+      await page.screenshot({ path: testInfo.outputPath(`templates-${width}.png`), fullPage: true });
+    });
+  }
+
+  test("settings upload completion opens the current queue", async ({ page }) => {
+    test.setTimeout(60_000);
+    await page.context().addCookies([sessionCookie]);
+    await installSettingsMocks(page, { isAdmin: true });
+    await page.route("**/api/organizations/list", (route) => route.fulfill({ json: { organizations: [
+      { id: "org-edu", name: "市教育局", level: "department", parent_id: null },
+      { id: "org-school", name: "市第一中学", level: "unit", parent_id: "org-edu" },
+    ] } }));
+    await page.route("**/api/ai/capabilities", (route) => route.fulfill({ json: { enabled: false, profiles: [] } }));
+    await page.route("**/api/documents/preflight", (route) => route.fulfill({ json: { report_year: 2026, doc_type: "dept_budget" } }));
+    await page.route("**/api/documents/upload", (route) => route.fulfill({ json: { id: "settings-upload-1" } }));
+    await page.route("**/api/documents/settings-upload-1/run", (route) => route.fulfill({ json: { job_id: "settings-upload-1", status: "started" } }));
+    await page.goto("/settings?section=operations");
+    await page.getByTestId("admin-operations-open-upload").click();
+    await expect(page.getByRole("dialog", { name: "上传报告" })).toBeVisible();
+    await page.getByTestId("batch-upload-file-input").setInputFiles({
+      name: "市第一中学2026预算.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4\n%%EOF\n"),
+    });
+    await expect(page.getByTestId("batch-bulk-department").locator("option[value='org-edu']")).toHaveCount(1);
+    await page.getByTestId("batch-bulk-department").selectOption("org-edu");
+    await page.getByTestId("batch-bulk-unit").selectOption("org-school");
+    await page.getByTestId("batch-apply-all").click();
+    const confirmation = page.locator('[data-testid^="batch-confirm-metadata-"]');
+    if (await confirmation.count()) await confirmation.first().click();
+    await expect(page.getByTestId("batch-start")).toBeEnabled();
+    await page.getByTestId("batch-start").click();
+    await expect(page).toHaveURL(/\/queue\?job=settings-upload-1$/);
+  });
+
   test("admin sees the embedded system management panel with real org count", async ({ page }) => {
     await page.context().addCookies([sessionCookie]);
     await installSettingsMocks(page, { isAdmin: true });

@@ -1317,6 +1317,7 @@ class R33114_EmptyTableStatementCheck(Rule):
         issues: List[Issue] = []
         org = self._extract_organization(doc)
         org_label = org if org else "本单位"
+        unresolved: List[str] = []
 
         # 定义需要检查的空表
         empty_tables = [
@@ -1333,7 +1334,11 @@ class R33114_EmptyTableStatementCheck(Rule):
             for table_name in empty_tables:
                 if table_name in page_text:
                     # 检查表格是否为空（只有表头，没有数据）
-                    tables = doc.page_tables[page_num] if page_num < len(doc.page_tables) else []
+                    try:
+                        tables = _empty_note_page_tables(doc, page_num + 1, table_name)
+                    except RuleDeferred:
+                        unresolved.append(f"第{page_num + 1}页【{table_name}】多表身份未能唯一对应")
+                        continue
                     is_empty_table = False
 
                     if tables:
@@ -1389,6 +1394,9 @@ class R33114_EmptyTableStatementCheck(Rule):
                             severity="error"
                         ))
 
+        if unresolved:
+            raise RuleDeferred(self.code, "; ".join(unresolved), partial_issues=issues,
+                               unresolved_reasons=unresolved)
         return issues
 
 
@@ -1409,6 +1417,36 @@ _EMPTY_NOTE_TABLES = (
 _EMPTY_NOTE_KEYWORDS = ("三公", "政府性基金", "国有资本")
 
 
+def _empty_note_page_tables(doc: Document, page: int, table_name: str) -> List[List[List[str]]]:
+    """只取目标表的物理片段，不能用同页另一张空表判当前表为空。
+
+    正式解析有表种身份时直接使用；兼容旧产物时，仅在标题顺序与物理表一一对应时
+    按顺序配对。无法唯一配对的多表页交人工核实，不任意选最大表或任意一张空表。
+    """
+    from src.services.obligation_finding_coverage import _table_codes_in
+
+    codes = _table_codes_in(table_name)
+    artifact = getattr(doc, "parse_artifact", None)
+    fragments = getattr(artifact, "table_fragments", []) if artifact is not None else []
+    identified = [table.rows for table in fragments
+                  if table.page_number == page and table.table_code in codes]
+    if identified:
+        return identified
+    tables = doc.page_tables[page - 1] if page <= len(doc.page_tables) else []
+    text = _compact_page(doc, page)
+    titles = sorted((match.start(), keyword) for keyword, pattern in _EMPTY_NOTE_TABLES
+                    for match in re.finditer(pattern, text))
+    if len(tables) == 1 and len(titles) <= 1:
+        return tables
+    if len(titles) == len(tables):
+        indices = [index for index, (_, keyword) in enumerate(titles) if keyword in table_name]
+        if len(indices) == 1:
+            return [tables[indices[0]]]
+    if tables:
+        raise RuleDeferred("V33-114", "同页多张表的身份未能唯一对应，不能据其他表的空白判断当前表为空")
+    return []
+
+
 def _empty_table_note_present(page_text: str, keywords: Sequence[str]) -> bool:
     """该页是否有针对这张表的空表说明（V33-109 / V33-114 共用口径）。
 
@@ -1416,10 +1454,31 @@ def _empty_table_note_present(page_text: str, keywords: Sequence[str]) -> bool:
     必须在表下写空表说明；第七部分写“无三公经费支出”不能代替表下说明。说明按句判：
     一句话不能跨“。”去凑关键词与“无”字，点名另一张表的“故本表无数据”也不算本表的。
     """
-    text = str(page_text or "")
-    sentences = [s for s in re.split(r"(?<=。)", text) if s.strip()]
+    text = "".join(unicodedata.normalize("NFKC", str(page_text or "")).split())
     own = [kw for kw in keywords if kw != "相关"]
     others = [kw for kw in _EMPTY_NOTE_KEYWORDS if not any(kw in mine or mine in kw for mine in own)]
+
+    # 简短的“本表无数据”靠表名确定对象，只能读取本表标题之后、下一张表/说明章节之前。
+    # 不能只看整页是否出现关键词，否则同页其他表的说明、表前说明也会被借来放行。
+    titles = sorted(
+        (match.start(), match.end(), keyword)
+        for keyword, pattern in _EMPTY_NOTE_TABLES
+        for match in re.finditer(pattern, text)
+    )
+    target = next((entry for entry in titles if any(
+        entry[2] in kw or kw in entry[2] for kw in own
+    )), None)
+    anchored = target is not None
+    if target:
+        end = next((start for start, _, _ in titles if start >= target[1]), len(text))
+        text = text[target[1]:end]
+        chapter = re.search(r"第[一二三四五六七八九十]+部分|[一二三四五六七八九十]+、[^。]{0,100}情况说明", text)
+        if chapter:
+            text = text[:chapter.start()]
+    elif titles:
+        # 仅出现另一张表，不能把它的说明用作当前表的说明。
+        return False
+    sentences = [s for s in re.split(r"(?<=。)", text) if s.strip()]
 
     def names_other_table(sentence: str) -> bool:
         return any(kw in sentence for kw in others)
@@ -1434,8 +1493,8 @@ def _empty_table_note_present(page_text: str, keywords: Sequence[str]) -> bool:
                 return True
         if names_other_table(sentence):
             continue
-        # 「…故本表无数据」+ 页首表名锚：句子没点名别的表时，算本页这张表的说明
-        if "故本表无数据" in sentence and any(kw in text[:200] for kw in keywords):
+        # 表下“注：本表无数据。”与不带“注：/故”的短句均有效，不要求重复完整表名。
+        if anchored and re.search(r"(?:故)?本表(?:无数据|为空表|无发生额)", sentence):
             return True
         # 通式兜底：「本年度没有…收入和支出，故本表无数据」（表名关键词可能断行）
         if re.search(r"没有[^。]{0,60}(收入和支出|收支)[^。]{0,20}故本表无数据", sentence, flags=re.S):
@@ -3927,12 +3986,16 @@ class R33109_EmptyTables_Statement(Rule):
             p = _get_first_anchor_page(doc, nm)
             if not p:
                 continue
-            table = _largest_table_on_page(doc.page_tables[p - 1])
-            if not table:
+            try:
+                tables = _empty_note_page_tables(doc, p, nm)
+            except RuleDeferred:
+                unresolved.append(f"表【{nm}】所在页(P{p})多表身份未能唯一对应")
+                continue
+            if not tables:
                 unresolved.append(f"表【{nm}】所在页(P{p})未解析到有效表格")
                 continue
             vals = []
-            for row in table:
+            for row in (row for table in tables for row in table):
                 for cell in row[1:]:
                     v = parse_number(cell)
                     if v is not None:

@@ -91,6 +91,7 @@ export default function UserManagementPanel({
   const [loading, setLoading] = useState(true);
   const [busyUsername, setBusyUsername] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [showCreateForm, setShowCreateForm] = useState(false);
   const [newUsername, setNewUsername] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newUserAdmin, setNewUserAdmin] = useState(false);
@@ -270,6 +271,7 @@ export default function UserManagementPanel({
       setNewUserAdmin(false);
       setNewUserReadOnly(false);
       setNewUserOrganizationIds([]);
+      setShowCreateForm(false);
       setMessage(`用户 ${payload.username} 已创建`);
       await loadData();
     } catch (createError) {
@@ -415,9 +417,21 @@ export default function UserManagementPanel({
       ) : null}
 
       {/* 分栏按视口断点判断：两层侧栏占去约 530px，xl 下表格只剩不到 300px，所以到 2xl 才并排。 */}
-      <div className="grid gap-5 2xl:grid-cols-[360px_minmax(0,1fr)] 2xl:items-start">
-        <Card title="添加用户" desc="创建系统账号，并按需授予管理员或组织访问范围。">
-          <form className="grid gap-3 md:grid-cols-2 2xl:grid-cols-1" onSubmit={createUser}>
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm text-slate-500">管理现有账号，或按需添加新用户。</p>
+        <Button
+          data-testid="admin-users-toggle-create"
+          aria-expanded={showCreateForm}
+          aria-controls="admin-users-create-form"
+          disabled={submitting}
+          onClick={() => setShowCreateForm((value) => !value)}
+        >
+          {showCreateForm ? "收起添加用户" : "添加用户"}
+        </Button>
+      </div>
+      <div className={showCreateForm ? "grid gap-5 2xl:grid-cols-[360px_minmax(0,1fr)] 2xl:items-start" : "grid gap-5"}>
+        {showCreateForm ? <Card title="添加用户" desc="创建系统账号，并按需授予管理员或组织访问范围。" data-testid="admin-users-create-panel">
+          <form id="admin-users-create-form" className="grid gap-3 md:grid-cols-2 2xl:grid-cols-1" onSubmit={createUser}>
             <input
               data-testid="admin-users-new-username"
               value={newUsername}
@@ -477,7 +491,7 @@ export default function UserManagementPanel({
               </Button>
             </div>
           </form>
-        </Card>
+        </Card> : null}
 
         <div className="min-w-0 space-y-4">
           {error ? (

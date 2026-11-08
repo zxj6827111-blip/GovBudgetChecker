@@ -1,0 +1,18 @@
+{
+  "revision": "R10_20261108",
+  "parent": "R9",
+  "authorization": "2026-11-08用户裁定：决算九表必备；三公、政府性基金、国有资本经营空表均须表下说明。当前用户要求将全部未完成项落地并验证。",
+  "changed_sample": "GS-2025-05",
+  "changed_checks": [
+    "GS-S01"
+  ],
+  "old_annotation_sha256": "f9500d93226f6d76822e3b05b7dc732d481e5c90eaa555a90e88f1a6f3673fb2",
+  "new_annotation_sha256": "307ae44246d22a25d99d19d4739d2072a0d20b7b0611843cd23654c5d55cbf93",
+  "source_sha256": "a0d15e2e14ac06a1e990ce480087ad6187c08446918bbe7c6a7b4f5c8d29fa00",
+  "original_frozen_untouched": true,
+  "review": "Codex已比对原件第14、20页并渲染核查；非新增独立盲标验收",
+  "rules": "三公正文无支出不豁免表下说明；GS-T07/GS-N07的无发生额口径不变。",
+  "metadata_only": [
+    "GS-2025-05:F01 scan/occurrences，既有序号问题补核验元数据"
+  ]
+}
