@@ -40,6 +40,11 @@ ATTR_RECORD_MISSING = "record_missing"
 ATTR_TECH_UNRESOLVED = "tech_unresolved"
 ATTR_OUT_OF_SCOPE = "out_of_scope"
 ATTR_RESOLVED_BEFORE_THIS_PLAN = "resolved_before_this_plan"
+# R3-02（第三轮复核）：纠正旧误通过——main 父规则曾以完成态放行（pass）但该
+# 子关系**没有回执**（比较循环实际跳过：知产 CROSS 购置费实证，basic.amount
+# 为 None）。after 该子关系为未完成时，当前未知的原因是"父规则完成≠子关系
+# 完成"这一旧假象被纠正，不得归为 resolved_before。
+ATTR_CORRECTED_PREVIOUS_SKIP = "corrected_previous_skip"
 
 #: 维度三：人工处理状态（轻路径：无独立局部态）。
 MANUAL_UNPROCESSED = "unprocessed"
@@ -94,6 +99,10 @@ def derive_attribution(
       也不能凭 before 已完成就无视后续不可见）；
     - 修复前已完成、修复后**退化出现 finding** → resolved_before + 新发现
       同时入账（R2-05：resolved_before 不得单独吞掉 after 退化出的技术缺口）；
+    - 修复前已完成、修复后**存在但未完成**（unknown）→ resolved_before
+      （历史）+ 技术仍未解（当前缺口）同时入账（R3-02：当前未知不得只记
+      "此前已解决"；before 无子回执、父规则曾 pass 的跳过形态由采集层
+      另标 corrected_previous_skip）；
     - 修复前未完成、修复后完成且发现问题 → 本轮操作数恢复 + 新发现问题；
     - 修复前未完成、修复后完成通过 → 本轮操作数恢复；
     - 修复前后都未完成 → 技术仍未解；标记范围外的 → 范围外（附加）；
@@ -110,6 +119,12 @@ def derive_attribution(
         return [ATTR_RECORD_MISSING]
     if before_done:
         after_findings = bool(after.get("findings_count")) or bool(after.get("has_confirmed_findings"))
+        after_done = after_status == "completed" or after_status == "not_applicable"
+        if not after_done:
+            # R3-02：after 存在但未完成（unknown/insufficient 等）——当前缺口
+            # 必须有准确原因。历史结论（resolved_before）可以保留，但当前
+            # 未解状态必须同时入账，不得只记"此前已解决"。
+            return [ATTR_RESOLVED_BEFORE_THIS_PLAN, ATTR_TECH_UNRESOLVED]
         if after_findings:
             before_findings = bool(before.get("findings_count")) or bool(before.get("has_confirmed_findings"))
             if before_findings:
@@ -160,6 +175,7 @@ def aggregate_three_dimensions(
         ATTR_TECH_UNRESOLVED,
         ATTR_OUT_OF_SCOPE,
         ATTR_RESOLVED_BEFORE_THIS_PLAN,
+        ATTR_CORRECTED_PREVIOUS_SKIP,
     )}
     manual_counts: Dict[str, int] = {
         MANUAL_UNPROCESSED: 0,

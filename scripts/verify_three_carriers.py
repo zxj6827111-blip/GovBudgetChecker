@@ -217,6 +217,22 @@ def three_carrier_snapshot(result: Any, review_report: Any, meta_coverage: Any) 
     }
 
 
+def _input_identity(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """提取输入身份字段（R3 复核§五.1）：checksum / analysis_basis_token。
+
+    本组件是**问题载体统计组件**：只比较正式问题载体的规范化内容，不做
+    材料/代际/配置身份门禁——身份字段在这里仅透出供外层正式验收入口使用，
+    身份不一致时本组件输出不得当作跨材料/跨代际的比较结论。
+    """
+    status = payload.get("status") if isinstance(payload.get("status"), dict) else payload
+    identity: Dict[str, Any] = {}
+    for field in ("checksum", "analysis_basis_token"):
+        value = status.get(field) if isinstance(status, dict) else None
+        if value is not None:
+            identity[field] = str(value)
+    return identity
+
+
 def _snapshot_from_status(path: Path) -> Dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     status = payload.get("status") if isinstance(payload.get("status"), dict) else payload
@@ -224,7 +240,11 @@ def _snapshot_from_status(path: Path) -> Dict[str, Any]:
     report = status.get("review_report") if isinstance(status.get("review_report"), dict) else {}
     meta = result.get("meta") if isinstance(result.get("meta"), dict) else {}
     coverage = meta.get("obligation_coverage") if isinstance(meta.get("obligation_coverage"), dict) else {}
-    return three_carrier_snapshot(result, report, coverage)
+    snapshot = three_carrier_snapshot(result, report, coverage)
+    identity = _input_identity(payload)
+    if identity:
+        snapshot["input_identity"] = identity
+    return snapshot
 
 
 def scan(record_path: Path) -> int:
@@ -240,15 +260,32 @@ def compare(before_path: Path, after_path: Path) -> int:
     content_changes = sorted(
         identity for identity in set(before_contents) & set(after_contents)
         if _canonical(before_contents[identity]) != _canonical(after_contents[identity]))
+    identity_before, identity_after = before.get("input_identity"), after.get("input_identity")
+    identity_fields = sorted(set(identity_before or {}) | set(identity_after or {}))
+    identity_match: Any = None
+    if identity_fields:
+        identity_match = all(
+            (identity_before or {}).get(field) == (identity_after or {}).get(field)
+            for field in identity_fields)
+    statement = ("双采一致仅证明采集确定性；不构成独立验收结论，"
+                 "不得据此签发'零回归'（R2.2 §8.1）。"
+                 "本组件是问题载体统计组件：不做材料/代际/配置身份门禁，"
+                 "正式比较须由具备身份门禁并经独立核验的外层入口完成。")
+    if identity_match is False:
+        statement = ("输入身份字段不一致（checksum/analysis_basis_token）——"
+                     "两份输入不属同一材料/代际，本组件的问题载体内容比较"
+                     "**不构成**跨材料/跨代际结论；") + statement
     print(json.dumps({
         "deterministic_identical": identical,
+        "input_identity_before": identity_before,
+        "input_identity_after": identity_after,
+        "input_identity_match": identity_match,
         "content_changed_identities": content_changes,
         "before_formal_total": before["formal_total_deduped"],
         "after_formal_total": after["formal_total_deduped"],
         "conflicts_before": before["conflicts"],
         "conflicts_after": after["conflicts"],
-        "statement": ("双采一致仅证明采集确定性；不构成独立验收结论，"
-                      "不得据此签发'零回归'（R2.2 §8.1）。"),
+        "statement": statement,
     }, ensure_ascii=False, indent=2))
     return 0
 

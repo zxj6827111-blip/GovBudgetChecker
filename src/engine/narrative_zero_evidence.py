@@ -8,7 +8,8 @@
   引用/模板/示例（含金额整体处于引号内）、疑问一律不作零依据；支配范围覆盖
   整个零陈述句（含前缀引导句与"以下表述不成立"式指前否定），并覆盖宣告帧
   **作用域**（"以下为模板示例/假设情形"宣告后、显式闭合前的全部零陈述，
-  R2-02：作用域歧义即拒收，不存在隔句自动出框架）；
+  R2-02：作用域歧义即拒收，不存在隔句自动出框架；R3-01：冒号引出的裸
+  "示例：/模板示例："块同样建帧，支配块内全部零陈述）；
 - 阶段必须匹配：决算格只接受决算语境的零声明；年初预算格不接受决算声明；
 - 年度、主体必须与材料一致，出现他年度或他主体一律拒绝；
 - 同一指标在同类语境里只要出现一条**非零水平陈述**，就不形成零证据；
@@ -85,6 +86,13 @@ _FRAME_CLOSURE_RE = re.compile(
     r"以上[^。；;]{0,16}?(?:假设|假定|示例|样例|模板|虚构|演示)"
     r"|(?:假设|假定|示例|样例|模板|虚构|演示)情形?[^。；;]{0,6}?(?:到此)?(?:结束|为止)"
     r"|到此(?:为止|结束)")
+# R3-01（第三轮复核）：裸宣告也要建帧——"模板示例：/示例："这类**冒号引出**
+# 的模板/示例块没有指前词，旧实现退回逐句检查，块内第二条零陈述漏网。
+# 句首帧名词串（可复合："模板示例"）+冒号即开启作用域；允许 ≤4 字非句读
+# 前缀（"填报示例/本模板"式），前缀含否定词的语义属"并非示例"，此处不特判
+# ——误开帧的后果是多拒收（fail-closed 方向安全）。
+_FRAME_COLON_OPEN_RE = re.compile(
+    rf"(?:^|[。；;])[^。；;]{{0,4}}?(?:{_FRAME_NOUN_RE.pattern})+[：:]")
 #: 兼容旧名：宣告帧开启形态（无 $ 锚——锚定语义已由作用域机制取代）。
 _FRAME_ANNOUNCEMENT_RE = _FRAME_ANNOUNCEMENT_OPEN_RE
 
@@ -97,9 +105,10 @@ def _frame_scope_spans(compact: str) -> Tuple[Tuple[int, int], ...]:
     句子/段落就自动出框架"的默认豁免；作用域歧义时按拒收处理。
     """
     spans: list = []
-    for match in _FRAME_ANNOUNCEMENT_OPEN_RE.finditer(compact):
-        closure = _FRAME_CLOSURE_RE.search(compact, match.end())
-        spans.append((match.start(), closure.start() if closure else len(compact)))
+    for open_re in (_FRAME_ANNOUNCEMENT_OPEN_RE, _FRAME_COLON_OPEN_RE):
+        for match in open_re.finditer(compact):
+            closure = _FRAME_CLOSURE_RE.search(compact, match.end())
+            spans.append((match.start(), closure.start() if closure else len(compact)))
     return tuple(spans)
 _QUOTE_PAIRS = (("“", "”"), ("\"", "\""))
 

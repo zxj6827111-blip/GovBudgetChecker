@@ -161,3 +161,82 @@ def test_r205_recovery_quality_splits_by_evidence_nature(tmp_path):
     assert q["independent_amount_comparison"] == 1
     assert q["applicability_judgment"] == 1
     assert q["unspecified"] == 0
+
+
+def test_r302_before_done_after_unknown_keeps_current_gap_reason():
+    """R3-02：before 关系 pass、after 同一关系 unknown → 归因不得只有
+    resolved_before——当前未解（tech_unresolved）必须同时入账。"""
+    attributions = derive_attribution({"status": "completed"},
+                                      {"status": "insufficient_data"})
+    assert ATTR_RESOLVED_BEFORE_THIS_PLAN in attributions
+    assert ATTR_TECH_UNRESOLVED in attributions
+
+
+def test_r302_parent_rule_pass_never_completes_new_subrelation(tmp_path):
+    """R3-02（审核方真实形态）：before 无子回执、父规则曾 pass、after 子关系
+    unknown → 归因=仍未解+纠正旧误通过，不得标 resolved_before；
+    after 完成时历史标签语义不变。"""
+    import importlib.util
+    import json
+
+    script = pathlib.Path(__file__).resolve().parents[2] / "scripts" / "phase0_r22_target_relations.py"
+    spec = importlib.util.spec_from_file_location("r3_probe_module", script)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    before = {"head_commit": "before", "targets": [{"job_uuid": "j", "rules": {
+        "V33-X": {"status": "pass", "relations": []}}}]}
+    after = {"head_commit": "after", "targets": [{"job_uuid": "j", "rules": {
+        "V33-X": {"status": "insufficient_data", "relations": [
+            {"relation_id": "r1", "status": "insufficient_data"}]}}}]}
+    b, a = tmp_path / "b.json", tmp_path / "a.json"
+    b.write_text(json.dumps(before), encoding="utf-8")
+    a.write_text(json.dumps(after), encoding="utf-8")
+    out = tmp_path / "stats.json"
+    mod._run_relations_stats(str(b), str(a), str(out))
+    stats = json.loads(out.read_text(encoding="utf-8"))
+    rel = stats["relations"][0]
+    assert rel["engine_dimension"] == "unknown"
+    assert "corrected_previous_skip" in rel["attributions"]
+    assert "tech_unresolved" in rel["attributions"]
+    assert "resolved_before_this_plan" not in rel["attributions"]
+    assert stats["attribution"]["corrected_previous_skip"] == 1
+
+    # after 完成（pass）时：main 规则级完成 + after 完成 → resolved_before 不变
+    after_done = {"head_commit": "after", "targets": [{"job_uuid": "j", "rules": {
+        "V33-X": {"status": "pass", "relations": [
+            {"relation_id": "r1", "status": "pass"}]}}}]}
+    a2 = tmp_path / "a2.json"
+    a2.write_text(json.dumps(after_done), encoding="utf-8")
+    mod._run_relations_stats(str(b), str(a2), str(out))
+    stats2 = json.loads(out.read_text(encoding="utf-8"))
+    assert stats2["relations"][0]["attributions"] == ["resolved_before_this_plan"]
+
+
+def test_r302_no_real_unknown_left_with_historical_only_label(tmp_path):
+    """R3-02 收口判据：真实交付统计里不得再有 engine=unknown 且归因仅为
+    resolved_before 的关系（审核方 actual_unknown_historical_only 控制对应）。"""
+    import importlib.util
+    import json
+
+    script = pathlib.Path(__file__).resolve().parents[2] / "scripts" / "phase0_r22_target_relations.py"
+    spec = importlib.util.spec_from_file_location("r3_probe_module2", script)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    before = {"head_commit": "before", "targets": [{"job_uuid": "j", "rules": {
+        "V33-X": {"status": "pass", "relations": [
+            {"relation_id": "r1", "status": "pass"}]}}}]}
+    after = {"head_commit": "after", "targets": [{"job_uuid": "j", "rules": {
+        "V33-X": {"status": "insufficient_data", "relations": [
+            {"relation_id": "r1", "status": "insufficient_data"}]}}}]}
+    b, a = tmp_path / "b.json", tmp_path / "a.json"
+    b.write_text(json.dumps(before), encoding="utf-8")
+    a.write_text(json.dumps(after), encoding="utf-8")
+    out = tmp_path / "stats.json"
+    mod._run_relations_stats(str(b), str(a), str(out))
+    stats = json.loads(out.read_text(encoding="utf-8"))
+    offenders = [r for r in stats["relations"]
+                 if r["engine_dimension"] == "unknown"
+                 and r["attributions"] == ["resolved_before_this_plan"]]
+    assert offenders == []

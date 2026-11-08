@@ -263,3 +263,39 @@ def test_unbalanced_table_still_blocks():
         values, {}, {"overseas", "reception", "vehicle_purchase"}, {}, "万元")
     assert confirmed is False
     assert "总" in note or "1.85" in note
+
+
+def test_r301_bare_colon_declaration_opens_frame_scope():
+    """R3-01（第三轮复核）：冒号引出的裸宣告（无指前词）同样建立非断言
+    作用域——块内**每一条**零陈述拒收，第二条不再漏网。"""
+    for declaration in ("模板示例：", "示例：", "假设：", "填报示例："):
+        text = (f"甲局2024年度部门决算。{declaration}"
+                "财政拨款公务接待费支出决算0万元。因公出国（境）费支出决算0万元。")
+        doc = _doc(text)
+        assert narrative_zero_sources(doc, table_code="FIN_07_three_public",
+                                      indicator="reception", stage="决算") is None, text
+        assert narrative_zero_sources(doc, table_code="FIN_07_three_public",
+                                      indicator="overseas", stage="决算") is None, text
+
+
+def test_r301_bare_colon_declaration_explicit_closure_reopens():
+    """R3-01 正控：冒号宣告块以显式闭合结束后，其后合法零披露照常授权；
+    块内语句仍拒收。"""
+    text = ("甲局2024年度部门决算。示例：财政拨款公务接待费支出决算0万元。"
+            "以上示例仅供参考。因公出国（境）费支出决算0万元。")
+    doc = _doc(text)
+    assert narrative_zero_sources(doc, table_code="FIN_07_three_public",
+                                  indicator="reception", stage="决算") is None
+    assert narrative_zero_sources(doc, table_code="FIN_07_three_public",
+                                  indicator="overseas", stage="决算")
+
+
+def test_r301_bare_colon_declaration_across_pages():
+    """R3-01：冒号宣告跨页未闭合 → 下页零陈述仍在作用域内（歧义拒收）。"""
+    doc = _doc2 = SimpleNamespace(
+        page_texts=["甲局2024年度部门决算。模板示例：",
+                    "因公出国（境）费支出决算0万元。"],
+        fact_context=SimpleNamespace(org_name="甲局", fiscal_year=2024),
+        report_kind="final")
+    assert narrative_zero_sources(doc, table_code="FIN_07_three_public",
+                                  indicator="overseas", stage="决算") is None

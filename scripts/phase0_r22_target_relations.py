@@ -280,6 +280,7 @@ def _git_head(repo_root: Path) -> str:
 
 def _run_relations_stats(before_path: str, after_path: str, output: str) -> None:
     from src.services.remediation_statistics import (
+        ATTR_CORRECTED_PREVIOUS_SKIP, ATTR_TECH_UNRESOLVED,
         aggregate_three_dimensions, derive_attribution, engine_dimension)
     before = json.loads(Path(before_path).read_text(encoding="utf-8"))
     after = json.loads(Path(after_path).read_text(encoding="utf-8"))
@@ -341,8 +342,17 @@ def _run_relations_stats(before_path: str, after_path: str, output: str) -> None
         # 比较实际跑过）→ resolved_before_this_plan，不冒领恢复。
         if b is None and a is not None:
             before_status = before_rule_status.get(key.rsplit("::", 1)[0], "")
-            if before_status in ("pass", "fail", "not_applicable"):
+            after_done = str((a or {}).get("status") or "") in ("completed", "not_applicable")
+            if before_status in ("pass", "fail", "not_applicable") and after_done:
+                # main 规则级已完成且 after 完成 → 历史已解决（不冒领恢复）。
                 attributions = ["resolved_before_this_plan"]
+            elif before_status in ("pass", "not_applicable") and not after_done:
+                # R3-02：父规则曾以完成态放行但该子关系在 main **无回执**
+                # （比较循环实际跳过）——不能推断"此前已完成"。当前未解的
+                # 准确原因=纠正旧误通过，附仍未解状态。
+                attributions = [ATTR_TECH_UNRESOLVED, ATTR_CORRECTED_PREVIOUS_SKIP]
+            # before 规则级 fail 且 after 未完成：main 未曾解决该子关系，
+            # 保留 derive_attribution 的当前缺口归因，不强行贴历史标签。
         relations.append({
             "relation_id": key,
             "status": status,
