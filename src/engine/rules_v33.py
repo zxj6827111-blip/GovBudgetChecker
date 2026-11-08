@@ -1310,33 +1310,7 @@ class R33114_EmptyTableStatementCheck(Rule):
             if prefix in table_name:
                 keywords = kws
                 break
-        for kw in keywords:
-            # 方法1（R33109）：「注：…无(关键词)…故本表无数据」
-            if re.search(
-                rf"注[：:].{{0,30}}{kw}.{{0,50}}(无|空表|不存在|无数据|故本表无数据)",
-                page_text,
-                flags=re.S | re.M,
-            ):
-                return True
-            # 方法2（R33109）：「故本表无数据」+ 页首表名锚
-            if re.search(r"故本表无数据", page_text) and kw in page_text[:200]:
-                return True
-            # 方法3：「（本年度）没有…收支/支出」+「故本表无数据」（说明：前缀形态）
-            if re.search(
-                rf"(?:本年度|本年)?没有[^。]{{0,60}}{kw}[^。]{{0,40}}故本表无数据",
-                page_text,
-                flags=re.S,
-            ):
-                return True
-        # 通式兜底：「本年度没有…收入和支出，故本表无数据」（表名关键词
-        # 可能在换行/断字中，但同页存在该表且说明自述无收支）
-        if re.search(
-            r"没有[^。]{0,60}(收入和支出|收支)[^。]{0,20}故本表无数据",
-            page_text,
-            flags=re.S,
-        ):
-            return True
-        return False
+        return _empty_table_note_present(page_text, keywords)
 
     def apply(self, doc: Document) -> List[Issue]:
         """检查空表是否缺少相应的说明"""
@@ -1400,13 +1374,129 @@ class R33114_EmptyTableStatementCheck(Rule):
                         else:
                             expected_statement = f"注：{org_label}无相关支出，故本表无数据。"
 
+                        location = {"page": page_num + 1, "table": table_name}
+                        refs = _empty_table_source_refs(doc, page_num + 1, table_name)
+                        if refs:
+                            location["table_refs"] = refs
                         issues.append(self._issue(
                             f"空表缺少说明：{table_name}为空表，但缺少相应的说明。建议添加：{expected_statement}",
-                            {"page": page_num + 1, "table": table_name},
+                            location,
                             severity="error"
                         ))
 
         return issues
+
+
+# ---------------------------------------------------------------------------
+# 结构类问题的原文证据：缺表、空表无说明都要能在原件上逐字核验（2026-11-08 用户裁定
+# 二者进“必须处理”）。证据只取原页原文字面量，由 rule_source_binding 绑定为原件片段；
+# 取不到页内唯一的原文就不给，问题按原样留在待核实，不拿系统概述充当原文。
+# ---------------------------------------------------------------------------
+
+#: 三张“无数据须附空表说明”的表：表名原文与说明关键词。
+_EMPTY_NOTE_TABLES = (
+    ("三公", r"(?:一般公共预算)?财政拨款[“”\"']?三公[“”\"']?经费支出决算表"),
+    ("政府性基金", r"政府性基金预算财政拨款收入支出决算表"),
+    ("国有资本经营", r"国有资本经营预算财政拨款收入支出决算表"),
+)
+
+
+_EMPTY_NOTE_KEYWORDS = ("三公", "政府性基金", "国有资本")
+
+
+def _empty_table_note_present(page_text: str, keywords: Sequence[str]) -> bool:
+    """该页是否有针对这张表的空表说明（V33-109 / V33-114 共用口径）。
+
+    三公、政府性基金、国有资本经营三张表口径统一（2026-11-08 用户裁定）：表为空就
+    必须在表下写空表说明；第七部分写“无三公经费支出”不能代替表下说明。说明按句判：
+    一句话不能跨“。”去凑关键词与“无”字，点名另一张表的“故本表无数据”也不算本表的。
+    """
+    text = str(page_text or "")
+    sentences = [s for s in re.split(r"(?<=。)", text) if s.strip()]
+    own = [kw for kw in keywords if kw != "相关"]
+    others = [kw for kw in _EMPTY_NOTE_KEYWORDS if not any(kw in mine or mine in kw for mine in own)]
+
+    def names_other_table(sentence: str) -> bool:
+        return any(kw in sentence for kw in others)
+
+    for sentence in sentences:
+        for kw in keywords:
+            # 「注：…（关键词）…无/空表/本表无数据」——同一句之内
+            if re.search(rf"注[：:][^。]{{0,30}}{kw}[^。]{{0,50}}(无|空表|不存在|无数据)", sentence, flags=re.S):
+                return True
+            # 「（本年度）没有…（关键词）…故本表无数据」（“说明：”前缀形态）
+            if re.search(rf"(?:本年度|本年)?没有[^。]{{0,60}}{kw}[^。]{{0,40}}故本表无数据", sentence, flags=re.S):
+                return True
+        if names_other_table(sentence):
+            continue
+        # 「…故本表无数据」+ 页首表名锚：句子没点名别的表时，算本页这张表的说明
+        if "故本表无数据" in sentence and any(kw in text[:200] for kw in keywords):
+            return True
+        # 通式兜底：「本年度没有…收入和支出，故本表无数据」（表名关键词可能断行）
+        if re.search(r"没有[^。]{0,60}(收入和支出|收支)[^。]{0,20}故本表无数据", sentence, flags=re.S):
+            return True
+    return False
+
+
+def _compact_page(doc: Document, page: int) -> str:
+    texts = getattr(doc, "page_texts", None) or []
+    if not isinstance(page, int) or not 1 <= page <= len(texts):
+        return ""
+    return "".join(ch for ch in unicodedata.normalize("NFKC", str(texts[page - 1] or ""))
+                   if not ch.isspace())
+
+
+def _empty_table_source_refs(doc: Document, page: int, table_name: str) -> List[Dict[str, Any]]:
+    """空表所在页的表名原文与“注：本表反映…”原句（页内唯一才用）。"""
+    spec = next(((keyword, title) for keyword, title in _EMPTY_NOTE_TABLES if keyword in table_name), None)
+    compact = _compact_page(doc, page)
+    if spec is None or not compact:
+        return []
+    keyword, title_pattern = spec
+    refs = []
+    title = re.search(title_pattern, compact)
+    if title and compact.count(title.group()) == 1:
+        refs.append({"page": page, "span": title.group(), "role": "空表表名", "table": table_name})
+    for note in re.finditer(r"注[:：]本表反映[^。]{0,80}。", compact):
+        if keyword in note.group() and compact.count(note.group()) == 1:
+            refs.append({"page": page, "span": note.group(), "role": "表下注释", "table": table_name})
+            break
+    return refs
+
+
+def _missing_table_source_refs(doc: Document, table_name: str) -> Tuple[List[Dict[str, Any]], str]:
+    """缺表的原文证据：目录里列着该表的那一行；目录没列时取正文“第二部分…决算表”标题。
+
+    返回 (引用, 说明句)。目录行按表身份（表代码）认，不按序号或页码；同页不唯一的
+    字面量不用。
+    """
+    from src.services.obligation_finding_coverage import _table_codes_in
+
+    codes = _table_codes_in(table_name)
+    if len(codes) != 1:
+        return [], ""
+    texts = getattr(doc, "page_texts", None) or []
+    toc_pages = [index + 1 for index, text in enumerate(texts[:6]) if re.search(r"目\s*录", str(text or ""))]
+    for page in toc_pages:
+        compact = _compact_page(doc, page)
+        for line in str(texts[page - 1] or "").splitlines():
+            literal = "".join(ch for ch in unicodedata.normalize("NFKC", line) if not ch.isspace())
+            core = re.sub(r"^(?:[一二三四五六七八九十]+[、.]|\d+[、.]|[(（][一二三四五六七八九十\d]+[)）])", "", literal)
+            core = re.sub(r"[.·…]*\d*$", "", core)
+            if not core.endswith("表") or _table_codes_in(core) != codes or compact.count(literal) != 1:
+                continue
+            return ([{"page": page, "span": literal, "role": "目录所列表名", "table": table_name}],
+                    f"目录第{page}页列有“{literal}”，正文决算表部分未见该表。")
+    for page in range(1, len(texts) + 1):
+        if page in toc_pages:
+            continue
+        compact = _compact_page(doc, page)
+        heading = re.search(r"第二部分[^。]{0,40}?决算表", compact)
+        if heading and compact.count(heading.group()) == 1:
+            return ([{"page": page, "span": heading.group(), "role": "决算表部分标题", "table": table_name}],
+                    f"第{page}页“{heading.group()}”部分未见该表。")
+    return [], ""
+
 
 class R33002_NineTablesCheck(Rule):
     code, severity = "V33-002", "error"
@@ -1443,7 +1533,12 @@ class R33002_NineTablesCheck(Rule):
             if any(any(b - a > 1 for a, b in zip(sorted(pages), sorted(pages)[1:], strict=False)) for _name, pages in duplicates):
                 raise RuleDeferred(self.code, "必备表缺失且其他表在不连续页重复出现，表种身份冲突待确认")
         for nm in missing:
-            issues.append(self._issue(f"缺失表：{nm}", {"table": nm}, severity="error"))
+            # 九张表单位、部门一律必备，缺一张就是正式问题；证据绑目录所列表名（或决算表部分标题）原文。
+            refs, detail = _missing_table_source_refs(doc, nm)
+            location = {"table": nm}
+            if refs:
+                location.update(page=refs[0]["page"], table_refs=refs)
+            issues.append(self._issue(f"缺失表：{nm}" + (f"。{detail}" if detail else ""), location, severity="error"))
 
         # 重复 - 跨页表格常见，不再提示
         # for nm, pgs in duplicates:
@@ -3853,31 +3948,19 @@ class R33109_EmptyTables_Statement(Rule):
                     table_keywords = ["国有资本经营", "国有资本"]
                 
                 # 检查是否有针对该表的空表说明
-                has_statement = False
-                
-                # 方法1: 检查"注："说明中是否包含该表的关键词
-                for kw in table_keywords:
-                    # 检查格式："注：XXX无XXX（关键词）XXX，故本表无数据"
-                    pattern = rf"注[：:].{{0,30}}{kw}.{{0,50}}(无|空表|不存在|无数据|故本表无数据)"
-                    if re.search(pattern, current_page_text, flags=re.S | re.M):
-                        has_statement = True
-                        break
-                
-                # 方法2: 如果该页有"注：XXX故本表无数据"，且页面标题是该表名，也算有说明
-                if not has_statement:
-                    if re.search(r"故本表无数据", current_page_text):
-                        # 确认页面标题是该表
-                        for kw in table_keywords:
-                            if kw in current_page_text[:200]:  # 检查页面开头
-                                has_statement = True
-                                break
-                
+                # 与 V33-114 同一口径（_empty_table_note_present）：按句判、不跨表借说明。
+                has_statement = _empty_table_note_present(current_page_text, table_keywords)
+
                 if not has_statement:
                     # 简化表名用于显示
                     nm.replace("一般公共预算财政拨款", "").replace("收入支出决算表", "").replace("预算财政拨款", "")
+                    location = {"page": p}
+                    refs = _empty_table_source_refs(doc, p, nm)
+                    if refs:
+                        location["table_refs"] = refs
                     issues.append(self._issue(
                         f"【{nm}】为空表，但该页未见针对该表的空表说明（应有'注：XXX无{table_keywords[0] if table_keywords else '相关'}支出，故本表无数据'）。",
-                        {"page": p}, "error",
+                        location, "error",
                         evidence_text=f"空表名称：{nm}\n页面文本概览（未发现空表说明）：\n{current_page_text[:300].replace(chr(10), ' ')}..."
                     ))
         if unresolved:

@@ -238,6 +238,80 @@ def test_same_rounding_hint_from_generic_and_table_sum_rules_is_one_tip():
 
 
 # ---------------------------------------------------------------------------
+# 缺表、空表无说明：原文证据可核验，进“必须处理”（2026-11-08 用户裁定）
+# ---------------------------------------------------------------------------
+
+TOC = ('目\n录\n第二部分甲局2025 年度决算表\n一、收入支出决算总表\n二、收入决算表\n三、支出决算表\n'
+       '四、财政拨款收入支出决算总表\n三、支出决算情况说明\n')
+SAN_GONG = ('财政拨款“三公”经费支出决算表\n单位：万元\n预算数\n决算数\n'
+            '注：本表反映单位本年度“三公”经费支出预决算情况。\n')
+
+
+def bound_complete(location, pages, rule):
+    import hashlib
+    from src.services.evidence_guard import evaluate_finding_evidence
+    from src.services.rule_source_binding import bind_rule_sources
+
+    file_hash = hashlib.sha256(b'pdf').hexdigest()
+    finding = {'id': f'{rule}-1', 'rule_id': rule, 'source': 'rule', 'severity': 'error',
+               'message': 'x', 'location': location, 'evidence': [{'text': '系统概述，不是原文'}]}
+    bind_rule_sources({'rule_findings': [finding]}, page_texts=pages, source_file_hash=file_hash)
+    complete, missing, verification = evaluate_finding_evidence(
+        finding, document_page_count=len(pages), page_texts=pages, source_file_hash=file_hash)
+    return complete, verification, finding
+
+
+def test_missing_table_evidence_is_the_toc_line_and_verifies_on_the_original():
+    from src.engine.rules_v33 import _missing_table_source_refs
+
+    pages = ['甲局\n2025年度决算', TOC, '第二部分\n甲局2025 年度决算表\n收入支出决算总表']
+    doc = SimpleNamespace(page_texts=pages)
+    refs, detail = _missing_table_source_refs(doc, '支出决算表')
+    assert refs == [{'page': 2, 'span': '三、支出决算表', 'role': '目录所列表名', 'table': '支出决算表'}]
+    assert '目录第2页' in detail
+    complete, verification, finding = bound_complete({'table': '支出决算表', 'page': 2, 'table_refs': refs},
+                                                     pages, 'V33-002')
+    assert complete and verification['status'] == 'verified' and verification['source_identity_complete']
+    assert finding['evidence'][0]['quote'] == '三、支出决算表'
+
+
+def test_missing_table_without_toc_entry_falls_back_to_part_two_heading():
+    from src.engine.rules_v33 import _missing_table_source_refs
+
+    pages = ['甲局\n2025年度决算', '第二部分\n甲局2025 年度决算表\n收入支出决算总表']
+    refs, _ = _missing_table_source_refs(SimpleNamespace(page_texts=pages), '支出决算表')
+    assert refs and refs[0]['page'] == 2 and refs[0]['role'] == '决算表部分标题'
+    # 两样都没有就不编造证据
+    assert _missing_table_source_refs(SimpleNamespace(page_texts=['甲局', '收入决算表']), '支出决算表') == ([], '')
+
+
+@pytest.mark.parametrize('name', ['财政拨款“三公”经费支出决算表', '一般公共预算财政拨款“三公”经费支出决算表'])
+def test_empty_san_gong_table_evidence_binds_title_and_note_literals(name):
+    from src.engine.rules_v33 import _empty_table_source_refs
+
+    pages = ['封面', SAN_GONG]
+    refs = _empty_table_source_refs(SimpleNamespace(page_texts=pages), 2, name)
+    assert [ref['role'] for ref in refs] == ['空表表名', '表下注释']
+    complete, verification, _ = bound_complete({'page': 2, 'table_refs': refs}, pages, 'V33-114')
+    assert complete and verification['status'] == 'verified'
+
+
+def test_empty_table_note_rule_reports_san_gong_like_the_fund_tables():
+    from src.engine.rules_v33 import R33114_EmptyTableStatementCheck
+
+    def doc(text):
+        rows = [['财政拨款“三公”经费', '合计'], ['预算数', '决算数']]
+        return SimpleNamespace(page_texts=['甲局\n2025年度决算', text], page_tables=[[], [rows]])
+
+    issue, = R33114_EmptyTableStatementCheck().apply(doc(SAN_GONG))
+    assert issue.location['table_refs'][0]['span'] == '财政拨款“三公”经费支出决算表'
+    # 第七节写了无三公也不豁免表下说明；表下有说明则不报
+    assert len(R33114_EmptyTableStatementCheck().apply(doc(SAN_GONG + '七、甲局2025年度无“三公”经费支出。'))) == 1
+    assert R33114_EmptyTableStatementCheck().apply(
+        doc(SAN_GONG + '注：甲局本年度无财政拨款“三公”经费支出，故本表无数据。')) == []
+
+
+# ---------------------------------------------------------------------------
 # 同比百分比按显示精度取整
 # ---------------------------------------------------------------------------
 
