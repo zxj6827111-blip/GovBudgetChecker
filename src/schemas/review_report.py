@@ -381,6 +381,10 @@ def build_review_report(payload: Mapping[str, Any]) -> Dict[str, Any]:
                 "candidates": [dict(value) for value in item.get("candidates") or []],
                 "next_action": item.get("next_action"),
                 "root_cause_key": item.get("root_cause_key"),
+                # R2.2 计划 §7 承接字段：卡片摘要与建议动作原样进入导出块；
+                # 旧结果缺键时保持 None/空，不在这里编造默认文案。
+                "card_summary": item.get("card_summary"),
+                "suggested_actions": [dict(value) for value in item.get("suggested_actions") or []],
                 # DH-03a：旧兼容字段原样进入导出块；只作 UI 提示。
                 "legacy_same_source_keys": list(item.get("legacy_same_source_keys") or []),
                 "legacy_coverage_terms": list(item.get("legacy_coverage_terms") or []),
