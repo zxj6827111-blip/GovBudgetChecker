@@ -486,7 +486,7 @@ async def test_stale_analysis_basis_is_rejected_even_with_active_session(review_
                 obligation_id="OBL-A",
                 decision="verified_ok",
                 actor="reviewer-a",
-                note="旧页面无依据写回",
+                note="合计10万元等于基本8万元加项目2万元，全部关系已核对",  # A3：须先过依据协议，才能到达 409 代际保护
                 analysis_basis_token="",
                 scope_confirmed=True,  # 先过 422 依据协议，才能到达 409 代际保护
             )
@@ -500,7 +500,7 @@ async def test_stale_analysis_basis_is_rejected_even_with_active_session(review_
                 obligation_id="OBL-A",
                 decision="verified_ok",
                 actor="reviewer-a",
-                note="旧页面写回",
+                note="合计10万元等于基本8万元加项目2万元，全部关系已核对",
                 analysis_basis_token="old-job:revision-before-reanalyze",
             )
         assert excinfo.value.status_code == 409
@@ -512,7 +512,7 @@ async def test_stale_analysis_basis_is_rejected_even_with_active_session(review_
             obligation_id="OBL-A",
             decision="verified_ok",
             actor="reviewer-a",
-            note="当前页面写回",
+            note="合计10万元等于基本8万元加项目2万元，全部关系已核对",
             analysis_basis_token=current_basis,
         )
         assert accepted.decision.decision == "verified_ok"
@@ -558,7 +558,7 @@ async def test_rejected_decision_entry_points(review_db):
         with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
             await _decide_with_current_basis(
                 conn, ctx["slot_id"], obligation_id="OBL-A", decision="verified_ok",
-                actor="r", note="已核对，无问题",
+                actor="r", note="合计10万元等于基本8万元加项目2万元，全部关系已核对",
             )
         assert excinfo.value.error == "review_not_active"
 
@@ -568,7 +568,7 @@ async def test_rejected_decision_entry_points(review_db):
         with pytest.raises(HTTPException) as excinfo404:
             await _decide_with_current_basis(
                 conn, ctx["slot_id"], obligation_id="OBL-NOPE", decision="verified_ok",
-                actor="r", note="已核对",
+                actor="r", note="合计10万元等于基本8万元加项目2万元，全部关系已核对",
             )
         assert excinfo404.value.status_code == 404
 
@@ -582,13 +582,13 @@ async def test_rejected_decision_entry_points(review_db):
         # 决定之后完成；已完成 ⇒ 409 review_completed_locked
         await _decide_with_current_basis(
             conn, ctx["slot_id"], obligation_id="OBL-A", decision="verified_ok",
-            actor="r", note="已核对，无问题",
+            actor="r", note="合计10万元等于基本8万元加项目2万元，全部关系已核对",
         )
         await review_lifecycle_service.complete_review(conn, ctx["slot_id"], actor="r")
         with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
             await _decide_with_current_basis(
                 conn, ctx["slot_id"], obligation_id="OBL-A", decision="not_applicable",
-                actor="r", note="本材料不涉及该项",
+                actor="r", note="本材料本年度无政府性基金预算拨款，该义务整体不适用",
             )
         assert excinfo.value.error == "review_completed_locked"
 
@@ -635,7 +635,7 @@ async def test_non_blocking_obligation_cannot_be_decided(review_db):
         with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
             await _decide_with_current_basis(
                 conn, ctx["slot_id"], obligation_id="OBL-DONE", decision="verified_ok",
-                actor="r", note="已核对",
+                actor="r", note="合计10万元等于基本8万元加项目2万元，全部关系已核对",
             )
         assert excinfo.value.error == "obligation_not_blocking"
 
@@ -658,7 +658,7 @@ async def test_concurrent_first_decisions_do_not_overwrite(review_db):
         async with _conn(schema, pool) as conn:
             return await _decide_with_current_basis(
                 conn, ctx["slot_id"], obligation_id="OBL-A", decision=decision,
-                actor=actor, note=f"{actor} 的补核依据",
+                actor=actor, note=f"{actor}：合计10万元等于基本8万元加项目2万元，全部关系已核对",
             )
 
     results = await asyncio.gather(
@@ -691,7 +691,7 @@ async def test_stale_revision_update_is_rejected(review_db):
         await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="reviewer-a")
         first = await _decide_with_current_basis(
             conn, ctx["slot_id"], obligation_id="OBL-A", decision="verified_ok",
-            actor="reviewer-a", note="已核对，无问题",
+            actor="reviewer-a", note="合计10万元等于基本8万元加项目2万元，全部关系已核对",
         )
         updated = await _decide_with_current_basis(
             conn,
@@ -753,7 +753,7 @@ async def test_decision_audits_are_written_once_after_commit(review_db, monkeypa
         await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
         await _decide_with_current_basis(
             conn, ctx["slot_id"], obligation_id="OBL-A", decision="verified_ok",
-            actor="r", note="已核对，无问题", evidence_reference="第 12 页",
+            actor="r", note="合计10万元等于基本8万元加项目2万元，全部关系已核对", evidence_reference="第 12 页",
         )
         await _decide_with_current_basis(
             conn,
@@ -811,18 +811,30 @@ async def test_resolved_decisions_require_evidence(review_db):
 
 
 async def test_pending_and_supported_resolved_decisions_are_allowed(review_db):
-    """正向边界：pending 不需要依据；verified_ok 只给 evidence 也可以；
+    """正向边界：pending 不需要依据；verified_ok 必须有指明核对关系的 note
+    （IR04/A3 收紧后 evidence_reference 不再单独放行）；
     verified_issue / not_applicable 写明原因即可。"""
     schema, pool = review_db
     async with _conn(schema, pool) as conn:
         ctx = await _make_reviewable_slot(conn, blocking_ids=["OBL-A", "OBL-B", "OBL-C", "OBL-D"])
         await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
 
-        ok_only_evidence = await _decide_with_current_basis(
+        # IR04/A3 收紧：verified_ok 只给 evidence_reference 不放行（422），须有
+        # 指明核对关系的 note；evidence_reference 只作证据位置附件。
+        with pytest.raises(HTTPException) as ok_only_evidence:
+            await _decide_with_current_basis(
+                conn, ctx["slot_id"], obligation_id="OBL-A",
+                decision="verified_ok", actor="r", evidence_reference="表 8 合计行",
+            )
+        assert ok_only_evidence.value.status_code == 422
+        assert ok_only_evidence.value.detail["error"] == "obligation_decision_evidence_required"
+
+        ok_with_note = await _decide_with_current_basis(
             conn, ctx["slot_id"], obligation_id="OBL-A",
             decision="verified_ok", actor="r", evidence_reference="表 8 合计行",
+            note="合计10万元等于基本8万元加项目2万元，全部关系已核对",
         )
-        assert ok_only_evidence.decision.decision == "verified_ok"
+        assert ok_with_note.decision.decision == "verified_ok"
 
         issue_with_note = await _decide_with_current_basis(
             conn, ctx["slot_id"], obligation_id="OBL-B",
@@ -832,7 +844,7 @@ async def test_pending_and_supported_resolved_decisions_are_allowed(review_db):
 
         na_with_note = await _decide_with_current_basis(
             conn, ctx["slot_id"], obligation_id="OBL-C",
-            decision="not_applicable", actor="r", note="本单位年度内无三公经费支出",
+            decision="not_applicable", actor="r", note="本单位本年度无三公经费支出，该项义务整体不适用",
         )
         assert na_with_note.decision.decision == "not_applicable"
 
@@ -877,7 +889,7 @@ async def test_stale_job_claim_is_rejected_without_mutation(review_db):
         with pytest.raises(review_lifecycle_service.ReviewLifecycleError):
             await _decide_with_current_basis(
                 conn, ctx["slot_id"], obligation_id="OBL-A", decision="verified_ok",
-                actor="r", note="已核对", job_uuid="job-which-is-not-current",
+                actor="r", note="合计10万元等于基本8万元加项目2万元，全部关系已核对", job_uuid="job-which-is-not-current",
             )
         with pytest.raises(review_lifecycle_service.ReviewLifecycleError):
             await review_lifecycle_service.reopen_review(
