@@ -83,8 +83,9 @@ def _carrier_state_issues(container: Any, key: str) -> Dict[str, Any]:
     FA-03（最终验收）：投影一致性必须可核验——
     - 只有 ``all`` 投影、没有严重度桶且 ``all`` 非空 → ``unreadable_projection``
       （损坏/不完整投影不得读成合法空 0）；
-    - 严重度桶与 ``all`` 同时存在但内容不一致（桶内条目不在 all 中）→
-      ``projection_inconsistent``，同样不得静默计 0；
+    - 严重度桶与 ``all`` 同时存在但内容不一致（双向：桶内条目不在 all 中，
+      或 all 中条目不在任何严重度桶）→ ``projection_inconsistent``，
+      同样不得静默计 0；
     - 合法空（桶与 all 均为空 list）照常计 0。
     """
     state = _carrier_state(container, key)
@@ -124,7 +125,9 @@ def _carrier_state_issues(container: Any, key: str) -> Dict[str, Any]:
             elif not all_bucket and severity_ids:
                 # all 被清空而严重度桶仍有内容：投影被部分清空。
                 projection_inconsistent = True
-            elif severity_ids - all_ids:
+            elif severity_ids != all_ids:
+                # 双向一致：桶有而 all 无（投影剥离），或 all 有而桶无
+                # （仅 all 新增的问题被漏读），都判不一致。
                 projection_inconsistent = True
             else:
                 projection_consistent = True
@@ -433,6 +436,15 @@ def selftest() -> int:
     snapshot = three_carrier_snapshot(result_partial, {}, {})
     carriers = snapshot["formal_carriers"]["result.issues"]
     checks.append(("all被清空而严重度桶仍有内容 → projection_inconsistent 不计0",
+                   carriers.get("projection_inconsistent") is True
+                   and carriers.get("count") is None))
+
+    # M-03：all 含严重度桶之外的问题（仅 all 新增）→ 双向不一致，不得忽略。
+    result_extra_all = {"issues": {"error": [dict_issue_a], "warn": [], "info": [],
+                                   "all": [dict_issue_a, {"id": "F-extra", "rule": "V33-Y", "message": "x"}]}}
+    snapshot = three_carrier_snapshot(result_extra_all, {}, {})
+    carriers = snapshot["formal_carriers"]["result.issues"]
+    checks.append(("all新增桶外问题 → projection_inconsistent 双向检出",
                    carriers.get("projection_inconsistent") is True
                    and carriers.get("count") is None))
 

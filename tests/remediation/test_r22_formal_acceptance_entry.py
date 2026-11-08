@@ -228,3 +228,95 @@ def test_falsy_mode_and_optional_fields_rejected_not_defaulted():
                                         _contract(optional_fields=bad_optional))
         assert result["verdict"] == "rejected", f"optional_fields={bad_optional!r}"
         assert result["reject_reason"] == "contract_invalid"
+
+
+# ---- M-01/02/03：合入 main 后独立核查的三组边界 ------------------------------
+
+
+def test_mandatory_identity_cannot_be_marked_optional():
+    """M-01：必选身份字段进 optional_fields 即契约拒绝，载荷缺失也不得放行。"""
+    for field in ("material.checksum_sha256", "generation.analysis_revision",
+                  "code.rule_registry_version", "config.mode"):
+        contract = _contract(optional_fields=[field])
+        payload = _payload()
+        result = entry.compare_payloads(payload, json.loads(canonical(payload)), contract)
+        assert result["verdict"] == "rejected", field
+        assert result["reject_reason"] == "contract_invalid"
+        assert any(e["kind"] == "mandatory_field_marked_optional" for e in result["contract_errors"])
+
+
+def _payload_with_fact_evidence():
+    payload = _payload()
+    fact = [{"rule_id": "V33-X", "sub_check_id": "s1", "status": "pass", "formula": "10≤10",
+             "operand_fact_ids": ["f1", "f2"], "operand_sources": {"left": [{"physical_page": 1}]}}]
+    payload["result"]["meta"]["fact_receipts"] = json.loads(canonical(fact))
+    payload["review_report"]["fact_receipts"] = json.loads(canonical(fact))
+    return payload
+
+
+def test_same_relation_evidence_degradation_registered():
+    """M-02：关系ID保留但 operand 证据非空→空/缺失，须登记且不得零回归。"""
+    before = _payload_with_fact_evidence()
+    after = json.loads(canonical(before))
+    for container in (after["result"]["meta"], after["review_report"]):
+        fr = container["fact_receipts"][0]
+        fr["operand_fact_ids"] = []; fr["operand_sources"] = {}; fr["formula"] = None
+    result = entry.compare_payloads(before, after, _contract())
+    assert result["verdict"] == "compared"
+    degraded = [x for x in result["evidence_lost"] if x["kind"] == "same_relation_evidence_degraded"]
+    assert degraded
+    assert set(degraded[0]["degraded_relations"][0]["degraded_fields"]) == {
+        "operand_fact_ids", "operand_sources", "formula"}
+    assert result["zero_regression_claim"] is False
+
+
+def test_same_relation_sources_key_removed_registered():
+    """M-02：同关系 operand_sources 键被删除也登记。"""
+    before = _payload_with_fact_evidence()
+    after = json.loads(canonical(before))
+    for container in (after["result"]["meta"], after["review_report"]):
+        container["fact_receipts"][0].pop("operand_sources")
+    result = entry.compare_payloads(before, after, _contract())
+    degraded = [x for x in result["evidence_lost"] if x["kind"] == "same_relation_evidence_degraded"]
+    assert degraded
+    assert "operand_sources" in degraded[0]["degraded_relations"][0]["degraded_fields"]
+    assert result["zero_regression_claim"] is False
+
+
+def test_same_relation_diagnostic_addition_not_loss():
+    """M-02 正控：同关系新增诊断字段是合法演进，不得误报证据丢失。"""
+    before = _payload_with_fact_evidence()
+    after = json.loads(canonical(before))
+    for container in (after["result"]["meta"], after["review_report"]):
+        container["fact_receipts"][0]["dh02_structured"] = {"new": "演进"}
+    result = entry.compare_payloads(before, after, _contract())
+    assert result["verdict"] == "compared"
+    assert not result["evidence_lost"]
+    assert result["zero_regression_claim"] is True
+
+
+def test_extra_issue_in_all_projection_flagged():
+    """M-03：all 含严重度桶之外的问题 → 双向不一致，不得签零回归。"""
+    issue1 = {"id": "F1", "rule": "V33-X", "message": "m", "severity": "error", "page": 1}
+    issue2 = {"id": "F2", "rule": "V33-Y", "message": "n", "severity": "error", "page": 2}
+    before = _payload(rule_findings=[], report_issues=[], check_receipts=[])
+    before["result"]["issues"] = {"error": [issue1], "warn": [], "info": [], "all": [issue1]}
+    after = json.loads(canonical(before))
+    after["result"]["issues"]["all"].append(issue2)
+    result = entry.compare_payloads(before, after, _contract())
+    assert result["verdict"] == "pending_review"
+    assert result["zero_regression_claim"] is False
+
+
+def test_damaged_carrier_not_masked_by_empty_carriers():
+    """M-03：已损坏投影不能被其他空列表载体豁免（readable_any 仍 True 也待核）。"""
+    issue2 = {"id": "F2", "rule": "V33-Y", "message": "n", "severity": "error", "page": 2}
+    before = _payload(rule_findings=[], report_issues=[], check_receipts=[])
+    before["result"]["issues"] = {"error": [], "warn": [], "info": [], "all": []}
+    after = json.loads(canonical(before))
+    after["result"]["issues"] = {"all": [issue2]}
+    result = entry.compare_payloads(before, after, _contract())
+    assert result["verdict"] == "pending_review"
+    assert result["pending_reason"] == "formal_carrier_damaged"
+    assert result["zero_regression_claim"] is False
+    assert result["damaged_carriers"]["after"] == ["result.issues"]

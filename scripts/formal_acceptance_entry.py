@@ -106,6 +106,10 @@ from typing import Any, Dict, List, Optional, Tuple
 CONTRACT_VERSION = "r22-formal-acceptance-v1"
 #: 证据载体（投影）：before 存在而 after 缺键/null 时登记 evidence_lost。
 _EVIDENCE_CARRIERS = ("check_receipts", "obligation_coverage", "fact_receipts")
+#: M-02：回执的关键取数/来源证据字段。同关系身份保留但这些字段非空→空/缺失
+#: 仍属证据退化；新增诊断字段（如 DH-02 结构化）不在此列，属合法演进。
+#: 字段若发生版本迁移，必须在此显式更新映射，不能只剩关系 ID 即认定证据完整。
+_KEY_EVIDENCE_FIELDS = ("operand_fact_ids", "operand_sources", "formula")
 #: FA-01：契约每侧**必选**身份字段与类型校验器。缺一即契约无效——身份未成立的
 #: "门禁全过"不是兼容，是放行未知输入。
 _MANDATORY_CONTRACT_FIELDS: Tuple[Tuple[str, Any], ...] = (
@@ -312,10 +316,14 @@ def validate_contract(contract: Any) -> Dict[str, Any]:
                 set(_flat_expected({"expected": contract.get("expected_after")}))
         else:
             declared = set(_flat_expected({"expected": contract.get("expected")}))
+        mandatory_names = {field for field, _ in _MANDATORY_CONTRACT_FIELDS}
         for field in optional:
             if field not in declared:
                 errors.append({"field": field, "kind": "optional_field_undeclared",
                                "message": "optional_fields 只能引用已在 expected 声明的字段"})
+            elif field in mandatory_names:
+                errors.append({"field": field, "kind": "mandatory_field_marked_optional",
+                               "message": "必选身份字段不得标为可选——载荷缺失即身份未成立，不能放行"})
     git_declared = contract.get("git_commit_declared")
     if git_declared is not None and (
             not isinstance(git_declared, str) or len(git_declared) != 40
@@ -427,6 +435,40 @@ def _relation_identities(items: Any, *, carrier: str) -> Optional[Counter]:
     return counter
 
 
+def _evidence_field_nonempty(field: str, value: Any) -> bool:
+    """关键证据字段的"有效非空"判定（缺失/None/空容器/空串都算空）。"""
+    if field == "operand_fact_ids":
+        return isinstance(value, list) and len(value) > 0
+    if field == "operand_sources":
+        return isinstance(value, dict) and any(bool(v) for v in value.values())
+    if field == "formula":
+        return isinstance(value, str) and bool(value.strip())
+    return False
+
+
+def _relation_evidence(items: Any, *, carrier: str) -> Dict[Tuple, Dict[str, bool]]:
+    """同关系身份下关键证据字段的非空状态（M-02：ID 保留 ≠ 证据完整）。
+
+    关系键与 ``_relation_identities`` 一致；同键多条按 any() 聚合，
+    避免顺序敏感。只回答"该关系是否仍持有有效证据"，不比内容指纹
+    （内容增补是合法演进，不在这里误报）。
+    """
+    if not isinstance(items, list):
+        return {}
+    out: Dict[Tuple, Dict[str, bool]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        rule_id = str(item.get("rule_id") or "")
+        sub = item.get("sub_check_id")
+        key = (rule_id, str(sub)) if carrier == "fact_receipts" and sub is not None else (rule_id,)
+        fields = out.setdefault(key, {f: False for f in _KEY_EVIDENCE_FIELDS})
+        for f in _KEY_EVIDENCE_FIELDS:
+            if _evidence_field_nonempty(f, item.get(f)):
+                fields[f] = True
+    return out
+
+
 def _identity_set(items: Any) -> Tuple[Optional[set], Optional[int], Optional[str]]:
     """载体内容的身份集合：条目级 canonical 指纹（FA-02 按内容比较）。
 
@@ -480,11 +522,12 @@ def _evidence_content_state(status: Dict[str, Any]) -> Dict[str, Any]:
                     ids, count, kind = _identity_set(value)
                     state = {"kind": kind, "present": value is not None,
                              "count": count, "ids": ids,
-                             "relations": _relation_identities(value, carrier=key)}
+                             "relations": _relation_identities(value, carrier=key),
+                             "evidence": _relation_evidence(value, carrier=key)}
                 copies[name] = state
             else:
                 copies[name] = {"kind": "missing_key", "present": False,
-                                "count": None, "ids": None, "relations": None}
+                                "count": None, "ids": None, "relations": None, "evidence": None}
         states[key] = copies
     states["_containers"] = {"result_present": isinstance(result, dict),
                               "review_report_present": isinstance(status.get("review_report"), dict)}
@@ -570,6 +613,20 @@ def compare_evidence(before_status: Dict[str, Any],
                                      "before_count": b.get("count"), "after_count": a.get("count"),
                                      "lost_relations": [list(k) for k in sorted(lost_pairs)][:20],
                                      "lost_relations_total": lost_total})
+                    # M-02：同关系身份保留，但关键取数/来源证据非空→空/缺失
+                    # 仍须登记（ID 存在不等于证据完整）；新增诊断字段不触发。
+                    b_ev, a_ev = b.get("evidence") or {}, a.get("evidence") or {}
+                    degraded = []
+                    for rel_key in sorted(set(b_ev) & set(a_ev)):
+                        fields = [f for f in _KEY_EVIDENCE_FIELDS
+                                  if b_ev[rel_key].get(f) and not a_ev[rel_key].get(f)]
+                        if fields:
+                            degraded.append({"relation": list(rel_key), "degraded_fields": fields})
+                    if degraded:
+                        lost.append({"carrier": key, "copy": copy_name,
+                                     "kind": "same_relation_evidence_degraded",
+                                     "degraded_relations": degraded[:20],
+                                     "degraded_total": len(degraded)})
         # 两份投影互相不一致（一份清空一份保留）
         kinds_after = {name: after[key][name].get("kind") for name in ("result.meta", "review_report")}
         if kinds_after.get("result.meta") == kinds_after.get("review_report") == "list":
@@ -601,10 +658,15 @@ def _status(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _carrier_readability(snapshot: Dict[str, Any]) -> Dict[str, Any]:
-    """FA-03：单侧三正式载体可读性评估——合法空/缺失/不可读分开。"""
+    """FA-03：单侧三正式载体可读性评估——合法空/缺失/不可读分开。
+
+    M-03：已出现且被判损坏/不一致的载体（unreadable_type/unreadable_projection）
+    单独登记 damaged——合法旧格式的"键缺失"不算损坏，不得与损坏混同。
+    """
     carriers = snapshot.get("formal_carriers", {})
     details: Dict[str, Any] = {}
     readable_any = False
+    damaged: List[str] = []
     for key, state in carriers.items():
         if state.get("missing") or not state.get("present"):
             verdict = "missing"
@@ -620,10 +682,12 @@ def _carrier_readability(snapshot: Dict[str, Any]) -> Dict[str, Any]:
             readable_any = True
         else:
             verdict = "unknown"
+        if verdict in ("unreadable_type", "unreadable_projection"):
+            damaged.append(key)
         details[key] = {"verdict": verdict, "count": state.get("count"),
                          "legal_empty": state.get("legal_empty", False),
                          "dict_format": state.get("dict_format", False)}
-    return {"readable_any": readable_any, "carriers": details}
+    return {"readable_any": readable_any, "damaged": damaged, "carriers": details}
 
 
 def compare_payloads(
@@ -726,16 +790,23 @@ def compare_payloads(
     )
 
     # FA-03：任一侧三正式载体无一可靠读取 → 结论只能"待核"，不得零回归。
+    # M-03：已出现且被判损坏/不一致的载体，不能被其他空列表载体豁免——
+    # 局部损坏 + 另一份合法空仍须待核；合法旧格式的键缺失不算损坏。
     readability = {"before": _carrier_readability(snap_before),
                     "after": _carrier_readability(snap_after)}
-    if not readability["before"]["readable_any"] or not readability["after"]["readable_any"]:
+    damaged = {side: readability[side]["damaged"]
+               for side in ("before", "after") if readability[side]["damaged"]}
+    unreadable = not readability["before"]["readable_any"] or not readability["after"]["readable_any"]
+    if unreadable or damaged:
+        reason = "formal_carrier_damaged" if damaged else "formal_carriers_unreadable"
         return {
             "entry": "r22-formal-acceptance",
             "contract_version": CONTRACT_VERSION,
             "mode": mode,
             "tool_identity": _tool_identity(),
             "verdict": "pending_review",
-            "pending_reason": "formal_carriers_unreadable",
+            "pending_reason": reason,
+            "damaged_carriers": damaged,
             "gates": gates,
             "carrier_readability": readability,
             "snapshot_before": snap_before,
@@ -743,9 +814,9 @@ def compare_payloads(
             "evidence_lost": evidence_lost,
             "evidence_summary": evidence_summary,
             "zero_regression_claim": False,
-            "claim_reasons": ["formal_carriers_unreadable"],
-            "statement": ("身份门禁全过，但至少一侧三正式问题载体全部缺失/null/"
-                           "错类型/投影损坏——无法证明'零回归'，转待核。"),
+            "claim_reasons": [reason],
+            "statement": ("身份门禁全过，但正式问题载体不可读（全缺失/null/错类型）"
+                           "或已出现损坏/不一致投影——无法证明'零回归'，转待核。"),
         }
 
     claim_reasons: List[str] = []
@@ -1115,6 +1186,64 @@ def selftest() -> Tuple[int, List[Dict[str, Any]]]:
            result["verdict"] == "compared"
            and result["gates"]["before"]["optional_missing"] == ["generation.parse_run_id"],
            {"optional_missing": result["gates"]["before"]["optional_missing"]})
+
+    # M-01：必选身份字段标 optional → 契约拒绝（不能借可选绕过身份门禁）
+    c_m01 = _contract()
+    c_m01["optional_fields"] = ["material.checksum_sha256"]
+    no_checksum = _payload(rule_findings=[findings("F-1", "m")], check_receipts=receipts)
+    no_checksum.pop("checksum", None)
+    result = compare_payloads(no_checksum, json.loads(_canonical(no_checksum)), c_m01)
+    record("M-01 负控：必选身份标optional即契约拒绝",
+           result["verdict"] == "rejected" and result.get("reject_reason") == "contract_invalid"
+           and any(x["kind"] == "mandatory_field_marked_optional" for x in result.get("contract_errors", [])),
+           {"errors": [x["kind"] for x in result.get("contract_errors", [])]})
+
+    # M-02：同关系身份保留但关键取数/来源证据非空→空 → 登记，不得零回归
+    fact_ev = [{"rule_id": "V33-X", "sub_check_id": "s1", "status": "pass", "formula": "10≤10",
+                "operand_fact_ids": ["f1", "f2"], "operand_sources": {"left": [{"physical_page": 1}]}}]
+    before_m2 = _payload(rule_findings=[findings("F-1", "m")], check_receipts=receipts)
+    before_m2["result"]["meta"]["fact_receipts"] = json.loads(_canonical(fact_ev))
+    before_m2["review_report"]["fact_receipts"] = json.loads(_canonical(fact_ev))
+    after_m2 = json.loads(_canonical(before_m2))
+    for cont in (after_m2["result"]["meta"], after_m2["review_report"]):
+        fr = cont["fact_receipts"][0]
+        fr["operand_fact_ids"] = []; fr["operand_sources"] = {}; fr["formula"] = None
+    result = compare_payloads(before_m2, after_m2, _contract())
+    deg = [x for x in result.get("evidence_lost", []) if x["kind"] == "same_relation_evidence_degraded"]
+    record("M-02 负控：同关系operand证据清空登记+零回归False",
+           result["verdict"] == "compared" and deg and result["zero_regression_claim"] is False,
+           {"degraded": deg[:1]})
+    after_m2b = json.loads(_canonical(before_m2))
+    for cont in (after_m2b["result"]["meta"], after_m2b["review_report"]):
+        cont["fact_receipts"][0]["dh02_structured"] = {"new": "合法演进"}
+    result = compare_payloads(before_m2, after_m2b, _contract())
+    record("M-02 正控：同关系新增诊断字段零丢失（不误报）",
+           result["verdict"] == "compared" and not result.get("evidence_lost"),
+           {"lost": result.get("evidence_lost")})
+
+    # M-03：all 新增严重度桶之外的问题 → 双向不一致 → 不得零回归
+    i1 = {"id": "F1", "rule": "V33-X", "message": "m", "severity": "error", "page": 1}
+    i2 = {"id": "F2", "rule": "V33-Y", "message": "n", "severity": "error", "page": 2}
+    before_m3 = _payload(rule_findings=[], report_issues=[], check_receipts=[])
+    before_m3["result"]["issues"] = {"error": [i1], "warn": [], "info": [], "all": [i1]}
+    after_m3 = json.loads(_canonical(before_m3))
+    after_m3["result"]["issues"]["all"].append(i2)
+    result = compare_payloads(before_m3, after_m3, _contract())
+    record("M-03 负控：all新增桶外问题 → pending不得零回归",
+           result["verdict"] == "pending_review" and result["zero_regression_claim"] is False,
+           {"verdict": result["verdict"], "reason": result.get("pending_reason")})
+    # M-03：已损坏投影不能被其他空列表载体豁免（readable_any 仍 True 也须待核）
+    before_m3b = _payload(rule_findings=[], report_issues=[], check_receipts=[])
+    before_m3b["result"]["issues"] = {"error": [], "warn": [], "info": [], "all": []}
+    after_m3b = json.loads(_canonical(before_m3b))
+    after_m3b["result"]["issues"] = {"all": [i2]}
+    result = compare_payloads(before_m3b, after_m3b, _contract())
+    record("M-03 负控：损坏投影不被其他空载体掩盖",
+           result["verdict"] == "pending_review"
+           and result.get("pending_reason") == "formal_carrier_damaged"
+           and result["zero_regression_claim"] is False,
+           {"verdict": result["verdict"], "reason": result.get("pending_reason"),
+            "damaged": result.get("damaged_carriers")})
 
     failed = [c["control"] for c in checks if not c["ok"]]
     for item in checks:
