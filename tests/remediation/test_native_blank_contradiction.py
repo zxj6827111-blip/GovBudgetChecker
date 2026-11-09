@@ -89,3 +89,24 @@ def test_same_blank_field_with_same_claim_in_two_places_is_one_item_with_two_ori
                       fact_context=doc.fact_context)
     assert finding['source_binding_status'] == 'bound' and len(finding['evidence']) == 2
     assert len(finding['location']['native_blank_calculation_refs']) == 2
+
+
+def test_zero_denominator_ratio_retains_both_certified_cells_as_current_proof():
+    from src.engine.native_three_public_ratios import evaluate
+    doc=native_reception(budget='')
+    doc.page_texts=['公务接待费支出决算0万元，完成年初预算的100%。']
+    before=deepcopy(doc.fact_context.to_dict())
+    claim=dict(start=0,page=1,phrase='完成年初预算的100%',pct=Decimal('100'),
+               source_refs=[dict(page=1,span=doc.page_texts[0],role='完成率声明')])
+    issues,unresolved=evaluate(R33224_Narrative7_T7(),doc,claim,indicator='reception',
+        quote=doc.page_texts[0],denominator_stage='年初预算',year=2024)
+    assert not unresolved and len(issues)==1
+    finding=_issue_to_dict(issues[0],1,doc)
+    bind_rule_sources({'rule_findings':[finding]},page_texts=doc.page_texts,
+                      source_file_hash=doc.fact_context.file_hash,artifact=doc.parse_artifact,
+                      fact_context=doc.fact_context)
+    assert finding['source_binding_status']=='bound'
+    refs=finding['location']['native_blank_calculation_refs']
+    assert {r['role'] for r in refs}=={'numerator','denominator'}
+    assert len({r['source_cell_id'] for r in refs})==2
+    assert doc.fact_context.to_dict()==before

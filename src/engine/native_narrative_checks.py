@@ -99,15 +99,32 @@ class _Text:
         from bisect import bisect_left
         return bisect_left(self.positions, raw_start), bisect_left(self.positions, raw_end)
 
-    def refs(self, start, end, role):
+    def refs(self, start, end, role, *, unique_context=False):
         """Normalized ranges map back to unchanged, per-physical-page quotes."""
         if start >= end:
             return []
         raw_start, raw_end = self.positions[start], self.positions[end - 1] + 1
         refs = []
         for page, (left, right) in enumerate(self.pages, 1):
-            quote = self.raw[max(left, raw_start):min(right, raw_end)] if max(left, raw_start) < min(right, raw_end) else ''
+            begin, finish = max(left,raw_start), min(right,raw_end)
+            quote = self.raw[begin:finish] if begin < finish else ''
             if quote.strip():
+                if unique_context:
+                    normalize = lambda value: ''.join(unicodedata.normalize('NFKC',value).split())
+                    page_text = normalize(self.raw[left:right])
+                    expanded_begin, expanded_end = begin, finish
+                    # 原文定位只增加相邻完整行作见证，不改动取数范围或原句。
+                    # 超过400字仍不唯一时，保留原引文交由证据门阻断。
+                    while page_text.count(normalize(self.raw[expanded_begin:expanded_end])) > 1:
+                        new_begin = max(left,self.raw.rfind('\n',left,max(left,expanded_begin-1))+1)
+                        newline = self.raw.find('\n',expanded_end+1,right)
+                        new_end = right if newline<0 else newline
+                        if (new_begin,new_end)==(expanded_begin,expanded_end) or new_end-new_begin>400:
+                            break
+                        expanded_begin,expanded_end=new_begin,new_end
+                    expanded = self.raw[expanded_begin:expanded_end]
+                    if page_text.count(normalize(expanded))==1:
+                        quote=expanded
                 refs.append({'page': page, 'span': quote, 'role': role})
         return refs
 

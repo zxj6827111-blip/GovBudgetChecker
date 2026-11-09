@@ -368,7 +368,7 @@ def bind_rule_sources(result, *, page_texts, source_file_hash, artifact=None, fa
                     observation = term.get('observation') if isinstance(term, dict) else None
                     if (observation not in valid_observations or not isinstance(observation, dict)
                             or observation.get('calculation') is not True
-                            or term.get('role') not in {'parent', 'child'}
+                            or term.get('role') not in {'parent', 'child', 'numerator', 'denominator'}
                             or not term.get('relation_id') or not term.get('operand_id')):
                         errors.append('native_blank_operand_not_current_or_unverified')
                         continue

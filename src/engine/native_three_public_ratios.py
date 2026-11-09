@@ -276,7 +276,13 @@ def evaluate(rule: Any, doc: Any, claim: dict[str, Any], *, indicator: str,
                      if ref.get("physical_page"))
     location = {"page": claim["page"], "pages": sorted(pages), "table_code": TABLE_CODE,
                 "section": claim.get("section"), "indicator": indicator,
-                "operand_refs": refs, "native_blank_sources": blanks, "table_refs": claim.get("source_refs") or [{"page": claim["page"], "span": quote,
+                "operand_refs": refs, "native_blank_sources": blanks,
+                "native_blank_operands": [
+                    {'role': role, 'relation_id': relation, 'operand_id': f'{relation}:{role}',
+                     'observation': dict(fact.extra_dims['native_blank_observation'])}
+                    for fact,role in ((numerator,'numerator'),(denominator,'denominator'))
+                    if isinstance(fact,NativeBlankTerm)],
+                "table_refs": claim.get("source_refs") or [{"page": claim["page"], "span": quote,
                     "role": "占比声明" if share else "完成率声明"}],
                 "fact_context_version_token": context.version_token,
                 "declared_percent": str(claim["pct"]),
@@ -301,7 +307,7 @@ def completion_claim(rule: Any, doc: Any, claim: dict[str, Any], merged: str, ye
     stage = claim.get("role_key") or "年初预算"
     stage = _canonical_budget_stage(stage)
     _, claim_end = text.compact_range(claim["start"], claim["end"])
-    source_refs = text.refs(begin + start, claim_end, "完成率声明")
+    source_refs = text.refs(begin + start, claim_end, "完成率声明", unique_context=True)
     quote = "\n".join(ref["span"] for ref in source_refs)
     claim = {**claim, "source_refs": source_refs}
     return evaluate(rule, doc, claim, indicator=indicator, quote=quote,

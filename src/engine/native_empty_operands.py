@@ -1,4 +1,4 @@
-"""原生财政网格的空白观察项：仅用于加法，不新增或覆盖原始金额事实。"""
+"""原生财政网格的空白观察项：用于金额核对，不新增或覆盖原始金额事实。"""
 from __future__ import annotations
 
 from decimal import Decimal
@@ -9,7 +9,7 @@ from src.services.fiscal_fact_materializer import FiscalFactMaterializer, measur
 from .fact_context import _canonical_budget_stage, _column_mappings_for_instance, _fragment_for_instance, _stage_for_fact, _owner_rejection_reason
 
 
-# 只允许已知决算网格的加法关系使用原件空白；预算、OCR和文本拼表不适用。
+# 只允许已知决算网格的金额关系使用原件空白；预算材料、OCR和文本拼表不适用。
 _TABLES = {'FIN_01_income_expenditure_total', 'FIN_02_income', 'FIN_03_expenditure',
            'FIN_04_fiscal_grant_total', 'FIN_05_general_public_expenditure',
            'FIN_06_basic_expenditure', 'FIN_07_three_public', 'FIN_08_gov_fund', 'FIN_09_state_capital'}
