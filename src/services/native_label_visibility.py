@@ -29,7 +29,7 @@ try:
 except Exception:  # pragma: no cover
     cluster_objects = None  # type: ignore[assignment]
 
-POLICY_VERSION = "label-visibility-v1"
+POLICY_VERSION = "label-visibility-v2"
 DISABLE_ENV = "GOVBUDGET_PDF_DISABLE_LABEL_VISIBILITY_RECOVERY"
 CENTER_TOLERANCE = 0.75
 BOUNDARY_TOLERANCE = 0.75
@@ -481,6 +481,18 @@ def recover_label_cells(
                 else "amount" if cell.col_idx in amount_set
                 else "unknown"
             )
+        # 表头尾字可能被裁剪在首条合计行里；原格横跨全部标签列时，它是合计
+        # 名称格，不是财政编码格。仍须下游逐字证明只有“合计”实际可见。
+        merged_total = (
+            cell.row_idx == table.header_row_count and cell.col_span > 1
+            and re.fullmatch(r'(?:功能分类)?(?:科目)?编码合计', normalize_text(cell.raw_text)) is not None
+            and any(col in name_set for col in range(cell.col_idx, cell.col_idx + cell.col_span))
+            and not any(col in amount_set for col in range(cell.col_idx, cell.col_idx + cell.col_span))
+            and any(other.row_idx == cell.row_idx and other.col_idx in amount_set
+                    and other.numeric_value is not None and not other.is_header for other in table.cells)
+        )
+        if merged_total:
+            role = 'name'
         try:
             expanded = _source_char_expansion(cell, physical)
         except Exception:
@@ -571,9 +583,14 @@ def recover_label_cells(
             stats["reasons"][reason] = stats["reasons"].get(reason, 0) + 1
             continue
         recovered = character_map.visible_text.strip()
+        if merged_total and normalize_text(recovered) != '合计':
+            stats['skipped'] += 1
+            continue
         if normalize_text(recovered) == normalize_text(cell.raw_text):
             continue
         record = character_map.as_record(table, cell)
+        if merged_total:
+            record['role_basis'] = 'native_merged_total_label'
         records.append(record)
         updates[(cell.row_idx, cell.col_idx)] = replace(
             cell,
@@ -583,6 +600,7 @@ def recover_label_cells(
             normalized_value_wan=None,
             grid_raw_text=cell.grid_raw_text if cell.grid_raw_text is not None else cell.raw_text,
             label_recovery=record,
+            is_header=False if merged_total else cell.is_header,
         )
         stats["recovered"] += 1
 
