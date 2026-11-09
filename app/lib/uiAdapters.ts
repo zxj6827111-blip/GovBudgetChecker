@@ -1054,7 +1054,9 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
       const expenditureContext = readExpenditureContext(rawLocation.expenditure_context);
       const display = isRecord(issue.display) ? issue.display : {};
       const title = String(issue.title ?? issue.message ?? `问题 ${index + 1}`).trim();
-      const resolvedTitle = String(display.summary ?? issue.rule_name ?? title).trim() || title;
+      // 合并后的双口径事项以新标题为准，兼容已落库的成员旧 display.summary。
+      const groupedDetailSums = Array.isArray(rawLocation.detail_sum_checks) && rawLocation.detail_sum_checks.length > 1;
+      const resolvedTitle = groupedDetailSums ? title : String(display.summary ?? issue.rule_name ?? title).trim() || title;
       const snippet = String(evidence?.quote ?? evidence?.text_snippet ?? evidence?.text ?? issue.text_snippet ?? "").trim();
       const location = resolveProblemLocation(issue, page);
       const relatedRuleIds = Array.from(new Set([

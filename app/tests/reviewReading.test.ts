@@ -69,6 +69,14 @@ function mapOne(issue: Record<string, unknown>) {
 }
 
 const sumProblem = mapOne(sumIssue);
+const groupedDetailProblem = mapOne({ ...sumIssue, rule_id: "V33-251",
+  title: "支出决算具体情况的分项合计与总额不一致",
+  message: "年初预算分项合计不一致；支出决算分项合计不一致。",
+  display: { summary: "支出决算具体情况逐项列示的年初预算合计" },
+  location: { ...sumIssue.location, detail_sum_checks: [{ checklist_item: "C-11" }, { checklist_item: "C-12" }] },
+});
+assert.equal(groupedDetailProblem.title, "支出决算具体情况的分项合计与总额不一致");
+assert.match(groupedDetailProblem.description, /年初预算.*支出决算/);
 const groups = buildCalculationGroups(sumProblem);
 assert.equal(groups.length, 1);
 const [group] = groups;
