@@ -37,6 +37,52 @@ def test_verified_same_source_and_check_inherits_despite_id_and_message_changes(
     assert result[0]['note']=='已结合原件判断' and result[0]['resolved_from_issue_id']=='old-ai'
 
 
+def native_payload():
+    p=payload();issue=p['result']['ai_findings'][0]
+    issue.update(id='native-current',source='rule',rule_id='V33-005',check_relation_id='native:sum',
+                 fact_ids=['same-fact-id'],evidence_ids=['same-evidence-id'])
+    p['result']['rule_findings']=p['result'].pop('ai_findings')
+    return p,issue
+
+
+@pytest.mark.parametrize('status',['confirmed','no_issue'])
+@pytest.mark.parametrize('change',['none','policy','source','year','owner','unverified'])
+def test_native_exact_old_ids_never_bypass_current_source_and_policy_identity(status,change):
+    p,issue=native_payload()
+    e=dict(job_id='job',issue_id=issue['id'],analysis_revision='old',status=status,
+           decision_revision='1',identity_fingerprint=workflow.issue_identity_fingerprint(issue),
+           fact_ids=issue['fact_ids'][:],evidence_ids=issue['evidence_ids'][:],
+           check_relation_id=issue['check_relation_id'],decision_identity=decision_identity(p,issue))
+    if change=='policy':p['result']['meta']['rule_policy_version']='other-policy'
+    elif change=='source':
+        p['checksum']='b'*64;issue['evidence'][0]['file_hash']='b'*64
+    elif change=='year':p['report_year']=2024
+    elif change=='owner':p['organization_name']='乙单位'
+    elif change=='unverified':issue['evidence_verification']['status']='failed'
+    projected=workflow.project_job_issue_decisions('job',p,_state=dict(decision_events=[e]))
+    assert bool(projected) == (change=='none')
+
+
+@pytest.mark.parametrize('change',['none','other_cell','missing_proof','other_convention'])
+def test_blank_operand_identity_is_not_replaced_by_the_same_narrative_quote(change):
+    p,issue=native_payload()
+    observation=dict(file_hash='a'*64,source_cell_id='native:r4c5',table_code='FIN_07_three_public',
+        instance_uid='native',indicator='vehicle_purchase_operation',subject_code='total',budget_stage='决算',
+        physical_page=2,bbox=[1,2,3,4],presence='blank',calculation=True,convention=dict(id='U-5'))
+    proof=dict(file_hash='a'*64,source_cell_id='native:r4c5',field='vehicle_purchase_operation',subject_code='total',
+        physical_page=2,bbox=[1,2,3,4],blank_as_zero=True,current_value='0.00',
+        verification_status='verified',location_level='exact_cell')
+    issue['location']=dict(operand_refs=[],native_blank_sources=[observation],native_blank_calculation_refs=[proof])
+    e=dict(job_id='job',issue_id=issue['id'],analysis_revision='old',status='confirmed',decision_revision='1',
+        decision_identity=decision_identity(p,issue))
+    assert e['decision_identity']
+    if change=='other_cell':observation['source_cell_id']=proof['source_cell_id']='native:r4c7'
+    elif change=='missing_proof':issue['location']['native_blank_calculation_refs']=[]
+    elif change=='other_convention':observation['convention']['id']='other-policy'
+    projected=workflow.project_job_issue_decisions('job',p,_state=dict(decision_events=[e]))
+    assert bool(projected) == (change=='none')
+
+
 @pytest.mark.parametrize('change',['file','quote','source','page','year','organization','check','claim','severity','unverified','duplicate','policy'])
 def test_any_changed_or_ambiguous_review_basis_cannot_inherit(change):
     p=payload();e=event(p);issue=p['result']['ai_findings'][0]

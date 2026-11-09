@@ -101,6 +101,7 @@ def blank_term(doc, table_code, indicator, *, code=None, names=(), stage='决算
     names = tuple(''.join(str(name or '').split()) for name in names)
     context, artifact = getattr(doc, 'fact_context', None), getattr(doc, 'parse_artifact', None)
     if (table_code not in _TABLES or context is None or artifact is None
+            or not context.file_hash or not context.parse_run_uid
             or context.file_hash != artifact.source_file_hash
             or context.parse_run_uid != artifact.parse_run_uid
             or not context.org_name or context.fiscal_year is None or context.report_kind != 'final'):
@@ -217,6 +218,17 @@ def blank_term(doc, table_code, indicator, *, code=None, names=(), stage='决算
                           subject_name=name, table_code=table_code, instance_uid=instance.instance_uid,
                           row_order=row_idx, recognition_status='observed_blank',
                           extra_dims={'native_blank_observation': observation})
+
+
+def independent_blank_zero(doc, term):
+    """原格约定独立证明零值；不能用待核对的说明金额给自身作证。"""
+    if not isinstance(term, NativeBlankTerm) or term.normalized_value != Decimal('0'):
+        return False
+    observation = term.extra_dims.get('native_blank_observation') or {}
+    return bool(isinstance(observation.get('convention'), dict)
+                and observation['convention'].get('id')
+                and valid_blank_observation(doc.parse_artifact, doc.fact_context, observation,
+                                            getattr(doc, 'page_texts', None)))
 
 
 def verified_blank_zero_by_code(doc, table_code, page, code):

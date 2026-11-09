@@ -1037,17 +1037,6 @@ def project_job_issue_decisions(
             if issue is None:
                 continue
             issue_fingerprint = issue_identity_fingerprint(issue)
-            facts = sorted(_strings(issue.get("fact_ids")))
-            evidence = sorted(_strings(issue.get("evidence_ids")))
-            same_identity = bool(
-                event.get("check_relation_id")
-                and event.get("check_relation_id") == issue.get("check_relation_id")
-                and facts
-                and sorted(_strings(event.get("fact_ids"))) == facts
-                and evidence
-                and sorted(_strings(event.get("evidence_ids"))) == evidence
-                and event.get("identity_fingerprint") == issue_fingerprint
-            )
             # An ignore is an explicit judgment for one analysis. Reusing an ID,
             # or even its evidence identity, cannot silently carry that judgment.
             if str(event.get("status")) == "no_issue":
@@ -1056,7 +1045,9 @@ def project_job_issue_decisions(
                     or event.get("identity_fingerprint") == issue_fingerprint
                 )
             else:
-                applies = same_revision or same_identity or source_identity_match
+                # 旧的 fact/evidence id 相等路径不含原件、年度和政策身份，
+                # 不能绕过上方同源唯一匹配（例如同编号但规则口径已变化）。
+                applies = same_revision or source_identity_match
             if applies:
                 canonical_id = str(issue.get("id") or issue_id)
                 bundle = grouped.setdefault(canonical_id, {"issue": issue, "records": []})

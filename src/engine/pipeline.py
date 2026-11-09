@@ -427,8 +427,14 @@ def _issue_to_dict(issue: Any, idx: int, doc: Any = None) -> Dict[str, Any]:
         issue.get("suggestion") if isinstance(issue, dict) else None
     ) or _default_suggestion(rule_code, page)
 
+    # 去重前分配的原始身份已用于成员别名。若在合并后按展示顺序重新编号，
+    # 某成员 id 可能正好变成另一个当前问题的 id，导致人工决定串到别组。
+    # 展示序号仍由 order_and_number_issues 管理，报告身份保留原始唯一编号。
+    source_issue_id = str(location.get("pre_group_issue_id") or "")
+    report_issue_id = (source_issue_id if re.fullmatch(rf"{re.escape(rule_code)}-[1-9]\d*", source_issue_id)
+                       else f"{rule_code}-{idx}")
     data: Dict[str, Any] = {
-        "id": f"{rule_code}-{idx}",
+        "id": report_issue_id,
         "source": "rule",
         "rule": rule_code,
         "rule_id": rule_code,

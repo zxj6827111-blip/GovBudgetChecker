@@ -38,8 +38,8 @@ def sections(doc, match):
 
 def compare(rule, doc, text, start, end, value, fact, key, label, section, *, disclosure_sources=()):
     refs = text.refs(start, end, '原文金额声明')
-    from .native_empty_operands import NativeBlankTerm
-    if isinstance(fact, NativeBlankTerm):
+    from .native_empty_operands import NativeBlankTerm, independent_blank_zero, blank_observations, blank_operand_refs
+    if isinstance(fact, NativeBlankTerm) and not independent_blank_zero(doc, fact):
         reason = (f'{label}原文明确为零/无支出，表内对应格经原件认证为空白'
                   if value == 0 else f'{label}原文有金额而表内对应原件格留空，需核对披露')
         receipt(rule, doc, key, [fact], status='not_applicable' if value == 0 else 'insufficient_data',
@@ -60,7 +60,9 @@ def compare(rule, doc, text, start, end, value, fact, key, label, section, *, di
     return [rule._issue(f'{label}表文不一致：原文{value:.2f}万元，表内{fact.normalized_value:.2f}万元。',
              {'page': refs[0]['page'], 'pages': pages, 'section': section,
               'table_code': fact.table_code, 'table_refs': refs,
-              'operand_refs': [operand_ref(fact, key)],
+              'operand_refs': [] if isinstance(fact, NativeBlankTerm) else [operand_ref(fact, key)],
+              'native_blank_sources': blank_observations([fact]),
+              'native_blank_operands': blank_operand_refs([fact], key),
               'fact_context_version_token': doc.fact_context.version_token}, 'warn',
              evidence_text=quote, check_relation_id=f'{rule.code}:{key}',
              fact_ids=ids, evidence_ids=evidence)]
@@ -309,7 +311,7 @@ def check_income_structure(rule, doc):
 def check_three_public_details(rule, doc, *, require_vehicle_details=True, check_percentages=False):
     """Compare original detail declarations with uniquely bound current FIN_07 cells."""
     from .native_three_public_ratios import _SUBJECT, LABELS
-    from .native_empty_operands import NativeBlankTerm
+    from .native_empty_operands import NativeBlankTerm, independent_blank_zero
     from .native_no_activity import require_no_activity_disposition
     require_no_activity_disposition(rule, doc)
     facts, reason = table_facts(doc, 'FIN_07_three_public')
@@ -353,7 +355,7 @@ def check_three_public_details(rule, doc, *, require_vehicle_details=True, check
             start = subject.start() - len(absence.group()) if absent else subject.start()
             zero_vehicle_sources = [{**ref, 'file_hash': doc.fact_context.file_hash}
                                     for ref in text.refs(start, statement_end, '明确公务用车分项无支出')]
-        if isinstance(fact, NativeBlankTerm):
+        if isinstance(fact, NativeBlankTerm) and (value == 0 or not independent_blank_zero(doc, fact)):
             if value == 0:
                 start = subject.start() - len(absence.group()) if absent else subject.start()
                 sources = [{**ref, 'file_hash': doc.fact_context.file_hash}

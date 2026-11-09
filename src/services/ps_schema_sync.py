@@ -91,6 +91,11 @@ class PSSharedSchemaSync:
                 scope_key,
                 pdf_path.name,
             )
+        previous_id = None
+        if fact_snapshot is not None:
+            scope_key, previous_id = await self._snapshot_report_target(
+                department_id, unit_id, fiscal_year, report_type, scope_key, document_version_id
+            )
         report_kwargs = dict(
             department_id=department_id,
             unit_id=unit_id,
@@ -102,14 +107,7 @@ class PSSharedSchemaSync:
         )
         previous_archive_hash=None
         if fact_snapshot is not None:
-            previous_id=await self.conn.fetchval('SELECT id FROM org_dept_annual_report WHERE department_id=$1 '
-                'AND unit_id=$2 AND year IS NOT DISTINCT FROM $3 AND report_type=$4 AND scope_key=$5 FOR UPDATE',
-                department_id,unit_id,fiscal_year,report_type,scope_key)
             if previous_id:
-                collision=await self.conn.fetchval('SELECT EXISTS(SELECT 1 FROM published_fact_projections p '
-                    "WHERE p.receipt->>'shared_report_id'=$1 AND p.document_id!=(SELECT document_id FROM fiscal_document_versions WHERE id=$2))",
-                    str(previous_id),document_version_id)
-                if collision:raise ValueError('shared report scope belongs to a different fiscal document')
                 from src.services.fact_compatibility_projection import archive_legacy_projection
                 previous_archive_hash=await archive_legacy_projection(self.conn,document_version_id,checksum,
                                                                        shared_report_ids=[previous_id])
@@ -156,6 +154,39 @@ class PSSharedSchemaSync:
             "table_data_count": table_count,
             "line_item_count": line_item_count,
         }
+
+    async def _snapshot_report_target(
+        self, department_id, unit_id, fiscal_year, report_type, scope_key, document_version_id
+    ):
+        """快照按财政文档隔离，同名部门与本级单位不能覆盖彼此的共享报告。"""
+        document_id = await self.conn.fetchval(
+            'SELECT document_id FROM fiscal_document_versions WHERE id=$1', document_version_id
+        )
+        if document_id is None:
+            raise ValueError('shared report has no fiscal document')
+        # 发布事务中串行化同一共享范围的首次分配，避免两份文档同时看到空槽。
+        lock_key = json.dumps(
+            ['shared-fiscal-report', str(department_id), str(unit_id), fiscal_year, report_type],
+            ensure_ascii=False, separators=(',', ':'),
+        )
+        await self.conn.execute('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', lock_key)
+        for candidate in dict.fromkeys([scope_key, f'fiscal-document:{document_id}']):
+            previous_id = await self.conn.fetchval(
+                'SELECT id FROM org_dept_annual_report WHERE department_id=$1 '
+                'AND unit_id=$2 AND year IS NOT DISTINCT FROM $3 AND report_type=$4 AND scope_key=$5 FOR UPDATE',
+                department_id, unit_id, fiscal_year, report_type, candidate,
+            )
+            if previous_id:
+                collision = await self.conn.fetchval(
+                    'SELECT EXISTS(SELECT 1 FROM published_fact_projections p '
+                    "WHERE p.receipt->>'shared_report_id'=$1 AND p.document_id!=$2)",
+                    str(previous_id), document_id,
+                )
+                if collision:
+                    continue
+            return candidate, previous_id
+        # 文档专属槽也被别的文档占用时，仍然阻断，不能挪用或覆盖旧事实。
+        raise ValueError('shared report scope belongs to a different fiscal document')
 
     def resolve_scope(
         self,

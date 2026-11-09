@@ -67,6 +67,34 @@ def decision_identity(payload: Mapping, issue: Mapping) -> dict | None:
     operand_fields = ('table_code', 'subject_code', 'indicator', 'budget_stage', 'value', 'role')
     operands = [tuple(_text(ref.get(key)) for key in operand_fields)
                 for ref in location.get('operand_refs') or [] if isinstance(ref, Mapping)]
+    blank_basis = []
+    blanks = location.get('native_blank_sources') or []
+    calculations = location.get('native_blank_calculation_refs') or []
+    for observation in blanks:
+        if not isinstance(observation, Mapping):
+            return None
+        convention = observation.get('convention') or {}
+        required = ('source_cell_id','table_code','instance_uid','indicator','subject_code','budget_stage')
+        if (observation.get('file_hash') != file_hash or observation.get('presence') != 'blank'
+                or observation.get('calculation') is not True
+                or any(not observation.get(key) for key in required)
+                or type(observation.get('physical_page')) is not int
+                or not observation.get('bbox') or not isinstance(convention,Mapping) or not convention.get('id')):
+            return None
+        matched = [ref for ref in calculations if isinstance(ref,Mapping)
+                   and ref.get('source_cell_id') == observation['source_cell_id']
+                   and ref.get('file_hash') == file_hash
+                   and ref.get('physical_page') == observation['physical_page']
+                   and list(ref.get('bbox') or []) == list(observation['bbox'])
+                   and ref.get('field') == observation['indicator']
+                   and ref.get('subject_code') == observation['subject_code']
+                   and ref.get('blank_as_zero') is True and ref.get('current_value') == '0.00'
+                   and ref.get('verification_status') == 'verified' and ref.get('location_level') == 'exact_cell']
+        if not matched:
+            return None
+        # 空白无 fact_uid，仍须把经来源绑定复验的原格及约定纳入判断身份。
+        blank_basis.append(tuple(_text(observation.get(key)) for key in required)
+                           + (observation['physical_page'],tuple(observation['bbox']),_text(convention['id'])))
     claims = {key: _text(issue.get(key)) for key in ('expected', 'actual', 'difference', 'table_or_section')}
     # 没有结构化判断对象时，不能把“相同原句、相同泛化检查名”当成相同结论。
     # 这类历史记录只接受逐字相同的判断；有 expected/actual 的才允许模型换措辞。
@@ -80,6 +108,8 @@ def decision_identity(payload: Mapping, issue: Mapping) -> dict | None:
                  operands=sorted(set(operands)),
                  claims=claims, unstructured_claim=unstructured_claim,
                  policy=meta.get('rule_policy_version'), registry=meta.get('rule_registry_version'))
+    if blank_basis:
+        basis['blank_operands'] = sorted(set(blank_basis))
     digest = hashlib.sha256(json.dumps(basis, ensure_ascii=False, sort_keys=True,
                                       separators=(',', ':')).encode()).hexdigest()
     return {'schema_version': 1, 'digest': digest, 'basis': basis}

@@ -11229,6 +11229,8 @@ class R33CrossSanGongEcon(Rule):
         # 语气守卫），或经审定的空白值约定（cell_value_policy）。无依据的
         # 空白保持未知，即使本表勾稽平衡。
         zero_authorized: Set[str] = set()
+        native_zero_keys: Set[str] = set()
+        native_zero_observations: Dict[str, Dict[str, Any]] = {}
         zero_refs_by_key: Dict[str, List[Dict[str, Any]]] = {}
         if blank_keys:
             zero_basis_by_subject: Dict[str, str] = {}
@@ -11237,7 +11239,8 @@ class R33CrossSanGongEcon(Rule):
             row_idx = next(
                 (i for i, r in enumerate(table7.rows) if r is data_row), None)
             for key in sorted(blank_keys):
-                indicator = "total_actual" if key == "total" else key
+                indicator = ("total_actual" if key == "total" else
+                             "vehicle_purchase_operation" if key == "vehicle_subtotal" else key)
                 refs = narrative_zero_sources(
                     doc, table_code="FIN_07_three_public",
                     indicator=indicator, stage="决算",
@@ -11249,18 +11252,22 @@ class R33CrossSanGongEcon(Rule):
                     zero_basis_by_subject[item_groups.get(key, key)] = (
                         f"说明零披露（第{refs[0].get('page')}页）")
                     zero_refs_by_key[key] = list(refs)
-                    continue
+                    # 仍检查原格是否另有独立约定；说明零披露与本表失衡时不能
+                    # 自行定零，但当前原件认证的空白不依赖等式是否恰好平衡。
                 # 空白值约定（U-5）只认原件网格认证的空白：回到原件同格核实，
                 # 旧实现在这里把认证写死为否并多传参数，约定从未生效（2026-11-08）。
                 convention = None
                 if row_idx is not None and key in three_public_columns:
-                    from .native_empty_operands import blank_term
+                    from .native_empty_operands import blank_term, independent_blank_zero
                     term = blank_term(doc, "FIN_07_three_public", indicator,
                                       code="total", stage="决算")
                     if term is not None:
                         convention = term.extra_dims["native_blank_observation"].get("convention")
                         if convention == "narrative_explicit_zero":
                             convention = None  # 说明零披露已在上面单独记账，这里只认原格约定
+                        elif independent_blank_zero(doc, term):
+                            native_zero_keys.add(key)
+                            native_zero_observations[key] = dict(term.extra_dims['native_blank_observation'])
                 if convention:
                     zero_authorized.add(key)
                     zero_basis_by_subject[item_groups.get(key, key)] = "经审定空白值约定"
@@ -11268,10 +11275,8 @@ class R33CrossSanGongEcon(Rule):
             confirmed, closure_note = self._blank_cells_confirmed(
                 three_public, item_groups, blank_keys, scales, unit
             )
-            # 零授权与勾稽一致性是"与"关系：
-            # - 无独立零依据 → 未知（勾稽平衡也不授权）；
-            # - 有依据但勾稽不成立 → 该格 0 与表格其他格矛盾，同样不能用；
-            # - 有依据且勾稽成立 → 才允许以 0 参与比较。
+            # 说明推断的零仍要求本表一致；原格约定独立证明的零不依赖等式
+            # 是否平衡。失衡由表内规则单独报告，不能把矛盾改写成取数失败。
             if unauthorized:
                 blocked.update(unauthorized)
                 unresolved.append(
@@ -11286,9 +11291,8 @@ class R33CrossSanGongEcon(Rule):
                 for key in unauthorized:
                     three_public.pop(key, None)
             if not confirmed:
-                # 授权项也依赖勾稽一致：勾稽失败时"空白=0"与表内其他金额矛盾，
-                # 全部空白一起失效（旧契约保持：勾稽不成立时不得当 0 用）。
-                still_open = blank_keys - unauthorized if unauthorized else blank_keys
+                # 只有依靠说明而无认证原格的空白，仍受旧勾稽守卫约束。
+                still_open = blank_keys - unauthorized - native_zero_keys
                 if still_open:
                     unresolved.append(
                         "三公表分项单元格为空白且本表勾稽不成立（"
@@ -11320,6 +11324,8 @@ class R33CrossSanGongEcon(Rule):
             hit = basic.get(key)
             total = three_public[key]
             blank_observation = None
+            source_observations = ([native_zero_observations[key]]
+                                   if key in native_zero_observations else [])
             if hit is not None and hit.get("amount") is None and hit.get("code"):
                 # FIN_06 空白金额的独立零依据：原件网格认证空白 + 空白值约定（U-5）。
                 # 依据来自本表原格本身，不取自被核对的三公表，不构成同源反推。
@@ -11341,6 +11347,7 @@ class R33CrossSanGongEcon(Rule):
                         formula=(f"三公表「{subject}」决算数为0（第{three_public_pages.get(key) or page7}页），"
                                  "基本支出表未列该经济科目，不存在可超分项"),
                         evidence_nature="applicability_judgment",
+                        cell_observations=source_observations,
                     )
                     continue
                 reason = (f"基本支出表未列「{subject}」，且三公表该项决算数为 "
@@ -11396,7 +11403,7 @@ class R33CrossSanGongEcon(Rule):
                     formula=(f"基本支出 {component} ≤ 三公表 {total} {unit}"
                              + ("（基本支出表该格原件空白，按空白值约定为0）" if blank_observation else "")),
                     disclosure_sources=list(zero_disclosure),
-                    cell_observations=[blank_observation] if blank_observation else (),
+                    cell_observations=[*source_observations, *([blank_observation] if blank_observation else [])],
                 )
                 continue
             envelope = compute_dynamic_envelope(

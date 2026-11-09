@@ -418,9 +418,31 @@ def _yoy_key(item, doc):
 
 def _text_key(item, doc, context):
     refs = _location(item).get('operand_refs') or []
+    observations = _location(item).get('native_blank_sources') or []
+    blank_refs = _location(item).get('native_blank_operands') or []
+    if (not refs and len(observations) == 1 and isinstance(observations[0],dict) and blank_refs
+            and all(isinstance(term,dict) and term.get('observation') == observations[0] and term.get('role') == 'parent'
+                    and term.get('relation_id') and term.get('operand_id') for term in blank_refs)):
+        # 空白观察项没有财政 fact_uid；只为本次分组构造业务身份，不写入金额事实。
+        refs = [{**observations[0], 'value': '0'}]
     if len(refs) != 1 or _version(item, context) is None:
         return None
     identity = _resolve_ref(refs[0], context)
+    if identity is None and doc is not None and context is not None:
+        from .native_empty_operands import blank_term, independent_blank_zero
+        ref = refs[0]
+        if not isinstance(ref,dict):
+            return None
+        if len(observations) == 1 and all(ref.get(k) for k in ('table_code','indicator','budget_stage','instance_uid')):
+            term = blank_term(doc, ref['table_code'], ref['indicator'],
+                              code=ref.get('subject_code'), stage=ref['budget_stage'])
+            if (term is not None and independent_blank_zero(doc, term)
+                    and observations[0] == term.extra_dims['native_blank_observation']
+                    and ref['instance_uid'] == term.instance_uid
+                    and _decimal(ref.get('value')) == term.normalized_value):
+                identity = ('native_blank:' + observations[0]['source_cell_id'], term.table_code,
+                            term.instance_uid, term.indicator, _canonical_budget_stage(term.budget_stage),
+                            term.fiscal_year, term.org_name, term.org_scope, term.fund_scope)
     if identity is None:
         return None
     if identity[1] == 'FIN_07_three_public' and identity[3] == 'total_actual':
@@ -432,7 +454,7 @@ def _text_key(item, doc, context):
         business = next((pattern for key, pattern in _BUSINESS if key == identity[3]), None)
         if business is None or identity[4] != '决算':
             return None
-        pattern = re.compile(rf'{business}(?:支出)?(?:决算(?:数)?|决算数)(?:为|是)?{_NUMBER}(?:亿元|万元|元)')
+        pattern = re.compile(rf'{business}(?:支出决算(?:数)?|决算(?:数)?|支出)(?:为|是)?{_NUMBER}(?:亿元|万元|元)')
     elif identity[1] == 'FIN_05_general_public_expenditure' and identity[3] == 'total_actual' and identity[4] == '决算':
         pattern = _DECISION_LITERAL
     else:
@@ -442,6 +464,21 @@ def _text_key(item, doc, context):
                     and not ref.get('fact_uid') and not ref.get('source_cell_id')]
     if not literal_refs or any(_literal_ref_position(ref, doc) is None for ref in literal_refs):
         return None
+    if str(identity[0]).startswith('native_blank:'):
+        # 同一认证原格与同一显式金额在多处冲突，只产生一个整改事项，
+        # 每条原文引用和独立失败回执仍全部保留。仅金额相同不能进入此分支。
+        claims = []
+        for ref in literal_refs:
+            matches = list(pattern.finditer(_compact(ref.get('span') or ref.get('quote'))))
+            if len(matches) != 1:
+                return None
+            amount = re.search(rf'(?P<amount>{_NUMBER})(?P<unit>亿元|万元|元)$',matches[0].group())
+            if amount is None:
+                return None
+            claims.append(_decimal(amount['amount']) * {'元':Decimal('.0001'),'万元':Decimal('1'),'亿元':Decimal('10000')}[amount['unit']])
+        if len(set(claims)) != 1:
+            return None
+        return ('text_vs_blank_table',identity,str(claims[0].normalize()),_version(item,context))
     matches = list(pattern.finditer(_source_spans(item)))
     if len(matches) != 1:
         return None
@@ -708,6 +745,10 @@ def _merged(group, doc=None, *, key=None):
         refs = _unique([ref for item in proof_members for ref in _location(item).get(field) or []])
         if refs:
             location[field] = _repair_literal_refs(refs, doc) if field == 'table_refs' else refs
+        elif field == 'operand_refs' and all(isinstance(_location(item).get(field),list) for item in proof_members):
+            # [] 是“仅空白观察项”的显式证明合同；不能在并组时删除，
+            # 否则来源绑定会退回只验证文字而跳过原格复验。
+            location[field] = []
         else:
             location.pop(field, None)
     pages = {page for item in group for page in [

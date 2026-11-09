@@ -521,9 +521,9 @@ def bind_rule_sources(result, *, page_texts, source_file_hash, artifact=None, fa
             ]
             location['pages'] = sorted({item['physical_page'] for item in evidence})
             finding['location'] = location
-        if bound_refs:
+        if bound_refs or blank_calculation_refs:
             location['operand_refs'] = bound_refs
-            location['pages'] = sorted({item['physical_page'] for item in evidence})
+            location['pages'] = sorted({item['physical_page'] for item in [*evidence, *blank_calculation_refs]})
             location['page'] = evidence[0]['physical_page']
             finding['page_number'] = evidence[0]['physical_page']
             # Every operand keeps its own source coordinates. There is no
@@ -543,7 +543,7 @@ def bind_rule_sources(result, *, page_texts, source_file_hash, artifact=None, fa
             finding['source_binding_status'] = 'bound'
             finding.pop('source_binding_errors', None)
         finding.pop('text_snippet', None)
-        finding['source_binding_method'] = ('current_semantic_operands_and_literal_claims' if bound_refs
+        finding['source_binding_method'] = ('current_semantic_operands_and_literal_claims' if bound_refs or blank_calculation_refs
                                             else 'literal_native_span_or_current_consumed_cell')
         bound += 1
     return {"bound_rule_findings": bound, "scope": "source identity only; evidence guard and human business adjudication remain required"}
