@@ -1001,6 +1001,26 @@ function withReadableAiTitle(issue: Record<string, unknown>): Record<string, unk
   return { ...issue, title: readable, message: swap(issue.message), display };
 }
 
+function readExpenditureContext(value: unknown): Problem["expenditureContext"] {
+  if (!isRecord(value) || value.verified !== true || !Array.isArray(value.rows) || !Array.isArray(value.columns)) return undefined;
+  const rows = value.rows.filter(isRecord).map((row) => ({
+    code: String(row.code ?? ""), name: String(row.name ?? ""),
+    rowDifference: String(row.row_difference ?? ""), rowStatus: String(row.row_status ?? ""),
+    cells: (Array.isArray(row.cells) ? row.cells.filter(isRecord) : []).map((cell) => ({
+      key: String(cell.key ?? ""), indicator: String(cell.indicator ?? ""), value: String(cell.value ?? ""),
+      page: Number(cell.page), bbox: Array.isArray(cell.bbox) ? cell.bbox.map(Number) : [],
+      blankAsZero: cell.blank_as_zero === true,
+    })),
+  }));
+  if (!rows.length || rows.some((row) => !row.code || row.cells.length < 3 || row.cells.some((cell) =>
+    !cell.key || !Number.isInteger(cell.page) || cell.page < 1 || cell.bbox.length !== 4 || !Number.isFinite(Number(cell.value))))) return undefined;
+  return { checkedIndicator: String(value.checked_indicator ?? ""), rows,
+    columns: value.columns.filter(isRecord).map((column) => ({ indicator: String(column.indicator ?? ""),
+      actual: String(column.actual ?? ""), computed: String(column.computed ?? ""),
+      difference: String(column.difference ?? ""), status: String(column.status ?? ""),
+    })) };
+}
+
 export function toUiProblems(detail: JobDetailRecord, options: { includeEvidencePreview?: boolean } = {}): Problem[] {
   const result = isRecord(detail.result) ? detail.result : {};
   const reviewReport = isRecord(detail.review_report) ? detail.review_report : {};
@@ -1031,6 +1051,7 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
       const anchor = resolveIssueAnchor(issue);
       const { page, evidence } = anchor;
       const rawLocation = isRecord(issue.location) ? issue.location : {};
+      const expenditureContext = readExpenditureContext(rawLocation.expenditure_context);
       const display = isRecord(issue.display) ? issue.display : {};
       const title = String(issue.title ?? issue.message ?? `问题 ${index + 1}`).trim();
       const resolvedTitle = String(display.summary ?? issue.rule_name ?? title).trim() || title;
@@ -1127,7 +1148,13 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
             }];
           })
         : [];
-      const allEvidenceRefs = [...evidenceRefs, ...factRefs, ...pairRefs, ...rejectedPairRefs].filter(
+      const columnRefs = expenditureContext?.rows.flatMap((row) => row.cells.map((cell) => ({
+        key: cell.key, role: "同一行列间对照", page: cell.page,
+        locationText: `第 ${cell.page} 页 · ${row.name} · ${row.code} · ${displayMeasureName(cell.indicator)}`,
+        valueText: cell.value, bbox: cell.bbox, blankAsZero: cell.blankAsZero,
+        locationLevel: "exact_cell", verificationStatus: "verified",
+      }))) ?? [];
+      const allEvidenceRefs = [...evidenceRefs, ...factRefs, ...pairRefs, ...rejectedPairRefs, ...columnRefs].filter(
         (ref, refIndex, all) => all.findIndex((item) => item.key === ref.key) === refIndex,
       );
       const roundingCases = Array.isArray(rawLocation.rounding_cases)
@@ -1175,6 +1202,7 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
             : mapSeverity(issue.severity) === "info" ? "tip" : "issue",
         bbox: anchor.bbox,
         evidenceRefs: allEvidenceRefs,
+        expenditureContext,
         roundingCases,
         expectedName: String(issue.expected_name ?? rawLocation.expected_name ?? ""),
         actualName: String(issue.actual_name ?? rawLocation.actual_name ?? ""),

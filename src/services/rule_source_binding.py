@@ -408,6 +408,19 @@ def bind_rule_sources(result, *, page_texts, source_file_hash, artifact=None, fa
                 if evidence and not errors:
                     finding['fact_ids'] = list(dict.fromkeys(fact.fact_uid for fact in selected))
                     finding['fact_version'] = fact_context.version_token
+            if matching_context and location.get('expenditure_context'):
+                from .expenditure_context_binding import bind_expenditure_context
+                try:
+                    context_view = bind_expenditure_context(location['expenditure_context'],
+                        context=fact_context, artifact=artifact, pages=page_texts, file_hash=source_file_hash)
+                except (ValueError, TypeError, ArithmeticError, KeyError):
+                    context_view = None
+                if context_view is not None:
+                    location['expenditure_context'] = context_view
+                else:
+                    location.pop('expenditure_context', None)
+            else:
+                location.pop('expenditure_context', None)
             if errors:
                 finding['source_binding_status'] = 'unresolved'
                 finding['source_binding_errors'] = errors

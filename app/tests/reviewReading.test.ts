@@ -114,6 +114,35 @@ assert.equal(buildCalculationGroups(mapOne({ ...sumIssue,
   location: { table_refs: [...blankRefs, ...otherColumn] },
 })).length, 2);
 
+// 同一原行的三列并排，201的基本空白0和项目3不能互相替代。
+const columnCell = (code: string, indicator: string, value: string, blank = false) => ({
+  key: `expenditure:T3:${code}:${indicator}`, indicator, value, page: 12,
+  bbox: [10, 20, 30, 40], blank_as_zero: blank,
+});
+const threeColumnContext = {
+  verified: true, checked_indicator: "basic_actual",
+  rows: [
+    { code: "total", name: "合计", row_status: "mismatch", row_difference: "-1", cells: [
+      columnCell("total", "total_actual", "10"), columnCell("total", "basic_actual", "8"), columnCell("total", "project_actual", "3")] },
+    { code: "201", name: "一般公共服务支出", row_status: "ok", row_difference: "0", cells: [
+      columnCell("201", "total_actual", "3"), columnCell("201", "basic_actual", "0", true), columnCell("201", "project_actual", "3")] },
+    { code: "208", name: "社会保障和就业支出", row_status: "ok", row_difference: "0", cells: [
+      columnCell("208", "total_actual", "7"), columnCell("208", "basic_actual", "7"), columnCell("208", "project_actual", "0", true)] },
+  ],
+  columns: [
+    { indicator: "total_actual", actual: "10", computed: "10", difference: "0", status: "ok" },
+    { indicator: "basic_actual", actual: "8", computed: "7", difference: "1", status: "mismatch" },
+    { indicator: "project_actual", actual: "3", computed: "3", difference: "0", status: "ok" },
+  ],
+};
+const columnsProblem = mapOne({ ...sumIssue, location: { ...sumIssue.location, expenditure_context: threeColumnContext } });
+assert.equal(columnsProblem.expenditureContext?.rows.length, 3);
+assert.equal(columnsProblem.expenditureContext?.rows[1].cells[1].blankAsZero, true);
+assert.equal(columnsProblem.expenditureContext?.rows[1].cells[2].value, "3");
+for (const row of columnsProblem.expenditureContext!.rows) for (const cell of row.cells)
+  assert.ok(columnsProblem.evidenceRefs?.some((ref) => ref.key === cell.key && ref.page === cell.page && ref.bbox));
+assert.equal(mapOne({ ...sumIssue, location: { expenditure_context: { ...threeColumnContext, verified: false } } }).expenditureContext, undefined);
+
 // 任一金额无法解析时不给出半截加总。
 const brokenProblem = mapOne({
   ...sumIssue,

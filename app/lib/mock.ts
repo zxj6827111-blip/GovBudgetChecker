@@ -23,6 +23,13 @@ export interface ProblemRoundingCase {
   operandIds: string[];
 }
 
+export interface ExpenditureContext {
+  checkedIndicator: string;
+  rows: Array<{ code: string; name: string; rowDifference: string; rowStatus: string;
+    cells: Array<{ key: string; indicator: string; value: string; page: number; bbox: number[]; blankAsZero: boolean }> }>;
+  columns: Array<{ indicator: string; actual: string; computed: string; difference: string; status: string }>;
+}
+
 export interface Problem {
   id: string;
   ruleId: string;
@@ -45,6 +52,7 @@ export interface Problem {
   bbox?: number[];
   evidenceRefs?: ProblemEvidenceRef[];
   roundingCases?: ProblemRoundingCase[];
+  expenditureContext?: ExpenditureContext;
   jobId?: string;
   expectedName?: string;
   actualName?: string;

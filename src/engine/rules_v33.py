@@ -1120,7 +1120,7 @@ class Rule:
                fact_ids: Optional[Sequence[str]] = None,
                evidence_ids: Optional[Sequence[str]] = None) -> Issue:
         blanks = (location or {}).get("native_blank_sources") or []
-        if blanks:
+        if blanks and not (location or {}).get("expenditure_context"):
             message += "；以下原件空白格按0参与计算：" + "；".join(
                 f"第{item.get('physical_page')}页 科目{item.get('subject_code')} {item.get('subject_name') or ''}/"
                 f"{ {'basic_actual':'基本支出','project_actual':'项目支出','total_actual':'决算金额'}.get(item.get('indicator'), item.get('indicator'))}，"

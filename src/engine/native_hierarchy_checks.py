@@ -312,7 +312,7 @@ def _select(doc, view, code, indicator):
     return (None, f'{table.title}科目{code}/{indicator}：{reason}') if reason else (fact, None)
 
 
-def _compare(rule, doc, title, key, code, indicator, parent, children, *, column_total=False):
+def _compare(rule, doc, title, key, code, indicator, parent, children, *, column_total=False, table_view=None):
     facts = [parent] + children
     scope = ('instance_uid', 'org_scope', 'fund_scope', 'fiscal_year', 'budget_stage')
     if any(any(getattr(f, k) != getattr(parent, k) for k in scope) for f in children):
@@ -359,6 +359,21 @@ def _compare(rule, doc, title, key, code, indicator, parent, children, *, column
                 'native_blank_sources': blank_observations(facts),
                 'native_blank_operands': blank_operand_refs(facts, key),
                 'fact_context_version_token': doc.fact_context.version_token}
+    if column_total and table_view is not None:
+        from .native_expenditure_context import build_expenditure_context
+        cache = getattr(doc, '_expenditure_context_cache', None)
+        if cache is None:
+            cache = doc._expenditure_context_cache = {}
+        cache_key = (parent.table_code, doc.fact_context.version_token)
+        if cache_key not in cache:
+            cache[cache_key] = build_expenditure_context(doc, table_view)
+        if cache[cache_key] is not None:
+            location['expenditure_context'] = {**cache[cache_key], 'checked_indicator': indicator}
+            if level == 'mismatch':
+                label = {'total_actual': '本年支出合计', 'basic_actual': '基本支出',
+                         'project_actual': '项目支出'}.get(indicator, indicator)
+                message = (f'{title}{label}列合计不一致：表内总计{parent.normalized_value:.2f}万元，'
+                           f'各类科目合计{total:.2f}万元，差额{diff:.2f}万元。')
     return [rule._issue(message, location, 'warn' if level == 'mismatch' else 'info',
                         evidence_text=message, check_relation_id=f'{rule.code}:{key}',
                         fact_ids=ids, evidence_ids=evidence_ids)], []
@@ -493,7 +508,7 @@ def check_native_detail_tables(rule, doc, *, table_codes=None, include_income_so
                             formula='parent = sum(complete children)', reason='；'.join(errors))
                     continue
                 found, missing = _compare(rule, doc, title, key, parent_code, indicator,
-                                          operands[0], operands[1:], column_total=parent_code == 'total')
+                                          operands[0], operands[1:], column_total=parent_code == 'total', table_view=view)
                 issues.extend(found)
                 unresolved.extend(missing)
     return finish(rule, cluster_rounding(rule, issues), unresolved)

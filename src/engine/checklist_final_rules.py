@@ -967,6 +967,9 @@ class R33251_FunctionalDetailCompleteness(Rule):
                     included_subtotal_wan=format(subtotal, "f"),
                     difference_wan=format(difference, "f"),
                     completeness="complete",
+                    # 两种口径属于同一原文节的整改事项，但各自算式和失败回执独立保留。
+                    detail_section_anchor={"page": page, "span": text[s:e]},
+                    check_relation_id=f"{self.code}:V33-251:{kind}:item_sum",
                     **({"conditional_assumed_wan": format(conditional_assumed, "f"),
                         "conditional_included_wan": format(conditional_included, "f"),
                         "conditional_delta_wan": format(conditional_delta, "f")}

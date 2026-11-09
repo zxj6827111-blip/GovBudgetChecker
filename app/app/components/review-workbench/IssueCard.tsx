@@ -16,6 +16,7 @@
  */
 "use client";
 
+import { ExpenditureContextTable } from "./ExpenditureContextTable";
 import { evidenceExcerptLabel } from "@/lib/evidenceIdentity";
 
 import { getSeverityMeta, normalizeSeverityCode, type SeverityCode } from "../../../lib/issueSeverity";
@@ -228,7 +229,10 @@ export function IssueCard({
   });
   const groups = buildCalculationGroups(problem);
   const comparison = buildAmountComparison(problem, groups);
-  const calcKeys = new Set(groups.flatMap((group) => [group.total.key, ...group.items.map((item) => item.key)]));
+  const calcKeys = new Set([
+    ...groups.flatMap((group) => [group.total.key, ...group.items.map((item) => item.key)]),
+    ...(problem.expenditureContext?.rows.flatMap((row) => row.cells.map((cell) => cell.key)) ?? []),
+  ]);
   const evidenceRefs = dedupeEvidenceRefsForDisplay(problem.evidenceRefs ?? []).filter((ref) =>
     !calcKeys.has(ref.key));
   // 取整说明没有对上计算明细时仍要展示，不能因为改版丢掉。
@@ -327,7 +331,9 @@ export function IssueCard({
         </div>
       ) : null}
 
-      {groups.map((group) => (
+      {problem.expenditureContext ? (
+        <ExpenditureContextTable context={problem.expenditureContext} selectedKey={selectedEvidenceRefKey} onSelect={onSelectEvidenceRef} />
+      ) : groups.map((group) => (
         <CalculationDetails
           key={group.relationId}
           problem={problem}

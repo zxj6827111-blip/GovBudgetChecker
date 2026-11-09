@@ -30,7 +30,7 @@ _TABLE_DEFECT_RULES = {
 #: 空表取 V33-114（带表字段与建议语句，表名按原件；V33-109 用九表规范名）。
 _TABLE_DEFECT_PRIMARY = ('V33-002', 'V33-114')
 _YOY = {'V33-234', 'CMM-007'}
-_TEXT = {'CMM-001', 'V33-108', 'V33-105', 'V33-221'}
+_TEXT = {'CMM-001', 'V33-108', 'V33-105', 'V33-221', 'V33-224', 'V33-222'}
 _UNIT_MAGNITUDE = {'V33-222', 'CMM-011'}
 _NUMBER = r'(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?'
 _DECISION_LITERAL = re.compile(
@@ -411,13 +411,131 @@ def _text_key(item, doc, context):
     elif identity[1] == 'FIN_04_fiscal_grant_total' and identity[3] == 'expenditure_actual':
         pattern = re.compile(rf'(?:财政拨款)?(?:收入支出|收支)(?:总计|合计|总额)'
                              rf'(?:为|共计|是)?{_NUMBER}(?:亿元|万元|元)')
+    elif identity[1] == 'FIN_07_three_public':
+        business = next((pattern for key, pattern in _BUSINESS if key == identity[3]), None)
+        if business is None or identity[4] != '决算':
+            return None
+        pattern = re.compile(rf'{business}(?:支出)?(?:决算(?:数)?|决算数)(?:为|是)?{_NUMBER}(?:亿元|万元|元)')
+    elif identity[1] == 'FIN_05_general_public_expenditure' and identity[3] == 'total_actual' and identity[4] == '决算':
+        pattern = _DECISION_LITERAL
     else:
+        return None
+    literal_refs = [ref for ref in _location(item).get('table_refs') or []
+                    if isinstance(ref, dict) and (ref.get('span') or ref.get('quote'))
+                    and not ref.get('fact_uid') and not ref.get('source_cell_id')]
+    if not literal_refs or any(_literal_ref_position(ref, doc) is None for ref in literal_refs):
         return None
     matches = list(pattern.finditer(_source_spans(item)))
     if len(matches) != 1:
         return None
     position = _claim_position(item, matches[0].group(), doc)
     return ('text_vs_table', identity, position, _version(item, context)) if position is not None else None
+
+
+def _literal_ref_position(ref, doc):
+    """证明某条引用在其声称物理页唯一存在；不是按相同金额找位置。"""
+    pages = getattr(doc, 'page_texts', None)
+    page = ref.get('physical_page') or ref.get('page')
+    span = ref.get('span') or ref.get('quote')
+    if not pages or type(page) is not int or not 1 <= page <= len(pages) or not span:
+        return None
+    token = _compact(span)
+    original = _compact(pages[page - 1])
+    if not token or original.count(token) != 1:
+        return None
+    return page, original.index(token), len(token)
+
+
+def _detail_sum_key(item, doc, context):
+    """同一节的预算/决算加总归为一件整改事项，各口径并不互相抵销。"""
+    location = _location(item)
+    if context is None or not context.file_hash or _version(item, context) is None:
+        return None
+    kind = {'C-11': 'budget', 'C-12': 'final'}.get(location.get('checklist_item'))
+    included = location.get('included_items') or []
+    if (kind is None or location.get('completeness') != 'complete' or not included
+            or location.get('not_included_items') or location.get('withheld_items')):
+        return None
+    if any(not isinstance(ref, dict) or ref.get('kind') != kind for ref in included):
+        return None
+    values = [_decimal(ref.get('value_wan')) for ref in included]
+    stated, subtotal, difference = [_decimal(location.get(k)) for k in
+                                  ('stated_total_wan', 'included_subtotal_wan', 'difference_wan')]
+    if (None in values or None in (stated, subtotal, difference)
+            or sum(values, Decimal(0)) != subtotal or subtotal - stated != difference):
+        return None
+    anchor = location.get('detail_section_anchor')
+    position = _literal_ref_position(anchor, doc) if isinstance(anchor, dict) else None
+    if position is None:
+        return None
+    return ('detail_section_sum', context.file_hash, position, _version(item, context))
+
+
+def _name_key(item, doc, context):
+    location = _location(item)
+    code = str(location.get('code') or '')
+    expected, actual = _compact(location.get('expected_name')), _compact(location.get('actual_name'))
+    if (context is None or not context.file_hash or not re.fullmatch(r'\d{3}(?:\d{2}){0,2}', code)
+            or not actual or not expected or actual == expected or _version(item, context) is None):
+        return None
+    facts = [fact for fact in context.facts if fact.table_code == 'FIN_05_general_public_expenditure'
+             and fact.subject_code == code and _compact(fact.subject_name) == expected
+             and not operand_rejection_reason(fact, context.org_name)
+             and fact.fiscal_year == context.fiscal_year]
+    if not facts:
+        return None
+    level = str(location.get('code_level') or '')
+    refs = [ref for ref in location.get('table_refs') or [] if isinstance(ref, dict)
+            and ref.get('role') == '说明5']
+    if (not refs or any(_literal_ref_position(ref, doc) is None for ref in refs)
+            or not all(f'{actual}({level})' in _compact(ref.get('span') or ref.get('quote')) for ref in refs)):
+        return None
+    # 多处同一编码、相同错名和正确名只需一次修改事项；所有出现位置仍留在主卡片。
+    return ('name_discrepancy', context.file_hash, 'FIN_05_general_public_expenditure', code,
+            level, expected, actual, _version(item, context))
+
+
+def _repeat_text_keys(item, doc, context):
+    location = _location(item)
+    if (context is None or location.get('measure') != '本年支出决算'
+            or location.get('fiscal_year') != context.fiscal_year or _version(item, context) is None):
+        return []
+    indicator = _compact(location.get('indicator'))
+    candidates = [fact for fact in context.facts if fact.table_code == 'FIN_05_general_public_expenditure'
+                  and fact.indicator == 'total_actual' and _compact(fact.subject_name) == indicator
+                  and _canonical_budget_stage(fact.budget_stage) == '决算'
+                  and fact.fiscal_year == context.fiscal_year
+                  and not operand_rejection_reason(fact, context.org_name)]
+    if len(candidates) != 1:
+        return []
+    fact = candidates[0]
+    identity = _resolve_ref({'fact_uid': fact.fact_uid}, context)
+    values = [_decimal(location.get('value_a')), _decimal(location.get('value_b'))]
+    if identity is None or None in values or values[0] == values[1] or values.count(fact.normalized_value) != 1:
+        return []
+    refs = [ref for ref in location.get('table_refs') or [] if isinstance(ref, dict)
+            and ref.get('role') in {'披露A', '披露B'}]
+    if len(refs) != 2 or {ref['role'] for ref in refs} != {'披露A', '披露B'}:
+        return []
+    by_role = {ref['role']: ref for ref in refs}
+    for index, role in enumerate(('披露A', '披露B')):
+        ref = by_role[role]
+        span = _compact(ref.get('span') or ref.get('quote'))
+        if (_literal_ref_position(ref, doc) is None
+                or not any(_decimal(match['amount']) * {'元': Decimal('.0001'), '万元': Decimal(1), '亿元': Decimal(10000)}[match['unit']] == values[index]
+                           for match in re.finditer(rf'(?P<amount>{_NUMBER})(?P<unit>亿元|万元|元)', span))):
+            return []
+    unchanged = values.index(fact.normalized_value)
+    same_item = by_role[('披露A', '披露B')[unchanged]]
+    if indicator not in _compact(same_item.get('span') or same_item.get('quote')):
+        return []
+    changed = values.index(next(value for value in values if value != fact.normalized_value))
+    source = _compact(by_role[('披露A', '披露B')[changed]].get('span') or by_role[('披露A', '披露B')[changed]].get('quote'))
+    claims = list(_DECISION_LITERAL.finditer(source))
+    if len(claims) != 1:
+        return []
+    position = _claim_position(item, claims[0].group(), doc)
+    return [('text_vs_table', identity, position, _version(item, context))] if position else []
 
 
 def _table_defect_key(item):
@@ -472,13 +590,27 @@ def _keys(item, doc, context):
         return keys
     if rule in _YOY:
         key = _yoy_key(item, doc)
-    elif rule in _TEXT:
+        if key is not None:
+            keys.append(key)
+    if rule in _TEXT:
         key = _text_key(item, doc, context)
-    elif rule in _UNIT_MAGNITUDE:
+        if key is not None:
+            keys.append(key)
+    if rule in _UNIT_MAGNITUDE:
         key = _unit_magnitude_key(item, doc)
-    else:
-        key = None
-    return [key] if key is not None else []
+        if key is not None:
+            keys.append(key)
+    if rule == 'V33-227':
+        key = _name_key(item, doc, context)
+        if key is not None:
+            keys.append(key)
+    if rule == 'V33-251':
+        key = _detail_sum_key(item, doc, context)
+        if key is not None:
+            keys.append(key)
+    if rule == 'V33-NARRATIVE-INDICATOR-REPEAT':
+        keys.extend(_repeat_text_keys(item, doc, context))
+    return keys
 
 
 def _key(item, doc, context):
@@ -513,7 +645,8 @@ def _quality(item):
 
 def _relation_ids(item):
     return list(dict.fromkeys(str(value) for value in [
-        _get(item, 'check_relation_id'), *(_get(item, 'check_relation_ids') or []),
+        _get(item, 'check_relation_id'), _location(item).get('check_relation_id'),
+        *(_get(item, 'check_relation_ids') or []),
         *(_location(item).get('check_relation_ids') or [])] if value))
 
 
@@ -593,6 +726,17 @@ def _merged(group, doc=None, *, key=None):
                 }
                 for item in group
             ]
+    if key is not None and key[0] == 'name_discrepancy':
+        page_text = '、'.join(map(str, sorted(pages)))
+        _set(result, 'message', f'同一科目名称不一致（编码{key[3]}）：表内“{key[5]}”，说明“{key[6]}”；共{len(group)}处，见第{page_text}页。')
+    if key is not None and key[0] == 'detail_section_sum':
+        # 共享整改卡片，不把两个口径误写成一套计算；完整成员与失败回执继续保留。
+        ordered = sorted(group, key=lambda item: _location(item).get('checklist_item', ''))
+        title = '支出决算具体情况的分项合计与总额不一致'
+        _set(result, 'message', title + '。\n' + '\n'.join(str(_get(item, 'message') or '') for item in ordered))
+        _set(result, 'title', title)
+        _set(result, 'difference', None)
+        location['detail_sum_checks'] = [deepcopy(_location(item)) for item in ordered]
     _set(result, 'location', location)
     for key in ('fact_ids', 'evidence_ids', 'tags'):
         members = group if key == 'tags' else proof_members
@@ -651,9 +795,8 @@ def deduplicate_native_issues(issues, doc=None, *, receipts=None):
         # 记录“未并组时该条会得到的报告 id”。旧链接/旧客户端仍可按它查询，
         # 但只在当前分析的问题集合内解析，不跨版本。
         rule = _rule(item)
-        # V33-227 的每条名称差异都是独立问题，不参与跨规则合并；分组展示号
-        # 会随前序问题增删整体位移，写成引用既无必要也会制造假漂移。
-        if rule and rule != "V33-227":
+        # 同一名称缺陷也保留成员别名；合并依据是编码和双侧原文，不是展示序号。
+        if rule:
             location = _location(item)
             location.setdefault("pre_group_issue_id", f"{rule}-{index + 1}")
             _set(item, "location", location)
