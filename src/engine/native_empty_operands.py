@@ -12,11 +12,65 @@ from .fact_context import _canonical_budget_stage, _column_mappings_for_instance
 # 只允许已知决算网格的加法关系使用原件空白；预算、OCR和文本拼表不适用。
 _TABLES = {'FIN_01_income_expenditure_total', 'FIN_02_income', 'FIN_03_expenditure',
            'FIN_04_fiscal_grant_total', 'FIN_05_general_public_expenditure',
-           'FIN_06_basic_expenditure', 'FIN_07_three_public'}
+           'FIN_06_basic_expenditure', 'FIN_07_three_public', 'FIN_08_gov_fund', 'FIN_09_state_capital'}
 
 
 class NativeBlankTerm(FiscalFact):
     """运行时的无发生额项，raw_value 仍为空；不得物化成财政金额事实。"""
+
+
+def blank_table_terms(doc, table_code):
+    """全空金额表也须逐格证明；没有数据行或夹有横线/未知字样则不推零。
+
+    仅补齐本次计算视图，不加入 fact_context，不创建实际金额事实。
+    """
+    context, artifact = getattr(doc, 'fact_context', None), getattr(doc, 'parse_artifact', None)
+    if context is None or artifact is None or any(f.table_code == table_code for f in context.facts):
+        return []
+    pairs = [(i, _fragment_for_instance(artifact, i)) for i in getattr(artifact, 'logical_tables', []) if i.table_code == table_code]
+    if len(pairs) != 1 or pairs[0][1] is None:
+        return []
+    instance, table = pairs[0]
+    mappings = _column_mappings_for_instance(instance, table)
+    if not mappings:
+        return []
+    materializer = FiscalFactMaterializer(None)
+    cells = {(c.row_idx,c.col_idx):c for c in table.cells}
+    start = min(int(m['source_col_idx']) for m in mappings)
+    terms, seen = [], set()
+    for mapping in mappings:
+        col = int(mapping['source_col_idx'])
+        label_cols = set(mapping.get('source_label_cols') or range(start))
+        stage = _stage_for_fact(mapping['canonical_measure'],mapping.get('source_col_name',''),'final','决算')
+        for row in range(table.header_row_count,len(table.rows)):
+            from .native_grid_roles import merged_note_row
+            if merged_note_row(table, row):
+                continue
+            cell = cells.get((row,col))
+            if cell is None or cell.is_header:
+                continue
+            if cell.raw_text.strip() or cell.numeric_value is not None or not cell.native_blank_verified:
+                return []
+            labels = [cells.get((row,c)) for c in sorted(label_cols)]
+            if any(c is None for c in labels):
+                return []
+            classification = materializer._extract_classification([
+                {'raw_text':c.raw_text,'col_idx':c.col_idx} for c in labels])
+            if classification is None and table_code == 'FIN_07_three_public' and start == 0:
+                classification = {'classification_code':'total','classification_name':'合计'}
+            if classification is None:
+                if any(c.raw_text.strip() for c in labels):
+                    return []
+                continue
+            term = blank_term(doc,table_code,mapping['canonical_measure'],
+                code=classification['classification_code'],
+                names=(''.join((classification['classification_name'] or '').split()),),stage=stage)
+            if term is None:
+                return []
+            sid = term.extra_dims['native_blank_observation']['source_cell_id']
+            if sid not in seen:
+                seen.add(sid);terms.append(term)
+    return terms
 
 
 def cell_id(table, cell):
@@ -44,6 +98,7 @@ def blank_operand_refs(terms, relation):
 
 def blank_term(doc, table_code, indicator, *, code=None, names=(), stage='决算', calculation=True):
     """未识别格保持缺失；只有原页原格、列身份和行身份均完整才返回空白项。"""
+    names = tuple(''.join(str(name or '').split()) for name in names)
     context, artifact = getattr(doc, 'fact_context', None), getattr(doc, 'parse_artifact', None)
     if (table_code not in _TABLES or context is None or artifact is None
             or context.file_hash != artifact.source_file_hash

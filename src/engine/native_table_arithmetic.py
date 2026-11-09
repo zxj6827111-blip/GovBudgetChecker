@@ -27,6 +27,10 @@ def table_facts(doc, code):
         return [], reason
     facts = [f for f in context.facts if f.table_code == code]
     if not facts:
+        from .native_empty_operands import blank_table_terms
+        observed = blank_table_terms(doc, code)
+        if observed:
+            return observed, None
         reason = f'{code}没有可用金额事实'
         _record_table_failure(doc, code, reason)
         return [], reason
@@ -219,6 +223,12 @@ def select(doc, facts, indicator, *, code=None, name=None, stage='决算', allow
                             code=code, name=name, stage=stage)
         return None, reason
     fact = candidates[0]
+    if isinstance(fact, NativeBlankTerm):
+        from .native_empty_operands import valid_blank_observation
+        observation = fact.extra_dims.get('native_blank_observation')
+        if observation and valid_blank_observation(doc.parse_artifact, context, observation, getattr(doc,'page_texts',None)):
+            return fact, None
+        return None, '空白观察项未通过当前原件复验'
     reason = operand_rejection_reason(fact, context.org_name)
     if (reason or context.fiscal_year is None or fact.fiscal_year != context.fiscal_year
             or fact.period not in (None, '本年')):
@@ -247,6 +257,8 @@ def receipt(rule, doc, relation, facts, *, status, formula, reason=None, disclos
             reason_codes=(), amount_subcheck_status=None, explained_by=None,
             residual_difference_wan=None, cascade_of=None, cell_observations=()):
     from .rules_v33 import _v33_relation_receipt
+    if any(f.table_code == 'FIN_06_basic_expenditure' for f in facts):
+        disclosure_sources = [*disclosure_sources, *getattr(doc, '_economic_zero_layout_observations', [])]
     ids, evidence = journal(rule, doc, facts)
     _v33_relation_receipt(doc, rule.code, relation, status=status,
                           operand_fact_ids=ids, formula=formula, incomplete_reason=reason,
@@ -521,7 +533,10 @@ def check_fund_zero_disclosures(rule, doc):
                 continue
             unresolved.append(error)
             continue
-        if any(operand_rejection_reason(f, doc.fact_context.org_name)
+        from .native_empty_operands import valid_blank_observation
+        if any((not valid_blank_observation(doc.parse_artifact, doc.fact_context,
+                    f.extra_dims.get('native_blank_observation') or {}, getattr(doc, 'page_texts', None))
+                if isinstance(f, NativeBlankTerm) else operand_rejection_reason(f, doc.fact_context.org_name))
                or f.fiscal_year != doc.fact_context.fiscal_year or f.fund_scope != fund for f in target):
             unresolved.append(f'{title}的原格金额/身份未确认，不能断言为空表')
             continue
@@ -699,9 +714,6 @@ def relation(rule, doc, key, label, parent, children, *, hints=True, fund_compos
         receipt(rule, doc, key, facts, status='not_applicable', formula='原件完整网格各项均为空白，无发生额关系')
         return [], []
     level, diff = classify_amount_diff(parent.normalized_value, total, n_children=len(children))
-    if rule.code == 'V33-117' and Decimal('0') < abs(diff) <= Decimal('0.05'):
-        # 人员/公用经费类是多个末级科目汇总后的二次加总，0.05 内按显示取整提示。
-        level = 'rounding_hint'
     ids, evidence = receipt(rule, doc, key, facts,
                             status='fail' if level == 'mismatch' else 'pass',
                             formula='total = sum(parts) (万元)')
@@ -757,6 +769,61 @@ def _native_grid_coverage_error(artifact, instance, table):
     return None
 
 
+def _economic_zero_layout_tail(doc, table, cells, row_idx, mapping):
+    """跨页首行只剩名称尾字且所有金额格认证为空白：数值贡献确定为0。
+
+    不给尾字猜编码、不改写原名称，也不物化零事实。只在连续原页、同车道、
+    上页末行有编码、本页首行无其他内容且逐格认证时排除其数值阻断。
+    """
+    from .cell_value_policy import interpret_cell_value
+    from .native_empty_operands import cell_id
+
+    labels = mapping.get('source_label_cols') or []
+    if row_idx < 1 or len(labels) != 2:
+        return None
+    code_col, name_col = map(int, labels)
+    amount_col = int(mapping['source_col_idx'])
+    current = [cells.get((row_idx, col)) for col in range(len(table.rows[row_idx]))]
+    name, code, amount = cells.get((row_idx, name_col)), cells.get((row_idx, code_col)), cells.get((row_idx, amount_col))
+    previous_code, previous_name = cells.get((row_idx-1, code_col)), cells.get((row_idx-1, name_col))
+    previous_amount = cells.get((row_idx-1, amount_col))
+    if (any(c is None for c in [name, code, amount, previous_code, previous_name, previous_amount])
+            or not str(name.raw_text or '').strip() or code.raw_text.strip() or not amount.bbox
+            or name.ocr_provenance or name.extraction_method not in {'lines','lines_strict'}
+            or not previous_amount.native_blank_verified
+            or not re.fullmatch(r'3\d{2}(?:\d{2})?', previous_code.raw_text.strip())
+            or not previous_name.raw_text.strip() or previous_amount.raw_text.strip()
+            or name.page_number != previous_name.page_number + 1
+            or name.origin_row_idx != 0 or not name.bbox or not previous_name.bbox
+            or any(abs(name.bbox[index]-previous_name.bbox[index]) > .5 for index in (0,2))):
+        return None
+    context, artifact = doc.fact_context, doc.parse_artifact
+    if (context is None or artifact is None or context.report_kind != 'final' or context.file_hash != artifact.source_file_hash
+            or context.parse_run_uid != artifact.parse_run_uid):
+        return None
+    for cell in current:
+        if cell is name:
+            continue
+        if (cell is None or cell.raw_text.strip() or cell.numeric_value is not None
+                or not cell.native_blank_verified or cell.is_header
+                or cell.extraction_method not in {'lines','lines_strict'}):
+            return None
+    sid = cell_id(table, amount)
+    physical = [c for fragment in artifact.physical_fragments for c in fragment.cells
+                if cell_id(fragment,c) == sid]
+    if len(physical) != 1 or not physical[0].native_blank_verified or physical[0].raw_text.strip():
+        return None
+    value, _presence, convention = interpret_cell_value('', native_blank_verified=True,
+        region=context.org_name, year=context.fiscal_year, table_code=table.table_code,
+        row=row_idx, column=amount_col)
+    if value != 0 or not convention:
+        return None
+    return dict(kind='zero_layout_tail', table_code=table.table_code, source_cell_id=sid,
+                physical_page=amount.page_number, bbox=list(amount.bbox), raw_text='',
+                name_tail=name.raw_text, value='0', convention=convention,
+                source_file_hash=context.file_hash, parse_run_uid=context.parse_run_uid)
+
+
 def _economic_table_view(doc, facts):
     """完整网格决定明细集合，事实只提供当前金额；左右车道独立绑定标签。"""
     from .fact_context import _column_mappings_for_instance, _fragment_for_instance, _stage_for_fact
@@ -794,6 +861,9 @@ def _economic_table_view(doc, facts):
     for row_idx, row in enumerate(table.rows):
         if row_idx < table.header_row_count or is_index_header(row):
             continue
+        from .native_grid_roles import merged_note_row
+        if merged_note_row(table, row_idx):
+            continue
         for mapping in mappings:
             col = int(mapping['source_col_idx'])
             label_cols = [int(value) for value in mapping['source_label_cols']]
@@ -810,8 +880,16 @@ def _economic_table_view(doc, facts):
             if (code != 'total' and not re.fullmatch(r'3\d{2}(?:\d{2})?', str(code or ''))
                     or classification and classification.get('classification_conflict')
                     or code == 'total' and name not in {'人员经费合计', '公用经费合计'}):
+                zero_tail = _economic_zero_layout_tail(doc, table, cells, row_idx, mapping)
+                if zero_tail is not None:
+                    observed = getattr(doc, '_economic_zero_layout_observations', [])
+                    if zero_tail not in observed:
+                        observed.append(zero_tail)
+                    doc._economic_zero_layout_observations = observed
+                    continue
                 return None, f'经济分类表第{row_idx + 1}行科目编码无法唯一识别，明细归集未完成'
-            if amount is None or any((row_idx, c) not in cells for c in label_cols):
+            from .native_grid_roles import labels_covered_by_native_cells
+            if amount is None or not labels_covered_by_native_cells(table, row_idx, label_cols):
                 return None, f'经济分类表第{row_idx + 1}行原始标签或金额单元格缺失'
             key = name if code == 'total' else code
             if key in rows:

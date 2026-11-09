@@ -76,3 +76,18 @@ def test_multiple_original_candidates_even_if_facts_drop_one_are_not_unique():
 def test_different_characters_in_parent_name_cannot_be_guessed_by_equal_amount():
     doc, facts = document()
     assert bind(doc, facts, parent='城乡社区服务事务')[0] is None
+
+
+def test_two_independent_exact_leaf_chains_can_bind_under_wrong_parent_label(monkeypatch):
+    from src.engine import native_final_disclosure as target
+    from src.engine.native_narrative_checks import _Text
+    doc,facts=document(extra=(('2120101','行政运行'),))
+    doc.page_texts[0]+='\n“城乡社区支出(类)旧款名(款)其他城乡社区管理事务支出(项)”支出决算100万元。\n“城乡社区支出(类)旧款名(款)行政运行(项)”支出决算100万元。'
+    text=_Text.from_pages(doc.page_texts);items=list(target._ITEM.finditer(text.compact))
+    monkeypatch.setattr(target,'_general_ranges',lambda doc:(text,[('一般公共预算支出',0,len(text.compact))]))
+    aliases=[];fact,reason=target._hierarchy_fact(doc,facts,items[0],siblings=items,aliases=aliases)
+    assert reason is None and fact.subject_code=='2120199'
+    proof=next(x for x in aliases if x.get('role')=='independent_exact_leaf_chain')
+    assert proof['corroborating_leaf_codes']==['2120101','2120199']
+    assert proof['narrative_parent']=='旧款名' and proof['table_parent']=='城乡社区管理\n事务'
+    assert target._hierarchy_fact(doc,facts,items[0],siblings=items[:1])[0] is None

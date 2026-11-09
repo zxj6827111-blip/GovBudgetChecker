@@ -173,6 +173,11 @@ def fact_bound_table_rows(doc, table_name, *, strict_unknown_values=False):
             if cell_id:
                 by_cell.setdefault(cell_id, []).append(fact)
     consumed = []
+    from .native_empty_operands import blank_table_terms
+    # 没有物化金额事实的完整空白表，仅在每个真实金额格都通过原件认证时提供临时投影。
+    observed_by_cell = {term.extra_dims['native_blank_observation']['source_cell_id']: term
+                        for term in blank_table_terms(doc, code)}
+    consumed_observations = []
     source_units = set()
     mappings_by_col = {int(m["source_col_idx"]): m for m in mappings}
     padding_positions = native_bilateral_padding_positions(table)
@@ -186,6 +191,12 @@ def fact_bound_table_rows(doc, table_name, *, strict_unknown_values=False):
         ):
             continue
         if not str(cell.raw_text or "").strip():
+            from .native_empty_operands import cell_id as native_cell_id
+            observed = observed_by_cell.get(native_cell_id(table, cell))
+            if observed is not None:
+                rows[cell.row_idx][cell.col_idx] = "0"
+                consumed_observations.append(observed.extra_dims['native_blank_observation'])
+                continue
             # 双边总表无标签侧的结构空白是版式占位，不参与“金额未知”判定。
             if (cell.row_idx, cell.col_idx) in padding_positions:
                 continue
@@ -266,8 +277,9 @@ def fact_bound_table_rows(doc, table_name, *, strict_unknown_values=False):
             "fact_version": context.version_token,
             "normalized_unit": "万元",
             "source_units": sorted(source_units),
+            "native_blank_observations": consumed_observations,
         }
     )
-    if not consumed:
+    if not consumed and not consumed_observations:
         raise ProjectionUnavailable(f"{table_name} 没有可用金额事实")
     return rows

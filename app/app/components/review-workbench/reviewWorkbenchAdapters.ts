@@ -619,6 +619,24 @@ export function resolveWorkbenchHeaderBadge(job: {
 export interface WorkflowIssueRecord {
   issue_id: string;
   status: string;
+  inherited?: boolean;
+}
+
+export interface WorkflowStateResponse {
+  issues?: Record<string, { issue_id: string; job_id: string; status: string; note?: string | null; inherited?: boolean }>;
+  prior_decisions?: Array<{ issue_id: string; job_id: string; title?: string; status: string; note?: string; page?: number }>;
+}
+
+/** 当前决定和历史备注分别读取，避免别的任务或旧结论被计入已处理数量。 */
+export function workflowViewForJob(payload: WorkflowStateResponse, jobId: string) {
+  const issues: Record<string, WorkflowIssueRecord> = {};
+  const notes: Record<string, string> = {};
+  for (const record of Object.values(payload.issues ?? {})) {
+    if (record.job_id !== jobId) continue;
+    issues[record.issue_id] = { issue_id: record.issue_id, status: record.status, inherited: record.inherited === true };
+    if (record.note) notes[record.issue_id] = record.note;
+  }
+  return { issues, notes, priorDecisions: (payload.prior_decisions ?? []).filter((record) => record.job_id === jobId) };
 }
 
 export interface WorkflowStatusCounts {

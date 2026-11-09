@@ -16,6 +16,9 @@ export type IssueWorkflowRecord = {
   organization_id?: string | null;
   organization_name?: string | null;
   note?: string;
+  inherited?: boolean;
+  inheritance_basis?: string | null;
+  analysis_revision?: string | null;
   updated_at: string;
 };
 
@@ -35,6 +38,7 @@ export type IssueWorkflowState = {
   issues: Record<string, IssueWorkflowRecord>;
   packages: RemediationPackageRecord[];
   updated_at?: string;
+  prior_decisions?: IssueWorkflowRecord[];
 };
 
 export function buildIssueWorkflowKey(jobId: string, issueId: string): string {

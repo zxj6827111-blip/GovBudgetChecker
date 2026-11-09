@@ -25,9 +25,9 @@ from src.services.fiscal_code_hierarchy import hierarchy_paths
 GENERAL = 'FIN_05_general_public_expenditure'
 FUND = 'FIN_08_gov_fund'
 _ITEM = re.compile(
-    r'(?P<klass>[^\d，,。；;：:、.()“”]{1,60}?)\(类\)'
-    r'(?P<kuan>[^\d，,。；;：:、.()“”]{1,60}?)\(款\)'
-    r'(?P<xiang>[^\d，,。；;：:、.()“”]{1,60}?)\(项\)')
+    r'(?P<klass>[^\d，,。；;：:、.()“”\-—–]{1,60}?)\(类\)[\-—–]?'
+    r'(?P<kuan>[^\d，,。；;：:、.()“”\-—–]{1,60}?)\(款\)[\-—–]?'
+    r'(?P<xiang>[^\d，,。；;：:、.()“”\-—–]{1,60}?)\(项\)')
 #: 不带（类）（款）（项）标记的写法：“社会保障和就业支出-行政事业单位养老支出-行政单位离退休”，
 #: 连接号可为 - — –（全角－经 NFKC 后为 -），可带引号。类名一律以“支出”结尾，日期、区间不会误中。
 _DASH_ITEM = re.compile(
@@ -402,7 +402,7 @@ def _native_grid_name_rows(doc, pages):
     原文中的任何项级编码，整条恢复路径拒收，不能拿幸存候选自证唯一。
     """
     artifact, context = getattr(doc, 'parse_artifact', None), getattr(doc, 'fact_context', None)
-    if (not artifact or not context or artifact.source_file_hash != context.file_hash
+    if (not pages or not artifact or not context or artifact.source_file_hash != context.file_hash
             or artifact.parse_run_uid != context.parse_run_uid):
         return {}, {}
     if any(not isinstance(p, int) or not 1 <= p <= len(doc.page_texts) for p in pages):
@@ -742,6 +742,49 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
             return fact, None
         return None
 
+    def bind_exact_leaf_independent_of_parent_label():
+        # 原文款名有误时，须两条不同项名各自逐字唯一地落入同一原生款链。
+        # 不采用旧名词典、编辑距离或金额匹配；原文款名差异仍交名称规则报告。
+        pages = _general_table_pages(doc, facts)
+        native_rows, native_refs = _native_grid_name_rows(doc, pages)
+        codes = {code for code, name in native_rows.items()
+                 if len(code) == 7 and paths.get(code, '').startswith(klass)
+                 and _name(name) == _name(item['xiang'])}
+        if len(codes) != 1:
+            return None
+        leaf = next(iter(codes))
+        parent_code = next((code for code, path in paths.items() if path == paths[leaf][:5]), None)
+        klass_code = next((code for code, path in paths.items() if path == klass), None)
+        corroborated = set()
+        source_text, ranges = _general_ranges(doc)
+        for other in siblings:
+            if _name(other['klass']) != _name(item['klass']) or _name(other['kuan']) != _name(item['kuan']):
+                continue
+            scope = next((begin for _title, begin, end in ranges if begin <= other.start() < end), None)
+            if scope is None or _guard(doc, source_text, scope, other.start(), other.start()):
+                continue
+            matches = {code for code, name in native_rows.items()
+                       if len(code) == 7 and paths.get(code, '').startswith(paths[leaf][:5])
+                       and _name(name) == _name(other['xiang'])}
+            if len(matches) == 1:
+                corroborated.update(matches)
+        if len(corroborated) < 2 or leaf not in corroborated:
+            return None
+        chain = []
+        for code in (klass_code, parent_code, leaf):
+            fact, error = select(doc, facts, 'total_actual', code=code) if code else (None, 'missing')
+            if error or fact is None or _name(native_rows.get(code)) != _name(fact.subject_name):
+                return None
+            chain.append(fact)
+        if aliases is not None:
+            aliases.extend(ref for fact in chain for ref in native_refs[fact.subject_code])
+            aliases.extend(ref for code in sorted(corroborated - {leaf}) for ref in native_refs[code])
+            aliases.append(dict(role='independent_exact_leaf_chain', klass_code=klass_code,
+                                kuan_code=parent_code, xiang_code=leaf,
+                                corroborating_leaf_codes=sorted(corroborated),
+                                narrative_parent=item['kuan'], table_parent=chain[1].subject_name))
+        return chain[-1], None
+
     for group, width in levels:
         candidates = {str(f.subject_code) for f in facts
                       if len(paths.get(str(f.subject_code), '')) == width
@@ -760,6 +803,9 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
         if len(candidates) != 1:
             if group == 'kuan' and not candidates:
                 bound = bind_under_parent_word_order_error()
+                if bound is not None:
+                    return bound
+                bound = bind_exact_leaf_independent_of_parent_label()
                 if bound is not None:
                     return bound
             if group == 'xiang' and not candidates:

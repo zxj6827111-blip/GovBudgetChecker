@@ -24,7 +24,7 @@ import { IgnoreReasonPanel } from "./IgnoreReasonPanel";
 import { ObligationCard } from "./ObligationCard";
 import { ObligationDecisionPanel, type ObligationPanelDecision } from "./ObligationDecisionPanel";
 import { isObligationProblem, obligationAutoEvidence, readableObligationReason, type ObligationDecision } from "./obligationProblems";
-import type { IgnoreReason } from "./reviewDecisionNotes";
+import { parseDecisionNote, type IgnoreReason } from "./reviewDecisionNotes";
 import type { ObligationCascadeItemRecord, ObligationReviewItemRecord } from "./reviewLifecycleAdapters";
 import type { Problem } from "../../../lib/mock";
 import { groupProblemsByCategory, issueCategory } from "../../../lib/issueCategories";
@@ -92,6 +92,8 @@ export interface IssuesTabProps {
   /** issue_id -> 当前 workflow 状态（confirmed/no_issue/...），未记录时为 undefined。 */
   workflowStatusByIssueId: Record<string, string>;
   workflowNotes: Record<string, string>;
+  workflowInheritedByIssueId?: Record<string, boolean>;
+  priorDecisions?: Array<{ issue_id: string; title?: string; status: string; note?: string; page?: number }>;
   onAction: (problem: Problem, action: IssueWorkflowAction, ignoreReason?: IgnoreReason) => Promise<boolean>;
   submittingIssueId: string | null;
   lastDecision: IssueDecisionNotice | null;
@@ -190,6 +192,8 @@ export function IssuesTab({
   selectedEvidenceRefKey,
   workflowStatusByIssueId,
   workflowNotes,
+  workflowInheritedByIssueId = {},
+  priorDecisions = [],
   onAction,
   submittingIssueId,
   lastDecision,
@@ -538,6 +542,19 @@ export function IssuesTab({
 
       <div className="relative min-h-0 min-w-0 flex-1" data-testid="gbc-review-issue-detail-pane">
         <div ref={readingRef} className="h-full overflow-y-auto" style={{ fontSize: REVIEW_TEXT_SIZE_PX[textSize] }} data-text-size={textSize}>
+          {priorDecisions.length > 0 ? <details className="border-b border-border px-4 py-3 text-[0.85em]" data-testid="gbc-prior-decisions">
+            <summary className="cursor-pointer font-medium text-slate-700">历史复核决定待重新对应（{priorDecisions.length}）</summary>
+            <p className="mt-2 text-slate-500">历史意见已保留；本次依据变化或无法唯一对应，尚未沿用。</p>
+            {priorDecisions.map((record) => {
+              const note = parseDecisionNote(record.note);
+              return <div key={record.issue_id} className="mt-3 border-t border-border pt-2">
+                <p>{record.title ?? "历史复核事项"}{record.page ? ` · 第${record.page}页` : ""}</p>
+                <p className="text-slate-500">原决定：{record.status === "no_issue" ? "已忽略" : record.status === "confirmed" ? "已确认" : record.status === "in_package" ? "已进整改包" : "待复核"}</p>
+                {note.ignoreReason ? <p className="whitespace-pre-line">{note.ignoreReason.label}{note.ignoreReason.detail ? `：${note.ignoreReason.detail}` : ""}</p> : null}
+                {note.userNote ? <p className="whitespace-pre-line">{note.userNote}</p> : null}
+              </div>;
+            })}
+          </details> : null}
           {detailCategory && detailCategoryGroup ? (
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border bg-surface-50 px-4 py-2 text-xs text-slate-600" data-testid="gbc-review-current-category">
               <button type="button" onClick={() => setListOpen(true)} className="font-medium text-primary-700 hover:underline">{detailCategory.label}</button>
@@ -570,6 +587,7 @@ export function IssuesTab({
               problem={detailProblem}
               workflowStatus={workflowStatusByIssueId[detailProblem.id] ?? null}
               workflowNote={workflowNotes[detailProblem.id]}
+              workflowInherited={workflowInheritedByIssueId[detailProblem.id]}
               selectedEvidenceRefKey={detailProblem.id === selectedProblemId ? selectedEvidenceRefKey : null}
               onSelectEvidenceRef={(refKey) => onSelectEvidenceRef(detailProblem, refKey)}
               cascadedChecks={cascadedChecks[detailProblem.id]}

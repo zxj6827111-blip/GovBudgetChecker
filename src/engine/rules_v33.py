@@ -3553,6 +3553,19 @@ class R33104_Expense_vs_Text(Rule):
         elif fact_proj_block is not None:
             proj = None
 
+        from .native_empty_operands import blank_term, blank_observations
+
+        def source_blank_summary(value, reference, rejection, indicator):
+            if value is None and rejection is None and getattr(doc, 'parse_artifact', None) is not None:
+                observed = blank_term(doc, 'FIN_03_expenditure', indicator, code='total', names=('合计', '总计'))
+                if observed is not None:
+                    return float(observed.normalized_value), observed
+            return value, reference
+
+        total, fact_total_ref = source_blank_summary(total, fact_total_ref, fact_total_block, 'total_actual')
+        basic, fact_basic_ref = source_blank_summary(basic, fact_basic_ref, fact_basic_block, 'basic_actual')
+        proj, fact_proj_ref = source_blank_summary(proj, fact_proj_ref, fact_proj_block, 'project_actual')
+
         tt = _bound_narrative_amount(doc, sec_text, ("本年支出合计", "支出合计", "本年支出"))
         tb = _bound_narrative_amount(doc, sec_text, ("基本支出",))
         tp = _bound_narrative_amount(doc, sec_text, ("项目支出",))
@@ -3564,11 +3577,12 @@ class R33104_Expense_vs_Text(Rule):
             ("项目支出", proj, tp, fact_proj_ref, fact_proj_block, "T3:project_actual:text_vs_table", "text.项目支出 == table.FIN_03.project_actual (万元)"),
         ]
         for nm, a, b, fact_ref, fact_block, sub_id, formula in check_items:
+            observations = blank_observations([fact_ref])
             if a is not None and b is not None:
                 if not tolerant_equal(a, b):
                     fact_ids, evidence_ids = _v33_fact_identity(fact_ref)
                     issues.append(self._issue(
-                        f"{nm}：表{a} ≠ 文本{b}", {"page": p}, "warn",
+                        f"{nm}：表{a} ≠ 文本{b}", {"page": p, 'native_blank_sources': observations}, "warn",
                         check_relation_id=f"{self.code}:{sub_id}",
                         fact_ids=fact_ids,
                         evidence_ids=evidence_ids,
@@ -3576,14 +3590,16 @@ class R33104_Expense_vs_Text(Rule):
                     _v33_relation_receipt(
                         doc, self.code, sub_id,
                         status="fail",
-                        operand_fact_ids=[fact_ref.fact_uid] if fact_ref is not None else [],
+                        operand_fact_ids=_v33_fact_identity(fact_ref)[0],
+                        cell_observations=observations,
                         formula=formula,
                     )
                 else:
                     _v33_relation_receipt(
                         doc, self.code, sub_id,
                         status="pass",
-                        operand_fact_ids=[fact_ref.fact_uid] if fact_ref is not None else [],
+                        operand_fact_ids=_v33_fact_identity(fact_ref)[0],
+                        cell_observations=observations,
                         formula=formula,
                     )
             else:
@@ -3594,9 +3610,10 @@ class R33104_Expense_vs_Text(Rule):
                 _v33_relation_receipt(
                     doc, self.code, sub_id,
                     status="insufficient_data",
-                    operand_fact_ids=[fact_ref.fact_uid] if fact_ref is not None else [],
+                    operand_fact_ids=_v33_fact_identity(fact_ref)[0],
+                    cell_observations=observations,
                     formula=formula,
-                    incomplete_reason="表侧或说明侧取数失败"
+                    incomplete_reason=("说明侧取数失败" if a is not None else "表侧或说明侧取数失败")
                     + (f"（{fact_block}）" if fact_block else ""),
                 )
 
@@ -3646,7 +3663,7 @@ class R33104_Expense_vs_Text(Rule):
             if differs:
                 issues.append(self._issue(
                     f"{nm}占比：表算{calculated}% ≠ 文本{pct_t}%（容差0.1个百分点）",
-                    {"page": p}, "warn",
+                    {"page": p, 'native_blank_sources': blank_observations([fact_ref, fact_total_ref])}, "warn",
                     evidence_text="；".join(percentage_claim.quotes),
                     check_relation_id=relation_id,
                     fact_ids=fact_ids,
@@ -3657,6 +3674,7 @@ class R33104_Expense_vs_Text(Rule):
                 status="fail" if differs else "pass",
                 operand_fact_ids=fact_ids,
                 formula=f"{nm} / expense_total * 100 == narrative percentage",
+                cell_observations=blank_observations([fact_ref, fact_total_ref]),
             )
 
         issues.extend(_historical_narrative_checks(doc, self, sec_text))
@@ -8688,12 +8706,32 @@ def _structure_class_name_issues(rule, doc, table_entries):
             amount /= Decimal(10000)
         elif unit == "亿元":
             amount *= Decimal(10000)
-        hits = [f for f in facts
-                if abs(f.normalized_value - amount) <= Decimal("0.01")]
+        # 名称检查也必须先有业务身份；同额不是科目对应证据。仅允许按逐字
+        # 相同的名称主干定位，后缀差异仍按既有严格名称规则报告。
+        narrative_name = match.group("name").strip()
+        hits = [f for f in facts if _functional_name_matches(f.subject_name, narrative_name)]
+        if len(hits) != 1 and derived:
+            # 结构段把项名写成类名时，按表内逐字唯一的项名定位所属类，金额不参与配对。
+            leaf_matches = {code for code, entry in derived.items()
+                            if any(re.sub(r'\s+', '', str(leaf.subject_name)) == narrative_name
+                                   for leaf in entry['leaves'])}
+            if len(leaf_matches) == 1:
+                hits = [fact for fact in facts if str(fact.subject_code) in leaf_matches]
+            elif ('（类' in match.group(0) or '(类' in match.group(0)):
+                # 两处显式类名集合不一致是独立文字事实；不能用同额或排除法指定某个类编码。
+                page = _txt_fund_page_for(offsets, scope_start + compact_positions[match.start()])
+                names = sorted({str(entry['name']) for entry in derived.values()})
+                issues.append(rule._issue(
+                    f'结构情况中的类名“{narrative_name}”未在同节具体情况的类名中出现，两处类名写法不一致，请核对。',
+                    {'page': page, 'section': '说明5（一般公共预算财政拨款支出结构情况）',
+                     'field': '功能分类科目名称', 'actual_name': narrative_name,
+                     'expected_names': names, 'source_of_truth': '同节两处显式类名集合',
+                     'table_refs': [{'page': page, 'span': match.group(0), 'role': '说明5结构段'}]},
+                    severity='warn', evidence_text=f'结构段：{match.group(0)}\n同节具体情况类名：'+ '、'.join(names)))
+                continue
         if len(hits) != 1:
             continue
         fact = hits[0]
-        narrative_name = match.group("name").strip()
         table_name = str(fact.subject_name or "").strip()
         table_key = re.sub(r"\s+", "", table_name)
         if not table_name or _functional_name_identical(table_key, narrative_name):
@@ -8741,7 +8779,7 @@ def _structure_class_name_issues(rule, doc, table_entries):
 
 
 def _leaf_class_name_issue(rule, doc, location, entry, code, narrative_name, snippet):
-    """项级表的类名错误：金额与某类各项合计唯一相符，但写的不是该类名称。"""
+    """项级表的类名错误：按原文精确项名定位，不用同额推测所属类。"""
     from .native_final_disclosure import _source_refs
     from .native_three_public_ratios import operand_ref
 
@@ -8774,8 +8812,8 @@ def _leaf_class_name_issue(rule, doc, location, entry, code, narrative_name, sni
                                       *(ref["page"] for ref in _source_refs(leaves))] if p}),
     })
     return rule._issue(
-        f"说明5类级科目名称错误（{code}类）：结构情况写“{narrative_name}（类）{entry['sum']:,.2f}万元”，"
-        f"该金额等于表内{code}类各项合计（{parts}），同节具体情况把这些项归在“{expected}（类）”；"
+        f"说明5类级科目名称错误（{code}类）：结构情况写“{narrative_name}（类）”，"
+        f"按表内精确项名定位到{code}类；同节具体情况把这些项归在“{expected}（类）”；"
         f"{verdict}",
         location,
         severity="warn",

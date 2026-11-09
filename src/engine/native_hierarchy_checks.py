@@ -264,6 +264,14 @@ def _select(doc, view, code, indicator):
     mapping = next(m for m in mappings if m['canonical_measure'] == indicator)
     cell = source_cells.get((code_rows[code], int(mapping['source_col_idx'])))
     candidates = [f for f in facts if f.subject_code == code and f.indicator == indicator]
+    if cell is not None and cell.native_blank_verified:
+        # 全空表的运行时观察项也要按原格配对，左右合计行都叫 total 时不能按编码挑选。
+        from .native_empty_operands import valid_blank_observation
+        observed = [f for f in candidates if isinstance(f, NativeBlankTerm)
+                    and f.extra_dims['native_blank_observation']['source_cell_id'] == _cell_id(table, cell)]
+        if len(observed) == 1 and valid_blank_observation(doc.parse_artifact, doc.fact_context,
+                observed[0].extra_dims['native_blank_observation'], getattr(doc, 'page_texts', None)):
+            return observed[0], None
     if not candidates and cell is not None and cell.native_blank_verified:
         term = blank_term(doc, table.table_code, indicator, code=code)
         if term is not None:

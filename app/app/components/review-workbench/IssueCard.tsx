@@ -117,6 +117,7 @@ export interface IssueCardProps {
   workflowStatus: string | null;
   /** 工作流 note：开头可能带忽略理由块，其余是补充意见。 */
   workflowNote?: string;
+  workflowInherited?: boolean;
   selectedEvidenceRefKey?: string | null;
   onSelectEvidenceRef?: (refKey: string) => void;
   /** 因本问题（缺表/空表）而无法自动进行的核对；不单独处理，随本问题了结。 */
@@ -209,6 +210,7 @@ export function IssueCard({
   problem,
   workflowStatus,
   workflowNote,
+  workflowInherited,
   selectedEvidenceRefKey,
   onSelectEvidenceRef,
   cascadedChecks,
@@ -413,6 +415,7 @@ export function IssueCard({
         </section>
       ) : null}
 
+      {workflowInherited ? <p className="mb-4 border-t border-border pt-3 text-[0.85em] text-slate-600" data-testid="gbc-inherited-decision">已沿用历史复核决定：原件和核对依据未变。</p> : null}
       {ignoreReason && workflowStatus === "no_issue" ? (
         <section className="mb-4 border-t border-border pt-3" data-testid="gbc-review-ignore-record">
           <h3 className={SECTION_TITLE}>忽略记录</h3>

@@ -99,6 +99,8 @@ import {
   extractTotalPageCount,
   resolveProblemTargetPage,
   resolveWorkbenchHeaderBadge,
+  workflowViewForJob,
+  type WorkflowStateResponse,
   type WorkflowIssueRecord,
 } from "./reviewWorkbenchAdapters";
 import { StageHistoryTab } from "./StageHistoryTab";
@@ -112,10 +114,6 @@ const MORE_TABS: Array<{ id: RightTabId; label: string }> = [
   { id: "metadata", label: "元数据" },
   { id: "stages", label: "阶段记录" },
 ];
-
-interface WorkflowStateResponse {
-  issues?: Record<string, { issue_id: string; job_id: string; status: string; note?: string | null }>;
-}
 
 async function fetchJson<T>(url: string, fallback: T): Promise<T> {
   try {
@@ -206,6 +204,7 @@ export function ReviewWorkbenchPage() {
   const [selectedEvidenceRefKey, setSelectedEvidenceRefKey] = useState<string | null>(null);
   const [workflowIssues, setWorkflowIssues] = useState<Record<string, WorkflowIssueRecord>>({});
   const [workflowNotes, setWorkflowNotes] = useState<Record<string, string>>({});
+  const [priorDecisions, setPriorDecisions] = useState<NonNullable<WorkflowStateResponse['prior_decisions']>>([]);
   const [submittingIssueId, setSubmittingIssueId] = useState<string | null>(null);
   const [lastIssueDecision, setLastIssueDecision] = useState<IssueDecisionNotice | null>(null);
   const workflowMutationRef = useRef(false);
@@ -377,26 +376,19 @@ export function ReviewWorkbenchPage() {
     const payload = await fetchJson<WorkflowStateResponse | null>(`/api/workflow?job_id=${encodeURIComponent(jobId)}`, null);
     // 重取失败时保留已保存的决定，避免把短暂读取故障误当成“全部未处理”。
     if (seq !== workflowLoadSeqRef.current || !payload?.issues) return;
-    const issues = payload.issues ?? {};
-    const nextIssues: Record<string, WorkflowIssueRecord> = {};
-    const nextNotes: Record<string, string> = {};
-    for (const record of Object.values(issues)) {
-      if (record.job_id !== jobId) {
-        continue;
-      }
-      nextIssues[record.issue_id] = { issue_id: record.issue_id, status: record.status };
-      if (record.note) {
-        nextNotes[record.issue_id] = record.note;
-      }
-    }
-    setWorkflowIssues(nextIssues);
-    setWorkflowNotes(nextNotes);
+    const next = workflowViewForJob(payload, jobId);
+    setWorkflowIssues(next.issues);
+    setWorkflowNotes(next.notes);
+    setPriorDecisions(next.priorDecisions);
   }, [jobId]);
 
   // 首次详情由轮询控制器负责，避免 effect 与 controller.start 重复发起读取。
   // 两者都要：只拉详情会让"已确认/已忽略"在刷新后归零（工作流状态是另一条接口），
   // 用户会以为自己的处理动作丢了。
   useEffect(() => {
+    setWorkflowIssues({});
+    setWorkflowNotes({});
+    setPriorDecisions([]);
     void loadWorkflow();
     return () => { loadSeqRef.current += 1; reviewLoadSeqRef.current += 1; workflowLoadSeqRef.current += 1; };
   }, [loadWorkflow]);
@@ -1343,6 +1335,8 @@ export function ReviewWorkbenchPage() {
                 selectedEvidenceRefKey={selectedEvidenceRefKey}
                 workflowStatusByIssueId={reviewStatusById}
                 workflowNotes={workflowNotes}
+                workflowInheritedByIssueId={Object.fromEntries(Object.entries(workflowIssues).map(([id, record]) => [id, record.inherited === true]))}
+                priorDecisions={priorDecisions}
                 onAction={handleIssueAction}
                 submittingIssueId={submittingIssueId}
                 lastDecision={lastIssueDecision}

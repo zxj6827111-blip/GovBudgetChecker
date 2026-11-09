@@ -173,31 +173,24 @@ def _sum_key(item, context, doc=None):
         if len(members) != len(bundle) or any(key is None for key in members):
             return None
         return ('sum_bundle', tuple(sorted(set(members), key=repr)), _version(item, context))
-    refs = location.get('operand_refs') or []
-    if len(refs) < 2 or _version(item, context) is None:
+    refs = list(location.get('operand_refs') or [])
+    blank_operands = location.get('native_blank_operands') or []
+    if len(refs) + len(blank_operands) < 2 or _version(item, context) is None:
         return None
     # A pooled info finding may contain many independent relations. It must
     # not be mistaken for a single large sum with its first amount as parent.
-    relations = {ref.get('relation_id') for ref in refs if isinstance(ref, dict) and ref.get('relation_id')}
+    relations = {ref.get('relation_id') for ref in [*refs, *blank_operands]
+                 if isinstance(ref, dict) and ref.get('relation_id')}
     if len(relations) > 1:
         return None
     identities = [_resolve_ref(ref, context) for ref in refs]
-    if any(value is None for value in identities) or len(set(identities)) != len(identities):
-        return None
-    parents = [i for i, ref in enumerate(refs) if ref.get('role') in ('parent', '合计', 'expense_total', 'income_total')]
-    if not parents:
-        parents = [i for i, ref in enumerate(refs) if str(ref.get('role') or '').endswith(':0')]
-    if len(parents) != 1:
-        return None
-    parent = parents[0]
-    children = [value for index, value in enumerate(identities) if index != parent]
     blank_ids = []
+    required = ('file_hash', 'parse_run_uid', 'table_code', 'instance_uid',
+                'source_cell_id', 'indicator', 'subject_code', 'budget_stage')
     for observation in location.get('native_blank_sources') or []:
         if context is None or not isinstance(observation, dict):
             return None
         # 原格集合也是算式身份；金额相同、相同页码或空白数量不能替代它。
-        required = ('file_hash', 'parse_run_uid', 'table_code', 'instance_uid',
-                    'source_cell_id', 'indicator', 'subject_code', 'budget_stage')
         if (any(observation.get(key) is None for key in required)
                 or observation['file_hash'] != context.file_hash
                 or observation['parse_run_uid'] != context.parse_run_uid
@@ -212,6 +205,30 @@ def _sum_key(item, context, doc=None):
         blank_ids.append(tuple(str(observation[key]) for key in required))
     if len(set(blank_ids)) != len(blank_ids):
         return None
+    # 空白合计本身也能是 parent；旧逻辑先要求两个数值事实，因而同一算式的
+    # “空白父项 + 一个非零子项”被多条规则各报一次。角色必须来自原始操作数记录。
+    used_blank_ids = []
+    for term in blank_operands:
+        observation = term.get('observation') if isinstance(term, dict) else None
+        if not isinstance(observation, dict):
+            return None
+        identity = tuple(str(observation.get(key)) for key in required)
+        if identity not in blank_ids:
+            return None
+        used_blank_ids.append(identity)
+        identities.append(('native_blank', *identity))
+        refs.append(term)
+    if sorted(used_blank_ids) != sorted(blank_ids):
+        return None
+    if any(value is None for value in identities) or len(set(identities)) != len(identities):
+        return None
+    parents = [i for i, ref in enumerate(refs) if ref.get('role') in ('parent', '合计', 'expense_total', 'income_total')]
+    if not parents:
+        parents = [i for i, ref in enumerate(refs) if str(ref.get('role') or '').endswith(':0')]
+    if len(parents) != 1:
+        return None
+    parent = parents[0]
+    children = [value for index, value in enumerate(identities) if index != parent]
     return ('sum', identities[parent], tuple(sorted(children, key=repr)),
             tuple(sorted(blank_ids)), _version(item, context))
 

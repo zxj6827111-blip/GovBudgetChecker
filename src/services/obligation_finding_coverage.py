@@ -108,6 +108,26 @@ def _json_list(raw: Any) -> List[Any]:
     return value if isinstance(value, list) else []
 
 
+def _current_rule_findings(result_row: Any) -> List[Dict[str, Any]]:
+    """同一规则结果的 dual/legacy 存储适配；不改变来源与完成判据。"""
+    result = _json_dict(result_row)
+    findings = _json_list(result.get('rule_findings'))
+    legacy = _json_value(result.get('issues'))
+    if isinstance(legacy, list):
+        findings += legacy
+    elif isinstance(legacy, Mapping):
+        if isinstance(legacy.get('all'), list):
+            findings += legacy['all']
+        else:
+            findings += [item for bucket in ('error', 'warn', 'info')
+                         for item in _json_list(legacy.get(bucket))]
+    unique = {}
+    for item in findings:
+        if isinstance(item, dict) and item.get('id') and item.get('source') != 'ai':
+            unique.setdefault(str(item['id']), item)
+    return list(unique.values())
+
+
 def distinctive_terms(detail: str) -> Set[str]:
     """从义务 detail 里取可辨识的引号短语；泛化词和短词剔除。"""
     terms = {
@@ -485,7 +505,7 @@ def obligation_covered_by_finding(
 
     visible = set(visible_issue_ids) if visible_issue_ids is not None else None
     candidates: List[Dict[str, Any]] = []
-    for finding in _json_list(_json_dict(result_row).get("rule_findings")):
+    for finding in _current_rule_findings(result_row):
         if not isinstance(finding, dict) or not is_formal_finding(finding):
             continue
         issue_id = str(finding.get("id") or "").strip()
@@ -637,7 +657,7 @@ def cascade_root_issue_id(
         return None
     visible = set(visible_issue_ids) if visible_issue_ids is not None else None
     roots: Dict[str, str] = {}
-    for finding in _json_list(_json_dict(result_row).get("rule_findings")):
+    for finding in _current_rule_findings(result_row):
         if not isinstance(finding, dict) or not is_formal_finding(finding):
             continue
         issue_id = str(finding.get("id") or "").strip()

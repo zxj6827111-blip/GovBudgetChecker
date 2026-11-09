@@ -50,6 +50,9 @@ _EMPTY_COMPILER_RE = re.compile(r"编制(?:部门|单位)\s*[:：]\s*(?=单位\s
 _WRAPPED_PART_NAME_RE = re.compile(
     rf"(?m)^[ \t]*第[一二三四]部分\s*(?P<n>(?:[{CJK}][ \t\r\n]*){{4,80}}?)"
     rf"(?=概况|20\d{{2}}年度?(?:部门|单位)?(?:决算|预算))")
+_FINANCIAL_OWNER_RE = re.compile(
+    rf"(?m)^[ \t]*(?P<n>{_NAME})[ \t]*20\d{{2}}\s*年\s*度?\s*"
+    rf"(?:财政拨款\s*)?收入支出\s*总计")
 
 
 def _is_subsequence(short: str, long: str) -> bool:
@@ -109,6 +112,14 @@ def name_mentions(doc: Document) -> List[Tuple[str, int, str, int, int]]:
             end = start + len(raw_name.rstrip())
             if not any((n, p, a, b) == (name, page, start, end) for n, p, _t, a, b in mentions):
                 mentions.append((name, page, text, start, end))
+        # 说明一/四开头的“全称 + 年度 + 收入支出总计”是显式本材料主体声明。
+        # 年份与“年度”可跨行，不能只看标题而漏掉正文多写“人民政府”等名称冲突。
+        for match in _FINANCIAL_OWNER_RE.finditer(text):
+            name = match.group('n')
+            if _ORG_START_RE.match(name):
+                start, end = match.span('n')
+                if not any((n, p, a, b) == (name, page, start, end) for n, p, _t, a, b in mentions):
+                    mentions.append((name, page, text, start, end))
     return mentions
 
 
@@ -579,6 +590,20 @@ class CMM019_CoverElements(Rule):
         if _uses_writing_resolution(doc) and not scope:
             incomplete.append("封面文种缺少独立依据")
         if incomplete:
+            from .diagnostic_fields import blocker, record_gap
+            for reason in incomplete:
+                if '单位名称' in reason:
+                    body_names = {name for name, page, *_ in name_mentions(doc) if page > 1}
+                    conflict = any(_variant_kind(left, right) or _variant_kind(right, left)
+                                   for left in body_names for right in body_names if left != right)
+                    code = 'subject_conflict' if conflict else 'subject_unconfirmed'
+                    ref = '封面名称的正文参照：' + '、'.join(sorted(body_names)) if body_names else reason
+                    record_gap(doc, reason, reason_codes=[code], blocked_by=[blocker(
+                        dimension='organization', ref=ref, reason_code=code)], preferred_action='human_confirm')
+                else:
+                    record_gap(doc, reason, reason_codes=['scope_unconfirmed'], blocked_by=[blocker(
+                        dimension='year' if '年度' in reason else 'org_scope', ref=reason,
+                        reason_code='scope_unconfirmed')], preferred_action='human_confirm')
             detail = "；".join(incomplete)
             if resolution.get("archive_subject_mismatch"):
                 detail += "；封面主体与所选组织不一致，请核对归档"

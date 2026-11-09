@@ -5,6 +5,7 @@ import type { JobDetailRecord, JobSummaryRecord } from "../lib/uiAdapters";
 import {
   computeOverlayBoxAtScale,
   computeWorkflowStatusCounts,
+  workflowViewForJob,
   countFormalProblems,
   dedupeEvidenceRefsForDisplay,
   deriveStageHistory,
@@ -491,6 +492,22 @@ function runSyncAssertions(): void {
 }
 
 async function main(): Promise<void> {
+  const view = workflowViewForJob({
+    issues: {
+      current: { job_id: "a", issue_id: "new", status: "confirmed", inherited: true, note: "原件依据未变" },
+      unrelated: { job_id: "b", issue_id: "foreign", status: "confirmed" },
+    },
+    prior_decisions: [
+      { job_id: "a", issue_id: "old", status: "no_issue", note: "旧版人工备注" },
+      { job_id: "b", issue_id: "foreign-old", status: "confirmed" },
+    ],
+  }, "a");
+  assert.deepEqual(Object.keys(view.issues), ["new"]);
+  assert.equal(view.issues.new.inherited, true);
+  assert.equal(view.notes.new, "原件依据未变");
+  assert.equal(view.priorDecisions[0].note, "旧版人工备注");
+  assert.equal(view.priorDecisions.length, 1);
+  assert.equal(view.issues.old, undefined, "旧版备注不能变成当前已处理事项");
   await testConcurrencyCapIsRespected();
   await testCachingAvoidsDuplicateRequests();
   await testLazyLoadDoesNotFetchUnrequestedPages();

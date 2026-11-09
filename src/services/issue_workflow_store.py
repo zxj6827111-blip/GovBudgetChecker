@@ -21,6 +21,7 @@ from api import runtime
 from api.auth_utils import user_can_access_job
 from src.db.connection import DatabaseConnection
 from src.services.analysis_result_store import ensure_analysis_persistence_ready
+from src.services.decision_identity import decision_identity, valid_decision_identity
 
 
 _LOCK = threading.RLock()
@@ -180,6 +181,7 @@ def _normalize_state(value: Any) -> Dict[str, Any]:
                 "fact_ids": _strings(item.get("fact_ids")),
                 "evidence_ids": _strings(item.get("evidence_ids")),
                 "identity_fingerprint": str(item.get("identity_fingerprint") or "").strip() or None,
+                "decision_identity": copy.deepcopy(item.get("decision_identity")) if valid_decision_identity(item.get("decision_identity")) else None,
                 "resolved_from_issue_id": str(item.get("resolved_from_issue_id") or "").strip() or None,
                 "updated_at": str(item.get("updated_at") or "").strip() or _now(),
             }
@@ -705,8 +707,10 @@ def get_visible_state(user: Dict[str, Any], *, job_id: Optional[str] = None) -> 
     with _state_lock():
         state = _read_state()
         visible_issues: Dict[str, Dict[str, Any]] = {}
+        prior_decisions: List[Dict[str, Any]] = []
         visible_job_ids: Set[str] = set()
         current_decisions: Dict[str, Dict[str, str]] = {}
+        current_projections: Dict[str, List[Dict[str, Any]]] = {}
         job_payloads: Dict[str, Optional[Dict[str, Any]]] = {}
         for key, record in state["issues"].items():
             record_job = record["job_id"]
@@ -721,8 +725,20 @@ def get_visible_state(user: Dict[str, Any], *, job_id: Optional[str] = None) -> 
             if payload is None:
                 continue
             if user_can_access_job(user, payload):
+                if record_job not in current_projections:
+                    current_projections[record_job] = project_job_issue_decisions(record_job, payload, _state=state)
+                    current_decisions[record_job] = {
+                        item['issue_id']: item['status'] for item in current_projections[record_job]
+                    }
                 canonical = _find_issue(payload, record["issue_id"])
                 if canonical is None:
+                    successors = [item for item in current_projections[record_job]
+                                  if item.get('resolved_from_issue_id') == record['issue_id']
+                                  or record['issue_id'] in (item.get('resolved_from_issue_ids') or [])]
+                    if len(successors) == 1:
+                        canonical = _find_issue(payload, successors[0]['issue_id'])
+                if canonical is None:
+                    prior_decisions.append({**copy.deepcopy(record), 'requires_reconfirmation': True})
                     continue
                 canonical_id = str(canonical.get("id") or record["issue_id"])
                 if record_job not in current_decisions:
@@ -736,6 +752,15 @@ def get_visible_state(user: Dict[str, Any], *, job_id: Optional[str] = None) -> 
                 if canonical_id != record["issue_id"]:
                     visible["resolved_from_issue_id"] = record["issue_id"]
                 visible["status"] = current_decisions[record_job].get(canonical_id, "pending")
+                projected = next((item for item in current_projections[record_job]
+                                  if item['issue_id'] == canonical_id), {})
+                visible['inherited'] = bool(projected.get('inherited'))
+                visible['inheritance_basis'] = projected.get('inheritance_basis')
+                if not projected and str(record.get('analysis_revision') or '') != str(payload.get('analysis_revision') or ''):
+                    prior_decisions.append({**copy.deepcopy(record), 'requires_reconfirmation': True})
+                    visible.pop('note', None)
+                    visible['hide_from_results'] = False
+                    visible['requires_reconfirmation'] = True
                 visible_key = _workflow_key(record_job, canonical_id)
                 existing = visible_issues.get(visible_key)
                 if existing is None or int(str(visible.get("decision_revision") or "0") or 0) >= int(
@@ -756,7 +781,8 @@ def get_visible_state(user: Dict[str, Any], *, job_id: Optional[str] = None) -> 
                 job_id: entry.get("payload", {}).get("analysis_revision")
                 for job_id, entry in snapshots.items() if isinstance(entry, dict) and isinstance(entry.get("payload"), dict)
             }
-        return {"issues": visible_issues, "packages": packages, "updated_at": state.get("updated_at")}
+        return {"issues": visible_issues, "packages": packages,
+                "prior_decisions": prior_decisions, "updated_at": state.get("updated_at")}
 
 
 def _package_payload_sha(payload: Dict[str, Any]) -> str:
@@ -985,16 +1011,34 @@ def project_job_issue_decisions(
         if str(event.get("job_id") or "") == normalized_job_id:
             events_by_issue.setdefault(str(event.get("issue_id") or ""), []).append(event)
     grouped: Dict[str, Dict[str, Any]] = {}
+    identities: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    for candidate in _iter_finding_items(payload):
+        identity = decision_identity(payload, candidate)
+        if identity and candidate.get('id'):
+            identities.setdefault(identity['digest'], {})[str(candidate['id'])] = candidate
+    archive_identities: Dict[Tuple[str, str, str], Optional[Dict[str, Any]]] = {}
     for issue_id in sorted(events_by_issue):
-        issue = _find_issue(payload, issue_id)
-        if issue is None:
-            continue
-        issue_fingerprint = issue_identity_fingerprint(issue)
-        facts = sorted(_strings(issue.get("fact_ids")))
-        evidence = sorted(_strings(issue.get("evidence_ids")))
-        matching_events = []
-        for event in events_by_issue[issue_id]:
+        # 先确认该旧条目最后一次人工决定，再判断能否继承；否则撤销/待复核会被
+        # 跨版本筛选排除，反而让更早的“已确认/误报”决定复活。
+        same_revision_events = [event for event in events_by_issue[issue_id]
+                                if str(event.get('analysis_revision') or '') == revision]
+        latest_event = max(same_revision_events or events_by_issue[issue_id], key=lambda event: (
+            _event_revision(event), str(event.get('updated_at') or '')))
+        for event in (latest_event,):
             same_revision = bool(revision and str(event.get("analysis_revision") or "") == revision)
+            issue = _find_issue(payload, issue_id)
+            source_identity_match = False
+            if not same_revision and event.get('status') in {'confirmed', 'no_issue'}:
+                old_identity = _event_source_identity(normalized_job_id, event, archive_identities)
+                successors = identities.get(old_identity['digest'], {}) if old_identity else {}
+                if len(successors) == 1:
+                    issue = next(iter(successors.values()))
+                    source_identity_match = True
+            if issue is None:
+                continue
+            issue_fingerprint = issue_identity_fingerprint(issue)
+            facts = sorted(_strings(issue.get("fact_ids")))
+            evidence = sorted(_strings(issue.get("evidence_ids")))
             same_identity = bool(
                 event.get("check_relation_id")
                 and event.get("check_relation_id") == issue.get("check_relation_id")
@@ -1007,27 +1051,67 @@ def project_job_issue_decisions(
             # An ignore is an explicit judgment for one analysis. Reusing an ID,
             # or even its evidence identity, cannot silently carry that judgment.
             if str(event.get("status")) == "no_issue":
-                applies = same_revision and (
+                applies = source_identity_match or same_revision and (
                     not event.get("identity_fingerprint")
                     or event.get("identity_fingerprint") == issue_fingerprint
                 )
             else:
-                applies = same_revision or same_identity
+                applies = same_revision or same_identity or source_identity_match
             if applies:
-                matching_events.append({"record": event, "same_revision": same_revision})
-        if not matching_events:
-            continue
-        latest = _pick_latest(matching_events)
-        canonical_id = str(issue.get("id") or issue_id)
-        bundle = grouped.setdefault(canonical_id, {"issue": issue, "records": []})
-        bundle["records"].append({"event_issue_id": issue_id, **latest})
+                canonical_id = str(issue.get("id") or issue_id)
+                bundle = grouped.setdefault(canonical_id, {"issue": issue, "records": []})
+                bundle['records'].append({'event_issue_id': issue_id, 'record': event,
+                                          'same_revision': same_revision,
+                                          'source_identity_match': source_identity_match})
     projected = []
     for canonical_id in sorted(grouped):
         bundle = grouped[canonical_id]
-        projected_item = _project_group(canonical_id, bundle["issue"], bundle["records"])
+        # 同一旧条目的历史修订先取最新决定；不能把被后续决定替代的旧意见当成成员冲突。
+        per_member: Dict[str, List[Dict[str, Any]]] = {}
+        for record in bundle['records']:
+            per_member.setdefault(record['event_issue_id'], []).append(record)
+        records = [_pick_latest(values) for values in per_member.values()]
+        projected_item = _project_group(canonical_id, bundle["issue"], records)
+        if projected_item and any(value.get('source_identity_match') for value in records):
+            projected_item['inheritance_basis'] = 'verified_source_identity_v1'
         if projected_item is not None:
             projected.append(projected_item)
     return projected
+
+
+def _event_source_identity(job_id, event, cache):
+    """旧决定只从带完整性清单的原分析快照恢复依据，不按当前措辞猜旧判断。"""
+    stored = event.get('decision_identity')
+    if valid_decision_identity(stored):
+        return stored
+    key = (str(event.get('analysis_revision') or ''), str(event.get('issue_id') or ''),
+           str(event.get('identity_fingerprint') or ''))
+    if key in cache:
+        return cache[key]
+    cache[key] = None
+    if not all(key):
+        return None
+    root = runtime.UPLOAD_ROOT.resolve()
+    folder = (root / job_id / 'preserved_analyses').resolve()
+    if not folder.is_relative_to(root) or not folder.is_dir():
+        return None
+    for manifest in sorted(folder.glob('*/manifest.json'), reverse=True):
+        snapshot = manifest.parent / 'status.json'
+        try:
+            expected = json.loads(manifest.read_text()).get('files', {}).get('status.json')
+            content = snapshot.read_bytes()
+            if not expected or hashlib.sha256(content).hexdigest() != expected:
+                continue
+            previous = json.loads(content)
+            if str(previous.get('analysis_revision') or '') != key[0] or previous.get('job_id') != job_id:
+                continue
+            issue = _find_issue(previous, key[1])
+            if issue is not None and issue_identity_fingerprint(issue) == key[2]:
+                cache[key] = decision_identity(previous, issue)
+                return cache[key]
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue
+    return None
 
 
 def _append_decision_event(state: Dict[str, Any], record: Dict[str, Any]) -> Dict[str, Any]:
@@ -1197,6 +1281,7 @@ def _decision_record(
         "check_relation_id": str(issue.get("check_relation_id") or "").strip() or None,
         "fact_ids": _strings(issue.get("fact_ids")), "evidence_ids": _strings(issue.get("evidence_ids")),
         "identity_fingerprint": issue_identity_fingerprint(issue), "hide_from_results": hide_from_results,
+        "decision_identity": decision_identity(payload, issue),
         "decision_origin": origin, "migration_id": migration_id,
         "resolved_from_issue_id": resolved_from_issue_id,
         "updated_at": _now(),
@@ -1582,6 +1667,7 @@ async def create_package(
                 "fact_ids": _strings(issue.get("fact_ids")),
                 "evidence_ids": _strings(issue.get("evidence_ids")),
                 "identity_fingerprint": issue_identity_fingerprint(issue),
+                "decision_identity": decision_identity(payload, issue),
                 "updated_at": now,
             }
             event = _append_decision_event(state, record)

@@ -145,6 +145,17 @@ def test_leaf_only_wrong_class_name_is_a_finding_not_a_gap():
 def test_other_class_name_difference_is_reported_without_choosing_a_winner():
     issue, = _structure_class_name_issues(NameRule(), leaf_document(wrong='城乡社区事务支出'), {})
     assert '两处类名写法不一致，请核对' in issue.message and '应为' not in issue.message
+    assert not issue.location.get('code')  # 类名集合不同不等于已证明两个名称属于同一编码。
+
+
+def test_class_name_correspondence_never_depends_on_equal_amounts():
+    doc=leaf_document()
+    doc.page_texts[1]=doc.page_texts[1].replace('行政运行（类）3,000.00万元','行政运行（类）999.00万元')
+    issue,=_structure_class_name_issues(NameRule(),doc,{})
+    assert issue.location['code']=='212'  # 精确项名仍能证明把项名误当类名，与金额无关。
+    correct=leaf_document(wrong='城乡社区支出')
+    correct.page_texts[1]=correct.page_texts[1].replace('城乡社区支出（类）3,000.00万元','城乡社区支出（类）999.00万元')
+    assert _structure_class_name_issues(NameRule(),correct,{})==[]
 
 
 def test_tables_with_any_class_or_kuan_row_keep_the_hierarchy_path():
