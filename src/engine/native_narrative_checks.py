@@ -18,9 +18,11 @@ from .rule_policy import AMOUNT_TOLERANCE_WAN, amount_difference_exceeds_policy
 _NUMBER = r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
 _UNIT = r"(?:亿元|万元|元)"
 _FACTORS = {'元': Decimal('.0001'), '万元': Decimal('1'), '亿元': Decimal('10000')}
+# “收入支出总8101.41万元”虽漏“计”，业务主体、总额标志、金额及单位仍显式齐备。
+# 仅在“总”后紧接数字时读取原值，保留原文，不补字，也不借同页其他总额代填。
 _METRIC = (r"(?:一般公共预算(?:财政拨款)?支出(?:决算(?:数)?)?"
-           r"|财政拨款收入支出(?:总计|合计|总额)"
-           r"|收入支出(?:总计|合计|总额)"
+           r"|财政拨款收入支出(?:总计|合计|总额|总(?=\d))"
+           r"|收入支出(?:总计|合计|总额|总(?=\d))"
            r"|机关运行经费支出(?:决算(?:数)?)?"
            r"|本年收入(?:合计|总计|总额)|本年支出(?:合计|总计|总额))")
 _CURRENT = re.compile(
@@ -211,7 +213,7 @@ def _receipt(rule, doc, relation, status, formula, reason=None, disclosure_sourc
                           incomplete_reason=reason, disclosure_sources=disclosure_sources)
 
 
-def _unresolved(rule, doc, text, start, relation, formula, reason, unresolved):
+def _unresolved(rule, doc, text, start, relation, formula, reason, unresolved, *, section='决算情况说明'):
     refs = text.refs(start, min(start + 1, len(text.compact)), '关系位置')
     page = refs[0]['page'] if refs else None
     message = f'第{page}页原文关系未完成：{reason}'
@@ -234,7 +236,8 @@ def _unresolved(rule, doc, text, start, relation, formula, reason, unresolved):
         blockers = [blocker(dimension='fund_scope', ref=f'第{page}页采购分项', reason_code='scope_unconfirmed')]
     if not blockers:
         record_gap(doc, message, reason_codes=codes, missing_operands=[text_missing_operand(
-            section='政府采购情况说明', role='政府采购分项显式金额', page=page,
+            section=section, role=('同比说明本年总额与增减额' if relation.startswith('narrative_yoy')
+                                   else '政府采购分项显式金额'), page=page,
             row_key=None, column='金额', stage='决算',
             year=year if isinstance(year, int) and year >= 1900 else None)])
     else:
@@ -263,7 +266,7 @@ def _check_yoy(rule, doc, text, section, start, stop, year, owner, year_refs, is
         currents = list(_CURRENT.finditer(block, 0, match.start()))
         if not currents:
             _unresolved(rule, doc, text, start + match.start(), relation, formula,
-                        '同条同比说明缺少明确的本年总额及单位', unresolved)
+                        '同条同比说明缺少明确的本年总额及单位', unresolved, section=section)
             continue
         current = currents[-1]
         bridge = block[current.end():match.start()]
@@ -272,18 +275,18 @@ def _check_yoy(rule, doc, text, section, start, stop, year, owner, year_refs, is
         if (bridge.count('。') > 1 or re.search(r'其中|分别|[；;]', bridge)
                 or re.search(rf'{_NUMBER}{_UNIT}', bridge)):
             _unresolved(rule, doc, text, start + match.start(), relation, formula,
-                        '本年总额与同比声明之间存在其他条目或分项，不能跨条目绑定', unresolved)
+                        '本年总额与同比声明之间存在其他条目或分项，不能跨条目绑定', unresolved, section=section)
             continue
         if match['metric'] and _metric_key(match['metric']) != _metric_key(current['metric']):
             _unresolved(rule, doc, text, start + match.start(), relation, formula,
-                        '本年金额与增减金额指标不同', unresolved)
+                        '本年金额与增减金额指标不同', unresolved, section=section)
             continue
         # Include the same paragraph's owner/year prefix, but no earlier entry.
         proof_start = max(block.rfind('。', 0, current.start()), block.rfind('；', 0, current.start()),
                           block.rfind(';', 0, current.start())) + 1
         if _CURRENT.search(block[proof_start:current.start()]):
             _unresolved(rule, doc, text, start + match.start(), relation, formula,
-                        '同一条目前出现多个本年总额候选，需先确认同比归属', unresolved)
+                        '同一条目前出现多个本年总额候选，需先确认同比归属', unresolved, section=section)
             continue
         proof = block[proof_start:match.end()]
         prefix = block[proof_start:current.start()]
@@ -301,7 +304,7 @@ def _check_yoy(rule, doc, text, section, start, stop, year, owner, year_refs, is
         if not reason and (current_amount < 0 or previous <= 0):
             reason = '推导的上年基数不可作为有效分母'
         if reason:
-            _unresolved(rule, doc, text, start + match.start(), relation, formula, reason, unresolved)
+            _unresolved(rule, doc, text, start + match.start(), relation, formula, reason, unresolved, section=section)
             continue
         computed = change / previous * Decimal('100')
         declared = Decimal(match['percent'].replace(',', ''))
@@ -312,13 +315,15 @@ def _check_yoy(rule, doc, text, section, start, stop, year, owner, year_refs, is
         decimals = max(0, -declared.as_tuple().exponent)
         tolerance = max(Decimal('.1'), Decimal('.5').scaleb(-decimals))
         failed = difference > tolerance or not direction_matches
-        _receipt(rule, doc, relation, 'fail' if failed else 'pass', formula)
-        if not failed:
-            continue
         claim_refs = text.refs(start + current.start(), start + match.end(), '本年金额及同比声明')
         refs = list(claim_refs)
         if not re.search(r'20\d{2}(?:年度|年)', prefix):
             refs += year_refs
+        _receipt(rule, doc, relation, 'fail' if failed else 'pass', formula,
+                 disclosure_sources=[dict(ref, file_hash=getattr(getattr(doc, 'fact_context', None),
+                                                               'file_hash', None)) for ref in refs])
+        if not failed:
+            continue
         page = refs[0]['page']
         location = {'page': page, 'pages': sorted({ref['page'] for ref in refs}), 'section': section,
                     'relation_type': 'narrative_yoy_delta', 'table_refs': refs,
@@ -364,7 +369,7 @@ def _check_procurement(rule, doc, text, section, start, stop, year, owner, year_
         if not reason and ('其中' in tail or re.search(r'另计|另行|分别采用|不含', tail)):
             reason = '采购分项存在嵌套分项或其他统计口径，不能直接求和'
         if reason:
-            _unresolved(rule, doc, text, start + total.start(), relation, formula, reason, unresolved)
+            _unresolved(rule, doc, text, start + total.start(), relation, formula, reason, unresolved, section=section)
             continue
         values = {part['kind']: _wan(part['amount'], part['unit']) for part in parts}
         # “无工程采购”是有原文的无发生额声明，不新增或回写金额事实。
@@ -376,7 +381,7 @@ def _check_procurement(rule, doc, text, section, start, stop, year, owner, year_
         if omitted and failed and difference > 0:
             _unresolved(rule, doc, text, start + total.start(), relation, formula,
                         f'政府采购汇总未列出{"、".join(omitted)}，已列分项小于总额，差额可能属于未列分项',
-                        unresolved)
+                        unresolved, section=section)
             continue
         if omitted:
             formula = f'listed parts = procurement_total; omitted {"/".join(omitted)} >= 0'

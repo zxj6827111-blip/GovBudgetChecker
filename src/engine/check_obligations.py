@@ -1552,7 +1552,11 @@ def _resolve_rule_backed(
             details = list(dict.fromkeys((details_by_rule or {}).get(rule_id, "") for rule_id in hit))
             details = [detail for detail in details if detail]
             if details:
-                instance.detail = "；".join(details)
+                # 不同子规则会重复报告同一个缺数原因；只去展示文字的重句，
+                # 各规则执行回执、原因码和缺数位置仍完整保留。
+                parts = dict.fromkeys(part.strip() for detail in details
+                                      for part in detail.split('；') if part.strip())
+                instance.detail = "；".join(parts)
             instance.reason_codes = _codes(implemented)
             return
 

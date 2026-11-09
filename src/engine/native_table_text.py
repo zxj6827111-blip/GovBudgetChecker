@@ -36,7 +36,7 @@ def sections(doc, match):
     return text, ranges[-1:]
 
 
-def compare(rule, doc, text, start, end, value, fact, key, label, section):
+def compare(rule, doc, text, start, end, value, fact, key, label, section, *, disclosure_sources=()):
     refs = text.refs(start, end, '原文金额声明')
     from .native_empty_operands import NativeBlankTerm
     if isinstance(fact, NativeBlankTerm):
@@ -50,7 +50,8 @@ def compare(rule, doc, text, start, end, value, fact, key, label, section):
         return []
     ids, evidence = receipt(rule, doc, key, [fact],
             status='fail' if amount_difference_exceeds_policy(value - fact.normalized_value) else 'pass',
-            formula='explicit narrative amount == current table amount (万元)')
+            formula='explicit narrative amount == current table amount (万元)',
+            **({'disclosure_sources': list(disclosure_sources)} if disclosure_sources else {}))
     if not amount_difference_exceeds_policy(value - fact.normalized_value):
         return []
     pages = sorted({ref['page'] for ref in refs} | {e.get('physical_page') for e in fact.extra_dims.get('evidence_refs', [])
@@ -76,6 +77,91 @@ def context_guard(doc, compact, start, end):
             or _foreign_owner(proof, context.org_name))
 
 
+def _inside_full_quotation(compact, start, end):
+    """整句引文可嵌套指标短引号；不能被内部“三公”的闭引号截断。"""
+    for opening, closing in (('“', '”'), ('「', '」'), ('『', '』'), ('‘', '’')):
+        stack = []
+        for index, char in enumerate(compact):
+            if char == opening:
+                stack.append(index)
+            elif char == closing and stack:
+                left = stack.pop()
+                if left <= start and end <= index:
+                    return True
+        if any(left <= start for left in stack):
+            return True
+    # 同一种直引号不能表达嵌套；断言首尾都在引用态时仍按引文拒收。
+    return compact[:start].count('"') % 2 == compact[:end].count('"') % 2 == 1
+
+
+def _three_public_absence_span(doc, text, begin, end):
+    """本年财政拨款三公整体明确无支出，可核对各决算格；不证明预算为零。
+
+    只接受原说明中的事实断言，复用零证据的否定/假设/引用/模板作用域守卫。
+    与“合计碰巧为0”不同，明确无发生额的范围涵盖各分项；表格仍须逐格认证。
+    """
+    from .narrative_zero_evidence import (
+        _clauses, _frame_scope_spans, _inside_quote_span, _is_assertive_context,
+        _NON_FISCAL_SCOPE_RE,
+    )
+    context = getattr(doc, 'fact_context', None)
+    if not context or not context.org_name or context.fiscal_year is None:
+        return None
+    body = text.compact[begin:end]
+    # 预测、局部期间或后置否定不能证明全年实际未发生。语义范围不清时
+    # 仍保持未知，不能由当前表格的零值反推文字声明的期间与真实性。
+    if re.search(r'预计|计划|预期|可能|拟|截至|截止|上半年|下半年|季度|月度|'
+                 r'\d{1,2}月|本月|本季|不属实|不成立|不正确|不准确|有误|'
+                 r'(?:不能|未能|尚未|无法)(?:确认|确定)|未必|不一定', body):
+        return None
+    absent = re.compile(r'(?:没有|无)(?:一般公共预算)?(?:财政拨款)?["“”]?三公["“”]?经费'
+                        r'(?:财政拨款)?(?:支出决算|支出)(?=[。；;，,]|$)')
+    frames, candidates = _frame_scope_spans(text), []
+    for left, right in _clauses(text.compact):
+        left, right = max(left, begin), min(right, end)
+        if left >= right:
+            continue
+        clause = text.compact[left:right]
+        matches = list(absent.finditer(clause))
+        if not matches or _NON_FISCAL_SCOPE_RE.search(clause):
+            continue
+        if (not _is_assertive_context(text.compact, left, clause, frames)
+                or context_guard(doc, text.compact, left, right)
+                or '预算' in clause
+                or re.search(r'并非|不是|不代表|不能说明|暂无|是否|未核实|待核实|'
+                             r'(?:不能|未能|尚未|无法)(?:确认|确定)|不确定|未必|不一定', clause)):
+            continue
+        # 无主语的后句不能越过前面的异年/异主体声明继承当前材料身份。
+        # 范围内出现外来身份时保守交回复核，不改动其他表文检查的语境规则。
+        scope = text.compact[begin:right]
+        if (any(int(year) != context.fiscal_year for year in re.findall(r'20\d{2}(?=年)', scope))
+                or _foreign_owner(scope, context.org_name)):
+            continue
+        for match in matches:
+            # 引号可跨句读；在整段原文中判定，不能先按句号切断闭引号。
+            if (not _inside_quote_span(text.compact, left + match.start(), left + match.end())
+                    and not _inside_full_quotation(text.compact, left + match.start(), left + match.end())):
+                candidates.append((left, right))
+    if not candidates:
+        return None
+    # 同节若还有正数/百分比披露，不用总体无支出声明覆盖它们，交原检查逐项核对。
+    if (re.search(r'\d+(?:\.\d+)?[%％]', body)
+            or any(_wan(m['amount'], m['unit']) != 0 for m in re.finditer(
+                rf'(?P<amount>{_NUMBER})(?P<unit>{_UNIT})', body))):
+        return None
+    return candidates[0]
+
+
+def _compare_absence(rule, doc, text, span, fact, key, label, title):
+    sources = [{**ref, 'file_hash': doc.fact_context.file_hash}
+               for ref in text.refs(*span, '原文明确无三公支出；非印刷金额0')]
+    issues = compare(rule, doc, text, *span, Decimal('0'), fact, key,
+                     f'{label}（原文明确无三公支出）', title, disclosure_sources=sources)
+    for issue in issues:
+        issue.amounts_provenance = '原文明确无发生额，按0核对；未在原件中补写数字'
+    return issues
+
+
 def check_three_public_totals(rule, doc):
     from .native_no_activity import require_no_activity_disposition
     require_no_activity_disposition(rule, doc)
@@ -86,6 +172,7 @@ def check_three_public_totals(rule, doc):
     if not ranges:
         return finish(rule, [], ['未找到三公经费决算说明原文范围'])
     title, begin, end = ranges[0]
+    absence_span = _three_public_absence_span(doc, text, begin, end)
     pattern = re.compile(rf'(?P<phase>年初预算|全年预算|调整后预算|支出决算(?:数)?|决算数)'
                          rf'(?:为|共计|合计为|是)?(?P<amount>{_NUMBER})(?P<unit>{_UNIT})')
     claims = {}
@@ -98,7 +185,15 @@ def check_three_public_totals(rule, doc):
         claims.setdefault(stage, []).append(match)
     issues, unresolved = [], []
     if '决算' not in claims:
-        unresolved.append('三公总体说明缺少显式决算金额，不能用预算金额替代')
+        if absence_span:
+            fact, error = select(doc, facts, 'total_actual', code='total', stage='决算', allow_native_blank=True)
+            if error:
+                unresolved.append(error)
+            else:
+                issues.extend(_compare_absence(rule, doc, text, absence_span, fact,
+                              'three_public:text:决算:explicit_absence', '三公经费合计决算', title))
+        else:
+            unresolved.append('三公总体说明缺少显式决算金额，不能用预算金额替代')
     for stage, matches in claims.items():
         fact, error = select(doc, facts, 'total_actual', code='total', stage=stage, allow_native_blank=True)
         if error:
@@ -206,6 +301,7 @@ def check_three_public_details(rule, doc, *, require_vehicle_details=True, check
     if not ranges:
         return finish(rule, [], ['未定位到三公经费决算说明原文'])
     title, begin, end = ranges[0]
+    absence_span = _three_public_absence_span(doc, text, begin, end)
     pattern = re.compile(rf'(?:支出)?(?:决算|预算)?(?:数)?(?:为|是)?(?P<amount>{_NUMBER})(?P<unit>{_UNIT})')
     issues, unresolved, seen = [], [], set()
     # The concrete-detail subsection takes precedence over its summary.
@@ -278,6 +374,14 @@ def check_three_public_details(rule, doc, *, require_vehicle_details=True, check
 
     for indicator in required:
         if indicator not in seen:
+            if absence_span:
+                term, error = select(doc, facts, indicator, code='total', stage='决算', allow_native_blank=True)
+                if error:
+                    unresolved.append(f'{LABELS[indicator]}：{error}')
+                else:
+                    issues.extend(_compare_absence(rule, doc, text, absence_span, term,
+                                  f'three_public:detail:{indicator}:explicit_absence', LABELS[indicator], title))
+                continue
             top = {'overseas', 'vehicle_purchase_operation', 'reception'}
             if indicator in top and indicator not in mentioned and stated_total is not None:
                 others = [stated_amount(other) for other in sorted(top - {indicator})]

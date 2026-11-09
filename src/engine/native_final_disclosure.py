@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections import Counter
 from decimal import Decimal
 
 from .amount_math import classify_amount_diff
@@ -386,6 +387,85 @@ def _original_name_candidates(doc, pages, name, width):
     return candidates
 
 
+def _native_grid_name_rows(doc, pages):
+    """折行原表的码名身份：原生文字按格定位，且原文七位编码全集不能漏行。
+
+    仅用于款名同字异序时的独立金额核对；不扩展全局名称别名。解析表若漏掉
+    原文中的任何项级编码，整条恢复路径拒收，不能拿幸存候选自证唯一。
+    """
+    artifact, context = getattr(doc, 'parse_artifact', None), getattr(doc, 'fact_context', None)
+    if (not artifact or not context or artifact.source_file_hash != context.file_hash
+            or artifact.parse_run_uid != context.parse_run_uid):
+        return {}, {}
+    if any(not isinstance(p, int) or not 1 <= p <= len(doc.page_texts) for p in pages):
+        return {}, {}
+    # 片段范围不能排除漏解析的续页：一直扫到下一张核心表的原文表头。
+    # 找不到明确边界时扩大范围只会让完整性更难通过，不能缩小候选集合。
+    pages = list(pages)
+    next_table = re.compile(r'收入支出决算总表|收入决算表|支出决算表|'
+        r'财政拨款收入支出决算总表|一般公共预算财政拨款基本支出决算表|'
+        r'财政拨款[“"]?三公[”"]?经费支出决算表|'
+        r'政府性基金预算财政拨款收入支出决算表|国有资本经营预算财政拨款收入支出决算表')
+    for page in range(max(pages) + 1, len(doc.page_texts) + 1):
+        head = re.sub(r'\s+', '', str(doc.page_texts[page - 1] or ''))[:180]
+        if next_table.search(head) and '一般公共预算财政拨款支出决算表' not in head:
+            break
+        pages.append(page)
+    raw_counts = Counter((page, m[1]) for page in pages for m in re.finditer(
+        r'(?<!\d)(\d{7})(?!\d)', str(doc.page_texts[page - 1] or '')))
+    if not raw_counts:
+        return {}, {}
+    tokens = [t for t in artifact.source_tokens
+              if t.source_method == 'native_text' and t.physical_page in pages and t.bbox
+              and t.source_ref.get('source_file_hash') == context.file_hash]
+    if (any(not t.token_uid or not t.source_ref.get('source_block_id') for t in tokens)
+            or len({t.token_uid for t in tokens}) != len(tokens)):
+        return {}, {}
+    rows, refs, certified_counts = {}, {}, Counter()
+    for table in artifact.table_fragments:
+        if table.table_code != GENERAL or table.extraction_method != 'lines':
+            continue
+        for code_cell in table.cells:
+            code = str(code_cell.raw_text or '').strip()
+            if (not re.fullmatch(r'\d{3}|\d{5}|\d{7}', code)
+                    or code_cell.page_number not in pages or code_cell.ocr_provenance or code_cell.is_header):
+                continue
+            names = [c for c in table.cells if c.row_idx == code_cell.row_idx
+                     and c.col_idx == code_cell.col_idx + 1 and c.page_number == code_cell.page_number]
+            if len(names) != 1 or names[0].ocr_provenance:
+                continue
+            # row_idx 不能自证同排：必须为原网格中左右相邻、上下边界相同的两格。
+            if (not code_cell.bbox or not names[0].bbox
+                    or abs(code_cell.bbox[2] - names[0].bbox[0]) > .5
+                    or abs(code_cell.bbox[1] - names[0].bbox[1]) > .5
+                    or abs(code_cell.bbox[3] - names[0].bbox[3]) > .5):
+                continue
+            proof = []
+            for cell in (code_cell, names[0]):
+                if not cell.bbox:
+                    break
+                x0, y0, x1, y1 = cell.bbox
+                native = sorted([t for t in tokens if t.physical_page == cell.page_number
+                    and x0 - .5 <= t.bbox[0] <= t.bbox[2] <= x1 + .5
+                    and y0 - .5 <= t.bbox[1] <= t.bbox[3] <= y1 + .5],
+                    key=lambda t: (t.bbox[1], t.bbox[0]))
+                literal = lambda v: re.sub(r'\s+', '', str(v or ''))
+                if not native or literal(''.join(t.raw_text for t in native)) != literal(cell.raw_text):
+                    break
+                proof.extend({'file_hash': context.file_hash, 'page': t.physical_page,
+                              'span': t.raw_text, 'bbox': list(t.bbox),
+                              'source_block_id': t.source_ref.get('source_block_id'),
+                              'role': '原生格内码名身份'} for t in native)
+            else:
+                rows.setdefault(code, set()).add(literal(names[0].raw_text))
+                refs.setdefault(code, []).extend(proof)
+                if len(code) == 7:
+                    certified_counts[(code_cell.page_number, code)] += 1
+    if raw_counts != certified_counts or any(len(names) != 1 for names in rows.values()):
+        return {}, {}
+    return {code: next(iter(names)) for code, names in rows.items()}, refs
+
+
 def _bind_klass_via_independent_chain(doc, facts, item, paths, aliases):
     """A2（R2.2 附页 QP-04）：类名缺口时按独立身份链绑定类级，不用近似名称。
 
@@ -617,6 +697,43 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
                 return None, error
         return select(doc, facts, 'total_actual', code=leaf_code)
 
+    def bind_under_parent_word_order_error():
+        # 款名仅为同字异序时，可用完整原表中逐字唯一的项名及原件层级链
+        # 独立核对金额；名称错误仍由 V33-227 报告。不同字、旧名、同名多项
+        # 或原件链缺失均不绑定，更不按金额相同猜配。
+        pages = _general_table_pages(doc, facts)
+        native_rows, native_refs = _native_grid_name_rows(doc, pages)
+        original = {code for code, name in native_rows.items()
+                    if len(code) == 7 and _name(name) == _name(item['xiang'])}
+        if len(original) != 1:
+            return None
+        leaf_code = next(iter(original))
+        if leaf_code not in paths or not paths[leaf_code].startswith(klass):
+            return None
+        parent_code = next((c for c, path in paths.items() if path == paths[leaf_code][:5]), None)
+        parent_fact, error = select(doc, facts, 'total_actual', code=parent_code) if parent_code else (None, 'missing')
+        if error or not parent_fact:
+            return None
+        actual, stated = _name(parent_fact.subject_name), _name(item['kuan'])
+        if actual == stated or Counter(actual) != Counter(stated):
+            return None
+        klass_code = next((c for c, path in paths.items() if path == klass), None)
+        klass_fact, error = select(doc, facts, 'total_actual', code=klass_code) if klass_code else (None, 'missing')
+        chain = [(klass_code, klass_fact.subject_name if klass_fact else ''),
+                 (parent_code, parent_fact.subject_name), (leaf_code, item['xiang'])]
+        if error or not klass_fact or not all(
+                _name(native_rows.get(code)) == _name(name) for code, name in chain):
+            return None
+        fact, error = select(doc, facts, 'total_actual', code=leaf_code)
+        if not error and _name(fact.subject_name) == _name(item['xiang']):
+            if aliases is not None:
+                aliases.extend(ref for code, _ in chain for ref in native_refs[code])
+                aliases.append({'role': 'independent_hierarchy_chain_with_parent_word_order',
+                                'klass_code': klass_code, 'kuan_code': parent_code, 'xiang_code': leaf_code,
+                                'narrative_name': item['kuan'], 'table_name': parent_fact.subject_name})
+            return fact, None
+        return None
+
     for group, width in levels:
         candidates = {str(f.subject_code) for f in facts
                       if len(paths.get(str(f.subject_code), '')) == width
@@ -633,6 +750,10 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
                 klass = parent
                 continue
         if len(candidates) != 1:
+            if group == 'kuan' and not candidates:
+                bound = bind_under_parent_word_order_error()
+                if bound is not None:
+                    return bound
             if group == 'xiang' and not candidates:
                 matches = []
                 for f in facts:

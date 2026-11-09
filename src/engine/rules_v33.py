@@ -3088,7 +3088,80 @@ class R33102_TotalSheet_vs_Text(Rule):
     code, severity = "V33-102", "warn"
     desc = "收入支出决算总表 ↔ 总体情况说明"
 
+    @staticmethod
+    def _current_total_claim(doc, aliases):
+        """只读取本节「本年总额标签+金额+单位」，不借同比增减额替代总额。"""
+        from .native_narrative_checks import _NUMBER, _UNIT, _wan
+        from .native_table_text import sections, context_guard, _inside_full_quotation
+        from .narrative_zero_evidence import (
+            _clauses, _frame_scope_spans, _inside_quote_span, _is_assertive_context,
+        )
+        text, ranges = sections(doc, lambda title:
+            '收入支出决算总体情况说明' in title
+            and not any(word in title for word in ('财政拨款', '政府性基金', '国有资本')))
+        # 原文若漏写“计”，仅在“总”紧邻数字时仍有显式总额身份；不改写原文。
+        labels = '|'.join(re.escape(alias) for alias in aliases)
+        if '收入支出总计' in aliases:
+            labels += r'|收入支出总(?=[+-]?\d)'
+        pattern = re.compile(rf'(?:{labels})(?:为|共计|是|[:：])?'
+                             rf'(?P<amount>[+-]?{_NUMBER})(?P<unit>{_UNIT})')
+        candidates = []
+        frames = _frame_scope_spans(text)
+        for title, begin, end in ranges:
+            for match in pattern.finditer(text.compact, begin, end):
+                clause_start, clause_end = next(
+                    ((max(begin, a), min(end, b)) for a, b in _clauses(text.compact)
+                     if a <= match.start() < b), (begin, end))
+                clause = text.compact[clause_start:clause_end]
+                if (not _is_assertive_context(text.compact, clause_start, clause, frames)
+                        or _inside_quote_span(text.compact, match.start(), match.end())
+                        or _inside_full_quotation(text.compact, match.start(), match.end())):
+                    continue
+                if getattr(doc, 'fact_context', None) is not None:
+                    if context_guard(doc, text.compact, match.start(), match.end()):
+                        continue
+                else:
+                    year = _percentage_document_context(doc, '')['report_year']
+                    prefix = text.compact[clause_start:match.start()]
+                    if year and any(int(y) != year for y in re.findall(r'20\d{2}(?=年)', prefix)):
+                        continue
+                # 预算、历史比较及口径不明的声明不充当本年决算总额。
+                prefix = text.compact[clause_start:match.start()]
+                if re.search(r'预算|上年|去年|原为|曾为', prefix):
+                    continue
+                candidates.append((text, match.start(), match.end(),
+                                   _wan(match['amount'], match['unit']), title))
+        if len(candidates) != 1:
+            raise RuleDeferred('V33-102', '总体情况说明未提取到唯一的显式本年支出总额及单位')
+        return candidates[0]
+
+    def _apply_native(self, doc):
+        from .native_table_arithmetic import table_facts, select, finish
+        from .native_table_text import compare
+        facts, error = table_facts(doc, 'FIN_01_income_expenditure_total')
+        if error:
+            return finish(self, [], [error])
+        names = {'总计', '支出总计'}
+        # 总计行存在但取数不合格时不能悄悄换成本年支出，避免跨口径比较。
+        grand = [fact for fact in facts if fact.indicator == 'expenditure_actual'
+                 and re.sub(r'\s+', '', fact.subject_name or '') in names]
+        if not grand:
+            names = {'本年支出合计', '支出合计'}
+        selected = [fact for fact in facts if fact.indicator == 'expenditure_actual'
+                    and re.sub(r'\s+', '', fact.subject_name or '') in names]
+        fact, error = select(doc, selected, 'expenditure_actual')
+        if error:
+            return finish(self, [], [error])
+        aliases = ['收入支出总计', '支出总计'] if grand else ['本年支出合计', '支出合计']
+        text, start, end, value, title = self._current_total_claim(doc, aliases)
+        return compare(self, doc, text, start, end, value, fact, 'total_sheet:text',
+                       '收入支出总计' if grand else '本年支出合计', title,
+                       disclosure_sources=[{**ref, 'file_hash': doc.fact_context.file_hash}
+                                           for ref in text.refs(start, end, '原文总额声明')])
+
     def apply(self, doc: Document) -> List[Issue]:
+        if getattr(doc, "parse_artifact", None) is not None:
+            return self._apply_native(doc)
         try:
             issues: List[Issue] = []
 
@@ -3123,38 +3196,17 @@ class R33102_TotalSheet_vs_Text(Rule):
                     unresolved_reasons=["收入支出决算总表未找到支出合计/总计"],
                 )
 
-            # 4) 总体情况说明章节内取数（MR-1a：旧实现在前 5 页找关键词后
-            #    抓 100 字符内首个数字，页界断号/页序变化都取不到；
-            #    现按章节定位 + 断号修复后锚定「收入支出总计/支出总计」。
-            #    target_year 固定 None：章节范围已限定，而全量运行时
-            #    dominant_year 会被前置规则置位，年度过滤分支反而把
-            #    同比句（"比 2024 年度减少…"）的数字抓进来——宜川实测）
-            scope = _final_section_scope(
-                doc, ("收入支出决算总体情况说明",), exclude_tokens=("财政拨款", "政府性基金", "国有资本"),
-            )
-            found_num = (
-                near_number(
-                    scope or "",
-                    narrative_aliases,
-                    target_year=None,
-                )
-                if scope
-                else None
-            )
-
-            if found_num is None:
-                raise RuleDeferred(
-                    self.code,
-                    detail="总体情况说明未提取到支出合计金额",
-                    unresolved_reasons=["总体情况说明未提取到支出合计金额"],
-                )
+            # 同口径标签必须直接带有本年金额和单位；同比“减少X万元”不是总额。
+            text, start, end, found_num, title = self._current_total_claim(doc, narrative_aliases)
+            refs = text.refs(start, end, '原文总额声明')
 
             # 5) 比较
             if not tolerant_equal(total_expense, found_num):
                 issues.append(self._issue(
                     f"收入支出决算总表支出合计({total_expense:.2f})与总体情况说明数字({found_num:.2f})不一致",
-                    {"page": p, "pos": 0},
-                    evidence_text=f"表格：P{p} 收入支出决算总表\n表内合计: {total_expense}\n文本提取值: {found_num}\n(请检查“总体情况说明”部分的数字)"
+                    {"page": refs[0]['page'], "pages": sorted({p, *(ref['page'] for ref in refs)}),
+                     "section": title, "table_refs": refs},
+                    evidence_text='\n'.join(ref['span'] for ref in refs)
                 ))
 
             return issues
@@ -10021,34 +10073,19 @@ class R33236_DocumentScopeTerminology(Rule):
 
 
 class R33230_EmptyZeroHint(Rule):
-    """空值与0值规范性提示"""
+    """旧版空格补零建议：显式零不是空白，原生认证空白按无发生额处理。"""
     code, severity = "V33-230", "info"
     desc = "空值/0值规范性提示"
 
     def apply(self, doc: Document) -> List[Issue]:
-        issues = []
-        
-        # 检查T7：如果说明写0但表内为空
-        for pidx, txt in enumerate(doc.page_texts):
-            if "三公" in txt and "0" in txt:
-                # 说明中提到0，检查T7是否有数据
-                t7_rows = _get_table_rows(doc, '一般公共预算财政拨款"三公"经费支出决算表')
-                if t7_rows:
-                    has_data = False
-                    for row in t7_rows:
-                        vals = _parse_row_values(row)
-                        if any(v > 0 for v in vals):
-                            has_data = True
-                            break
-                    if not has_data:
-                        issues.append(self._issue(
-                            "规范性提示：三公经费表内为空，说明中提及为0，建议表内补填0保持一致。",
-                            {"page": pidx + 1}, "info",
-                            evidence_text="文档内容：提及 '0' 或相关描述\n表格检测：三公表存在但无任何大于0的数值"
-                        ))
-                break
-        
-        return issues
+        from .rule_outcome import RuleNotApplicable
+        # 原生路径已分别核验网格空白、金额和表下无数据说明；2026-11-08
+        # 约定真实空白按0参与计算，不再凭“无正数”要求补0。旧二维表空值
+        # 也不能认证原件格为空。这里只记录过时建议不适用，不冒充逐格检查通过。
+        # 缺表、缺说明及不可识别格继续由各自的结构/取数规则处理。
+        raise RuleNotApplicable(self.code,
+            detail='按当前原件空白无发生额约定，空格补0建议不适用；'
+                   '表格完整性、表下无数据说明及金额可识别性由相应检查规则核验')
 
 
 class R33232_PercentagePrecision(Rule):

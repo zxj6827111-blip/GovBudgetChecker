@@ -45,6 +45,11 @@ _NAME_CONTEXTS: Sequence[re.Pattern[str]] = (
 _LEADING_VERBS_RE = re.compile(r"^(?:纳入|按照|照|根据|经|由|对|向|与|在|是)")
 _TRAILING_SCOPE_RE = re.compile(r"(?:部门|单位|[（(]本级[)）])$")
 _EMPTY_COMPILER_RE = re.compile(r"编制(?:部门|单位)\s*[:：]\s*(?=单位\s*[:：]|金额单位|\n|$)")
+# 部分标题中的同一名称常在 PDF 内折行；保留原始字符位置，不借封面/文件名补字。
+# 括号别称的跨行范围仍保守留待核实，不把未闭合的名称残片当独立依据。
+_WRAPPED_PART_NAME_RE = re.compile(
+    rf"(?m)^[ \t]*第[一二三四]部分\s*(?P<n>(?:[{CJK}][ \t\r\n]*){{4,80}}?)"
+    rf"(?=概况|20\d{{2}}年度?(?:部门|单位)?(?:决算|预算))")
 
 
 def _is_subsequence(short: str, long: str) -> bool:
@@ -93,6 +98,17 @@ def name_mentions(doc: Document) -> List[Tuple[str, int, str, int, int]]:
                     s = chars[match.start("n") + lead][0]
                     e = chars[min(len(chars) - 1, match.start("n") + lead + len(name) - 1)][0] + 1
                     mentions.append((name, page, text, line_start + s, line_start + e))
+        for match in _WRAPPED_PART_NAME_RE.finditer(text):
+            raw_name = match.group('n')
+            if '\n' not in raw_name:
+                continue
+            name = _TRAILING_SCOPE_RE.sub('', compact(raw_name))
+            if not _ORG_START_RE.match(name):
+                continue
+            start, end = match.span('n')
+            end = start + len(raw_name.rstrip())
+            if not any((n, p, a, b) == (name, page, start, end) for n, p, _t, a, b in mentions):
+                mentions.append((name, page, text, start, end))
     return mentions
 
 
