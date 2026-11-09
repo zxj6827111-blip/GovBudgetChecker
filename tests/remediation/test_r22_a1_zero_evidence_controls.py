@@ -196,7 +196,7 @@ def test_fin02_blank_term_end_to_end_narrative_zero(monkeypatch):
     headers = ['科目编码', '科目名称', '本年收入合计', '财政拨款收入', '事业收入',
                '经营收入', '其他收入']
     rows = [headers,
-            ['201', '合计', '10.00', '8.00', '2.00', '', '0.00']]
+            ['201', '一般公共服务支出', '10.00', '8.00', '2.00', '', '0.00']]
     text = '甲局2024年度部门决算。经营收入0万元。'
     cells = []
     parser = PDFParser(None)

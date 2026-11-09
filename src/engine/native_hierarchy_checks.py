@@ -16,7 +16,7 @@ from .fact_context import (
 from .native_table_arithmetic import cluster_rounding, finish, receipt
 from .native_three_public_ratios import operand_ref
 from src.services.fiscal_row_roles import is_index_header
-from .native_empty_operands import NativeBlankTerm, blank_term, blank_observations, money_facts
+from .native_empty_operands import NativeBlankTerm, blank_term, blank_observations, blank_operand_refs, money_facts
 from src.services.fiscal_code_hierarchy import hierarchy_paths, leaf_codes
 
 
@@ -320,10 +320,7 @@ def _compare(rule, doc, title, key, code, indicator, parent, children, *, column
         receipt(rule, doc, key, facts, status='insufficient_data', formula='parent = sum(children)', reason=reason)
         return [], [reason]
     total = sum((f.normalized_value for f in children), Decimal('0'))
-    if isinstance(parent, NativeBlankTerm) and total != 0:
-        reason = f'{title}科目{code}/{indicator}合计格原件留空而明细有金额'
-        receipt(rule, doc, key, facts, status='insufficient_data', formula='parent = sum(children)', reason=reason)
-        return [], [reason]
+    # 父格已通过原格认证与 U-5 取零，完整子项仍须按同一容差勾稽。
     if all(isinstance(f, NativeBlankTerm) for f in facts):
         receipt(rule, doc, key, facts, status='not_applicable', formula='原件完整网格各项均为空白，无发生额关系')
         return [], []
@@ -352,9 +349,15 @@ def _compare(rule, doc, title, key, code, indicator, parent, children, *, column
         suffix = '' if indicator == 'total_actual' else f'/{indicator}'
         message = (f'层级校验失败({code}{suffix}): 父级金额({parent.normalized_value:.2f}) '
                    f'!= 子级之和({total:.2f})，差额{diff:.2f}万元。')
+    if column_total and indicator in {'basic_actual', 'project_actual'}:
+        # 展示全部类级原行，包括认证空白零，避免把另一金额列的有数误解为本列漏算。
+        column_name = '基本支出' if indicator == 'basic_actual' else '项目支出'
+        message += f'本列（{column_name}）逐类复算：' + ' + '.join(
+            f'{f.subject_code}={f.normalized_value:.2f}' for f in children) + f' = {total:.2f}万元。'
     location = {'table': title, 'table_code': parent.table_code, 'code': code, 'column': indicator,
                 'page': pages[0] if pages else None, 'pages': pages, 'operand_refs': refs,
                 'native_blank_sources': blank_observations(facts),
+                'native_blank_operands': blank_operand_refs(facts, key),
                 'fact_context_version_token': doc.fact_context.version_token}
     return [rule._issue(message, location, 'warn' if level == 'mismatch' else 'info',
                         evidence_text=message, check_relation_id=f'{rule.code}:{key}',

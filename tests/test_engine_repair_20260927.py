@@ -156,7 +156,9 @@ def test_unresolved_total_le_15(replays):
         item = replays[alias]["unresolved"]["V33-TREND-COMPLETION-RATE"]
         assert "预算分母" in item["detail"]
         if alias == "shiquan":
-            assert "公共法律服务" in item["detail"]
+            # 原件30万元的“年\n初预算”已恢复；职业年金257.14/245.53冲突仍须保留。
+            assert "公共法律服务" not in item["detail"]
+            assert "机关事业单位职业年金缴费支出" in item["detail"]
             assert "本年支出决算存在多个不一致披露" in item["detail"]
         planned_missing += 1
     # New fact-bound checks cannot run from a frozen legacy page-data replay
@@ -179,7 +181,9 @@ def test_unresolved_total_le_15(replays):
     # 批次1 V33-251：原文确有未标单位的声明（yichuan“支出决算为4.19”、
     # shiquan 年初预算同类），按合同不得把该部分并入完整分项加总；规则保留
     # 已确认差额问题并转 insufficient_data，属于计划内取数不足。
-    for alias, label in (("yichuan", "支出决算"), ("shiquan", "年初预算")):
+    # 石泉原文同时写“年初预算为0”和“年初无预算”，该明确零声明现已纳入核对。
+    assert "V33-251" not in replays["shiquan"]["unresolved"]
+    for alias, label in (("yichuan", "支出决算"),):
         item = replays[alias]["unresolved"]["V33-251"]
         assert "未纳入合计" in item["detail"] and label in item["detail"]
         planned_missing += 1

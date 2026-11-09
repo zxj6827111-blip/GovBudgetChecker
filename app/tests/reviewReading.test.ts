@@ -92,6 +92,28 @@ assert.deepEqual(buildAmountComparison(sumProblem, groups), {
   values: ["41.24", "41.23", "0.01"],
 });
 
+// 认证空白是可定位的计算0；不同规则引用同一组原格时只展一组。
+const blankRefs = sumIssue.location.table_refs.map((ref, index) => ({
+  ...ref, source_cell_id: `native:r1c${index}`, current_value: index === 3 ? "0.00" : ref.current_value,
+  blank_as_zero: index === 3,
+}));
+const duplicateRefs = blankRefs.map((ref, index) => ({ ...ref,
+  relation_id: "other-rule:same-formula", operand_id: `other:${index}`,
+}));
+const [blankGroup] = buildCalculationGroups(mapOne({ ...sumIssue,
+  location: { table_refs: [...blankRefs, ...duplicateRefs] },
+}));
+assert.equal(buildCalculationGroups(mapOne({ ...sumIssue,
+  location: { table_refs: [...blankRefs, ...duplicateRefs] },
+})).length, 1);
+assert.equal(blankGroup.items[2].blankAsZero, true);
+assert.equal(blankGroup.items[2].located, true);
+assert.equal(blankGroup.itemsSum, "38.43");
+const otherColumn = duplicateRefs.map((ref) => ({ ...ref, field: `${ref.field}_different`, source_cell_id: `${ref.source_cell_id}-different` }));
+assert.equal(buildCalculationGroups(mapOne({ ...sumIssue,
+  location: { table_refs: [...blankRefs, ...otherColumn] },
+})).length, 2);
+
 // 任一金额无法解析时不给出半截加总。
 const brokenProblem = mapOne({
   ...sumIssue,

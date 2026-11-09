@@ -66,15 +66,32 @@ def compare(rule, doc, text, start, end, value, fact, key, label, section, *, di
              fact_ids=ids, evidence_ids=evidence)]
 
 
-def context_guard(doc, compact, start, end):
+def context_rejection(doc, compact, start, end):
+    """区分金额缺失与已有金额的主体/年度冲突；不放宽业务身份。"""
     context = doc.fact_context
-    # An explicit foreign period/owner is not an operand for this material.
-    # Inspect the current sentence, preserving soft line wraps.
     begin = max(compact.rfind(ch, 0, start) for ch in '。；！？') + 1
     proof = compact[begin:end]
     years = re.findall(r'20\d{2}(?=年)', proof)
-    return (any(int(year) != context.fiscal_year for year in years)
-            or _foreign_owner(proof, context.org_name))
+    if any(int(year) != context.fiscal_year for year in years):
+        return ('scope_unconfirmed', 'year', '金额声明包含其他年度，需核对期间口径')
+    if _foreign_owner(proof, context.org_name):
+        return ('subject_conflict', 'organization', '金额已披露，但原文单位名称与材料主体不一致，需先核对主体名称')
+    return None
+
+
+def context_guard(doc, compact, start, end):
+    return context_rejection(doc, compact, start, end) is not None
+
+
+def record_context_rejection(doc, text, start, end, rejection):
+    from .diagnostic_fields import blocker, record_gap
+    code, dimension, reason = rejection
+    refs = text.refs(start, end, '身份待核的原文金额声明')
+    pages = sorted({ref['page'] for ref in refs})
+    message = f'第{"、".join(map(str, pages))}页：{reason}'
+    record_gap(doc, message, reason_codes=[code], blocked_by=[blocker(
+        dimension=dimension, ref=message, reason_code=code)])
+    return message
 
 
 def _inside_full_quotation(compact, start, end):
@@ -241,8 +258,9 @@ def check_fiscal_grant_total(rule, doc):
     fact, error = _pick(doc, facts, 'expenditure_actual', _NAMES['total'])
     for claim in claims:
         key = f'grant:text:total:{claim.start()}'
-        invalid = error or ('说明四总计声明属于其他年度或主体' if context_guard(
-            doc, text.compact, claim.start(), claim.end()) else None)
+        rejection = context_rejection(doc, text.compact, claim.start(), claim.end())
+        invalid = error or (record_context_rejection(doc, text, claim.start(), claim.end(), rejection)
+                            if rejection else None)
         if invalid:
             unresolved.append(invalid)
             receipt(rule, doc, key, [fact] if fact else [], status='insufficient_data',

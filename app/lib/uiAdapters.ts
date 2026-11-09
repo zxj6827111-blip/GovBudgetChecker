@@ -1045,9 +1045,13 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
         ...(Array.isArray(rawLocation.merged_issue_ids) ? rawLocation.merged_issue_ids : []),
         ...(Array.isArray(rawLocation.member_issue_ids) ? rawLocation.member_issue_ids : []),
       ].map((item) => String(item ?? "").trim()).filter(Boolean)));
-      const rawRefs = Array.isArray(rawLocation.table_refs)
-        ? rawLocation.table_refs.filter(isRecord)
-        : [];
+      const rawRefs = [
+        ...(Array.isArray(rawLocation.table_refs) ? rawLocation.table_refs.filter(isRecord) : []),
+        ...(Array.isArray(rawLocation.native_blank_calculation_refs)
+          ? rawLocation.native_blank_calculation_refs.filter(isRecord).filter((ref) =>
+              ref.blank_as_zero === true && ref.current_value === "0.00" && Boolean(ref.source_cell_id)
+              && ref.verification_status === "verified" && ref.location_level === "exact_cell") : []),
+      ];
       const evidenceRefs = rawRefs.flatMap((ref, refIndex) => {
         const refPage = toNumber(ref.physical_page ?? ref.page);
         if (!Number.isFinite(refPage) || refPage <= 0) return [];
@@ -1066,6 +1070,8 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
           role: String(ref.role ?? `定位 ${refIndex + 1}`),
           relationId: ref.relation_id == null ? undefined : String(ref.relation_id),
           operandId: ref.operand_id == null ? undefined : String(ref.operand_id),
+          sourceCellId: ref.source_cell_id == null ? undefined : String(ref.source_cell_id),
+          blankAsZero: ref.blank_as_zero === true && verificationStatus === "verified" && locationLevel === "exact_cell",
           page: Math.floor(refPage),
           locationText: [`第 ${Math.floor(refPage)} 页`, ...labels].join(" · "),
           valueText: ref.current_value !== undefined && ref.current_value !== null

@@ -131,8 +131,13 @@ def _location(doc, refs, facts, section, relation, **extra):
             'fact_context_version_token': getattr(context, 'version_token', None),
             **identity}
     if facts:
+        from .native_empty_operands import blank_observations, money_facts
         result['operand_refs'] = [operand_ref(fact, f'{relation}:{i}')
-                                  for i, fact in enumerate(facts)]
+                                  for i, fact in enumerate(money_facts(facts))]
+        observations = blank_observations(facts)
+        if observations:
+            result['native_blank_sources'] = observations
+            result['pages'] = sorted(set(result['pages']) | {o['physical_page'] for o in observations})
     return result
 
 
@@ -179,6 +184,9 @@ def _amount(rule, doc, text, begin, end, amount, unit, fact, key, label, section
     message = (f'{label}金额单位口径错误：' if unit_error else f'{label}表文金额不一致：')
     message += (f'原文{amount}{unit}折合{declared}万元，表内{fact.normalized_value:.2f}万元，'
                 f'相差{abs(difference):.4f}万元。')
+    from .native_empty_operands import NativeBlankTerm
+    if isinstance(fact, NativeBlankTerm):
+        message += '表内对应原件格经认证为空白，按已确认约定作为0参与核对。'
     location = _location(doc, refs, [fact], section, 'final_disclosure_amount',
                          table_code=fact.table_code, subject_code=fact.subject_code,
                          indicator=fact.indicator, declared_amount_wan=str(declared),
@@ -808,7 +816,7 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
         if group == 'klass':
             klass = parent
     code = next(code for code, path in paths.items() if path == parent)
-    return select(doc, facts, 'total_actual', code=code)
+    return select(doc, facts, 'total_actual', code=code, allow_native_blank=True)
 
 
 def _general_ranges(doc):

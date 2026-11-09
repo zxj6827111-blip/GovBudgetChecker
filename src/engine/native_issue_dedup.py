@@ -19,7 +19,7 @@ from .native_narrative_checks import _Text
 _SUM_FAMILIES = ({'V33-117', 'V33-243'}, {'V33-120', 'V33-241'}, {'V33-101', 'V33-115'})
 #: “合计 = Σ明细”类规则。分组键是合计原格 + 明细原格的事实身份，与规则族无关：
 #: V33-005（各表通用的合计↔明细）与上面各族就同一组原格各报一次时是同一个算式。
-_SUM_RULES = frozenset().union(*_SUM_FAMILIES) | {'V33-005'}
+_SUM_RULES = frozenset().union(*_SUM_FAMILIES) | {'V33-005', 'V33-233'}
 #: 同一张表“缺失 / 为空表而无空表说明”的根缺陷：不同规则各报一次时只保留一条，
 #: 其余作为附注（related_findings）留在主条里。按表身份分组，不按文字相似。
 _TABLE_DEFECT_RULES = {
@@ -161,8 +161,19 @@ def _version(item, context):
     return str(version or getattr(context, 'version_token', '') or '')
 
 
-def _sum_key(item, context):
-    refs = _location(item).get('operand_refs') or []
+def _sum_key(item, context, doc=None):
+    location = _location(item)
+    if _version(item, context) is None:
+        return None
+    bundle = location.get('relations') or []
+    if bundle:
+        # 只合并完整且完全等价的一组算式；共享一式不足以吞并其他独立关系。
+        members = [_sum_key({'location': relation.get('location', {})}, context, doc)
+                   for relation in bundle if isinstance(relation, dict)]
+        if len(members) != len(bundle) or any(key is None for key in members):
+            return None
+        return ('sum_bundle', tuple(sorted(set(members), key=repr)), _version(item, context))
+    refs = location.get('operand_refs') or []
     if len(refs) < 2 or _version(item, context) is None:
         return None
     # A pooled info finding may contain many independent relations. It must
@@ -180,7 +191,29 @@ def _sum_key(item, context):
         return None
     parent = parents[0]
     children = [value for index, value in enumerate(identities) if index != parent]
-    return ('sum', identities[parent], tuple(sorted(children, key=repr)), _version(item, context))
+    blank_ids = []
+    for observation in location.get('native_blank_sources') or []:
+        if context is None or not isinstance(observation, dict):
+            return None
+        # 原格集合也是算式身份；金额相同、相同页码或空白数量不能替代它。
+        required = ('file_hash', 'parse_run_uid', 'table_code', 'instance_uid',
+                    'source_cell_id', 'indicator', 'subject_code', 'budget_stage')
+        if (any(observation.get(key) is None for key in required)
+                or observation['file_hash'] != context.file_hash
+                or observation['parse_run_uid'] != context.parse_run_uid
+                or observation.get('presence') != 'blank'
+                or observation.get('calculation') is not True):
+            return None
+        from .native_empty_operands import valid_blank_observation
+        artifact = getattr(doc, 'parse_artifact', None)
+        if artifact is None or not valid_blank_observation(artifact, context, observation,
+                                                         getattr(doc, 'page_texts', None)):
+            return None
+        blank_ids.append(tuple(str(observation[key]) for key in required))
+    if len(set(blank_ids)) != len(blank_ids):
+        return None
+    return ('sum', identities[parent], tuple(sorted(children, key=repr)),
+            tuple(sorted(blank_ids)), _version(item, context))
 
 
 def _unit_magnitude_anchor(item, doc=None):
@@ -425,7 +458,7 @@ def _keys(item, doc, context):
     rule = _rule(item)
     keys = []
     if rule in _SUM_RULES:
-        key = _sum_key(item, context)
+        key = _sum_key(item, context, doc)
         if key is None and severity != 'info':
             return []
         if key is not None:
@@ -521,7 +554,7 @@ def _merged(group, doc=None, *, key=None):
     # 混入这些无 span 的引用会让双模式适配后的原文绑定整体失效；保留主规则证据，
     # 后果的完整定位仍留在 related_findings 中。算式类仍须合并全部操作数证明。
     proof_members = [primary] if key and key[0] == 'table_missing' else group
-    for field in ('operand_refs', 'table_refs'):
+    for field in ('operand_refs', 'table_refs', 'native_blank_sources', 'native_blank_operands'):
         refs = _unique([ref for item in proof_members for ref in _location(item).get(field) or []])
         if refs:
             location[field] = _repair_literal_refs(refs, doc) if field == 'table_refs' else refs

@@ -111,13 +111,23 @@ def test_real_difference_survives_blank_support_and_support_must_be_current():
     args=dict(page_texts=pages,source_file_hash=doc.fact_context.file_hash,artifact=doc.parse_artifact,
               fact_context=doc.fact_context,consumption=doc.structured_consumption)
     assert bind_rule_sources(result,**args)['bound_rule_findings']==1
+    blank_refs = finding['location']['native_blank_calculation_refs']
+    assert blank_refs and all(ref['current_value'] == '0.00' and ref['bbox'] for ref in blank_refs)
     finding['location']['native_blank_sources'][0]['bbox'][0]+=1
     assert bind_rule_sources(result,**args)['bound_rule_findings']==0
 
 
 def test_blank_total_is_not_backfilled_from_nonzero_parts():
     doc=expenditure('')
-    with pytest.raises(RuleDeferred): R33241_Table3_ExpenseAdvancedCheck().apply(doc)
+    before = doc.fact_context.to_dict()
+    original = doc.parse_artifact.to_dict()
+    issues = R33241_Table3_ExpenseAdvancedCheck().apply(doc)
+    assert any(issue.severity == 'error' and '差额10.00' in issue.message for issue in issues)
+    assert any(source['indicator'] == 'total_actual' and source['raw_text'] == ''
+               for issue in issues for source in issue.location['native_blank_sources'])
+    assert not any(f.indicator == 'total_actual' for f in doc.fact_context.facts)
+    assert doc.fact_context.to_dict() == before
+    assert doc.parse_artifact.to_dict() == original
 
 
 @pytest.mark.parametrize('obstacle',['none','glyph','image','unknown_coords','merged_placeholder','no_text_layer'])

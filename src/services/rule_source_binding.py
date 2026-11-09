@@ -339,6 +339,7 @@ def bind_rule_sources(result, *, page_texts, source_file_hash, artifact=None, fa
         evidence = []
         bound_refs = []
         literal_refs = []
+        blank_calculation_refs = []
         if has_operands:
             matching_context = (artifact is not None and fact_context is not None
                                 and artifact.source_file_hash == fact_context.file_hash == source_file_hash
@@ -356,12 +357,44 @@ def bind_rule_sources(result, *, page_texts, source_file_hash, artifact=None, fa
                     location, [f for f in fact_context.facts if f.fact_uid in uids], fact_context,
                     artifact, page_texts, source_file_hash)
                 from src.engine.native_empty_operands import valid_blank_observation
-                for observation in location.get('native_blank_sources') or []:
+                observations = location.get('native_blank_sources') or []
+                valid_observations = []
+                for observation in observations:
                     if not isinstance(observation, dict) or not valid_blank_observation(artifact, fact_context, observation, page_texts):
                         errors.append('native_blank_source_not_current_or_unverified')
+                    else:
+                        valid_observations.append(observation)
+                for term in location.get('native_blank_operands') or []:
+                    observation = term.get('observation') if isinstance(term, dict) else None
+                    if (observation not in valid_observations or not isinstance(observation, dict)
+                            or observation.get('calculation') is not True
+                            or term.get('role') not in {'parent', 'child'}
+                            or not term.get('relation_id') or not term.get('operand_id')):
+                        errors.append('native_blank_operand_not_current_or_unverified')
+                        continue
+                    blank_calculation_refs.append({
+                        'role': term['role'], 'relation_id': term['relation_id'],
+                        'operand_id': term['operand_id'], 'current_value': '0.00',
+                        'current_value_unit': '万元', 'blank_as_zero': True,
+                        'table': observation['table_code'], 'table_code': observation['table_code'],
+                        'field': observation['indicator'], 'row': observation.get('subject_name'),
+                        'subject_code': observation['subject_code'],
+                        'subject_name': observation.get('subject_name'),
+                        'source_cell_id': observation['source_cell_id'],
+                        'physical_page': observation['physical_page'], 'page': observation['physical_page'],
+                        'bbox': observation['bbox'], 'file_hash': source_file_hash,
+                        'location_level': 'exact_cell', 'verification_status': 'verified',
+                    })
+                # 没有金额事实的表文关系也能由认证空白原格与显式原文共同举证。
+                # 不把空白加入金额事实，不允许缺少唯一原文声明的空证明。
+                blank_only = (location.get('operand_refs') == [] and valid_observations
+                              and len(valid_observations) == len(observations)
+                              and refs and all(ref.get('span') for ref in refs))
+                if blank_only:
+                    errors = [error for error in errors if error != 'invalid_operand_refs']
                 # Literal narrative claims are part of the proof too. Retain
                 # them alongside the denominator/numerator cell evidence.
-                if evidence:
+                if evidence or blank_only:
                     for index, ref in enumerate(refs):
                         if not ref.get('span'):
                             continue
@@ -488,6 +521,9 @@ def bind_rule_sources(result, *, page_texts, source_file_hash, artifact=None, fa
                                        'row': item.get('subject_name') or item.get('subject_code'),
                                        'field': item.get('indicator')}
                                       for item in evidence]
+            # 空白观察没有可供文字定位器认证的引文。单列已通过当前原生网格
+            # 复验的计算定位；它不是印刷“0”的证据，也不进入财政金额事实。
+            location['native_blank_calculation_refs'] = blank_calculation_refs
             location.pop('bbox', None)
             finding.pop('bbox', None)
             finding['location'] = location

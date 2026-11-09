@@ -392,6 +392,16 @@ def _clause_declaration_accounting(
                 continue
             if stage_exceptions and has_zero:
                 if kind_records:
+                    # 同条同阶段又明示“年初无预算”时，字面0不依赖金额单位。
+                    # 保留原raw/unit；只把已确认的零声明用于加法，不推断任何非零金额。
+                    for record in kind_records:
+                        if (record["value_wan"] is None and record.get("unit") is None
+                                and _dec(record.get("raw")) == Decimal(0)
+                                and record.get("not_included_reason") in (None, "amount_or_unit_unusable")):
+                            record.update(value_wan=Decimal(0), source="explicit_zero",
+                                          not_included_reason=None,
+                                          exception_text=next(item["text"] for item in stage_exceptions
+                                                              if item["reason"] == "zero"))
                     values = [record["value_wan"] for record in kind_records]
                     record_positions = {record["pos"] for record in kind_records}
                     if (all(value == Decimal(0) for value in values)
@@ -863,7 +873,9 @@ class R33251_FunctionalDetailCompleteness(Rule):
                         disclosure_sources=exception_evidence,
                     )
                     continue
-                unit_items = [record for record in included if record["unit"] != "万元"]
+                unit_items = [record for record in included if record["unit"] != "万元"
+                              and not (record.get("source") == "explicit_zero"
+                                       and record["unit"] is None and record["value_wan"] == 0)]
                 anchors = []
                 for record in unit_items:
                     page, text, s, e = _locate(record["pos"])

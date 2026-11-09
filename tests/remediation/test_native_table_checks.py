@@ -113,8 +113,12 @@ def test_native_table_text_rejects_incompatible_or_ambiguous_current_facts(confl
 
 
 def economic(values):
-    return document('', 'FIN_06_basic_expenditure',
-        [(code, name, 'total_actual', '决算', amount) for code,name,amount in values])
+    # 经济分类勾稽必须有完整原格行集合，不能用 facts 子集自证明细齐全。
+    from tests.remediation.test_shiquan_native_empty_rows import grid_document
+    rows = [['经济分类科目编码', '科目名称', '决算数', '经济分类科目编码', '科目名称', '决算数']]
+    rows.extend([[code if code not in (None, 'total') else '', name, amount, '', '', '']
+                 for code, name, amount in values])
+    return grid_document(rows)
 
 
 def test_unidentified_amount_row_never_generates_a_partial_sum_error():

@@ -217,6 +217,7 @@ def _finding_locations(
 
 def _dedupe(
     locations: Sequence[Tuple[int, Optional[List[float]], str]],
+    *, priority_pages: Sequence[int] = (),
 ) -> List[ObligationLocation]:
     # 页面跳转是页级的：同一页留一个主入口；同页其余位置不再丢弃，作为
     # 关联框挂到主入口（R2.2 §7：同页主框+关联框——旧实现"后面的同页
@@ -245,7 +246,9 @@ def _dedupe(
             continue
         entry.related.append(related)
     result = [entries[page] for page in order]
-    result.sort(key=lambda item: (item.page, item.label or ""))
+    priority = {page: rank for rank, page in enumerate(dict.fromkeys(priority_pages))}
+    result.sort(key=lambda item: (0, priority[item.page]) if item.page in priority
+                else (1, item.page, item.label or ""))
     return result[:_MAX_LOCATIONS]
 
 
@@ -286,6 +289,22 @@ def resolve_obligation_locations(
     """把一条义务解析成可点击的原文位置；没有可靠位置时返回空列表。"""
     table_index = _reading_tables(structured_ingest)
     locations: List[Tuple[int, Optional[List[float]], str]] = []
+    page_texts = _page_texts(result_meta)
+    meta_page_count = _json_dict(result_meta).get("pages")
+    page_count = len(page_texts) or (meta_page_count if isinstance(meta_page_count, int)
+                                   and not isinstance(meta_page_count, bool) else 999)
+    priority_pages = []
+    # 当前关系在产生处登记的缺数/冲突页优先于表首、目录及同 checker 的其他问题。
+    # 仍保留关联表格位置；只调整入口顺序，不改变缺口或问题的判定。
+    for operand in getattr(item, "missing_operands", None) or []:
+        if not isinstance(operand, dict):
+            continue
+        page = operand.get("page")
+        if isinstance(page, int) and not isinstance(page, bool) and 1 <= page <= page_count:
+            bbox = operand.get("bbox")
+            role = str(operand.get("role") or operand.get("section") or "待核对原文")
+            locations.append((page, bbox if isinstance(bbox, list) else None, role))
+            priority_pages.append(page)
 
     if getattr(item, "obligation_id", "") == "OBL-STRUCT-COVER":
         # 封面要素的定义就是第 1 页；再给一个正文表题页，便于核对年度是否一致。
@@ -330,7 +349,6 @@ def resolve_obligation_locations(
 
     # 逐页文本：detail 里的引号短语（旧科目名等）和"十九、住房保障支出"行标签
     # 能把位置钉到续页/说明页，而不是只停在表首。
-    page_texts = _page_texts(result_meta)
     detail = str(getattr(item, "detail", None) or "")
     if page_texts:
         for quoted in _QUOTED_RE.findall(detail):
@@ -347,4 +365,4 @@ def resolve_obligation_locations(
     for page in _pages_from_text(detail):
         locations.append((page, None, "原文提及"))
 
-    return _dedupe(locations)
+    return _dedupe(locations, priority_pages=priority_pages)

@@ -455,7 +455,9 @@ def test_finals_unresolved_total_le_11(final_replays):
                     if x["rule_id"] == "V33-TREND-COMPLETION-RATE")
         assert item["status"] == "insufficient_data" and "预算分母" in item["detail"]
         if alias == "shiquan":
-            assert "公共法律服务" in item["detail"]
+            # 原件30万元的“年\n初预算”已恢复；职业年金257.14/245.53冲突仍须保留。
+            assert "公共法律服务" not in item["detail"]
+            assert "机关事业单位职业年金缴费支出" in item["detail"]
             assert "本年支出决算存在多个不一致披露" in item["detail"]
         added += 1
     # These old page-data fixtures have no current native fact context. Keep
@@ -477,8 +479,9 @@ def test_finals_unresolved_total_le_11(final_replays):
         item=next(x for x in final_replays[alias]['summary']['unresolved_rules']if x['rule_id']=='V33-224')
         assert item['status']=='insufficient_data' and item['detail']=='因公出国说明或表内决算金额未唯一识别'
         added+=1
-    # 批次1 V33-251：原文存在未标单位的声明，不能把该部分当成完整分项加总。
-    for alias in ('yichuan','shiquan'):
+    # 宜川非零声明缺单位仍不纳入；石泉明确零声明已与同条“年初无预算”核对。
+    assert not any(x['rule_id'] == 'V33-251' for x in final_replays['shiquan']['summary']['unresolved_rules'])
+    for alias in ('yichuan',):
         item=next(x for x in final_replays[alias]['summary']['unresolved_rules']
                   if x['rule_id']=='V33-251')
         assert '未纳入合计' in item['detail']

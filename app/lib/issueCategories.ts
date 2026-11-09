@@ -24,9 +24,11 @@ export function issueCategoryId(problem: CategoryInput): IssueCategoryId {
   if (/证据完整率|应检查事项|未实际覆盖|检查范围|未覆盖|规则因数据缺失/.test(text)) return "coverage";
   // 格式规则优先于通用“金额不一致”和 AI-TEXT，避免同一类按发现来源拆开。
   if (rule === "CMM-010" || /千分位|小数位|数字格式|金额书写格式|保留两位小数/.test(text)) return "number_format";
+  // 补核卡与正式名称问题按同一业务分类，保留每项金额检查的独立处理身份。
+  if (/单位名称.*(?:不一致|冲突)|原文包含其他或未确认主体|(?:项|款|类)“[^”]+”在表内找不到同名科目/.test(text)) return "scope";
   if (["BUD-109", "V33-227", "CMM-018"].includes(rule)
     || rule.startsWith("AI-CODE-") || /主体口径|类款项|科目.*(?:名称|编码|层级|用途).*?(?:错误|不一致|不匹配)|类级科目名称/.test(text)) return "scope";
-  if (["V33-234", "V33-249"].includes(rule)
+  if (rule.startsWith("OBL-TREND-") || ["V33-234", "V33-249"].includes(rule)
     || /占比.*(?:分母|不一致|错误)|同比比例|比例.*(?:计算错误|不一致)|占比合计/.test(text)) return "percentage";
   if (rule === "V33-110" || /^AI-(?:DIR|DESC)-/.test(rule)
     || /比较方向|增减方向.*(?:不一致|矛盾)|增减原因|缺少实质|原因.*(?:矛盾|相反)/.test(text)) return "change";

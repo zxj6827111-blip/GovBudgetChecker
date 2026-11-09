@@ -11,7 +11,8 @@ from .fact_context import _canonical_budget_stage, _column_mappings_for_instance
 
 # 只允许已知决算网格的加法关系使用原件空白；预算、OCR和文本拼表不适用。
 _TABLES = {'FIN_01_income_expenditure_total', 'FIN_02_income', 'FIN_03_expenditure',
-           'FIN_04_fiscal_grant_total', 'FIN_05_general_public_expenditure', 'FIN_07_three_public'}
+           'FIN_04_fiscal_grant_total', 'FIN_05_general_public_expenditure',
+           'FIN_06_basic_expenditure', 'FIN_07_three_public'}
 
 
 class NativeBlankTerm(FiscalFact):
@@ -31,6 +32,14 @@ def money_facts(terms):
 def blank_observations(terms):
     return [dict(term.extra_dims['native_blank_observation'])
             for term in terms if isinstance(term, NativeBlankTerm)]
+
+
+def blank_operand_refs(terms, relation):
+    """计算角色单列在观察记录外；原格认证记录保持可逐字复验。"""
+    return [{'role': 'parent' if index == 0 else 'child', 'relation_id': relation,
+             'operand_id': f'{relation}:{index}',
+             'observation': dict(term.extra_dims['native_blank_observation'])}
+            for index, term in enumerate(terms) if isinstance(term, NativeBlankTerm)]
 
 
 def blank_term(doc, table_code, indicator, *, code=None, names=(), stage='决算', calculation=True):
@@ -59,45 +68,60 @@ def blank_term(doc, table_code, indicator, *, code=None, names=(), stage='决算
     candidates = [mapping for mapping in mappings if mapping.get('canonical_measure') == indicator
                   and _canonical_budget_stage(_stage_for_fact(indicator, mapping.get('source_col_name', ''),
                                                'final', '决算')) == _canonical_budget_stage(stage)]
-    if len(candidates) != 1:
+    if not candidates or (len(candidates) > 1 and code is None and not names):
         return None
-    mapping = candidates[0]
-    col = int(mapping['source_col_idx'])
     source_cells = {(c.row_idx, c.col_idx): c for c in table.cells}
     if len(source_cells) != len(table.cells):
         return None
     start = min(int(m['source_col_idx']) for m in mappings)
-    label_cols = mapping.get('source_label_cols')
-    labels = set(label_cols if label_cols is not None else range(start))
     materializer = FiscalFactMaterializer(None)
     matches = []
-    for row_idx in range(table.header_row_count, len(table.rows)):
-        row = [c for c in table.cells if c.row_idx == row_idx]
-        classification = materializer._extract_classification(
-            [{'raw_text': c.raw_text} for c in sorted(row, key=lambda c: c.col_idx) if c.col_idx in labels])
-        if classification is None and table_code == 'FIN_07_three_public' and start == 0:
-            classification = {'classification_code': 'total', 'classification_name': '合计'}
-        if classification is None:
-            continue
-        subject = classification['classification_code']
-        name = ''.join((classification['classification_name'] or '').split())
-        if (code is not None and subject != code) or (names and name not in names):
-            continue
-        matches.append((row_idx, subject, name, source_cells.get((row_idx, col))))
+    for mapping in candidates:
+        col = int(mapping['source_col_idx'])
+        label_cols = mapping.get('source_label_cols')
+        # 经济分类表左右各有一条“编码｜名称｜决算数”车道；同指标多列时
+        # 必须由字面列身份提供标签范围，先匹配科目，不能默认拿左车道。
+        if len(candidates) > 1 and not label_cols:
+            return None
+        labels = set(label_cols if label_cols is not None else range(start))
+        for row_idx in range(table.header_row_count, len(table.rows)):
+            row = [c for c in table.cells if c.row_idx == row_idx]
+            classification = materializer._extract_classification(
+                [{'raw_text': c.raw_text, 'col_idx': c.col_idx}
+                 for c in sorted(row, key=lambda c: c.col_idx) if c.col_idx in labels])
+            if classification is None and table_code == 'FIN_07_three_public' and start == 0:
+                classification = {'classification_code': 'total', 'classification_name': '合计'}
+            if classification is None:
+                continue
+            subject = classification['classification_code']
+            name = ''.join((classification['classification_name'] or '').split())
+            if (code is not None and subject != code) or (names and name not in names):
+                continue
+            if classification.get('classification_conflict'):
+                return None
+            matches.append((row_idx, subject, name, source_cells.get((row_idx, col)), mapping))
     if len(matches) != 1:
         return None
-    row_idx, subject, name, cell = matches[0]
+    row_idx, subject, name, cell, mapping = matches[0]
+    col = int(mapping['source_col_idx'])
     if (cell is None or not cell.native_blank_verified or cell.is_header
             or cell.raw_text.strip() or cell.presence != CellPresence.BLANK or cell.numeric_value is not None
             or not cell.bbox or cell.extraction_method not in {'lines', 'lines_strict'}
             or (cell.unit_hint and cell.unit_hint != table.unit_hint)):
         return None
     # 事实或人工校正已占据该字段时不绕过它；低置信/冲突事实也不可用空白兜底。
-    if any(f.table_code == table_code and f.instance_uid == instance.instance_uid
-           and f.row_order == row_idx and f.indicator == indicator
-           and _canonical_budget_stage(f.budget_stage) == _canonical_budget_stage(stage) for f in context.facts):
-        return None
     sid = cell_id(table, cell)
+    for fact in context.facts:
+        if (fact.table_code != table_code or fact.instance_uid != instance.instance_uid
+                or fact.indicator != indicator
+                or _canonical_budget_stage(fact.budget_stage) != _canonical_budget_stage(stage)):
+            continue
+        bound_ids = {ref.get('source_cell_id') for ref in (fact.extra_dims or {}).get('evidence_refs', [])
+                     if ref.get('source_cell_id')}
+        # 同一原行的另一条已绑定车道不占用本格；没有原格身份的同排事实仍属冲突。
+        if sid in bound_ids or (fact.row_order == row_idx and (
+                len(candidates) == 1 or fact.subject_code == subject or not bound_ids)):
+            return None
     from .cell_value_policy import interpret_cell_value
     interpreted, _presence, convention = interpret_cell_value(
         cell.raw_text, native_blank_verified=cell.native_blank_verified,

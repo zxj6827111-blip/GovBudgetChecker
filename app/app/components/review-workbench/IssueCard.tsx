@@ -168,7 +168,9 @@ function CalculationDetails({ problem, group, selectedKey, onSelect }: {
                   {row.label}
                 </button>
               </td>
-              <td className="px-1 py-1.5 text-right align-top tabular-nums">{row.valueText}</td>
+              <td className="px-1 py-1.5 text-right align-top tabular-nums">{row.valueText}
+                {row.blankAsZero ? <span className="ml-1 text-[0.85em] text-slate-500">（原件空白）</span> : null}
+              </td>
               <td className="px-1 py-1.5 text-right align-top">
                 <button
                   type="button"
@@ -227,7 +229,8 @@ export function IssueCard({
   const groups = buildCalculationGroups(problem);
   const comparison = buildAmountComparison(problem, groups);
   const calcKeys = new Set(groups.flatMap((group) => [group.total.key, ...group.items.map((item) => item.key)]));
-  const evidenceRefs = dedupeEvidenceRefsForDisplay(problem.evidenceRefs ?? []).filter((ref) => !calcKeys.has(ref.key));
+  const evidenceRefs = dedupeEvidenceRefsForDisplay(problem.evidenceRefs ?? []).filter((ref) =>
+    !calcKeys.has(ref.key));
   // 取整说明没有对上计算明细时仍要展示，不能因为改版丢掉。
   const looseRoundingCases = (problem.roundingCases ?? []).filter((item) => !groups.some((group) => group.relationId === item.relationId));
   const summary = detailSummary(problem.title, problem.description);

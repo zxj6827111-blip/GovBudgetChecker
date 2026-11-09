@@ -28,6 +28,12 @@ assert.equal(issueCategoryId(item("structured", "OTHER", "金额识别待核", {
 assert.equal(issueCategoryId(item("coverage", "OTHER", "应检查事项中10项未完成")), "coverage");
 assert.equal(issueCategoryId(item("unknown", "OTHER", "待核事项")), "other");
 
+for (const rule of ["OBL-TXT-T1", "OBL-TXT-T4", "OBL-NARRATIVE-AMOUNT"]) {
+  assert.equal(issueCategoryId(item(rule, rule, "金额已披露，但原文单位名称与材料主体不一致")), "scope");
+}
+assert.equal(issueCategoryId(item("t5", "OBL-TXT-T5", "说明中的款“行政事业单位养老支出”在表内找不到同名科目")), "scope");
+assert.equal(issueCategoryId(item("completion", "OBL-TREND-COMPLETION-RATE", "预算完成率分母口径与复算")), "percentage");
+
 // 分类不等于去掉核对关系：同类但不同科目、文件、状态的原始事项全部保留。
 const a = item("amount-a", "V33-234", "机关运行费同比错误", { jobId: "file-a", page: 33 });
 const b = item("amount-b", "V33-234", "财政收支总计同比错误", { jobId: "file-a", page: 24 });

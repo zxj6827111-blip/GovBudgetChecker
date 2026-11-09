@@ -111,6 +111,34 @@ def test_single_rounding_relation_may_merge_without_dropping_or_promoting_it():
     assert len(result) == 1 and result[0]['severity'] == 'info'
 
 
+def test_identical_complete_horizontal_bundles_merge_but_partial_overlap_does_not():
+    def bundle(rule):
+        members = [sum_issue(rule), sum_issue(rule, 'project_actual')]
+        item = deepcopy(members[0])
+        item['location']['relations'] = [
+            {'message': member['message'], 'location': member['location']} for member in members]
+        item['location']['operand_refs'] = [ref for member in members for ref in member['location']['operand_refs']]
+        return item
+    one, two = bundle('V33-241'), bundle('V33-233')
+    doc = SimpleNamespace(fact_context=context())
+    result = deduplicate_native_issues([one, two], doc)
+    assert len(result) == 1
+    assert len(result[0]['location']['relations']) == 2
+    assert set(result[0]['related_rule_ids']) == {'V33-241', 'V33-233'}
+    assert len(deduplicate_native_issues([one, sum_issue('V33-233')], doc)) == 2
+
+
+def test_unverified_blank_identity_prevents_arithmetic_merge():
+    one, two = sum_issue('V33-120'), sum_issue('V33-241')
+    fake = {'presence': 'blank', 'calculation': True, 'file_hash': 'a'*64,
+            'parse_run_uid': 'run', 'table_code': T3, 'instance_uid': 'one',
+            'indicator': 'basic_actual', 'subject_code': '208', 'budget_stage': '决算',
+            'source_cell_id': 'invented'}
+    one['location']['native_blank_sources'] = [fake]
+    two['location']['native_blank_sources'] = [deepcopy(fake)]
+    assert len(deduplicate_native_issues([one, two], SimpleNamespace(fact_context=context()))) == 2
+
+
 def yoy_issues():
     source = '一般公共预算财政拨款支出139,407.47万元。与2024年度相比，一般公共预算财政拨款支出增加16,819.41万元，增长13.14%'
     first = {'id': 'v', 'rule_id': 'V33-234', 'severity': 'error',

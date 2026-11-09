@@ -7,6 +7,8 @@ export interface ProblemEvidenceRef {
   role: string;
   relationId?: string;
   operandId?: string;
+  sourceCellId?: string;
+  blankAsZero?: boolean;
   page: number;
   locationText: string;
   valueText?: string;

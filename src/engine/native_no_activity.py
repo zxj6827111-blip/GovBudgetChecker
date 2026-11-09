@@ -22,15 +22,28 @@ def empty_three_public_evidence(doc):
             terms.append(term)
     pages = {term.extra_dims['native_blank_observation']['physical_page'] for term in terms}
     from .native_narrative_checks import _Text, _foreign_owner
+    from .native_table_text import _inside_full_quotation
+    from .narrative_zero_evidence import _frame_scope_spans, _is_assertive_context
     text = _Text.from_pages(getattr(doc, 'page_texts', []) or [])
+    frames = _frame_scope_spans(text)
+    # 表种、主体、年度和十二个原格均已在上方认证，表下等效措辞可省略
+    # “财政拨款”“支出”；仍必须明确写“故本表无数据”，正文无支出不能代替。
     pattern = re.compile(r'(?:说明[：:])?[^。；]{0,100}(?:本年度|本年)(?:没有|无)'
-                         r'(?:一般公共预算)?财政拨款["“”]?三公["“”]?经费支出[，,]故本表无数据[。]?')
+                         r'(?:一般公共预算)?(?:财政拨款)?["“”]?三公["“”]?经费(?:支出)?[，,]故本表无数据[。]?')
     for match in pattern.finditer(text.compact):
         refs = text.refs(match.start(), match.end(), '原表明确无三公支出说明')
+        clause_start = max(text.compact.rfind(ch, 0, match.start()) for ch in '。；;') + 1
+        clause_end = (match.end() if text.compact[match.end() - 1] == '。' else
+                      next((i + match.end() for i, ch in enumerate(text.compact[match.end():])
+                            if ch in '。；;'), len(text.compact)))
+        clause = text.compact[clause_start:clause_end]
         if (not refs or any(ref['page'] not in pages for ref in refs)
                 or _foreign_owner(match.group(), context.org_name)
                 or any(int(y) != context.fiscal_year for y in re.findall(r'20\d{2}(?=年)', match.group()))
-                or re.search(r'并非|不是|不代表|不能说明|暂无', match.group())):
+                or re.search(r'并非|不是|不代表|不能说明|暂无|可能|预计|计划|未必|不一定|截至|截止', clause)
+                or not _is_assertive_context(text.compact, clause_start, clause, frames)
+                or _inside_full_quotation(text.compact,
+                    match.start() + match.group().rfind('本年'), match.end())):
             continue
         return terms, [{**ref, 'file_hash': context.file_hash} for ref in refs]
     return None

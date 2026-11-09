@@ -13,6 +13,7 @@ export interface CalculationRow {
   page: number;
   valueText: string;
   located: boolean;
+  blankAsZero?: boolean;
 }
 
 export interface CalculationGroup {
@@ -76,11 +77,21 @@ export function buildCalculationGroups(problem: Problem): CalculationGroup[] {
     byRelation.set(ref.relationId, refs);
   }
   const groups: CalculationGroup[] = [];
+  const seenCalculations = new Set<string>();
   byRelation.forEach((refs, relationId) => {
     const parents = refs.filter((ref) => ref.role === "parent");
     const children = refs.filter((ref) => ref.role === "child");
     if (parents.length !== 1 || children.length === 0) return;
     const ordered = [parents[0], ...children];
+    // 同一组原格被不同规则引用时只展示一遍；相同金额不能作为同一算式依据。
+    if (ordered.every((ref) => ref.verificationStatus === "verified" && ref.bbox)) {
+      const identity = ordered.map((ref) => JSON.stringify([
+        ref.role, ref.page, ref.sourceCellId || ref.bbox, ref.locationText, ref.valueText, Boolean(ref.blankAsZero),
+      ]));
+      const signature = JSON.stringify([identity[0], identity.slice(1).sort()]);
+      if (seenCalculations.has(signature)) return;
+      seenCalculations.add(signature);
+    }
     const labels = distinctLabels(ordered);
     const rows = ordered.map((ref, index): CalculationRow => ({
       key: ref.key,
@@ -88,6 +99,7 @@ export function buildCalculationGroups(problem: Problem): CalculationGroup[] {
       page: ref.page,
       valueText: ref.valueText ?? "",
       located: Boolean(ref.bbox),
+      blankAsZero: ref.blankAsZero,
     }));
     const total = parseAmount(rows[0].valueText);
     const items = rows.slice(1).map((row) => parseAmount(row.valueText));

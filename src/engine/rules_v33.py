@@ -1122,7 +1122,9 @@ class Rule:
         blanks = (location or {}).get("native_blank_sources") or []
         if blanks:
             message += "；以下原件空白格按0参与计算：" + "；".join(
-                f"第{item.get('physical_page')}页 {item.get('source_cell_id')}，依据约定{(item.get('convention') or {}).get('id')}"
+                f"第{item.get('physical_page')}页 科目{item.get('subject_code')} {item.get('subject_name') or ''}/"
+                f"{ {'basic_actual':'基本支出','project_actual':'项目支出','total_actual':'决算金额'}.get(item.get('indicator'), item.get('indicator'))}，"
+                f"依据约定{(item.get('convention') or {}).get('id')}"
                 for item in blanks)
         return Issue(
             rule=self.code,
@@ -3092,7 +3094,8 @@ class R33102_TotalSheet_vs_Text(Rule):
     def _current_total_claim(doc, aliases):
         """只读取本节「本年总额标签+金额+单位」，不借同比增减额替代总额。"""
         from .native_narrative_checks import _NUMBER, _UNIT, _wan
-        from .native_table_text import sections, context_guard, _inside_full_quotation
+        from .native_table_text import (sections, context_rejection, record_context_rejection,
+                                        _inside_full_quotation)
         from .narrative_zero_evidence import (
             _clauses, _frame_scope_spans, _inside_quote_span, _is_assertive_context,
         )
@@ -3105,7 +3108,7 @@ class R33102_TotalSheet_vs_Text(Rule):
             labels += r'|收入支出总(?=[+-]?\d)'
         pattern = re.compile(rf'(?:{labels})(?:为|共计|是|[:：])?'
                              rf'(?P<amount>[+-]?{_NUMBER})(?P<unit>{_UNIT})')
-        candidates = []
+        candidates, identity_rejections = [], []
         frames = _frame_scope_spans(text)
         for title, begin, end in ranges:
             for match in pattern.finditer(text.compact, begin, end):
@@ -3118,7 +3121,9 @@ class R33102_TotalSheet_vs_Text(Rule):
                         or _inside_full_quotation(text.compact, match.start(), match.end())):
                     continue
                 if getattr(doc, 'fact_context', None) is not None:
-                    if context_guard(doc, text.compact, match.start(), match.end()):
+                    rejection = context_rejection(doc, text.compact, match.start(), match.end())
+                    if rejection:
+                        identity_rejections.append((match.start(), match.end(), rejection))
                         continue
                 else:
                     year = _percentage_document_context(doc, '')['report_year']
@@ -3131,6 +3136,10 @@ class R33102_TotalSheet_vs_Text(Rule):
                     continue
                 candidates.append((text, match.start(), match.end(),
                                    _wan(match['amount'], match['unit']), title))
+        if not candidates and identity_rejections:
+            reasons = [record_context_rejection(doc, text, start, end, rejection)
+                       for start, end, rejection in identity_rejections]
+            raise RuleDeferred('V33-102', '；'.join(dict.fromkeys(reasons)))
         if len(candidates) != 1:
             raise RuleDeferred('V33-102', '总体情况说明未提取到唯一的显式本年支出总额及单位')
         return candidates[0]
@@ -9776,6 +9785,9 @@ class R33233_DetailRowFormulaConsistency(Rule):
     desc = "决算明细行勾稽检查（合计=基本支出+项目支出）"
 
     def apply(self, doc: Document) -> List[Issue]:
+        if getattr(doc, "parse_artifact", None) is not None:
+            from .native_table_arithmetic import check_detail_row_formulas
+            return check_detail_row_formulas(self, doc)
         _ensure_table_anchors(doc)
         issues: List[Issue] = []
         unresolved: List[str] = []
@@ -10180,6 +10192,10 @@ class R33245_ThreePublicDirectionContradiction(Rule):
                 if not subject:
                     continue
                 direction = clause_direction(clause)
+                from src.engine.three_public_disclosure_policy import movement_is_explicit_zero
+                # 明示“增加0万元/增长0%”与持平相容；“减少为0”仍是方向变化。
+                if direction in ("up", "down") and movement_is_explicit_zero(clause):
+                    continue
                 # “基本持平”是近似描述，不能推导为严格零增长。
                 if direction == "flat" and re.search(r"(?:基本|大体|大致|总体|相对)\s*持平", clause):
                     continue
@@ -10231,6 +10247,8 @@ class R33246_DomesticReceptionDisclosure(Rule):
     desc = "公务接待：国内公务接待批次、人次披露完整性"
 
     def apply(self, doc: Document) -> List[Issue]:
+        from src.engine.native_no_activity import require_no_activity_disposition
+        require_no_activity_disposition(self, doc)
         issues = []
         merged = merge_page_texts(doc.page_texts)
 
@@ -10245,6 +10263,10 @@ class R33246_DomesticReceptionDisclosure(Rule):
             raise RuleDeferred(self.code, detail="未找到三公经费说明章节")
         section_title, scope, _start, _end = found
         scope_text = scope
+        from src.engine.three_public_disclosure_policy import reception_quantity_not_required
+        if reception_quantity_not_required(self, doc, scope_text):
+            return []
+
 
         # 批次/人次的口径按「就近主体」判定（句子 → 分句 两级 + 主体状态机）：
         # - 只按句子判：会把「公务接待 1 批次、7 人次，其中：接待外宾批 0 次、0 人次」
@@ -10974,6 +10996,10 @@ class R33CrossSanGongEcon(Rule):
     desc = "三公经费表 与 基本支出经济分类表 跨表资金来源一致性"
 
     def apply(self, doc: Document) -> List[Issue]:
+        from .native_empty_three_public_cross import check_certified_empty_three_public_cross
+        native_result = check_certified_empty_three_public_cross(self, doc)
+        if native_result is not None:
+            return native_result
         # 每次执行重建空白零依据台账（供证据文本引用，R2.2 附页 A1 出处完整）
         self._zero_basis_note_by_subject = {}
         if not _ensure_parsed_tables(doc):
@@ -13191,14 +13217,14 @@ _WP4E_OBLIGATION_ID = "OBL-TREND-COMPLETION-RATE"
 #: CMM-007 领域）与占比句（占X的P%）都不带「完成…预算」锚，不进本 matcher
 #: （Mutation D 看守该边界）。
 _WP4E_CLAIM_RE = re.compile(
-    r"完\s*成\s*(?P<denom>年初\s*预\s*算|全年\s*预\s*算|调整\s*后?\s*预\s*算|预\s*算)"
+    r"完\s*成\s*(?P<denom>年\s*初\s*预\s*算|全\s*年\s*预\s*算|调\s*整\s*后?\s*预\s*算|预\s*算)"
     r"(?:\s*数)?(?:\s*的\s*比\s*重)?(?:\s*的)?(?:\s*为)?\s*"
     r"(?P<pct>\d[\d,，]*(?:\.\d+)?)\s*%"
 )
 
 #: 完成率声明句（名词形态）：「（年初|全年|调整|）预算完成率为?P%」。
 _WP4E_CLAIM_NOUN_RE = re.compile(
-    r"(?P<denom>年初\s*预\s*算|全年\s*预\s*算|调整\s*后?\s*预\s*算|预\s*算)\s*完\s*成\s*率"
+    r"(?P<denom>年\s*初\s*预\s*算|全\s*年\s*预\s*算|调\s*整\s*后?\s*预\s*算|预\s*算)\s*完\s*成\s*率"
     r"(?:\s*为)?\s*(?P<pct>\d[\d,，]*(?:\.\d+)?)\s*%"
 )
 
@@ -13208,7 +13234,8 @@ _WP4E_CLAIM_NOUN_RE = re.compile(
 #: 泛身份，只在与完成率声明同句读单元时绑定，避免表格表头「预算数\n0.00」
 #: 误入；「决算数大于预算数的主要原因」类无金额句读不命中。
 _WP4E_BUDGET_RE = re.compile(
-    r"(?P<role>年初\s*预\s*算(?:\s*数)?|全年\s*预\s*算(?:\s*数)?|调整\s*后?\s*预\s*算(?:\s*数)?|预\s*算(?:\s*数)?)"
+    # 阶段关键词本身也可能被原生 PDF 折行，不能把“年/初预算”降成泛预算身份。
+    r"(?P<role>年\s*初\s*预\s*算(?:\s*数)?|全\s*年\s*预\s*算(?:\s*数)?|调\s*整\s*后?\s*预\s*算(?:\s*数)?|预\s*算(?:\s*数)?)"
     # A native text layer may insert a horizontal gap inside the leading
     # thousands group: 1 10,210.99. Only accept a complete 1–3 digit group,
     # retaining the literal comma-separated groups; do not join amount columns.
@@ -13250,7 +13277,7 @@ _WP4E_SUBCLAUSE_BREAK_RE = re.compile(r"[。；;！？，,、：:]")
 #: 指标为「一般公共预算财政拨款支出」）。软换行先整体去空白再截，避免
 #: 「决算␊为 16.95」把「为 16.95 万元」当成指标名。
 _WP4E_HEAD_CUT_RE = re.compile(
-    r"年初\s*预\s*算|全年\s*预\s*算|调整\s*后?\s*预\s*算|预\s*算(?:\s*数)?|支\s*出\s*决\s*算|决\s*算"
+    r"年\s*初\s*预\s*算|全\s*年\s*预\s*算|调\s*整\s*后?\s*预\s*算|预\s*算(?:\s*数)?|支\s*出\s*决\s*算|决\s*算"
 )
 
 #: 条目类款项头（不要求紧邻首句金额——「（项），主要用于…年初预算为X」
@@ -13327,8 +13354,12 @@ def _record_trend_gaps(doc, texts, claim, merged, offsets):
     indicator = str(claim.get("indicator") or "未定位条目")
     for text in texts:
         if "parse_ambiguity" in str(text):
-            record_gap(doc, text, reason_codes=["row_level_unresolved"], blocked_by=[
-                blocker(dimension="row", ref=f"完成率声明:{indicator}", reason_code="row_level_unresolved")])
+            # 已定位同条目、但金额/预算身份互相矛盾，不是“行层级未确定”。
+            # 保留该声明的原文页，避免审核台跳到同科目最早出现的表格页。
+            record_gap(doc, text, reason_codes=["candidate_amount_conflict"], missing_operands=[
+                text_missing_operand(section="预算完成率说明", role="存在冲突的预算/决算披露",
+                                     page=page, row_key=indicator, column="完成率分母/分子",
+                                     stage="决算", year=year if isinstance(year, int) and year >= 1900 else None)])
         elif "未显式金额单位" in str(text):
             record_gap(doc, text, reason_codes=["scope_unconfirmed"], blocked_by=[
                 blocker(dimension="fund_scope", ref=f"完成率披露:{indicator}", reason_code="scope_unconfirmed")])
