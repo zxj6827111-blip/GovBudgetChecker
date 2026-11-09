@@ -517,10 +517,12 @@ def _merged(group, doc=None, *, key=None):
         _get(item, 'id'), *(_get(item, 'merged_issue_ids') or []),
         *(_location(item).get('merged_issue_ids') or []),
         _location(item).get('pre_group_issue_id')] if value))
-    # Preserve every original operand and source reference; distinct relation
-    # names may reference the same original cell without manufacturing evidence.
+    # 缺表是根缺陷，V33-201 的跨表引用只是无法核对的后果，并不是“缺表”的证据。
+    # 混入这些无 span 的引用会让双模式适配后的原文绑定整体失效；保留主规则证据，
+    # 后果的完整定位仍留在 related_findings 中。算式类仍须合并全部操作数证明。
+    proof_members = [primary] if key and key[0] == 'table_missing' else group
     for field in ('operand_refs', 'table_refs'):
-        refs = _unique([ref for item in group for ref in _location(item).get(field) or []])
+        refs = _unique([ref for item in proof_members for ref in _location(item).get(field) or []])
         if refs:
             location[field] = _repair_literal_refs(refs, doc) if field == 'table_refs' else refs
         else:
@@ -560,10 +562,11 @@ def _merged(group, doc=None, *, key=None):
             ]
     _set(result, 'location', location)
     for key in ('fact_ids', 'evidence_ids', 'tags'):
-        values = list(dict.fromkeys(value for item in group for value in _get(item, key, []) or []))
+        members = group if key == 'tags' else proof_members
+        values = list(dict.fromkeys(value for item in members for value in _get(item, key, []) or []))
         if values:
             _set(result, key, values)
-    _set(result, 'evidence', _unique([ref for item in group for ref in _get(item, 'evidence', []) or []]))
+    _set(result, 'evidence', _unique([ref for item in proof_members for ref in _get(item, 'evidence', []) or []]))
     for key, values in (('related_rule_ids', rules), ('check_relation_ids', relations), ('merged_issue_ids', aliases)):
         _set(result, key, values)
     priorities = {'critical': 6, 'high': 5, 'error': 5, 'warn': 4, 'warning': 4,
