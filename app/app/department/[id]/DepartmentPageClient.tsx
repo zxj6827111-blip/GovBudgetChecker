@@ -160,7 +160,8 @@ export default function DepartmentPageClient() {
   const [isBatchZipExporting, setIsBatchZipExporting] = useState(false);
   // ZC-00：默认关闭 AI 分析，显式勾选后才请求模型
   const [reanalyzeUseAiAssist, setReanalyzeUseAiAssist] = useState(false);
-  const [hasConfiguredReanalyzeUseAiAssist, setHasConfiguredReanalyzeUseAiAssist] = useState(false);
+  // 开关初始已明确显示关闭，首次提交也必须发送false，不能让后端默认模型覆盖页面选择。
+  const [hasConfiguredReanalyzeUseAiAssist, setHasConfiguredReanalyzeUseAiAssist] = useState(true);
   const [associatingJobId, setAssociatingJobId] = useState<string | null>(null);
   const [isAssociatingJob, setIsAssociatingJob] = useState(false);
   const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
