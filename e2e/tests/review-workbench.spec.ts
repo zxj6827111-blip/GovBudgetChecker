@@ -164,9 +164,66 @@ async function openIssueList(page: Page) {
 /** 从列表选中一条；选中后列表收起，解释区显示该条。 */
 async function selectIssue(page: Page, id: string) {
   await openIssueList(page);
-  await page.getByTestId(`gbc-review-issue-card-${id}`).click();
+  const row = page.getByTestId(`gbc-review-issue-card-${id}`);
+  if (!await row.isVisible()) await row.locator("xpath=ancestor::section[1]").getByRole("button").first().click();
+  await row.click();
   await expect(page.getByTestId("gbc-review-issue-detail")).toHaveAttribute("data-detail-problem-id", id);
 }
+
+test("业务分类：同类一个入口、原文独立定位、跨队列关联及逐项处理", async ({ page }) => {
+  const workflowUpdates: Array<Record<string, unknown>> = [];
+  const workflowIssuesState: MockOptions["workflowIssuesState"] = {};
+  const finding = (id: string, rule: string, title: string, physicalPage: number, extra = {}) => ({
+    id, rule_id: rule, title, message: title, source: "rule", severity: "low",
+    evidence_verification: { status: "verified", source_identity_complete: true },
+    evidence: [{ page: physicalPage, text: title, bbox: [100, 200, 400, 260], location_level: "exact_span", verification_status: "verified" }],
+    location: { page: physicalPage }, ...extra,
+  });
+  await page.context().addCookies([sessionCookie]);
+  await installReviewWorkbenchMocks(page, { reportYear: 2026, workflowUpdates, workflowIssuesState,
+    ruleFindings: [
+      finding("FORMAT-1", "CMM-010", "金额未分千分位：1234.56万元", 5),
+      finding("FORMAT-2", "CMM-010", "金额小数位不统一：20万元", 7),
+      finding("TEMPLATE-1", "CMM-008", "二选一模板语未处理", 9),
+      finding("AI-FORMAT-REF", "AI-TEXT-005", "金额书写格式待核：79,85.49", 11,
+        { source: "ai", severity: "manual_review", review_kind: "manual_review" }),
+    ],
+  });
+  await page.goto(`/review?job=${JOB_ID}`);
+  await expect(page.getByTestId("gbc-review-tab-issues")).toContainText("必须处理 3");
+  await selectIssue(page, "FORMAT-1");
+  await expect(page.getByTestId("gbc-review-current-category")).toContainText("金额和比例格式");
+  await openIssueList(page);
+  await expect(page.getByTestId("gbc-review-category-count")).toHaveText("2 类 · 3 项");
+  const numberGroup = page.getByTestId("gbc-review-business-category-number_format");
+  await expect(numberGroup).toHaveCount(1);
+  await expect(numberGroup.locator("[data-review-problem-id]")).toHaveCount(2);
+  await expect(page.getByTestId("gbc-review-category-toggle-wording")).toHaveAttribute("aria-expanded", "false");
+  await page.screenshot({ path: test.info().outputPath("问题分类列表.png") });
+  await selectIssue(page, "TEMPLATE-1");
+  await expect(page.getByTestId("gbc-review-pdf-page-input")).toHaveValue("9");
+  await selectIssue(page, "FORMAT-2");
+  await expect(page.getByTestId("gbc-review-pdf-page-input")).toHaveValue("7");
+
+  // 同类参考仍需核实；跨队列查阅不会替用户提交确认或降低完成条件。
+  await page.getByTestId("gbc-review-related-category").click();
+  await expect(page.getByTestId("gbc-review-issue-detail")).toHaveAttribute("data-detail-problem-id", "AI-FORMAT-REF");
+  await expect(page.getByTestId("gbc-review-tab-reference")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("gbc-review-pdf-page-input")).toHaveValue("11");
+  expect(workflowUpdates).toHaveLength(0);
+  await page.getByTestId("gbc-review-related-category").click();
+  await expect(page.getByTestId("gbc-review-issue-detail")).toHaveAttribute("data-detail-problem-id", "FORMAT-1");
+  await page.getByTestId("gbc-review-issue-confirm-FORMAT-1").click();
+  await expect(page.getByTestId("gbc-review-tab-issues")).toContainText("必须处理 2");
+  expect(workflowUpdates).toHaveLength(1);
+  expect(workflowUpdates[0]).toMatchObject({ issue_id: "FORMAT-1", status: "confirmed" });
+  await openIssueList(page);
+  await expect(page.getByTestId("gbc-review-scope-all")).toBeVisible();
+  await page.getByTestId("gbc-review-scope-all").click();
+  await expect(numberGroup.locator("[data-review-problem-id]")).toHaveCount(2);
+  await expect(page.getByTestId("gbc-review-issue-card-FORMAT-1")).toContainText("已确认");
+  await expect(page.getByTestId("gbc-review-issue-card-FORMAT-2")).toHaveAttribute("data-workflow-status", "pending");
+});
 
 /** 忽略必须先记录理由。 */
 async function ignoreWithReason(page: Page, id: string, reason = "false_positive") {

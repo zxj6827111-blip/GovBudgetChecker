@@ -29,7 +29,7 @@
     "test:archive-adapters": "jiti tests/archivePageAdapters.test.ts",
     "test:login-next-path": "jiti tests/loginNextPath.test.ts",
     "test:cn-merge": "jiti tests/cnTailwindMerge.test.ts",
-    "test:unit": "npm run test:material-reports && npm run test:ui-adapters && npm run test:ui-status && npm run test:ai-scope && npm run test:review-explanation && npm run test:review-reading && npm run test:unit-match && npm run test:admin-config && npm run test:ui-components && npm run test:cn-merge && npm run test:ui-preview-guard && npm run test:color-guard && npm run test:workspace-navigation && npm run test:workbench-adapters && npm run test:workbench-cockpit && npm run test:upload-center-adapters && npm run test:review-workbench-adapters && npm run test:review-workbench-contract && npm run test:review-problem-groups && npm run test:quality-adapters && npm run test:queue-adapters && npm run test:history-adapters && npm run test:job-polling && npm run test:job-list-events && npm run test:rules-adapters && npm run test:archive-adapters && npm run test:login-next-path && npm run test:material-ledger && npm run test:material-detail && npm run test:material-search && npm run test:obligation-review && npm run test:obligation-guidance && npm run test:review-known-regressions && npm run test:department-reports && npm run test:location-consistency && npm run test:review-list && npm run test:list-requests && npm run test:review-reads && npm run test:supervision && npm run test:report-version && npm run test:correction-adapters && npm run test:material-dimensions",
+    "test:unit": "npm run test:material-reports && npm run test:ui-adapters && npm run test:ui-status && npm run test:ai-scope && npm run test:review-explanation && npm run test:review-reading && npm run test:unit-match && npm run test:admin-config && npm run test:ui-components && npm run test:cn-merge && npm run test:ui-preview-guard && npm run test:color-guard && npm run test:workspace-navigation && npm run test:workbench-adapters && npm run test:workbench-cockpit && npm run test:upload-center-adapters && npm run test:review-workbench-adapters && npm run test:review-workbench-contract && npm run test:review-problem-groups && npm run test:issue-categories && npm run test:quality-adapters && npm run test:queue-adapters && npm run test:history-adapters && npm run test:job-polling && npm run test:job-list-events && npm run test:rules-adapters && npm run test:archive-adapters && npm run test:login-next-path && npm run test:material-ledger && npm run test:material-detail && npm run test:material-search && npm run test:obligation-review && npm run test:obligation-guidance && npm run test:review-known-regressions && npm run test:department-reports && npm run test:location-consistency && npm run test:review-list && npm run test:list-requests && npm run test:review-reads && npm run test:supervision && npm run test:report-version && npm run test:correction-adapters && npm run test:material-dimensions",
     "test:e2e": "node ../scripts/run-e2e.cjs",
     "test:material-ledger": "jiti tests/materialLedgerAdapters.test.ts",
     "test:material-detail": "jiti tests/materialDetailAdapters.test.ts",
@@ -51,7 +51,8 @@
     "test:material-dimensions": "jiti tests/materialDimensionLabels.test.ts",
     "test:review-explanation": "jiti tests/reviewExplanation.test.ts",
     "test:review-reading": "jiti tests/reviewReading.test.ts",
-    "test:review-problem-groups": "jiti tests/reviewProblemGroups.test.ts"
+    "test:review-problem-groups": "jiti tests/reviewProblemGroups.test.ts",
+    "test:issue-categories": "jiti tests/issueCategories.test.ts"
   },
   "dependencies": {
     "clsx": "^2.1.1",

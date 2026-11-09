@@ -412,6 +412,8 @@ test.describe("人工补核（WP3-B）：并入必须处理", () => {
     await page.getByTestId(`gbc-review-obligation-verified_issue-${entry("OBL-TXT-T5")}`).click();
     await expect(page.getByTestId("gbc-review-obligation-note")).toHaveValue("该要求尚无规则实现（V33-TEST）");
     await page.getByTestId("gbc-review-obligation-note").fill("说明第 18 页科目名称与表内不一致");
+    await expect(page.getByTestId("gbc-review-obligation-save")).toBeDisabled();
+    await page.getByTestId("gbc-review-obligation-scope-confirm").check();
     await page.getByTestId("gbc-review-obligation-save").click();
     expect(state.decideCalls[0].body).toMatchObject({ decision: "verified_issue", note: "说明第 18 页科目名称与表内不一致" });
     await expect(page.getByTestId("gbc-review-complete")).toBeEnabled();
@@ -439,7 +441,7 @@ test.describe("人工补核（WP3-B）：并入必须处理", () => {
     const tab = page.getByTestId("gbc-review-tab-issues");
     await expect(tab).toContainText("必须处理 2");
     await openIssueList(page);
-    await expect(page.getByTestId("gbc-review-group-obligation")).toContainText("未能自动核对（2）");
+    await expect(page.getByTestId("gbc-review-category-count")).toContainText("2 项");
     await page.getByTestId(`gbc-review-issue-card-${entry("OBL-CROSS-SAN-GONG-ECON")}`).click();
 
     // 卡片说清：为什么没核对成、请你核对什么、怎么判断、原文在哪。

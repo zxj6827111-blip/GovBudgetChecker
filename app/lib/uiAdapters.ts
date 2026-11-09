@@ -2,6 +2,7 @@ import type { Problem, Task } from "@/lib/mock";
 import { getSeverityMeta, normalizeSeverityCode } from "./issueSeverity";
 import { hasVerifiedSourceIdentity } from "./evidenceIdentity";
 import { displayedAnalysisRevision, fileAnalysisRevision } from "./reportVersion";
+import { issueCategory } from "./issueCategories";
 
 const TABLE_CODE_LABELS: Record<string, string> = {
   FIN_01_income_expenditure_total: "收入支出决算总表",
@@ -569,34 +570,13 @@ export function toUiTask(job: JobSummaryRecord, structuredInput?: StructuredInge
 }
 
 function inferProblemCategory(issue: Record<string, unknown>): string {
-  const ruleId = String(issue.rule_id ?? issue.rule ?? "").trim().toLowerCase();
-  const title = `${String(issue.title ?? "")} ${String(issue.message ?? "")}`.toLowerCase();
-  const source = String(issue.source ?? "").trim().toLowerCase();
-  const location = isRecord(issue.location) ? issue.location : {};
-  const normalizedRuleId = ruleId.toUpperCase();
-  if (source === "structured_ingest") {
-    return "结构化识别复核";
-  }
-  if (
-    ["BUD-109", "V33-227"].includes(normalizedRuleId) ||
-    (title.includes("t5") && title.includes("\u540d\u79f0"))
-  ) {
-    return "\u7c7b\u6b3e\u9879\u53e3\u5f84\u4e00\u81f4\u6027";
-  }
-
-  if (source.includes("ai") || ruleId.includes("ai") || title.includes("绩效")) {
-    return "AI 智能分析";
-  }
-  if (location.table_name || title.includes("缺失") || title.includes("九张表") || ruleId.startsWith("bud")) {
-    return "表格完整性";
-  }
-  if (title.includes("勾稽") || title.includes("合计") || title.includes("平衡")) {
-    return "表内逻辑关系";
-  }
-  if (title.includes("口径") || title.includes("一致") || title.includes("文")) {
-    return "文数一致性";
-  }
-  return "基础信息合规";
+  if (issue.source === "structured_ingest") return "结构化识别复核";
+  return issueCategory({
+    ruleId: String(issue.rule_id ?? issue.rule ?? ""),
+    title: String(issue.title ?? ""),
+    description: String(issue.message ?? ""),
+    source: String(issue.source ?? ""),
+  }).label;
 }
 
 function mapSeverity(value: unknown): Problem["severity"] {

@@ -27,6 +27,7 @@ import { isObligationProblem, obligationAutoEvidence, readableObligationReason, 
 import type { IgnoreReason } from "./reviewDecisionNotes";
 import type { ObligationCascadeItemRecord, ObligationReviewItemRecord } from "./reviewLifecycleAdapters";
 import type { Problem } from "../../../lib/mock";
+import { groupProblemsByCategory, issueCategory } from "../../../lib/issueCategories";
 
 export interface SourceFindingViews {
   enabled: boolean;
@@ -84,6 +85,7 @@ export interface IssuesTabProps {
   sourceFindings?: SourceFindingViews;
   /** 检查范围：未完整完成时在问题区顶部展开说明，完整完成时只在页面状态条显示。 */
   queue: ReviewQueue;
+  onOpenRelatedQueue?: (queue: ReviewQueue, problemId: string) => void;
   selectedProblemId: string | null;
   onSelectProblem: (problemId: string | null, options?: { keepLayout?: boolean }) => void;
   selectedEvidenceRefKey: string | null;
@@ -141,26 +143,13 @@ function isProcessedStatus(status: string | undefined): boolean {
   return PROCESSED_STATUSES.has(status ?? "");
 }
 
-const groups = [
-  { kind: "issue", label: "审核问题" },
-  { kind: "obligation", label: "未能自动核对" },
-  { kind: "manual_review", label: "待人工核实" },
-  { kind: "degraded", label: "证据降级（不计入问题数）" },
-  { kind: "tip", label: "提示" },
-  { kind: "review_notice", label: "系统复核事项" },
-] as const;
-
-function problemGroup(problem: Problem): string {
-  return problem.evidenceStatus === EVIDENCE_STATUS_DEGRADED ? "degraded" : problemReviewKind(problem);
-}
-
 function findCard(list: HTMLElement, id: string): HTMLElement | undefined {
   return Array.from(list.querySelectorAll<HTMLElement>("[data-review-problem-id]"))
     .find((card) => card.dataset.reviewProblemId === id);
 }
 
 /** 分组标题吸顶，行滚到它下面也算看不见。 */
-const STICKY_GROUP_HEADER_HEIGHT = 24;
+const STICKY_GROUP_HEADER_HEIGHT = 56;
 
 // 只滚动列表自身：scrollIntoView 会连带滚动 overflow-hidden 的外层容器，把整页布局顶歪。
 function keepCardInView(list: HTMLElement, card: HTMLElement) {
@@ -195,6 +184,7 @@ export function IssuesTab({
   problems,
   sourceFindings,
   queue,
+  onOpenRelatedQueue,
   selectedProblemId,
   onSelectProblem,
   selectedEvidenceRefKey,
@@ -221,6 +211,7 @@ export function IssuesTab({
   const [sourceView, setSourceView] = useState<SourceView>("all");
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all");
   const [showSourceDetails, setShowSourceDetails] = useState(false);
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
   // 列表与忽略面板都记在打开时的队列上：切换队列即自然收起，不靠事后的 effect
   // 去关（effect 在绘制后才执行，会把用户紧接着点开的列表又关掉）。
   const [listOpenFor, setListOpenFor] = useState<ReviewQueue | null>(null);
@@ -296,9 +287,8 @@ export function IssuesTab({
     : classifiedProblems.filter((problem) => statusFilter === "all" || workflowStatusByIssueId[problem.id] === statusFilter),
   [effectiveQueueView, pendingProblems, classifiedProblems, statusFilter, workflowStatusByIssueId]);
   // 接续顺序必须与页面分组后的顺序一致，不能只按原始数组找下一条。
-  const orderedVisibleProblems = useMemo(() => groups.flatMap(({ kind }) =>
-    visibleProblems.filter((problem) => problemGroup(problem) === kind)
-  ), [visibleProblems]);
+  const categoryGroups = useMemo(() => groupProblemsByCategory(visibleProblems), [visibleProblems]);
+  const orderedVisibleProblems = useMemo(() => categoryGroups.flatMap((group) => group.items), [categoryGroups]);
 
   useLayoutEffect(() => {
     const navigation = pendingNavigationRef.current;
@@ -326,6 +316,20 @@ export function IssuesTab({
   const detailIndex = Math.max(0, orderedVisibleProblems.findIndex((problem) => problem.id === selectedProblemId));
   const detailProblem = orderedVisibleProblems[detailIndex] ?? null;
   const detailProblemId = detailProblem?.id ?? null;
+  const detailCategory = detailProblem ? issueCategory(detailProblem) : null;
+  const detailCategoryExpanded = Boolean(detailCategory && expandedCategories.has(`${queue}:${detailCategory.id}`));
+  const detailCategoryGroup = categoryGroups.find((group) => group.id === detailCategory?.id);
+  const relatedQueueProblems = useMemo(() => allSortedProblems.filter((problem) =>
+    requiredIds.has(problem.id) !== (queue === "required")
+      && issueCategory(problem).id === detailCategory?.id
+  ), [allSortedProblems, requiredIds, queue, detailCategory?.id]);
+
+  // 当前项、键盘接续与撤销恢复都展开所属类别；折叠只影响浏览，不改变待办。
+  useLayoutEffect(() => {
+    if (!listOpen || !detailCategory) return;
+    const key = `${queue}:${detailCategory.id}`;
+    setExpandedCategories((previous) => previous.has(key) ? previous : new Set(Array.from(previous).concat(key)));
+  }, [listOpen, queue, detailCategory]);
 
   useEffect(() => {
     if (flowSelectionRef.current !== undefined) {
@@ -343,14 +347,15 @@ export function IssuesTab({
 
   // 列表展开时把当前条目滚进视野并聚焦，↑/↓ 可直接接着切换。
   useEffect(() => {
-    if (!listOpen) return;
+    // 类别展开前行仍是 hidden，必须在展开后的渲染再聚焦，否则键盘导航失效。
+    if (!listOpen || !detailCategoryExpanded) return;
     const list = listRef.current;
     const card = list && detailProblemId ? findCard(list, detailProblemId) : undefined;
     if (list && card) {
       keepCardInView(list, card);
       card.focus({ preventScroll: true });
     }
-  }, [listOpen, detailProblemId]);
+  }, [listOpen, detailProblemId, detailCategoryExpanded]);
 
   const moveSelection = (delta: number) => {
     const next = orderedVisibleProblems[detailIndex + delta];
@@ -490,7 +495,7 @@ export function IssuesTab({
             listOpen ? "border-primary-300 bg-primary-50 text-primary-700" : "border-border text-slate-700 hover:bg-surface-100"
           }`}
         >
-          <ListFilter className="h-3.5 w-3.5" aria-hidden="true" />列表{activeFilterLabels.length > 0 ? ` · 筛选 ${activeFilterLabels.length}` : ""}
+          <ListFilter className="h-3.5 w-3.5" aria-hidden="true" />分类列表{activeFilterLabels.length > 0 ? ` · 筛选 ${activeFilterLabels.length}` : ""}
         </button>
         <div className="flex items-center gap-0.5 text-xs text-slate-500">
           <button type="button" onClick={() => moveSelection(-1)} disabled={!detailProblem || detailIndex <= 0} data-testid="gbc-review-issue-prev"
@@ -533,6 +538,21 @@ export function IssuesTab({
 
       <div className="relative min-h-0 min-w-0 flex-1" data-testid="gbc-review-issue-detail-pane">
         <div ref={readingRef} className="h-full overflow-y-auto" style={{ fontSize: REVIEW_TEXT_SIZE_PX[textSize] }} data-text-size={textSize}>
+          {detailCategory && detailCategoryGroup ? (
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border bg-surface-50 px-4 py-2 text-xs text-slate-600" data-testid="gbc-review-current-category">
+              <button type="button" onClick={() => setListOpen(true)} className="font-medium text-primary-700 hover:underline">{detailCategory.label}</button>
+              <span>本类第 {detailCategoryGroup.items.findIndex((item) => item.id === detailProblemId) + 1}/{detailCategoryGroup.items.length} 项</span>
+              {relatedQueueProblems.length > 0 && onOpenRelatedQueue ? (
+                <button type="button" className="ml-auto text-primary-700 hover:underline" data-testid="gbc-review-related-category"
+                  onClick={() => {
+                    clearFilters();
+                    setQueueView("all");
+                    onOpenRelatedQueue(queue === "required" ? "reference" : "required", relatedQueueProblems[0].id);
+                  }}
+                >同类{queue === "required" ? "参考" : "必须处理"} {relatedQueueProblems.length} 项</button>
+              ) : null}
+            </div>
+          ) : null}
           {detailProblem && isObligationProblem(detailProblem) && obligationItems[detailProblem.id] ? (
             <ObligationCard
               key={detailProblem.id}
@@ -567,6 +587,7 @@ export function IssuesTab({
             onKeyDown={(event) => { if (event.key === "Escape") setListOpen(false); }}>
             <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-2">
               <strong className="text-sm font-semibold text-slate-900">{queue === "required" ? "必须处理的问题" : "参考发现"}</strong>
+              <span className="text-xs text-slate-500" data-testid="gbc-review-category-count">{categoryGroups.length} 类 · {visibleProblems.length} 项</span>
               <div className="flex items-center gap-0.5 rounded-md bg-surface-100 p-0.5" aria-label="按处理进度查看">
                 {([["pending", "待处理", pendingProblems.length], ["all", "全部", classifiedProblems.length]] as Array<[QueueView, string, number]>).map(([id, label, count]) => (
                   <button key={id} type="button" aria-pressed={effectiveQueueView === id}
@@ -692,13 +713,23 @@ export function IssuesTab({
             >
               {visibleProblems.length === 0 ? (
                 <p className="px-2 py-6 text-center text-sm text-slate-500">{effectiveQueueView === "pending" && classifiedProblems.length > 0 ? "当前队列已无待处理项。" : emptyText}</p>
-              ) : groups.map(({ kind, label }) => {
-                const items = visibleProblems.filter((problem) => problemGroup(problem) === kind);
-                if (items.length === 0) return null;
+              ) : categoryGroups.map(({ id, label, description, items }) => {
+                const key = `${queue}:${id}`;
+                const expanded = expandedCategories.has(key);
                 return (
-                  <section key={kind} data-testid={`gbc-review-group-${kind}`}>
-                    <h3 className="sticky top-0 z-10 bg-white px-1 pb-1 pt-1.5 text-[11px] font-medium text-slate-500">{label}（{items.length}）</h3>
-                    <div className="space-y-0.5">
+                  <section key={id} className="mb-2 rounded-md border border-border" data-testid={`gbc-review-business-category-${id}`}>
+                    <button type="button" aria-expanded={expanded} aria-controls={`review-category-${queue}-${id}`}
+                      data-testid={`gbc-review-category-toggle-${id}`}
+                      className="sticky top-0 z-10 flex w-full items-center gap-2 rounded-t-md bg-surface-50 px-3 py-2 text-left text-xs text-slate-700"
+                      onClick={() => setExpandedCategories((previous) => {
+                        const next = new Set(previous);
+                        if (next.has(key)) next.delete(key); else next.add(key);
+                        return next;
+                      })}>
+                      <span className="min-w-0 flex-1"><strong className="block font-semibold">{label}</strong><span className="mt-0.5 block text-[11px] text-slate-500">{description}</span></span>
+                      <span className="shrink-0 tabular-nums">{items.length} 项</span><span aria-hidden="true">{expanded ? "⌃" : "⌄"}</span>
+                    </button>
+                    <div id={`review-category-${queue}-${id}`} hidden={!expanded} className="space-y-0.5 px-1 pb-1">
                       {items.map((problem) => (
                         <IssueRow
                           key={problem.id}
@@ -715,7 +746,7 @@ export function IssuesTab({
             </div>
             <div className="shrink-0 border-t border-border px-4 py-2 text-[11px] text-slate-500">
               {queue === "required" ? "这些条目计入完成条件：问题逐条确认或记录理由后忽略；未能自动核对的检查选核对无误、确认有问题或不适用。" : "参考项不影响完成复核；可按需确认、忽略或补充意见。"}
-              <span className="ml-1 text-slate-400">展开时可按 ↑ ↓ 切换，Esc 关闭。</span>
+              <span className="ml-1 text-slate-400">同类集中展示，各项分别记录结论；↑ ↓ 切换，Esc 关闭。</span>
             </div>
           </div>
         ) : null}

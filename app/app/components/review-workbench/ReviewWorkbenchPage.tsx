@@ -1333,6 +1333,10 @@ export function ReviewWorkbenchPage() {
                 problems={reviewProblems}
                 sourceFindings={sourceFindings}
                 queue={issueQueue}
+                onOpenRelatedQueue={(queue, problemId) => {
+                  openIssueQueue(queue, "all");
+                  handleSelectProblem(problemId);
+                }}
                 sourceRequest={issueSourceRequest}
                 selectedProblemId={selectedProblemId}
                 onSelectProblem={handleSelectProblem}

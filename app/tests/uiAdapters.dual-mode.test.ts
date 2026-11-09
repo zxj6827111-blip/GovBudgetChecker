@@ -226,8 +226,8 @@ assert.equal(
 );
 assert.equal(
   nameAlignmentProblems[0].category,
-  "类款项口径一致性",
-  "BUD-109 should land in the dedicated name-alignment category",
+  "科目名称与主体口径",
+  "BUD-109 should share its business category with AI name-alignment findings",
 );
 assert.equal(
   nameAlignmentProblems[0].suggestion,
