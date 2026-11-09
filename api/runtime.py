@@ -3439,28 +3439,17 @@ async def reanalyze_job(
         raise HTTPException(status_code=409, detail="job is already being analyzed")
 
     body = dict(body or {})
-    if "use_local_rules" not in body:
-        body["use_local_rules"] = bool(source_status.get("use_local_rules", True))
-    if "mode" not in body:
-        body["mode"] = "dual" if normalize_request_flag(body.get("use_ai_assist"), "use_ai_assist") is True else str(source_status.get("mode") or "legacy")
-    if "use_ai_assist" not in body:
-        # UI 未显式指定时，dual 重分析遵循当前系统默认模型设置；这样切换模型后
-        # 可直接重跑旧任务。若系统默认关闭，则保留任务之前的 AI 选择。
-        # legacy 不请求 AI；structured 模式保留原值（结构化入库不消耗该标志）。
-        # 历史 status.json 均为布尔值（分析请求经 normalize_request_flag
-        # 归一后持久化），此处 bool() 是防御性收尾而非真值解析。
-        resolved_mode = str(body["mode"])
-        if resolved_mode == "dual":
-            from src.services.ai_model_settings import capabilities
-
-            body["use_ai_assist"] = bool(
-                capabilities()["default_use_ai"]
-                or source_status.get("use_ai_assist", False)
-            )
-        elif resolved_mode == "legacy":
-            body["use_ai_assist"] = False
-        else:
-            body["use_ai_assist"] = bool(source_status.get("use_ai_assist", True))
+    # 检查方式继承契约（2026-11-08）：默认严格按上轮已记录的启动配置继承，
+    # 不读系统当前 AI 默认开关；历史缺失标未知并拒绝猜测；显式键兼容旧调用方。
+    from src.services.reanalyze_inheritance import InheritanceError, resolve_check_method
+    try:
+        resolved = resolve_check_method(body, source_status, source_job_dir)
+    except InheritanceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    body["mode"] = resolved["mode"]
+    body["use_local_rules"] = resolved["use_local_rules"]
+    body["use_ai_assist"] = resolved["use_ai_assist"]
+    body["ai_profile_id"] = resolved["ai_profile_id"]
     if "fiscal_year" not in body and source_status.get("fiscal_year") is not None:
         body["fiscal_year"] = source_status.get("fiscal_year")
     if "doc_type" not in body and source_status.get("doc_type") is not None:
@@ -3481,7 +3470,13 @@ async def reanalyze_job(
         try:
             resolve_runtime(body.get("ai_profile_id") or None)
         except ValueError as exc:
-            raise HTTPException(422, str(exc)) from exc
+            detail = str(exc)
+            if resolved["check_method"] == "inherit":
+                from src.services.reanalyze_inheritance import evaluate_model_state, last_start_config
+                message = evaluate_model_state(last_start_config(source_status), source_job_dir)["message"]
+                if message:
+                    detail = message
+            raise HTTPException(422, detail) from exc
     if selected_mode == "dual" and not get_settings().is_dual_mode_enabled():
         raise HTTPException(422, "双模式检查未启用")
     if local_flag is False and (selected_mode == "legacy" or not ai_flag):
@@ -3502,6 +3497,8 @@ async def reanalyze_job(
         **started,
         "source_job_id": source_job_id,
         "job_id": source_job_id,
+        "check_method": resolved["check_method"],
+        "inheritance_warnings": resolved["warnings"],
     }
 
 
@@ -3680,6 +3677,8 @@ async def reanalyze_all_jobs(body: Optional[Dict[str, Any]] = None) -> Dict[str,
                     "job_id": result.get("job_id"),
                     "status": result.get("status"),
                     "dispatch": result.get("dispatch"),
+                    "check_method": result.get("check_method"),
+                    "inheritance_warnings": result.get("inheritance_warnings") or [],
                     "department_id": department.get("department_id"),
                     "department_name": department.get("department_name"),
                     "scope_id": selection_scope.get("scope_id"),

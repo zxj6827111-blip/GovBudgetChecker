@@ -10,6 +10,8 @@ type ReanalyzeCreatedItem = {
   department_name?: string | null;
   scope_name?: string | null;
   scope_level?: string | null;
+  check_method?: string | null;
+  inheritance_warnings?: string[] | null;
 };
 
 type ReanalyzeSkippedItem = {
@@ -231,6 +233,21 @@ export default function ReanalyzeProgressDialog({
             共请求 {formatCount(batch.requested_count)} 个历史任务，筛出 {formatCount(batch.selected_count)} 个最新报告，
             创建 {formatCount(batch.created_count)} 个重分析任务，跳过 {formatCount(batch.skipped_count)} 个。
           </div>
+
+          {created.some((item) => (item.inheritance_warnings || []).length > 0) ? (
+            <div className="mt-3 rounded-md border border-warning-200 bg-warning-50 px-4 py-3 text-sm text-warning-800" data-testid="reanalyze-inheritance-warnings">
+              <p className="font-medium">继承提示（不影响已启动的任务）：</p>
+              <ul className="mt-1 list-disc space-y-1 pl-5">
+                {created.flatMap((item) =>
+                  (item.inheritance_warnings || []).map((warning, index) => (
+                    <li key={`${item.job_id || item.source_job_id}-${index}`}>
+                      {item.scope_name || item.department_name || item.job_id}：{warning}
+                    </li>
+                  )),
+                )}
+              </ul>
+            </div>
+          ) : null}
 
           <section className="mt-6">
             <div className="flex items-center justify-between gap-3">

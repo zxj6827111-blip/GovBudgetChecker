@@ -21,7 +21,11 @@ import { useEffect, useState } from "react";
 
 import BatchUploadModal from "@/components/BatchUploadModal";
 import OrganizationTree from "@/components/OrganizationTree";
-import ReanalyzeAiToggle from "@/components/ReanalyzeAiToggle";
+import ReanalyzeMethodPicker, {
+  DEFAULT_REANALYZE_METHOD,
+  buildReanalyzeRequestBody,
+  type ReanalyzeMethodValue,
+} from "@/components/ReanalyzeMethodPicker";
 import ReanalyzeProgressDialog, {
   type ReanalyzeBatchPayload,
   type ReanalyzeLiveStatus,
@@ -32,7 +36,6 @@ import StructuredCleanupDialog, {
 import AnalysisResultsPanel from "@/components/admin/AnalysisResultsPanel";
 import UserManagementPanel from "@/components/admin/UserManagementPanel";
 import AIModelSettingsPanel from "@/components/admin/AIModelSettingsPanel";
-import { useAIAnalysisOptions } from "@/components/AIAnalysisOptions";
 import AnnualTemplatePanel from "@/components/settings/AnnualTemplatePanel";
 import DisclosureCalendarPanel from "@/components/settings/DisclosureCalendarPanel";
 import { Badge, Button, Card } from "@/components/ui";
@@ -564,7 +567,7 @@ function OperationsSection({ onRefresh }: { onRefresh?: () => Promise<void> | vo
   const [notice, setNotice] = useState<Notice | null>(null);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [isRunningReanalyzeAll, setIsRunningReanalyzeAll] = useState(false);
-  const aiOptions = useAIAnalysisOptions();
+  const [reanalyzeMethod, setReanalyzeMethod] = useState<ReanalyzeMethodValue>(DEFAULT_REANALYZE_METHOD);
   const [isRepairingLinks, setIsRepairingLinks] = useState(false);
   const [isRematching, setIsRematching] = useState(false);
   const [isLoadingCleanupPreview, setIsLoadingCleanupPreview] = useState(false);
@@ -627,12 +630,8 @@ function OperationsSection({ onRefresh }: { onRefresh?: () => Promise<void> | vo
 
   const reanalyzeAllRequestBody: Record<string, unknown> = {
     latest_per_department: true,
-    use_local_rules: true,
+    ...buildReanalyzeRequestBody(reanalyzeMethod),
   };
-  if (aiOptions.capabilities) {
-    reanalyzeAllRequestBody.use_ai_assist = aiOptions.enabled;
-    reanalyzeAllRequestBody.ai_profile_id = aiOptions.enabled ? aiOptions.profileId || null : null;
-  }
 
   const runReanalyzeAll = async () => {
     setIsRunningReanalyzeAll(true);
@@ -775,17 +774,13 @@ function OperationsSection({ onRefresh }: { onRefresh?: () => Promise<void> | vo
       <div className="grid gap-4 xl:grid-cols-2">
         <Card title="按组织批量重分析">
           <p className="text-sm leading-6 text-slate-600">触发各组织当前最新报告重新分析，并显示实时状态。</p>
-          <ReanalyzeAiToggle
-            checked={aiOptions.enabled}
-            onChange={aiOptions.setEnabled}
-            disabled={isRunningReanalyzeAll || !aiOptions.capabilities?.enabled}
-            className="mt-4 bg-white"
-            testId="admin-reanalyze-ai-toggle"
-            description={aiOptions.error || (aiOptions.capabilities?.enabled
-              ? aiOptions.enabled
-                ? "本次批量重分析将使用系统当前启用的模型；取消勾选后仅执行本地检查。"
-                : "模型已配置，但本次默认关闭；勾选后批量重分析会调用大模型。"
-              : "当前没有可用的大模型配置，重分析将仅执行本地检查。")}
+          <ReanalyzeMethodPicker
+            batch
+            value={reanalyzeMethod}
+            onChange={setReanalyzeMethod}
+            disabled={isRunningReanalyzeAll}
+            className="mt-4"
+            testId="admin-reanalyze-method"
           />
           <Button
             variant="secondary"

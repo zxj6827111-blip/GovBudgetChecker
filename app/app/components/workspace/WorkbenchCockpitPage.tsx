@@ -19,6 +19,7 @@ import { buildJobOverviewLocally, cockpitCoverageFromOverview } from "./jobOverv
 import { useJobPageLoader } from "./useJobPageLoader";
 import { useJobPolling } from "./useJobPolling";
 import { ANALYZE_START_REQUEST_BODY } from "./uploadCenterAdapters";
+import { ReanalyzeMethodDialog, buildReanalyzeRequestBody, type ReanalyzeMethodValue } from "@/components/ReanalyzeMethodPicker";
 import { deriveQualityAlerts, type WorkbenchStatusFilter } from "./workbenchAdapters";
 import { buildCockpitProgress, buildCockpitTaskPageLocally, buildDepartmentCoverage, cockpitPercent,
   cockpitOverviewCsv, cockpitTaskQuery, cockpitTrendFromDaily, sameCockpitTaskKey, validCockpitLedger,
@@ -79,6 +80,8 @@ export function WorkbenchCockpitPage() {
   const [taskPage, setTaskPage] = useState(1);
   const [taskSession, setTaskSession] = useState(0);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [reanalyzeJobId, setReanalyzeJobId] = useState<string | null>(null);
+  const [isReanalyzeSubmitting, setIsReanalyzeSubmitting] = useState(false);
   /** 最新汇总的旁路引用：轮询决策在 fetch 返回的同一微任务里读取，早于重渲染。 */
   const overviewRef = useRef<JobOverviewView | null>(null);
   const pageRef = useRef<HTMLDivElement>(null);
@@ -157,12 +160,16 @@ export function WorkbenchCockpitPage() {
     setTaskPage(1); setTaskSession((value) => value + 1);
   };
   const { keyRef: taskKeyRef, setKey: setTaskKey } = tasks;
-  const runOne = useCallback(async (jobId: string, initial: boolean) => {
+  const runOne = useCallback(async (jobId: string, initial: boolean, method?: ReanalyzeMethodValue) => {
     setActionError(null);
     try {
       const url = initial ? `/api/analyze/${encodeURIComponent(jobId)}` : `/api/jobs/${encodeURIComponent(jobId)}/reanalyze`;
-      const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(ANALYZE_START_REQUEST_BODY) });
-      if (!response.ok) throw new Error(`提交失败（HTTP ${response.status}），请在处理队列查看原因。`);
+      const body = initial ? ANALYZE_START_REQUEST_BODY : buildReanalyzeRequestBody(method ?? { checkMethod: "inherit", aiProfileId: "" });
+      const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
+        throw new Error(typeof payload.detail === "string" && payload.detail ? payload.detail : `提交失败（HTTP ${response.status}），请在处理队列查看原因。`);
+      }
       // 换一个新的查询对象：进行中的旧明细请求结果作废，按当前条件重读。
       setTaskKey({ ...taskKeyRef.current });
       await refreshNow();
@@ -248,9 +255,26 @@ export function WorkbenchCockpitPage() {
       {LEDGER_STATES[detail] && progress?.source === "ledger" && ledger ? <><p className="mb-4 text-sm text-slate-500">按材料台账统计，人工复核与分析任务状态分别展示。</p><div className="grid gap-3 sm:grid-cols-2">{LEDGER_STATES[detail].map(([key, label]) => <Link key={key} href={`/materials?status=${key}` as Route} className="flex items-center justify-between rounded-md border border-border p-4 text-sm hover:border-primary-300"><span>{label}</span><strong className="text-xl tabular-nums text-primary-700">{ledger.status_counts[key as keyof typeof ledger.status_counts]}</strong></Link>)}</div><div className="mt-5 flex flex-wrap gap-3"><Link href="/materials" className="text-sm text-primary-700">打开材料台账 →</Link><button type="button" onClick={() => openDetail("tasks")} className="text-sm text-primary-700">查看分析任务明细 →</button></div></> : null}
       {detail === "completed" && progress?.source !== "ledger" ? <p className="rounded-md bg-surface-50 p-4 text-sm text-slate-500">暂无可用人工复核统计。分析结束不能作为人工复核完成的依据，请在材料台账或审核工作台查看实际复核状态。</p> : null}
       {showTaskTable ? <><div className="mb-4 flex flex-wrap items-center gap-2"><input value={keyword} onChange={(event) => { setKeyword(event.target.value); setTaskPage(1); }} placeholder="搜索文件名、组织或任务 ID" data-testid="gbc-workbench-search" aria-label="搜索分析任务" className="min-w-0 flex-1 rounded-md border border-border px-3 py-2 text-sm" /><select value={statusFilter} onChange={(event) => { setStatusFilter(event.target.value as WorkbenchStatusFilter); setTaskPage(1); }} data-testid="gbc-workbench-status-filter" aria-label="按任务状态筛选" className="rounded-md border border-border px-3 py-2 text-sm">{FILTERS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select value={yearFilter} onChange={(event) => { setYearFilter(event.target.value); setTaskPage(1); }} data-testid="gbc-workbench-year-filter" aria-label="按材料年度筛选" className="rounded-md border border-border px-3 py-2 text-sm"><option value="">全部年份</option>{(tasks.view?.years ?? []).map((year) => <option key={year}>{year}</option>)}<option value="unresolved">未识别到</option></select><OrganizationFilterSelect value={organizationId} onChange={(value) => { setOrganizationId(value); setTaskPage(1); }} /></div><p className="mb-3 text-xs text-slate-400">{taskView ? `当前筛选 ${taskView.total} 个分析任务。` : "正在统计分析任务…"}批量操作可在<Link href="/queue" className="text-primary-700">处理队列</Link>中执行。</p>{actionError ? <p role="alert" className="mb-3 rounded-md bg-danger-50 p-3 text-sm text-danger-700">{actionError}</p> : null}{tasks.error ? <p role="alert" data-testid="gbc-cockpit-tasks-error" className="mb-3 rounded-md bg-warning-50 p-3 text-sm text-warning-800">{tasks.error}{taskView ? " 当前保留上次成功加载的结果。" : ""}</p> : null}{taskView === null ? (tasks.error ? null : <p className="text-sm text-slate-400" data-testid="gbc-cockpit-tasks-loading">正在加载任务…</p>) : <>
-        <WorkbenchQueueTable jobs={taskView.items} onReanalyze={(id) => void runOne(id, false)} onStartAnalysis={(id) => void runOne(id, true)} />
+        <WorkbenchQueueTable jobs={taskView.items} onReanalyze={(id) => setReanalyzeJobId(id)} onStartAnalysis={(id) => void runOne(id, true)} />
         {taskView.page_count > 1 ? <div className="mt-3 flex items-center justify-end gap-2 text-xs text-slate-500" data-testid="gbc-cockpit-tasks-pagination"><span>第 {taskView.page} / {taskView.page_count} 页</span><button type="button" onClick={() => setTaskPage((value) => Math.max(1, value - 1))} disabled={taskView.page <= 1} data-testid="gbc-cockpit-tasks-prev" className="rounded-md border border-border px-2.5 py-1 hover:bg-surface-50 disabled:cursor-not-allowed disabled:opacity-50">上一页</button><button type="button" onClick={() => setTaskPage((value) => Math.min(taskView.page_count, value + 1))} disabled={taskView.page >= taskView.page_count} data-testid="gbc-cockpit-tasks-next" className="rounded-md border border-border px-2.5 py-1 hover:bg-surface-50 disabled:cursor-not-allowed disabled:opacity-50">下一页</button></div> : null}
       </>}</> : null}
     </WorkbenchCockpitDrawer> : null}
+    {reanalyzeJobId ? (
+      <ReanalyzeMethodDialog
+        jobId={reanalyzeJobId}
+        title="重新分析这份报告"
+        submitting={isReanalyzeSubmitting}
+        onConfirm={(value) => {
+          setIsReanalyzeSubmitting(true);
+          void runOne(reanalyzeJobId, false, value).finally(() => {
+            setIsReanalyzeSubmitting(false);
+            setReanalyzeJobId(null);
+          });
+        }}
+        onCancel={() => {
+          if (!isReanalyzeSubmitting) setReanalyzeJobId(null);
+        }}
+      />
+    ) : null}
   </>;
 }
