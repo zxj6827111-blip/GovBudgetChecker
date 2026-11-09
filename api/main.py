@@ -784,7 +784,14 @@ def _evaluate_quality_gate(
 
     # ---- 规则证据完整性（此前只有降级数进门禁，不完整数被丢弃） ----
     if isinstance(evidence_completeness, dict):
-        incomplete_count = int(evidence_completeness.get("incomplete") or 0)
+        # incomplete 含 AI 候选；这些项已在上方作为 AI 证据不足单独阻断。
+        # 本处仅提示剩余本地规则缺口，避免同一 AI 引文重复报成两类问题。
+        # 兼容旧统计，未被 AI 降级数解释的不完整项仍保守按规则缺口保留。
+        incomplete_count = max(
+            int(evidence_completeness.get("rule_warning_count") or 0),
+            int(evidence_completeness.get("incomplete") or 0) - degraded_findings,
+            0,
+        )
         if incomplete_count > 0:
             review_reasons.append(
                 {

@@ -124,3 +124,22 @@ def test_printed_zero_or_negative_amount_is_never_reported_as_empty(native, amou
     if native: doc.parse_artifact = SimpleNamespace()
     with pytest.raises(RuleNotApplicable, match='空格补0建议不适用'):
         R33230_EmptyZeroHint().apply(doc)
+
+
+@pytest.mark.parametrize('statistics,ai_degraded,rule_reason', [
+    ({'incomplete':1,'rule_warning_count':0,'degraded_count':1},1,False),
+    ({'incomplete':2,'rule_warning_count':1,'degraded_count':1},1,True),
+    ({'incomplete':1},0,True),
+    ({'incomplete':1,'degraded_count':1},1,False),
+    ({'incomplete':1,'rule_warning_count':0,'degraded_count':1},0,True),
+])
+def test_ai_evidence_gap_is_not_duplicated_as_rule_gap(statistics, ai_degraded, rule_reason):
+    from api.main import _evaluate_quality_gate
+    from tests.test_audit_quality_p0 import _base_gate_kwargs
+
+    gate = _evaluate_quality_gate(**_base_gate_kwargs(
+        evidence_completeness=statistics, evidence_degraded_count=ai_degraded))
+    codes = [r['code'] for r in gate['review_reasons']]
+    assert gate['status'] == 'review_required', '消除重复提示不能清除真实证据缺口'
+    assert ('rule_evidence_incomplete' in codes) is rule_reason
+    assert ('evidence_incomplete_findings' in codes) is bool(ai_degraded)
