@@ -171,9 +171,7 @@ async def dispatch_pending() -> int:
                     if hashlib.sha256(pdf.read_bytes()).hexdigest() != row["file_hash"]:
                         raise ValueError("原件哈希已变化，拒绝将口径确认应用于其他文件")
                     await runtime.reanalyze_job(row["job_uuid"], {
-                        "document_scope_request_id": row["request_id"], "mode": status.get("mode") or "legacy",
-                        "use_local_rules": status.get("use_local_rules", True),
-                        "use_ai_assist": status.get("use_ai_assist", False),
+                        "document_scope_request_id": row["request_id"], "check_method": "inherit",
                     })
                 await conn.execute("UPDATE document_scope_decisions SET dispatch_status='queued',dispatch_error=NULL "
                                    "WHERE request_id=$1::uuid AND dispatch_status='pending'", row["request_id"])
@@ -227,9 +225,7 @@ async def dispatch_writing_pending() -> int:
                     if hashlib.sha256(pdf.read_bytes()).hexdigest() != row["file_hash"]:
                         raise ValueError("原件哈希已变化，拒绝将口径确认应用于其他文件")
                     await runtime.reanalyze_job(row["job_uuid"], {
-                        "writing_scope_request_id": row["request_id"], "mode": status.get("mode") or "legacy",
-                        "use_local_rules": status.get("use_local_rules", True),
-                        "use_ai_assist": status.get("use_ai_assist", False),
+                        "writing_scope_request_id": row["request_id"], "check_method": "inherit",
                     })
                 await conn.execute("UPDATE document_writing_scope_decisions SET dispatch_status='queued',dispatch_error=NULL "
                                    "WHERE request_id=$1::uuid AND dispatch_status='pending'", row["request_id"])

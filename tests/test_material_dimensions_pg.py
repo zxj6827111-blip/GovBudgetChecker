@@ -94,3 +94,8 @@ async def test_writing_outbox_failure_and_retry_are_durable(review_db,monkeypatc
         assert (await document_scope.latest_writing_decision(conn,material['job_uuid'],digest,material['version_id']))['dispatch_status']=='queued'
         assert await document_scope.dispatch_writing_pending()==0
         assert enqueue.await_count==2
+        # 2026-11-08 继承契约：自动重查统一走 inherit（含原模型），不再显式传开关。
+        assert enqueue.await_args.args[0]==material['job_uuid']
+        assert enqueue.await_args.args[1]['check_method']=='inherit'
+        assert 'use_ai_assist' not in enqueue.await_args.args[1]
+        assert 'ai_profile_id' not in enqueue.await_args.args[1]

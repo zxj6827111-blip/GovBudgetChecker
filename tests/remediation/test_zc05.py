@@ -78,6 +78,10 @@ def zc05_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "status": "review_required",
         "created_by": "test-admin",
         "analysis_revision": 1,
+        # 校正重查走统一继承契约，需要上轮启动配置；生产 status.json 始终带这些键。
+        "mode": "legacy",
+        "use_local_rules": True,
+        "use_ai_assist": False,
         "result": {
             "issues": {"all": [finding]},
             "meta": {

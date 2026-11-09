@@ -190,6 +190,9 @@ test("处理队列：跨页勾选、筛选重置、全选筛选结果、并发�
       if (id === "batch-1" && failFirst) return json({detail: {message: "测试：模型配置不可用"}}, 422);
       const job = jobs.find((item) => item.job_id === id)!;
       job.status = "queued";
+      if (id === "batch-4") {
+        return json({job_id: id, status: "queued", inheritance_warnings: ["原模型配置已变化（model），按上次方式执行将使用当前配置"]});
+      }
       return json({job_id: id, status: "queued"});
     }
     return json(await commonResponse(path));
@@ -213,17 +216,26 @@ test("处理队列：跨页勾选、筛选重置、全选筛选结果、并发�
   await expect(page.getByTestId("gbc-queue-selected-count")).toContainText("已选 26");
   await page.screenshot({path: "output/ui-layout-batch/queue-batch-selection.png"});
   await page.getByTestId("gbc-queue-batch-run").evaluate((button: HTMLButtonElement) => { button.click(); button.click(); });
+  // 批量先经检查方式对话框（默认逐条继承），连点只打开一次对话框，不直接提交。
+  await expect(page.getByTestId("reanalyze-method-dialog")).toBeVisible();
+  expect(calls).toHaveLength(0);
+  await page.getByTestId("reanalyze-method-confirm").click();
   await expect(page.getByTestId("gbc-queue-batch-run")).toBeDisabled();
   await expect(page.getByTestId("gbc-queue-batch-result")).toContainText("已提交 25 个，未提交 1 个");
   expect(calls).toHaveLength(26);
   expect(new Set(calls.map((call) => call.id)).size).toBe(26);
   expect(calls.some((call) => call.id === "running")).toBe(false);
   expect(calls.find((call) => call.id === "first-analysis")!.path).toBe("/api/analyze/first-analysis");
-  expect(calls.find((call) => call.id === "batch-2")!.body).toEqual({mode: "dual", use_local_rules: true});
+  expect(calls.find((call) => call.id === "batch-2")!.body).toEqual({check_method: "inherit"});
   await expect(page.getByTestId("gbc-queue-batch-result")).toContainText("模型配置不可用");
+  // 成功响应里的继承告警必须逐条展示材料名与原因，不能只留在后端响应里。
+  await expect(page.getByTestId("gbc-queue-batch-warnings")).toContainText("批量任务4.pdf");
+  await expect(page.getByTestId("gbc-queue-batch-warnings")).toContainText("配置已变化");
   await expect(page.getByTestId("gbc-queue-selected-count")).toContainText("已选 1");
   failFirst = false;
   await page.getByTestId("gbc-queue-batch-run").click();
+  await expect(page.getByTestId("reanalyze-method-dialog")).toBeVisible();
+  await page.getByTestId("reanalyze-method-confirm").click();
   await expect(page.getByTestId("gbc-queue-batch-result")).toContainText("已提交 1 个，未提交 0 个");
   expect(calls).toHaveLength(27);
   expect(calls.filter((call) => call.id === "batch-1")).toHaveLength(2);

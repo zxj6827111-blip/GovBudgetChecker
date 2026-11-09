@@ -9,7 +9,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import AssociateDialog from "@/components/AssociateDialog";
 import BatchUploadModal from "@/components/BatchUploadModal";
-import ReanalyzeAiToggle from "@/components/ReanalyzeAiToggle";
+import { ReanalyzeMethodDialog,
+  buildReanalyzeRequestBody,
+  type ReanalyzeMethodValue,
+} from "@/components/ReanalyzeMethodPicker";
+import { formatInheritanceWarnings, inheritanceWarningsFromResponse } from "@/components/reanalyzeOptions";
 import { ORG_TREE_REFRESH_EVENT, dispatchOrgTreeRefresh } from "@/lib/orgTreeEvents";
 import { cn } from "@/lib/utils";
 import type { JobSummaryRecord } from "@/lib/uiAdapters";
@@ -49,6 +53,13 @@ type OrganizationJobsResponse = {
   total?: number | null;
   limit?: number | null;
   offset?: number | null;
+};
+
+/** 批量重分析完整回执：告警只存在于提交响应，必须在页面保留，不能只截前几条进 alert。 */
+type BatchReanalyzeOutcome = {
+  submitted: Array<{ jobId: string; filename: string }>;
+  failures: Array<{ jobId: string; filename: string; message: string }>;
+  warnings: Array<{ jobId: string; filename: string; messages: string[] }>;
 };
 
 // pending_analysis（uploaded 待分析）是修复 3 新增的独立静止态，与 analyzing 分列。
@@ -156,11 +167,12 @@ export default function DepartmentPageClient() {
   const [exportingJobId, setExportingJobId] = useState<string | null>(null);
   const [isBatchDeleting, setIsBatchDeleting] = useState(false);
   const [isBatchReanalyzing, setIsBatchReanalyzing] = useState(false);
+  const [batchReanalyzeResult, setBatchReanalyzeResult] = useState<BatchReanalyzeOutcome | null>(null);
   const [isBatchExporting, setIsBatchExporting] = useState(false);
   const [isBatchZipExporting, setIsBatchZipExporting] = useState(false);
-  // ZC-00：默认关闭 AI 分析，显式勾选后才请求模型
-  const [reanalyzeUseAiAssist, setReanalyzeUseAiAssist] = useState(false);
-  const [hasConfiguredReanalyzeUseAiAssist, setHasConfiguredReanalyzeUseAiAssist] = useState(false);
+  // 检查方式继承（2026-11-08）：单条/批量都经对话框选择，默认按上次方式逐条继承。
+  const [reanalyzeDialogJobId, setReanalyzeDialogJobId] = useState<string | null>(null);
+  const [isBatchReanalyzeDialogOpen, setIsBatchReanalyzeDialogOpen] = useState(false);
   const [associatingJobId, setAssociatingJobId] = useState<string | null>(null);
   const [isAssociatingJob, setIsAssociatingJob] = useState(false);
   const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
@@ -349,12 +361,6 @@ export default function DepartmentPageClient() {
     () => Object.values(advancedFilters).filter(Boolean).length,
     [advancedFilters],
   );
-  const reanalyzeRequestBody = hasConfiguredReanalyzeUseAiAssist
-    ? {
-        use_local_rules: true,
-        use_ai_assist: reanalyzeUseAiAssist,
-      }
-    : {};
 
   useEffect(() => {
     const visibleTaskIds = new Set(filteredTasks.map((task) => task.job_id));
@@ -502,18 +508,22 @@ export default function DepartmentPageClient() {
   const handleReanalyze = async (jobId: string, event?: ReactMouseEvent<HTMLButtonElement>) => {
     event?.stopPropagation();
     setOpenMenuId(null);
-    if (!confirm("确定要重新分析这份报告吗？")) return;
+    setReanalyzeDialogJobId(jobId);
+  };
 
+  const submitReanalyze = async (jobId: string, method: ReanalyzeMethodValue) => {
     setReanalyzingJobId(jobId);
     try {
       const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/reanalyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(reanalyzeRequestBody),
+        body: JSON.stringify(buildReanalyzeRequestBody(method)),
       });
       if (!response.ok) {
         throw new Error(await readErrorMessage(response));
       }
+      const payload = await response.json().catch(() => null);
+      const warnings = formatInheritanceWarnings(inheritanceWarningsFromResponse(payload));
 
       setJobs((current) =>
         current.map((job) =>
@@ -522,20 +532,17 @@ export default function DepartmentPageClient() {
                 ...job,
                 status: "started",
                 updated_ts: Math.floor(Date.now() / 1000),
-                use_local_rules: hasConfiguredReanalyzeUseAiAssist ? true : job.use_local_rules,
-                use_ai_assist: hasConfiguredReanalyzeUseAiAssist
-                  ? reanalyzeUseAiAssist
-                  : job.use_ai_assist,
               }
             : job,
         ),
       );
-      alert("已触发重新分析。");
+      alert(`已触发重新分析。${warnings ? `\n注意：${warnings}` : ""}`);
     } catch (error) {
       console.error("Failed to reanalyze report:", error);
       alert(error instanceof Error ? error.message : "重新分析失败，请稍后重试。");
     } finally {
       setReanalyzingJobId(null);
+      setReanalyzeDialogJobId(null);
     }
   };
 
@@ -569,7 +576,7 @@ export default function DepartmentPageClient() {
     }
   };
 
-  const handleBatchReanalyze = async () => {
+  const handleBatchReanalyze = async (method: ReanalyzeMethodValue) => {
     const selectedJobs = filteredTasks.filter((job) => selectedTasks.includes(job.job_id));
     const eligibleJobs = selectedJobs.filter(
       (job) => normalizeUiTaskStatus(job.status) !== "analyzing",
@@ -577,58 +584,88 @@ export default function DepartmentPageClient() {
 
     if (eligibleJobs.length === 0) {
       alert("选中的报告都已在分析中。");
+      setIsBatchReanalyzeDialogOpen(false);
       return;
     }
-    if (!confirm(`确定要批量重新分析 ${eligibleJobs.length} 份报告吗？`)) return;
 
     setIsBatchReanalyzing(true);
+    setBatchReanalyzeResult(null);
     try {
       const results = await Promise.allSettled(
         eligibleJobs.map(async (job) => {
           const response = await fetch(`/api/jobs/${encodeURIComponent(job.job_id)}/reanalyze`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(reanalyzeRequestBody),
+            body: JSON.stringify(buildReanalyzeRequestBody(method)),
           });
           if (!response.ok) {
             throw new Error(await readErrorMessage(response));
           }
-          return job.job_id;
+          return {
+            jobId: job.job_id,
+            warnings: inheritanceWarningsFromResponse(await response.json().catch(() => null)),
+          };
         }),
       );
 
-      const succeeded = results
-        .filter((item): item is PromiseFulfilledResult<string> => item.status === "fulfilled")
-        .map((item) => item.value);
-      const successSet = new Set(succeeded);
-      const failedCount = results.length - succeeded.length;
+      const settled = results.map((item, index) => ({ item, job: eligibleJobs[index] }));
+      const submitted = settled
+        .filter(
+          (entry): entry is {
+            item: PromiseFulfilledResult<{ jobId: string; warnings: string[] }>;
+            job: (typeof eligibleJobs)[number];
+          } => entry.item.status === "fulfilled",
+        )
+        .map(({ item, job }) => ({ jobId: item.value.jobId, filename: job.filename || job.job_id }));
+      const succeeded = new Set(submitted.map((entry) => entry.jobId));
+      const failures = settled
+        .filter(
+          (entry): entry is { item: PromiseRejectedResult; job: (typeof eligibleJobs)[number] } =>
+            entry.item.status === "rejected",
+        )
+        .map(({ item, job }) => ({
+          jobId: job.job_id,
+          filename: job.filename || job.job_id,
+          message: item.reason instanceof Error ? item.reason.message : "提交未成功",
+        }));
+      const warnings = settled
+        .filter(
+          (entry): entry is {
+            item: PromiseFulfilledResult<{ jobId: string; warnings: string[] }>;
+            job: (typeof eligibleJobs)[number];
+          } => entry.item.status === "fulfilled" && entry.item.value.warnings.length > 0,
+        )
+        .map(({ item, job }) => ({
+          jobId: job.job_id,
+          filename: job.filename || job.job_id,
+          messages: item.value.warnings,
+        }));
 
       setJobs((current) =>
         current.map((job) =>
-          successSet.has(job.job_id)
+          succeeded.has(job.job_id)
             ? {
                 ...job,
                 status: "started",
                 updated_ts: Math.floor(Date.now() / 1000),
-                use_local_rules: hasConfiguredReanalyzeUseAiAssist ? true : job.use_local_rules,
-                use_ai_assist: hasConfiguredReanalyzeUseAiAssist
-                  ? reanalyzeUseAiAssist
-                  : job.use_ai_assist,
               }
             : job,
         ),
       );
-      setSelectedTasks((current) => current.filter((taskId) => !successSet.has(taskId)));
-      alert(
-        failedCount > 0
-          ? `已触发 ${succeeded.length} 份报告重新分析，失败 ${failedCount} 份。`
-          : `已触发 ${succeeded.length} 份报告重新分析。`,
-      );
+      setSelectedTasks((current) => current.filter((taskId) => !succeeded.has(taskId)));
+      setBatchReanalyzeResult({ submitted, failures, warnings });
+      const summary = [
+        `已触发 ${submitted.length} 份报告重新分析`,
+        failures.length > 0 ? `未提交 ${failures.length} 份` : "",
+        warnings.length > 0 ? `模型配置变化 ${warnings.length} 份` : "",
+      ].filter(Boolean).join("，");
+      alert(`${summary}。完整结果见页面「批量重新分析结果」。`);
     } catch (error) {
       console.error("Failed to batch reanalyze reports:", error);
       alert(error instanceof Error ? error.message : "批量重新分析失败，请稍后重试。");
     } finally {
       setIsBatchReanalyzing(false);
+      setIsBatchReanalyzeDialogOpen(false);
     }
   };
 
@@ -1071,16 +1108,6 @@ export default function DepartmentPageClient() {
             </div>
           ) : null}
 
-          <ReanalyzeAiToggle
-            checked={reanalyzeUseAiAssist}
-            onChange={(checked) => {
-              setReanalyzeUseAiAssist(checked);
-              setHasConfiguredReanalyzeUseAiAssist(true);
-            }}
-            className="mt-4"
-            testId="department-reanalyze-ai-toggle"
-            description="当前页面的单个重新分析和批量重新分析都会使用这个设置；取消后仅本地解析。"
-          />
         </div>
 
         {selectedTasks.length > 0 ? (
@@ -1094,7 +1121,7 @@ export default function DepartmentPageClient() {
             <button
               type="button"
               data-testid="batch-reanalyze-button"
-              onClick={() => void handleBatchReanalyze()}
+              onClick={() => setIsBatchReanalyzeDialogOpen(true)}
               disabled={isBatchReanalyzing}
               className="inline-flex items-center gap-2 rounded-lg border border-primary-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 disabled:opacity-60"
             >
@@ -1131,6 +1158,68 @@ export default function DepartmentPageClient() {
               {isBatchDeleting ? "批量删除中..." : "批量删除"}
             </button>
           </div>
+        ) : null}
+
+        {batchReanalyzeResult ? (
+          <section
+            className="mt-6 rounded-2xl border border-border bg-white px-5 py-4"
+            data-testid="department-batch-reanalyze-result"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <p className="text-sm text-slate-700" role="status">
+                批量重新分析结束：已提交 {batchReanalyzeResult.submitted.length} 份，未提交{" "}
+                {batchReanalyzeResult.failures.length} 份
+                {batchReanalyzeResult.warnings.length > 0
+                  ? `，模型配置有变化 ${batchReanalyzeResult.warnings.length} 份`
+                  : ""}
+                。
+              </p>
+              <button
+                type="button"
+                onClick={() => setBatchReanalyzeResult(null)}
+                data-testid="department-batch-reanalyze-dismiss"
+                className="shrink-0 text-xs text-slate-500 underline"
+              >
+                关闭
+              </button>
+            </div>
+            {batchReanalyzeResult.warnings.length > 0 ? (
+              <div className="mt-3">
+                <p className="text-xs font-medium text-warning-700">
+                  模型配置已变化（已按上次方式继续），逐条如下：
+                </p>
+                <ul
+                  className="mt-1 max-h-40 space-y-1 overflow-y-auto text-xs text-warning-700"
+                  aria-label="模型配置变化提示"
+                  data-testid="department-batch-reanalyze-warnings"
+                >
+                  {batchReanalyzeResult.warnings.map((warning) => (
+                    <li key={warning.jobId}>
+                      {warning.filename}：{formatInheritanceWarnings(warning.messages)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {batchReanalyzeResult.failures.length > 0 ? (
+              <div className="mt-3">
+                <p className="text-xs font-medium text-danger-700">
+                  未提交的 {batchReanalyzeResult.failures.length} 份：
+                </p>
+                <ul
+                  className="mt-1 max-h-40 space-y-1 overflow-y-auto text-xs text-danger-700"
+                  aria-label="未提交材料及原因"
+                  data-testid="department-batch-reanalyze-failures"
+                >
+                  {batchReanalyzeResult.failures.map((failure) => (
+                    <li key={failure.jobId}>
+                      {failure.filename}：{failure.message}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </section>
         ) : null}
 
         <div className="mt-6">
@@ -1198,6 +1287,30 @@ export default function DepartmentPageClient() {
           isSubmitting={isAssociatingJob}
           onClose={closeAssociateDialog}
           onAssociate={handleAssociateJob}
+        />
+      ) : null}
+
+      {reanalyzeDialogJobId ? (
+        <ReanalyzeMethodDialog
+          jobId={reanalyzeDialogJobId}
+          title="重新分析这份报告"
+          submitting={reanalyzingJobId === reanalyzeDialogJobId}
+          onConfirm={(value) => void submitReanalyze(reanalyzeDialogJobId, value)}
+          onCancel={() => {
+            if (!reanalyzingJobId) setReanalyzeDialogJobId(null);
+          }}
+        />
+      ) : null}
+      {isBatchReanalyzeDialogOpen ? (
+        <ReanalyzeMethodDialog
+          batch
+          title={`批量重新分析 ${selectedTasks.length} 份报告`}
+          confirmLabel="开始批量重新分析"
+          submitting={isBatchReanalyzing}
+          onConfirm={(value) => void handleBatchReanalyze(value)}
+          onCancel={() => {
+            if (!isBatchReanalyzing) setIsBatchReanalyzeDialogOpen(false);
+          }}
         />
       ) : null}
 

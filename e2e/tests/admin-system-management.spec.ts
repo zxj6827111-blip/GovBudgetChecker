@@ -600,16 +600,13 @@ test.describe("Admin system management actions", () => {
     await page.getByTestId("batch-upload-close").click();
     await expect(page.getByTestId("batch-upload-modal")).toHaveCount(0);
 
-    await page.getByTestId("admin-reanalyze-ai-toggle").uncheck();
+    // 检查方式继承：批量默认"按各材料上次检查方式逐条继承"，不再显式覆盖 AI 开关。
+    await expect(page.getByTestId("admin-reanalyze-method-inherit")).toBeChecked();
     await page.getByTestId("admin-operations-reanalyze-all").click();
     await expect.poll(() => state.reanalyzeAllBodies).toEqual([
       {
         latest_per_department: true,
-        use_local_rules: true,
-        // 档位由 AI 能力接口决定：本用例的能力响应不含 enabled，
-        // 于是 use_ai_assist 为 undefined（JSON 序列化时被丢掉），
-        // 只有 ai_profile_id 显式写 null。
-        ai_profile_id: null,
+        check_method: "inherit",
       },
     ]);
     await expect(page.getByTestId("reanalyze-progress-dialog")).toBeVisible();

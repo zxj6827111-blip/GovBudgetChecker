@@ -10,7 +10,10 @@ import AssociateDialog from "@/components/AssociateDialog";
 import { AiScopeBanner } from "@/components/AiScopeBanner";
 import { useAIAnalysisOptions } from "@/components/AIAnalysisOptions";
 import AnalysisCheckProgress from "@/components/AnalysisCheckProgress";
-import ReanalyzeAiToggle from "@/components/ReanalyzeAiToggle";
+import { ReanalyzeMethodDialog,
+  buildReanalyzeRequestBody,
+  type ReanalyzeMethodValue,
+} from "@/components/ReanalyzeMethodPicker";
 import EvidencePanel from "@/components/task-review/EvidencePanel";
 import PDFHighlighter from "@/components/task-review/PDFHighlighter";
 import PipelineDrawer from "@/components/task-review/PipelineDrawer";
@@ -89,7 +92,7 @@ export default function TaskDetail() {
   const [isReanalyzing, setIsReanalyzing] = useState(false);
   const [isAssociateDialogOpen, setIsAssociateDialogOpen] = useState(false);
   const [isAssociating, setIsAssociating] = useState(false);
-  const [reanalyzeUseAiAssist, setReanalyzeUseAiAssist] = useState<boolean | null>(null);
+  const [reanalyzeDialog, setReanalyzeDialog] = useState<{ initial?: ReanalyzeMethodValue } | null>(null);
   const [refreshSeed, setRefreshSeed] = useState(0);
   const [problemSearchValue, setProblemSearchValue] = useState("");
   const [problemCategory, setProblemCategory] = useState("全部");
@@ -224,11 +227,6 @@ export default function TaskDetail() {
     const ref = selectedProblem.evidenceRefs?.find((item) => item.key === selectedEvidenceRef.refKey);
     return ref ? { ...selectedProblem, page: ref.page, bbox: ref.bbox, location: ref.locationText } : selectedProblem;
   }, [selectedProblem, selectedEvidenceRef]);
-  const effectiveReanalyzeUseAiAssist =
-    reanalyzeUseAiAssist ?? (aiOptions.capabilities
-      ? aiOptions.enabled
-      : typeof jobDetail?.use_ai_assist === "boolean" ? jobDetail.use_ai_assist : false);
-
   const taskAiScope = useMemo(() => {
     const meta = jobDetail?.result?.meta;
     const requestedHint = typeof jobDetail?.use_ai_assist === "boolean"
@@ -251,56 +249,36 @@ export default function TaskDetail() {
     return Boolean(tracks.local || tracks.ai);
   })();
 
-  const handleReanalyze = async (useAiOverride?: boolean) => {
+  const handleReanalyze = async (method: ReanalyzeMethodValue) => {
     if (isReanalyzing || task?.status === "analyzing") {
       return;
     }
 
-    const useAi = useAiOverride ?? effectiveReanalyzeUseAiAssist;
-    if (
-      !confirm(
-        `确定要重新分析这份报告吗？系统会基于当前任务重新执行分析。\n本次将${useAi ? "调用大模型做文字语义复核" : "仅执行本地规则检查"}。`,
-      )
-    ) {
-      return;
-    }
-
-    setReanalyzeUseAiAssist(useAi);
     setIsReanalyzing(true);
 
     try {
       const response = await fetch(`/api/jobs/${encodeURIComponent(job_id)}/reanalyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          use_local_rules: true,
-          use_ai_assist: useAi,
-          ai_profile_id: useAi ? aiOptions.profileId || null : null,
-        }),
+        body: JSON.stringify(buildReanalyzeRequestBody(method)),
       });
 
       if (!response.ok) {
         alert(await readErrorMessage(response));
         return;
       }
+      const payload = (await response.json().catch(() => ({}))) as { inheritance_warnings?: string[] };
+      const warnings = Array.isArray(payload.inheritance_warnings) ? payload.inheritance_warnings : [];
 
       setTask((current) => (current ? { ...current, status: "analyzing" } : current));
-      setJobDetail((current) =>
-        current
-          ? {
-              ...current,
-              use_local_rules: true,
-              use_ai_assist: useAi,
-            }
-          : current
-      );
       setRefreshSeed((current) => current + 1);
-      alert("已开始重新分析，页面会自动刷新任务状态。");
+      alert(`已开始重新分析，页面会自动刷新任务状态。${warnings.length ? `\n注意：${warnings.join("；")}` : ""}`);
     } catch (error) {
       console.error("Failed to reanalyze report:", error);
       alert("重新分析失败，请稍后重试。");
     } finally {
       setIsReanalyzing(false);
+      setReanalyzeDialog(null);
     }
   };
 
@@ -538,23 +516,10 @@ export default function TaskDetail() {
             <Link2 className="h-4 w-4 text-slate-400" />
             {jobDetail?.organization_id ? "更改关联" : "关联报告"}
           </button>
-          <ReanalyzeAiToggle
-            compact
-            title="使用大模型"
-            checked={effectiveReanalyzeUseAiAssist}
-            onChange={setReanalyzeUseAiAssist}
-            disabled={Boolean(aiOptions.capabilities && !aiOptions.capabilities.enabled)}
-            testId="task-reanalyze-ai-toggle"
-            description={aiOptions.error || (aiOptions.capabilities?.enabled
-              ? aiOptions.enabled
-                ? "重新分析将使用系统当前启用的模型；取消勾选后仅执行本地检查。"
-                : "模型已配置，但本次默认关闭；勾选后重新分析会调用大模型。"
-              : "当前没有可用的大模型配置，重新分析将仅执行本地检查。")}
-          />
           <button
             type="button"
             data-testid="task-reanalyze-button"
-            onClick={() => void handleReanalyze()}
+            onClick={() => setReanalyzeDialog({})}
             disabled={isReanalyzing || task.status === "analyzing" || Boolean(selectedRevision)}
             className="flex items-center gap-2 rounded-md border border-border bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
           >
@@ -587,7 +552,7 @@ export default function TaskDetail() {
                 testId="task-ai-scope"
                 onRecheck={
                   taskAiScope.needsRecheck && !selectedRevision
-                    ? () => void handleReanalyze(true)
+                    ? () => setReanalyzeDialog({ initial: { checkMethod: "ai", aiProfileId: "" } })
                     : undefined
                 }
                 recheckLabel={aiOptions.capabilities?.enabled ? "使用大模型重新分析" : "重新分析"}
@@ -738,6 +703,18 @@ export default function TaskDetail() {
             }
           }}
           onAssociate={handleAssociate}
+        />
+      ) : null}
+      {reanalyzeDialog ? (
+        <ReanalyzeMethodDialog
+          jobId={job_id}
+          title="重新分析这份报告"
+          initialValue={reanalyzeDialog.initial}
+          submitting={isReanalyzing}
+          onConfirm={(value) => void handleReanalyze(value)}
+          onCancel={() => {
+            if (!isReanalyzing) setReanalyzeDialog(null);
+          }}
         />
       ) : null}
     </div>

@@ -1,10 +1,27 @@
 import { normalizeUiTaskStatus, type JobSummaryRecord } from "../../../lib/uiAdapters";
 import { ANALYZE_START_REQUEST_BODY } from "../workspace/uploadCenterAdapters";
+import {
+  DEFAULT_REANALYZE_METHOD,
+  buildReanalyzeRequestBody,
+  inheritanceWarningsFromResponse,
+  type ReanalyzeMethodValue,
+} from "../reanalyzeOptions";
 
 export interface QueueRunFailure {
   jobId: string;
   filename: string;
   message: string;
+}
+
+/** 提交成功但模型配置已变化等需要用户知晓的继承告警。 */
+export interface QueueRunOutcome {
+  warnings: string[];
+}
+
+export interface QueueRunWarning {
+  jobId: string;
+  filename: string;
+  messages: string[];
 }
 
 export interface QueueBatchProgress {
@@ -17,6 +34,7 @@ export interface QueueBatchProgress {
 export interface QueueBatchResult {
   submittedIds: string[];
   failures: QueueRunFailure[];
+  warnings: QueueRunWarning[];
 }
 
 export function canRunQueueJob(job: JobSummaryRecord): boolean {
@@ -40,8 +58,13 @@ function requestErrorMessage(status: number, payload: unknown): string {
   return `提交未成功（HTTP ${status}）。`;
 }
 
-/** 与行内按钮共用请求：待分析任务启动首次分析，其他可运行任务原地重新分析。 */
-export async function requestQueueRun(job: JobSummaryRecord, fetcher: typeof fetch = fetch): Promise<void> {
+/** 与行内按钮共用请求：待分析任务启动首次分析，其他可运行任务原地重新分析。
+ *  重分析默认按上次检查方式逐条继承；method 由统一选择对话框显式传入。 */
+export async function requestQueueRun(
+  job: JobSummaryRecord,
+  fetcher: typeof fetch = fetch,
+  method: ReanalyzeMethodValue = DEFAULT_REANALYZE_METHOD,
+): Promise<QueueRunOutcome> {
   if (!canRunQueueJob(job)) throw new Error("任务正在运行或状态未识别，已跳过。");
   const id = encodeURIComponent(String(job.job_id));
   const initial = normalizeUiTaskStatus(job.status) === "pending_analysis";
@@ -50,7 +73,7 @@ export async function requestQueueRun(job: JobSummaryRecord, fetcher: typeof fet
     response = await fetcher(initial ? `/api/analyze/${id}` : `/api/jobs/${id}/reanalyze`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(initial ? ANALYZE_START_REQUEST_BODY : { mode: "dual", use_local_rules: true }),
+      body: JSON.stringify(initial ? ANALYZE_START_REQUEST_BODY : buildReanalyzeRequestBody(method)),
     });
   } catch {
     throw new Error("网络请求失败，请检查连接后重试。");
@@ -59,16 +82,17 @@ export async function requestQueueRun(job: JobSummaryRecord, fetcher: typeof fet
   if (!response.ok || (payload && typeof payload === "object" && (payload as Record<string, unknown>).success === false)) {
     throw new Error(requestErrorMessage(response.status, payload));
   }
+  return { warnings: inheritanceWarningsFromResponse(payload) };
 }
 
 /** 仅限制提交并发；真正的分析由后端任务队列调度，不把提交成功误报为分析完成。 */
 export async function runQueueBatch(
   jobs: JobSummaryRecord[],
-  submit: (job: JobSummaryRecord) => Promise<void>,
+  submit: (job: JobSummaryRecord) => Promise<QueueRunOutcome | void>,
   onProgress: (progress: QueueBatchProgress) => void,
 ): Promise<QueueBatchResult> {
   const unique = Array.from(new Map(jobs.map((job) => [String(job.job_id ?? ""), job])).values());
-  const result: QueueBatchResult = { submittedIds: [], failures: [] };
+  const result: QueueBatchResult = { submittedIds: [], failures: [], warnings: [] };
   let nextIndex = 0;
   let completed = 0;
   const report = () => onProgress({total: unique.length, completed, submitted: result.submittedIds.length, failed: result.failures.length});
@@ -78,8 +102,15 @@ export async function runQueueBatch(
       const job = unique[nextIndex++];
       try {
         if (!canRunQueueJob(job)) throw new Error("任务正在运行或状态未识别，已跳过。");
-        await submit(job);
+        const outcome = await submit(job);
         result.submittedIds.push(String(job.job_id));
+        if (outcome && outcome.warnings.length > 0) {
+          result.warnings.push({
+            jobId: String(job.job_id),
+            filename: String(job.filename ?? job.job_id ?? ""),
+            messages: outcome.warnings,
+          });
+        }
       } catch (error) {
         result.failures.push({jobId: String(job.job_id ?? ""), filename: String(job.filename ?? job.job_id ?? ""), message: error instanceof Error ? error.message : "提交未成功，请重试。"});
       }

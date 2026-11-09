@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import logging
@@ -613,30 +612,21 @@ async def create_job_correction(job_id: str, body: CorrectionRequest, request: R
 
     # ZC-05（AC-10）：校正不再只是留痕——事实改值以不可变覆盖层进入下一轮
     # 分析，重跑受影响链路后发布新的分析版本（旧版本保留可回放）。
+    # 2026-11-09：内联回退不再绕过继承契约——统一经 runtime.reanalyze_job
+    # 先做历史配置判定与模型可用性预检，再由 start_analysis 按队列配置派发。
     reanalysis_status = "queued"
-    runner = runtime.get_pipeline_runner()
-    if runner is None:
-        reanalysis_status = "not_executed_no_pipeline_runner"
-    else:
-        from api import queue_runtime
-        if queue_runtime.queue_enabled() or not queue_runtime.allow_inline_fallback():
-            # Use the same dispatch and review invalidation policy as Analyze.
-            # In API role this persists queued status for the separate Worker.
-            await runtime.reanalyze_job(job_id)
-            return {
-                "correction_id": record["record_id"], "record_status": "append_only_overlay",
-                "analysis_basis_token": basis, "analysis_revision": basis.rsplit(":",1)[-1],
-                "new_analysis_revision": None, "affected_checks": affected,
-                "reanalysis_status": "queued", "review_decisions_status": "pending_reanalysis",
-                "message": "校正已追加留痕并排队重分析；完成后发布新版本，旧版本保留可回放。",
-            }
-        async def _run_reanalysis() -> None:
-            try:
-                await runner(job_dir)
-            except Exception:  # noqa: BLE001 - 后台重算失败由快照状态如实呈现
-                logger.exception("correction reanalysis failed for job %s", job_id)
-
-        asyncio.get_running_loop().create_task(_run_reanalysis())
+    reanalysis_detail: str | None = None
+    try:
+        await runtime.reanalyze_job(job_id)
+    except HTTPException as exc:
+        # 校正记录已落盘，此时不能把请求报成整体失败（用户重试会重复留痕）。
+        # 如实返回"未触发重分析"及原因，界面据此提示用户显式选择或修复模型。
+        reanalysis_detail = (
+            exc.detail if isinstance(exc.detail, str) else "重分析启动被拒绝"
+        )
+        reanalysis_status = "not_executed_dispatch_rejected"
+        # 日志门禁 fail-closed：拒绝把可能含材料内容的启动错误整体拼进 message。
+        logger.warning("correction reanalysis not started for job %s", job_id)
 
     return {
         "correction_id": record["record_id"],
@@ -646,6 +636,7 @@ async def create_job_correction(job_id: str, body: CorrectionRequest, request: R
         "new_analysis_revision": None,
         "affected_checks": affected,
         "reanalysis_status": reanalysis_status,
+        "reanalysis_detail": reanalysis_detail,
         "review_decisions_status": (
             "pending_reanalysis" if reanalysis_status == "queued" else "unchanged_until_new_analysis_is_published"
         ),
@@ -653,7 +644,11 @@ async def create_job_correction(job_id: str, body: CorrectionRequest, request: R
             "校正已追加留痕，并已触发基于校正后事实的重新分析；"
             "完成后将发布新的分析版本，旧版本保留可回放。"
             if reanalysis_status == "queued"
-            else "校正已追加留痕；重算未触发。"
+            else (
+                f"校正已追加留痕，但未触发重新分析：{reanalysis_detail}。"
+                if reanalysis_detail
+                else "校正已追加留痕；重算未触发。"
+            )
         ),
     }
 

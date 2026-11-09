@@ -225,10 +225,12 @@ async function testBatchRuns() {
   await requestQueueRun({job_id: "done/1", status: "done"}, fetcher);
   assert.deepEqual(requests, [
     {url: "/api/analyze/uploaded%2F1", body: ANALYZE_START_REQUEST_BODY},
-    {url: "/api/jobs/done%2F1/reanalyze", body: {mode: "dual", use_local_rules: true}},
-  ], "首次分析与重新分析采用各自接口，任务 ID 需要编码");
+    {url: "/api/jobs/done%2F1/reanalyze", body: {check_method: "inherit"}},
+  ], "首次分析与重新分析采用各自接口，任务 ID 需要编码；重分析默认按上次方式继承");
+  await requestQueueRun({job_id: "done/2", status: "done"}, fetcher, {checkMethod: "ai", aiProfileId: "m1"});
+  assert.deepEqual(requests[2], {url: "/api/jobs/done%2F2/reanalyze", body: {check_method: "ai", ai_profile_id: "m1"}}, "显式选择大模型时传递本次模型");
   await assert.rejects(requestQueueRun({job_id: "busy", status: "processing"}, fetcher), /已跳过/);
-  assert.equal(requests.length, 2, "运行中任务不发起请求");
+  assert.equal(requests.length, 3, "运行中任务不发起请求");
   await assert.rejects(requestQueueRun({job_id: "conflict", status: "done"}, async () => new Response("{}", {status: 409})), /状态已变化/);
   await assert.rejects(requestQueueRun({job_id: "invalid", status: "done"}, async () => new Response(JSON.stringify({detail: {message: "模型配置不可用"}}), {status: 422})), /模型配置不可用/);
   await assert.rejects(requestQueueRun({job_id: "network", status: "done"}, async () => { throw new Error("offline"); }), /网络请求失败/);
@@ -255,8 +257,34 @@ async function testBatchRuns() {
   assert.deepEqual(result.failures.map((failure) => failure.jobId).sort(), ["batch-2", "batch-busy"]);
   assert.deepEqual(progress[progress.length - 1], {total: 9, completed: 9, submitted: 7, failed: 2});
   const emptyProgress: QueueBatchProgress[] = [];
-  assert.deepEqual(await runQueueBatch([], async () => { throw new Error("不得调用"); }, (value) => emptyProgress.push(value)), {submittedIds: [], failures: []});
+  assert.deepEqual(await runQueueBatch([], async () => { throw new Error("不得调用"); }, (value) => emptyProgress.push(value)), {submittedIds: [], failures: [], warnings: []});
   assert.deepEqual(emptyProgress, [{total: 0, completed: 0, submitted: 0, failed: 0}]);
+
+  // 成功响应里的继承告警必须逐条保留（复验 RI-02）：单条返回、批量带材料名。
+  const warning = "原模型配置已变化（model），按上次方式执行将使用当前配置";
+  const warningFetcher: typeof fetch = async (url) => {
+    const jobId = String(url).split("/")[3];
+    const payload = jobId === "warn-1"
+      ? {job_id: jobId, check_method: "inherit", inheritance_warnings: [warning]}
+      : {job_id: jobId, check_method: "inherit"};
+    return new Response(JSON.stringify(payload), {status: 200});
+  };
+  assert.deepEqual(
+    (await requestQueueRun({job_id: "warn-1", status: "done"}, warningFetcher)).warnings,
+    [warning],
+    "单条提交保留服务端继承告警",
+  );
+  assert.deepEqual(
+    (await requestQueueRun({job_id: "warn-2", status: "done"}, warningFetcher)).warnings,
+    [],
+    "无告警时不伪造",
+  );
+  const warned = await runQueueBatch(
+    [{job_id: "warn-1", filename: "甲.pdf", status: "done"}, {job_id: "warn-2", filename: "乙.pdf", status: "done"}],
+    (job) => requestQueueRun(job, warningFetcher),
+    () => {},
+  );
+  assert.deepEqual(warned.warnings, [{jobId: "warn-1", filename: "甲.pdf", messages: [warning]}], "批量结果逐条保留告警及材料名");
   console.log("queuePageAdapters.test.ts: 批量提交、部分失败、状态与接口边界通过");
 }
 void testBatchRuns().catch((error) => { console.error(error); process.exitCode = 1; });
