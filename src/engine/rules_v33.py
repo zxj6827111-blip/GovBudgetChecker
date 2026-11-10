@@ -341,6 +341,45 @@ def _v33_fact_identity(*facts: Any) -> Tuple[List[str], List[str]]:
     return list(dict.fromkeys(fact_ids)), list(dict.fromkeys(evidence_ids))
 
 
+def _narrative_fiscal_fund_split(sec_text: str) -> Dict[str, float]:
+    """收入说明里按资金口径拆项披露的金额（D0 RC-2b）。
+
+    区级决算说明常见写法："财政拨款收入 8844.60 万元，占 98.83%；政府性
+    基金预算财政拨款收入 105.00 万元，占 1.17%"——首项"财政拨款收入"
+    实指一般公共预算财政拨款（与政府性基金/国资并列），表侧 FIN_02 的
+    财政拨款收入列是全口径。返回 {标签: 万元金额}；未按口径拆项返回空。
+    """
+    if not sec_text:
+        return {}
+    num = r'((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*万元'
+    labels = (
+        ("一般公共预算财政拨款收入", re.compile(r"一般公共预算(?:财政拨款)?收入[^\d]{0,8}" + num)),
+        ("政府性基金预算财政拨款收入", re.compile(r"政府性基金(?:预算)?(?:财政拨款)?收入[^\d]{0,8}" + num)),
+        ("国有资本经营预算财政拨款收入", re.compile(r"国有资本经营(?:预算)?(?:财政拨款)?收入[^\d]{0,8}" + num)),
+    )
+    split: Dict[str, float] = {}
+    compact = str(sec_text)
+    for label, pattern in labels:
+        match = pattern.search(compact)
+        if match:
+            try:
+                split[label] = float(match.group(1).replace(",", ""))
+            except ValueError:
+                continue
+    if "政府性基金预算财政拨款收入" not in split and "国有资本经营预算财政拨款收入" not in split:
+        # 没有并列的资金口径拆项：首项就是全口径财政拨款收入，不绑定
+        return {}
+    if "一般公共预算财政拨款收入" not in split:
+        # 首项写作"财政拨款收入"且与基金/国资并列 → 绑定一般公共口径
+        general = re.search(r"(?<!一般公共预算)(?<!政府性基金)(?<!国有资本经营)财政拨款收入[^\d]{0,8}" + num, compact)
+        if general:
+            try:
+                split["一般公共预算财政拨款收入"] = float(general.group(1).replace(",", ""))
+            except ValueError:
+                pass
+    return split
+
+
 def _narrative_quote_refs(doc: Any, quotes: Sequence[str]) -> List[Dict[str, Any]]:
     """说明原文引文 → 带各自真实页码的 table_refs（D0 RC-1e）。
 
@@ -3388,8 +3427,35 @@ class R33103_Income_vs_Text(Rule):
                 + (f"（{fact_total_block}）" if fact_total_block else ""),
             )
 
+        # D0 RC-2b：说明把"财政拨款收入"按资金口径拆项披露（"财政拨款收入 A，
+        # 占X%；政府性基金预算财政拨款收入 B，占Y%"）时，首项分子绑定的是
+        # 一般公共预算口径——表侧 FIN_02 的财政拨款收入列是全口径（含基金/国资）。
+        # 先按资金口径建立对应，再比较金额：表侧全口径 ↔ 说明拆项之和；
+        # 口径绑定成立时占比的分子也用同口径（AGENTS.md：先确认同一口径再比较）。
+        fund_split = _narrative_fiscal_fund_split(sec_text)
+        scope_bound = (
+            len(fund_split) >= 2
+            and any(k != "一般公共预算财政拨款收入" for k in fund_split)
+            and fp is not None
+        )
+        if scope_bound:
+            split_total = sum(fund_split.values())
+            split_matches = tolerant_equal(float(fp), float(split_total))
+        else:
+            split_matches = False
         if fp is not None and tf is not None:
-            if not tolerant_equal(fp, tf):
+            fp_compare, tf_compare = float(fp), float(tf)
+            if scope_bound and split_matches and tolerant_equal(tf_compare, float(fund_split.get("一般公共预算财政拨款收入", tf_compare))):
+                # 口径绑定成立：说明首项是一般公共口径，表侧全口径与拆项之和一致，
+                # 财政拨款收入整体一致——不按跨口径数值报不一致（误报控制）。
+                _v33_relation_receipt(
+                    doc, self.code, "T2:fiscal_allocation:text_vs_table",
+                    status="pass",
+                    operand_fact_ids=[fact_fp_ref.fact_uid] if fact_fp_ref is not None else [],
+                    formula=("text.财政拨款收入(资金口径拆项之和) == table.FIN_02.fiscal_allocation (万元)；"
+                             + "；".join(f"{k}={v:g}" for k, v in sorted(fund_split.items()))),
+                )
+            elif not tolerant_equal(fp_compare, tf_compare):
                 fact_ids, evidence_ids = _v33_fact_identity(fact_fp_ref)
                 issues.append(self._issue(
                     f"财政拨款收入：表{fp} ≠ 文本{tf}", {"page": p}, "warn",
@@ -3460,8 +3526,16 @@ class R33103_Income_vs_Text(Rule):
                    if fact_total_block or fact_fp_block else ""),
             )
         else:
+            # D0 RC-2b：口径绑定成立时，占比分子用绑定后的一般公共口径
+            # （说明首项），与文本同口径复算；否则保持全口径分子。
+            fp_share = fp
+            share_formula = "fiscal_allocation / income_total * 100 == narrative percentage"
+            if scope_bound and split_matches:
+                fp_share = float(fund_split.get("一般公共预算财政拨款收入", float(tf) if tf is not None else float(fp)))
+                share_formula = ("fiscal_allocation(一般公共口径) / income_total * 100 == narrative percentage；"
+                                 "资金口径拆项之和与表侧全口径一致")
             calculated = (
-                Decimal(str(fp)) * Decimal("100") / Decimal(str(total))
+                Decimal(str(fp_share)) * Decimal("100") / Decimal(str(total))
             ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
             fact_ids, evidence_ids = _v33_fact_identity(fact_fp_ref, fact_total_ref)
             differs = percentage_difference_exceeds_policy(abs(calculated - p_txt))
@@ -3483,7 +3557,7 @@ class R33103_Income_vs_Text(Rule):
                 doc, self.code, "T2:fiscal_allocation:share_of_income_total",
                 status="fail" if differs else "pass",
                 operand_fact_ids=fact_ids,
-                formula="fiscal_allocation / income_total * 100 == narrative percentage",
+                formula=share_formula,
                 incomplete_reason=None,
             )
 
@@ -9153,7 +9227,12 @@ class R33223_Narrative6_T6(Rule):
             )
 
         t6_page = _get_first_anchor_page(doc, "一般公共预算财政拨款基本支出决算表")
-        t6_rows = _get_table_rows(doc, "一般公共预算财政拨款基本支出决算表")
+        # MR-1b（同 V33-107）：T6 表尾 [人员经费合计,,数,公用经费合计,,数]
+        # 实测落在续页（宜川本级 p23），必须带 anchor_extent 合并续页，
+        # 否则标签行缺席时比较被静默跳过。
+        t6_rows = _get_table_rows(
+            doc, "一般公共预算财政拨款基本支出决算表", anchor_extent=True
+        )
         if not t6_rows:
             raise RuleDeferred(
                 self.code,
@@ -9161,89 +9240,93 @@ class R33223_Narrative6_T6(Rule):
                 unresolved_reasons=["一般公共预算财政拨款基本支出决算表(T6)缺失"],
             )
 
-        # T6 结构：通常最后一行是总计，但人员经费和公用经费是分块的合计
-        # 往往有 "人员经费合计" 和 "公用经费合计" 的行
-        
-        t6_personnel = 0.0
-        t6_public = 0.0
-        found_p = False
-        found_pub = False
-        
-        for row in t6_rows:
-            row_txt = "".join([str(c) for c in row if c])
-            vals = _parse_row_values(row)
-            if not vals: continue
-            
-            if "人员经费" in row_txt and "合计" in row_txt:
-                t6_personnel = max(vals)
-                found_p = True
-            elif "公用经费" in row_txt and "合计" in row_txt:
-                t6_public = max(vals)
-                found_pub = True
-        
+        # D0 RC-2a：表尾是双侧行（[人员经费合计,,2468.48,公用经费合计,,6376.12]），
+        # 旧实现按行内 max(vals) 取值——两个标签都命中同一行、又都取到行内
+        # 最大值 6376.12（公用经费），人员经费被错配。改用 _row_value_v2 的
+        # 双侧行同侧取值（与 V33-107 同一实现），取不到显式合计行时如实
+        # 记取数不足，不再静默跳过该侧比较。
+        t6_personnel = _row_value_v2(t6_rows, ("人员经费合计", "人员经费"))
+        t6_public = _row_value_v2(t6_rows, ("公用经费合计", "公用经费"))
+        missing_parts = []
+        if nar_personnel is not None and t6_personnel is None:
+            missing_parts.append("人员经费合计")
+        if nar_public is not None and t6_public is None:
+            missing_parts.append("公用经费合计")
+        if missing_parts:
+            raise RuleDeferred(
+                self.code,
+                detail=f"T6缺少关键行: {','.join(missing_parts)}",
+                partial_issues=issues,
+                unresolved_reasons=[f"基本支出决算表缺少关键行: {','.join(missing_parts)}"],
+            )
+
         # 校验人员经费
-        if nar_personnel is not None:
-            if not found_p:
-                 # 没找到显式的“人员经费合计”行，尝试用所有301+303推导？比较复杂，暂时报未找到
-                 pass 
-            elif _amount_mismatch(nar_personnel, t6_personnel):
-                location = _make_issue_location(
-                    _make_location_ref(
-                        role="说明6",
-                        page=narrative_page,
-                        section="说明6（基本支出情况）",
-                        field="人员经费",
-                        value=nar_personnel,
-                    ),
-                    _make_location_ref(
-                        role="T6",
-                        page=t6_page,
-                        table="一般公共预算财政拨款基本支出决算表",
-                        row="人员经费合计",
-                        field="人员经费",
-                        value=t6_personnel,
-                    ),
-                    table="一般公共预算财政拨款基本支出决算表",
+        if nar_personnel is not None and _amount_mismatch(nar_personnel, float(t6_personnel)):
+            location = _make_issue_location(
+                _make_location_ref(
+                    role="说明6",
+                    page=narrative_page,
                     section="说明6（基本支出情况）",
+                    field="人员经费",
+                    value=nar_personnel,
+                ),
+                _make_location_ref(
+                    role="T6",
+                    page=t6_page,
+                    table="一般公共预算财政拨款基本支出决算表",
                     row="人员经费合计",
                     field="人员经费",
-                )
-                issues.append(self._issue(
-                    f"说明6↔T6人员经费不一致：说明={nar_personnel:.2f}, T6={t6_personnel:.2f}",
-                    location, "warn",
-                    evidence_text=f"文档说明(人员经费)：{nar_personnel}\n表6(基本支出) 人员经费合计：{t6_personnel}"
-                ))
-        
+                    value=t6_personnel,
+                ),
+                table="一般公共预算财政拨款基本支出决算表",
+                section="说明6（基本支出情况）",
+                row="人员经费合计",
+                field="人员经费",
+            )
+            ren_quote, ren_quote_page = (
+                _sentence_with_number(doc, scope6, nar_personnel)
+                if scope6 else (None, None)
+            )
+            issues.append(self._issue(
+                f"说明6↔T6人员经费不一致：说明={nar_personnel:.2f}, T6={float(t6_personnel):.2f}",
+                location, "warn",
+                # D0 RC-1b：evidence 只保留说明侧原句；表侧数值在 location 携带
+                evidence_text=ren_quote or f"人员经费 {nar_personnel:g} 万元",
+            ))
+
         # 校验公用经费
-        if nar_public is not None:
-            if found_pub and _amount_mismatch(nar_public, t6_public):
-                location = _make_issue_location(
-                    _make_location_ref(
-                        role="说明6",
-                        page=narrative_page,
-                        section="说明6（基本支出情况）",
-                        field="公用经费",
-                        value=nar_public,
-                    ),
-                    _make_location_ref(
-                        role="T6",
-                        page=t6_page,
-                        table="一般公共预算财政拨款基本支出决算表",
-                        row="公用经费合计",
-                        field="公用经费",
-                        value=t6_public,
-                    ),
-                    table="一般公共预算财政拨款基本支出决算表",
+        if nar_public is not None and _amount_mismatch(nar_public, float(t6_public)):
+            location = _make_issue_location(
+                _make_location_ref(
+                    role="说明6",
+                    page=narrative_page,
                     section="说明6（基本支出情况）",
+                    field="公用经费",
+                    value=nar_public,
+                ),
+                _make_location_ref(
+                    role="T6",
+                    page=t6_page,
+                    table="一般公共预算财政拨款基本支出决算表",
                     row="公用经费合计",
                     field="公用经费",
-                )
-                issues.append(self._issue(
-                     f"说明6↔T6公用经费不一致：说明={nar_public:.2f}, T6={t6_public:.2f}",
-                    location, "warn",
-                    evidence_text=f"文档说明(公用经费)：{nar_public}\n表6(基本支出) 公用经费合计：{t6_public}"
-                ))
-        
+                    value=t6_public,
+                ),
+                table="一般公共预算财政拨款基本支出决算表",
+                section="说明6（基本支出情况）",
+                row="公用经费合计",
+                field="公用经费",
+            )
+            pub_quote, _pub_quote_page = (
+                _sentence_with_number(doc, scope6, nar_public)
+                if scope6 else (None, None)
+            )
+            issues.append(self._issue(
+                 f"说明6↔T6公用经费不一致：说明={nar_public:.2f}, T6={float(t6_public):.2f}",
+                location, "warn",
+                evidence_text=pub_quote or f"公用经费 {nar_public:g} 万元",
+            ))
+
         return issues
 
 

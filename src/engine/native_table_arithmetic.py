@@ -259,6 +259,8 @@ def receipt(rule, doc, relation, facts, *, status, formula, reason=None, disclos
     from .rules_v33 import _v33_relation_receipt
     if any(f.table_code == 'FIN_06_basic_expenditure' for f in facts):
         disclosure_sources = [*disclosure_sources, *getattr(doc, '_economic_zero_layout_observations', [])]
+        # D0 RC-2c：同科目重复原行按同一业务行归集时，重复行事实随回执留痕
+        disclosure_sources = [*disclosure_sources, *getattr(doc, '_economic_duplicate_row_observations', [])]
     ids, evidence = journal(rule, doc, facts)
     _v33_relation_receipt(doc, rule.code, relation, status=status,
                           operand_fact_ids=ids, formula=formula, incomplete_reason=reason,
@@ -893,6 +895,30 @@ def _economic_table_view(doc, facts):
                 return None, f'经济分类表第{row_idx + 1}行原始标签或金额单元格缺失'
             key = name if code == 'total' else code
             if key in rows:
+                # D0 RC-2c：同科目重复原行只有两种可能——原件排版重复或解析
+                # 重复提取。内容完全一致（金额原格一致）时按同一业务行处理
+                # （重复物理提取不得变成重复业务数据），重复行记观察清单；
+                # 内容不一致时行身份确实不可判，保持整表未决（fail-closed）。
+                prev_idx = rows[key][0]
+                prev_amount = cells.get((prev_idx, col))
+                prev_raw = str(prev_amount.raw_text or '').strip() if prev_amount is not None else ''
+                curr_raw = str(amount.raw_text or '').strip() if amount is not None else ''
+                same_content = (
+                    (curr_raw == prev_raw)
+                    or (amount is None and prev_amount is None)
+                )
+                if same_content:
+                    seen = getattr(doc, '_economic_duplicate_row_observations', [])
+                    seen.append({
+                        'subject_code': key,
+                        'subject_name': name,
+                        'row_idx': row_idx,
+                        'duplicate_of_row_idx': prev_idx,
+                        'raw_amount': curr_raw,
+                        'table_code': 'FIN_06_basic_expenditure',
+                    })
+                    doc._economic_duplicate_row_observations = seen
+                    continue
                 return None, f'经济分类表科目{key}存在重复原行身份'
             rows[key] = (row_idx, code, mapping)
     unknown = [f for f in facts if f.subject_code != 'total'

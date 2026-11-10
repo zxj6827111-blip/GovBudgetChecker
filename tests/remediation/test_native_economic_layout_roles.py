@@ -82,3 +82,44 @@ def test_name_tail_requires_entire_physical_zero_proof(change,monkeypatch):
     elif change=='missing_physical':doc.parse_artifact.physical_fragments=[]
     else:monkeypatch.setenv('GOVBUDGET_EMPTY_VALUE_CONVENTIONS','off')
     assert _economic_zero_layout_tail(doc,table,cells,2,mapping) is None
+
+
+# ---------------------------------------------------------------------------
+# D0 RC-2c：同科目重复原行（原件排版重复，如党群服务中心 31099 连续两行
+# 0.00）按同一业务行归集，不得阻断整个明细归集；内容不一致仍 fail-closed。
+# ---------------------------------------------------------------------------
+
+def duplicate_row_doc():
+    return grid_document([
+        ['经济分类科目编码', '科目名称', '决算数', '经济分类科目编码', '科目名称', '决算数'],
+        ['301', '工资福利支出', '100.00', '302', '商品和服务支出', '30.00'],
+        ['30101', '基本工资', '60.00', '30201', '办公费', '10.00'],
+        ['30102', '津贴补贴', '40.00', '30202', '印刷费', '20.00'],
+        ['', '', '', '30299', '其他商品和服务支出', '0.00'],
+        ['', '', '', '30299', '其他商品和服务支出', '0.00'],
+        ['', '', '', '310', '资本性支出', ''],
+        ['人员经费合计', '', '100.00', '公用经费合计', '', '30.00'],
+    ])
+
+
+def test_identical_duplicate_row_dedupes_instead_of_blocking():
+    doc = duplicate_row_doc()
+    facts = [f for f in doc.fact_context.facts if f.table_code == 'FIN_06_basic_expenditure']
+    view, reason = _economic_table_view(doc, facts)
+    assert reason is None, f"同值重复行不得阻断归集: {reason}"
+    assert getattr(doc, '_economic_duplicate_row_observations', []), "重复行应记观察清单"
+    obs = doc._economic_duplicate_row_observations[0]
+    assert obs['subject_code'] == '30299' and obs['row_idx'] == 5
+
+
+def test_conflicting_duplicate_rows_stay_fail_closed():
+    doc = duplicate_row_doc()
+    table = doc.parse_artifact.table_fragments[0]
+    # 把第二个 30299 行的金额改成不同值 → 行身份不可判，整表未决
+    conflict = next(c for c in table.cells if (c.row_idx, c.col_idx) == (5, 5))
+    conflict.raw_text = '9.00'
+    conflict.numeric_value = 9
+    doc.parse_artifact.physical_fragments = [deepcopy(table)]
+    facts = [f for f in doc.fact_context.facts if f.table_code == 'FIN_06_basic_expenditure']
+    view, reason = _economic_table_view(doc, facts)
+    assert view is None and '重复原行身份' in reason
