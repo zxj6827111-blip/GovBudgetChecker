@@ -112,7 +112,10 @@ UNCOMPLETED_RULE_STATUSES = frozenset(
 #: budget 专用，budget registry）。至此清单内全部确定性义务均有实现。
 #: v12（2026-10-22 检查点清单全系统默认）：清单 106 项内容检查点落地为
 #: CMM-008~026、BUD-116~123、V33-251/252，并扩展封面/占位/口径/空表义务的 checker。
-OBLIGATION_CATALOG_VERSION = "obligations-v12-checklist-global-20261022"
+#: v13（2026-11-10）：合并重复表文义务——OBL-TXT-T7 与 OBL-SG-TABLE-TEXT
+#: 为同一检查（V33-108/V33-224/CMM-001，table:FIN_07）的重复登记，人工待办
+#: 成对出现（宜川任务 5753d874… 裁定）；保留 OBL-SG-TABLE-TEXT，检查项不变。
+OBLIGATION_CATALOG_VERSION = "obligations-v13-checklist-global-20261110"
 
 # ---- 实例状态 ---------------------------------------------------------------
 
@@ -574,15 +577,11 @@ OBLIGATION_CATALOG: Tuple[Obligation, ...] = (
         depends_on=("table:FIN_06",),
         basis="AGENTS.md 决算必查勾稽 D-006",
     ),
-    Obligation(
-        obligation_id="OBL-TXT-T7",
-        group_id=GROUP_TABLE_TEXT,
-        title="三公经费支出决算表 与 三公说明一致",
-        report_kinds=_FINAL_ONLY,
-        checkers_by_kind=_final("V33-108", "V33-224", "CMM-001"),
-        depends_on=("table:FIN_07",),
-        basis="AGENTS.md 决算必查勾稽 D-007",
-    ),
+    # 2026-11-10 宜川任务 5753d874… 裁定：原 OBL-TXT-T7（三公表文一致）与
+    # GROUP_SAN_GONG 的 OBL-SG-TABLE-TEXT 同为 V33-108/V33-224/CMM-001 三条
+    # checker、同依赖 table:FIN_07，属重复登记——未完成时人工待办成对出现。
+    # 已合并进 OBL-SG-TABLE-TEXT：关联检查项与证据随 checker 完整保留，
+    # 本处不再单列。
     Obligation(
         obligation_id="OBL-TXT-BUDGET",
         group_id=GROUP_TABLE_TEXT,

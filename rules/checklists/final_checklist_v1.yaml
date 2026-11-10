@@ -138,7 +138,7 @@ items:
     title: "正文金额与决算表一致"
     criterion: "逐项比对一致（合计容差0.01万元）。"
     status: implemented
-    obligations: [OBL-TXT-T1, OBL-TXT-T2, OBL-TXT-T3, OBL-TXT-T5, OBL-TXT-T6, OBL-TXT-T7]
+    obligations: [OBL-TXT-T1, OBL-TXT-T2, OBL-TXT-T3, OBL-TXT-T5, OBL-TXT-T6, OBL-SG-TABLE-TEXT]
     rules: [V33-225, V33-226, V33-220, V33-222, V33-223, V33-224]
   - id: B-07
     dimension: "二、一致性"
@@ -279,7 +279,7 @@ items:
     title: "同一段各项占比合计=100%"
     criterion: "合计=100%±0.1%。"
     status: implemented
-    obligations: [OBL-TXT-T7, OBL-NARRATIVE-SHARE-SUM]
+    obligations: [OBL-SG-TABLE-TEXT, OBL-NARRATIVE-SHARE-SUM]
     rules: [V33-224, CMM-020]
   - id: D-01
     dimension: "四、文字规范"

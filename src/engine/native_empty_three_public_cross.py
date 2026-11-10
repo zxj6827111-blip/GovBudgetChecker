@@ -16,7 +16,9 @@ from .rule_policy import amount_difference_exceeds_policy
 def _name(view, code):
     if code not in view[4]:
         return ''
-    row, _, mapping = view[4][code]
+    # rows[key] 为多值登记（原件重复行不再整表拒收）；名称身份取首行，
+    # 目标科目是否唯一由 _economic_operand 严格校验（重复即阻断本项）。
+    row, _, mapping, _signature = view[4][code][0]
     # 只读取本车道的名称格；不把左右车道或数额拿来猜科目。
     return ''.join(re.sub(r'\s+', '', unicodedata.normalize('NFKC', str(view[1].rows[row][i] or '')))
                    for i in mapping['source_label_cols']
