@@ -149,10 +149,10 @@ items:
     rules: [V33-108, V33-224, CMM-001]
   - id: B-08
     dimension: "二、一致性"
-    title: "绩效评级项目数合计=自评项目总数"
-    criterion: "两者相等。"
+    title: "绩效评级项目数与自评项目总数一致"
+    criterion: "部分列举不超过总数；完整构成的分项之和等于总数。"
     status: implemented
-    obligations: [OBL-NARRATIVE-AMOUNT]
+    obligations: [OBL-PERFORMANCE-COUNTS]
     rules: [V33-250]
   - id: B-09
     dimension: "二、一致性"
@@ -279,7 +279,7 @@ items:
     title: "同一段各项占比合计=100%"
     criterion: "合计=100%±0.1%。"
     status: implemented
-    obligations: [OBL-SG-TABLE-TEXT, OBL-NARRATIVE-SHARE-SUM]
+    obligations: [OBL-SG-SHARE, OBL-NARRATIVE-SHARE-SUM]
     rules: [V33-224, CMM-020]
   - id: D-01
     dimension: "四、文字规范"

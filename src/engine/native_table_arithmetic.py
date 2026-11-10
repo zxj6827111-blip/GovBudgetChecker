@@ -255,13 +255,16 @@ def journal(rule, doc, facts):
 
 def receipt(rule, doc, relation, facts, *, status, formula, reason=None, disclosure_sources=(),
             reason_codes=(), amount_subcheck_status=None, explained_by=None,
-            residual_difference_wan=None, cascade_of=None, cell_observations=()):
+            residual_difference_wan=None, cascade_of=None, cell_observations=(), obligation_id=None,
+            evidence_nature=None):
     from .rules_v33 import _v33_relation_receipt
     if any(f.table_code == 'FIN_06_basic_expenditure' for f in facts):
         disclosure_sources = [*disclosure_sources, *getattr(doc, '_economic_zero_layout_observations', [])]
     ids, evidence = journal(rule, doc, facts)
     _v33_relation_receipt(doc, rule.code, relation, status=status,
                           operand_fact_ids=ids, formula=formula, incomplete_reason=reason,
+                          obligation_id=obligation_id,
+                          evidence_nature=evidence_nature,
                           cell_observations=[*blank_observations(facts), *cell_observations],
                           disclosure_sources=disclosure_sources,
                           reason_codes=reason_codes,
@@ -1197,19 +1200,59 @@ def check_expenditure_arithmetic(rule, doc):
             found, missing = relation(rule, doc, key, f'支出决算表{code}横向合计', operands[0], operands[1:])
             issues.extend(found)
             unresolved.extend(missing)
-    if not unresolved:
-        for code in codes:
-            if code == 'total':
-                child_codes = [c for c in codes if len(c) == 3]
-            else:
-                child_codes = [c for c in codes if c.startswith(code) and len(c) == len(code) + 2]
-            if not child_codes:
+    # 横向缺数只影响含该操作数的关系；纵向每列分别核对。
+    # 原件网格决定科目集合，不能用物化事实的子集冒充完整表。
+    from .native_hierarchy_checks import _table_view, _native_mirror_covered_roots
+    from src.services.fiscal_code_hierarchy import hierarchy_paths
+    view, graph_error = (None, None)
+    graph_codes = [code for code in codes if code != 'total']
+    if hasattr(doc.parse_artifact, 'logical_tables'):
+        view, graph_error = _table_view(doc, 'FIN_03_expenditure')
+        if view is not None:
+            graph_codes = [code for code in view[4] if code != 'total']
+    elif any(f.subject_code != 'total' and not re.fullmatch(r'\d{3}(?:\d{2}){0,2}',
+                                                         str(f.subject_code or '')) for f in facts):
+        graph_error = '支出金额行科目身份未唯一识别，不能确认纵向完整操作数集合'
+    if graph_error:
+        unresolved.append(graph_error)
+        receipt(rule, doc, 'expenditure:vertical:identity', [], status='insufficient_data',
+                formula='complete source row set required', reason=graph_error)
+    else:
+        paths = hierarchy_paths(graph_codes)
+        roots = [code for code in graph_codes if not any(paths[code].startswith(paths[other])
+                 and len(paths[other]) < len(paths[code]) for other in graph_codes)]
+        mirrors = _native_mirror_covered_roots(doc, view, roots, paths) if view is not None else {}
+        roots = [code for code in roots if code not in mirrors]
+        for code in ['total', *sorted(graph_codes)]:
+            child_codes = roots if code == 'total' else [c for c in graph_codes
+                if paths[c].startswith(paths[code]) and len(paths[c]) == len(paths[code]) + 2]
+            descendants = [] if code == 'total' else [c for c in graph_codes
+                if c != code and paths[c].startswith(paths[code])]
+            gap = any(not any(c == child or paths[c].startswith(paths[child]) for child in child_codes)
+                      for c in descendants)
+            if not child_codes and not gap:
                 continue
             for indicator in indicators:
-                parent, _ = select(doc, facts, indicator, code=code, allow_native_blank=True)
-                children = [select(doc, facts, indicator, code=c, allow_native_blank=True)[0] for c in child_codes]
-                found, missing = relation(rule, doc, f'expenditure:vertical:{indicator}:{code}',
-                    f'支出决算表{code}/{indicator}层级合计', parent, children)
+                operands, errors = [], []
+                for subject in [code, *child_codes]:
+                    if view is not None and view[4].get(subject) is None:
+                        fact, error = None, f'支出表科目{subject}存在重复或缺失原行身份'
+                    else:
+                        fact, error = select(doc, facts, indicator, code=subject, allow_native_blank=True)
+                    if fact is not None:
+                        operands.append(fact)
+                    if error:
+                        errors.append(error)
+                if gap:
+                    errors.append(f'支出表科目{code}直接层级明细不完整')
+                key = f'expenditure:vertical:{indicator}:{code}'
+                if errors:
+                    unresolved.extend(errors)
+                    receipt(rule, doc, key, operands, status='insufficient_data',
+                            formula='parent = sum(complete children)', reason='；'.join(errors))
+                    continue
+                found, missing = relation(rule, doc, key,
+                    f'支出决算表{code}/{indicator}层级合计', operands[0], operands[1:])
                 issues.extend(found)
                 unresolved.extend(missing)
     if shift:

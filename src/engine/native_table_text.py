@@ -8,7 +8,7 @@ from .native_narrative_checks import _Text, _NUMBER, _UNIT, _wan, _foreign_owner
 from .rule_policy import amount_difference_exceeds_policy
 from .native_table_arithmetic import table_facts, select, receipt, finish
 from .native_three_public_ratios import operand_ref, subject_before
-from .rule_outcome import RuleDeferred
+from .rule_outcome import RuleDeferred, RuleNotApplicable
 
 
 def is_general_expenditure_title(title):
@@ -313,7 +313,22 @@ def check_three_public_details(rule, doc, *, require_vehicle_details=True, check
     from .native_three_public_ratios import _SUBJECT, LABELS
     from .native_empty_operands import NativeBlankTerm, independent_blank_zero
     from .native_no_activity import require_no_activity_disposition
-    require_no_activity_disposition(rule, doc)
+    from .relation_coverage import close_relation_scope
+    empty_start = len(getattr(doc, 'fact_receipts', []) or [])
+    try:
+        require_no_activity_disposition(rule, doc)
+    except RuleNotApplicable:
+        # 认证空表只结清金额关系；仍须独立遍历原文实际披露的占比。
+        close_relation_scope(rule, doc, empty_start, 'amount', 'OBL-SG-TABLE-TEXT')
+        if check_percentages:
+            from .native_three_public_ratios import check_shares
+            from .rules_v33 import _final_section_scope
+            start = len(doc.fact_receipts)
+            issues, unresolved = check_shares(rule, doc, _final_section_scope(doc, ('三公',)),
+                                              doc.fact_context.fiscal_year)
+            close_relation_scope(rule, doc, start, 'percentage', 'OBL-SG-SHARE', unresolved)
+            return finish(rule, issues, unresolved)
+        return []
     facts, reason = table_facts(doc, 'FIN_07_three_public')
     if reason:
         return finish(rule, [], [reason])
@@ -323,6 +338,7 @@ def check_three_public_details(rule, doc, *, require_vehicle_details=True, check
     title, begin, end = ranges[0]
     absence_span = _three_public_absence_span(doc, text, begin, end)
     pattern = re.compile(rf'(?:支出)?(?:决算|预算)?(?:数)?(?:为|是)?(?P<amount>{_NUMBER})(?P<unit>{_UNIT})')
+    receipt_start = len(getattr(doc, 'fact_receipts', []) or [])
     issues, unresolved, seen = [], [], set()
     # The concrete-detail subsection takes precedence over its summary.
     detail = re.search(r'[（(]二[）)]具体情况说明', text.compact[begin:end])
@@ -464,10 +480,14 @@ def check_three_public_details(rule, doc, *, require_vehicle_details=True, check
     except RuleDeferred as signal:
         issues.extend(signal.partial_issues or [])
         unresolved.extend(signal.unresolved_reasons or [signal.detail])
+    from .relation_coverage import close_relation_scope
+    close_relation_scope(rule, doc, receipt_start, 'amount', 'OBL-SG-TABLE-TEXT', unresolved)
     if check_percentages:
+        percentage_start = len(getattr(doc, 'fact_receipts', []) or [])
         from .native_three_public_ratios import check_shares
         from .rules_v33 import _final_section_scope
         found, missing = check_shares(rule, doc, _final_section_scope(doc, ('三公',)), doc.fact_context.fiscal_year)
         issues.extend(found)
         unresolved.extend(missing)
+        close_relation_scope(rule, doc, percentage_start, 'percentage', 'OBL-SG-SHARE', missing)
     return finish(rule, issues, unresolved)

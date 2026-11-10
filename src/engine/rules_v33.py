@@ -774,6 +774,8 @@ def _v33_relation_receipt(
     residual_difference_wan: Optional[str] = None,
     cascade_of: Optional[str] = None,
     evidence_nature: Optional[str] = None,
+    obligation_id: Optional[str] = None,
+    required_sub_check_ids: Sequence[str] = (),
 ) -> None:
     """RC-04：V33 族关系级回执——每条适用关系一条，携带真实操作数 ID。
 
@@ -811,6 +813,8 @@ def _v33_relation_receipt(
             rule_code,
             sub_check_id,
             operand_fact_ids=list(operand_fact_ids),
+            required_sub_check_ids=list(required_sub_check_ids),
+            obligation_id=obligation_id,
             formula=formula,
             status=status,
             incomplete_reason=incomplete_reason,
@@ -6069,39 +6073,8 @@ class R33121_ThreePublicCheck(Rule):
     desc = "三公经费勾稽关系 (Table 7)"
 
     def apply(self, doc: Document) -> List[Issue]:
-        issues = []
-        table_name = "一般公共预算财政拨款“三公”经费支出决算表"
-        rows = _get_table_rows(doc, table_name)
-        if not rows:
-            # 三公表为条件性表，但决算材料极大多数应含此表：
-            # 查不到时按证据不足转人工复核（missing 核因由 missing_core_table
-            # 门禁另行呈现），不得静默记 pass（GPT5.6 P0-2）。
-            raise RuleDeferred(self.code, f"表缺失或无可解析行: {table_name}")
-        
-        # 10. 列间加和校验 (Column Sum Check)
-        # 合计 = 因公出国 + 公务用车购置及运行 + 公务接待
-        # 11. 车辆费细分
-        # 运行费 = 购置 + 运行
-        
-        # 定位数据行 (通常是最后一行或包含数据的行)
-        data_rows = []
-        for row in rows:
-            vals = _parse_row_values(row)
-            if len(vals) >= 3 and sum(vals) > 0:
-                data_rows.append(vals)
-        
-        for i, vals in enumerate(data_rows):
-            # 假设结构: [合计, 出国, 车辆合计, 购置, 运行, 接待]
-            # Good Sample: [0.95(合), 0.95(接)] (其他为空)
-            # 需根据非零值推断索引，或根据表头
-            
-            # 简单校验：最大值（合计）是否等于其余之和 or 其余一级项之和
-            # 这里如果不解析表头很难做精确索引校验。
-            # 暂只做：是否存在不平衡 (Max != Sum of parts)
-            # 略
-            pass
-            
-        return issues
+        # 仅保留旧调用的可解释入口；有效检查由 V33-244 执行，空壳不再记 pass。
+        raise RuleOutcomeSignal(self.code, "旧空壳规则已退役；三公表内勾稽由 V33-244 执行", status="not_applicable")
 
 
 class R33122_EmptyTableCheck(Rule):
@@ -10425,7 +10398,7 @@ class R33246_DomesticReceptionDisclosure(Rule):
 # 公务用车购置费 / 公务用车运行维护费 / 公务接待费）的细化披露是否在
 # 场；表格数值不参与判定——表格分项齐备归 V33-244（OBL-SG-ITEMS），
 # 表文金额一致归 V33-108/V33-224（OBL-SG-TABLE-TEXT），国内接待批次/
-# 人次归 V33-246（OBL-SG-DISCLOSURE），金额勾稽归 V33-121/V33-244
+# 人次归 V33-246（OBL-SG-DISCLOSURE），金额勾稽归 V33-244
 # （OBL-SG-TOTAL）。本规则补的是官方检查表口径：说明须把四项逐项
 # 写出来（"是否细化'公务用车购置及运行费'：公开'公务用车购置费'、
 # '公务用车运行费'"），合并披露"购置及运行维护费"是合法三项口径，
@@ -10559,6 +10532,14 @@ class R33SGCompletion(Rule):
         disclosed = self._collect_disclosed(paras)
         issues: List[Issue] = []
         for item_key, label, evidence_stem, fallback_stem in _WP4G_ITEM_SPECS:
+            from .three_public_counts import source_refs
+            from .native_table_arithmetic import receipt
+            evidence_para = self._evidence_para(paras, evidence_stem, fallback_stem)
+            receipt(self, doc, 'three_public:disclosure:' + item_key, [],
+                    status='pass' if item_key in disclosed else 'fail',
+                    formula='explicit item amount or equivalent no-activity disclosure',
+                    disclosure_sources=source_refs(doc, evidence_para, label + '细化披露原文'),
+                    obligation_id='OBL-SG-COMPLETION', evidence_nature='disclosure_check')
             if item_key in disclosed:
                 continue
             evidence_para = self._evidence_para(
@@ -10590,10 +10571,16 @@ class R33SGCompletion(Rule):
         # 口径决议④（清单 A-08 八字段）：金额驱动的数量要素与车辆保有量。
         from .three_public_counts import count_issues
 
-        issues.extend(count_issues(
-            self, doc, report_kind="final", scope=scope, section_title=section_title,
-            locate_page=R33245_ThreePublicDirectionContradiction._locate_page,
-        ))
+        try:
+            issues.extend(count_issues(
+                self, doc, report_kind="final", scope=scope, section_title=section_title,
+                locate_page=R33245_ThreePublicDirectionContradiction._locate_page,
+            ))
+        except RuleDeferred as signal:
+            # 数量未完成不吞掉此前已经检出的细化披露问题。
+            raise RuleDeferred(self.code, detail=signal.detail,
+                partial_issues=[*issues, *(signal.partial_issues or [])],
+                unresolved_reasons=signal.unresolved_reasons) from signal
         return issues
 
     # ------------------------------------------------------------------
@@ -14222,7 +14209,6 @@ ALL_RULES = [
     R33119_FiscalTotalCheck(),
     R33120_DetailTableCheck(),
     R33117_BasicExpenseClassification(),
-    R33121_ThreePublicCheck(),
     R33122_EmptyTableCheck(),
     R33114_EmptyTableStatementCheck(),
     # P0 - 主链路勾稽规则

@@ -37,6 +37,9 @@ _DASH_ITEM = re.compile(
     r'(?P<xiang>[\u4e00-\u9fff()]{2,60}?)[”"]?(?=[。.]|主要用于)')
 _DECISION = re.compile(rf'(?:支出决算(?:数)?|决算数)(?:为|是)?'
                        rf'(?P<amount>{_NUMBER})(?:为)?(?P<unit>{_UNIT})')
+_DECISION_ANY_UNIT = re.compile(
+    rf'(?:支出决算(?:数)?|决算数)(?:为|是)?(?P<amount>{_NUMBER})(?:为)?'
+    rf'(?:(?P<unit>{_UNIT})|(?=[。；;，,)]|$))')
 _GENERAL_AMOUNT = re.compile(
     rf'一般公共预算(?:财政拨款)?支出(?:决算(?:数)?)?(?:为|共计|合计为|是)?'
     rf'(?P<amount>{_NUMBER})(?P<unit>{_UNIT})')
@@ -70,10 +73,11 @@ def _name(value):
     return re.sub(r'支出$', '', re.sub(r'\s+', '', str(value or '')))
 
 
-def _unresolved(rule, doc, key, reason, unresolved, facts=(), formula='text = table'):
+def _unresolved(rule, doc, key, reason, unresolved, facts=(), formula='text = table',
+                *, reason_codes=(), disclosure_sources=()):
     unresolved.append(reason)
-    codes = []
-    if facts:
+    codes = list(reason_codes)
+    if facts and not codes:
         from src.engine.fact_context import operand_rejection_code
         context = getattr(doc, 'fact_context', None)
         codes = [code for code in (
@@ -87,8 +91,19 @@ def _unresolved(rule, doc, key, reason, unresolved, facts=(), formula='text = ta
             codes = ['identity_unconfirmed']
         elif '未识别到' in text or '未找到' in text:
             codes = ['source_missing']
+    if disclosure_sources:
+        from .diagnostic_fields import record_gap, text_missing_operand, blocker
+        blocked = ([blocker(dimension='year' if '年度' in reason or '上年' in reason else 'org_scope',
+                            ref='预算绩效管理情况:自评项目与评级数量', reason_code='scope_unconfirmed')]
+                   if 'scope_unconfirmed' in codes else [])
+        record_gap(doc, reason, reason_codes=codes or ['text_statement_unparsed'],
+                   blocked_by=blocked,
+                   missing_operands=[text_missing_operand(section='预算绩效管理情况',
+                       role='自评项目与评级数量', page=ref.get('page'), column='数量', stage='决算')
+                       for ref in disclosure_sources], preferred_action='system_recheck')
     receipt(rule, doc, key, list(facts), status='insufficient_data',
-            formula=formula, reason=reason, reason_codes=list(dict.fromkeys(codes)))
+            formula=formula, reason=reason, reason_codes=list(dict.fromkeys(codes)),
+            disclosure_sources=disclosure_sources)
 
 
 def _source_refs(facts):
@@ -1050,9 +1065,20 @@ def check_function_disclosures(rule, doc):
                                  text.raw[raw_start:raw_stop])
         if next_heading:
             _, stop = text.compact_range(raw_start, raw_start + next_heading.start())
-        claims = list(_DECISION.finditer(text.compact, item.end(), stop))
+        claims = list(_DECISION_ANY_UNIT.finditer(text.compact, item.end(), stop))
         key = f'general:text:item:{item.start()}'
         aliases = []
+        effective_unit = claims[0]['unit'] if len(claims) == 1 else None
+        if len(claims) == 1 and effective_unit is None:
+            from .narrative_amount_units import same_item_final_unit
+            claim = claims[0]
+            basis = same_item_final_unit(text.compact, item.start(), stop,
+                                         claim['amount'], claim.start())
+            if basis is not None:
+                effective_unit = basis['unit']
+                aliases.extend(dict(ref, unit_basis=basis['basis'], raw_unit_missing=True)
+                               for ref in text.refs(basis['start'], basis['end'],
+                                                    '同条目同一决算金额的显式单位依据'))
         fact, error = _hierarchy_fact(doc, facts, item, siblings=items, aliases=aliases)
         # A2（R2.2 QP-04）：类名差异在身份链成立时只作提示，金额照常核对。
         name_hint = next((a for a in aliases if isinstance(a, dict)
@@ -1077,7 +1103,7 @@ def check_function_disclosures(rule, doc):
         # Their hierarchy is already validated above; only the declaration
         # prefix can introduce a foreign owner or year for this item.
         error = error or _guard(doc, text, begin, item.start(), item.start())
-        if len(claims) != 1:
+        if len(claims) != 1 or effective_unit is None:
             decision_error = f'{item["xiang"]}条目显式决算金额缺失或不唯一，不能用预算金额替代'
             error = error or decision_error
             # DH-02：说明条目内无法唯一确定显式决算金额；位置落在条目原文页。
@@ -1089,7 +1115,8 @@ def check_function_disclosures(rule, doc):
             # 这不是“找不到科目”的取数不足，而是零值行未列示；不弹补核。
             if (
                 len(claims) == 1
-                and _wan(claims[0]["amount"], claims[0]["unit"]) == 0
+                and effective_unit is not None
+                and _wan(claims[0]["amount"], effective_unit) == 0
                 and "说明中的项" in error
                 and "在表内找不到同名科目" in error
                 and _zero_item_parent_reconciles(doc, facts, item)
@@ -1107,7 +1134,7 @@ def check_function_disclosures(rule, doc):
         else:
             claim = claims[0]
             issues.extend(_amount(rule, doc, text, item.start(), claim.end(), claim['amount'],
-                          claim['unit'], fact, key, item['xiang'], title, identity_sources=aliases))
+                          effective_unit, fact, key, item['xiang'], title, identity_sources=aliases))
     return finish(rule, issues, unresolved)
 
 
@@ -1329,7 +1356,9 @@ def check_performance_counts(rule, doc):
         if not totals and _RATING.search(text.compact, begin, end):
             _unresolved(rule, doc, f'performance:self_evaluation_count:missing:{begin}',
                         '绩效评级已披露但未识别到同范围自评项目总数，不能借用绩效目标或跟踪评价数量',
-                        unresolved, formula='self_evaluation_count = sum(4 rating counts)')
+                        unresolved, formula='self_evaluation_count = sum(4 rating counts)',
+                        reason_codes=['operand_missing'],
+                        disclosure_sources=text.refs(begin, end, '绩效评级原文'))
         for index, total in enumerate(totals):
             stop = totals[index + 1].start() if index + 1 < len(totals) else end
             scope_stop = stop
@@ -1343,12 +1372,17 @@ def check_performance_counts(rule, doc):
             ratings = list(_RATING.finditer(text.compact, total.end(), stop))
             declarations = list(_RATING_DECLARATION.finditer(text.compact, total.end(), stop))
             key = f'performance:self_evaluation_ratings:{total.start()}'
+            pending_refs = text.refs(total.start(), stop, '同范围自评项目及评级原文')
             if len(declarations) != len(ratings):
                 _unresolved(rule, doc, key, '评级类别未识别或不是互斥的标准评级，不能据此认定数量闭合',
-                            unresolved, formula='self_evaluation_count = sum(distinct standard rating counts)')
+                            unresolved, formula='self_evaluation_count = sum(distinct standard rating counts)',
+                            reason_codes=['text_statement_unparsed'], disclosure_sources=pending_refs)
                 continue
             if not ratings:
-                continue  # No classification declared: no sum relation exists.
+                receipt(rule, doc, key, [], status='not_applicable',
+                        formula='no rating composition declared',
+                        reason='未声明评级构成，不存在分项加总关系', disclosure_sources=pending_refs)
+                continue
             prefix_start = max((text.compact.rfind(ch, begin, total.start()) for ch in '。；;'), default=begin - 1) + 1
             proof = text.compact[max(begin, prefix_start):total.end()]
             local_years = [int(value) for value in re.findall(r'(20\d{2})年度', proof)]
@@ -1402,25 +1436,33 @@ def check_performance_counts(rule, doc):
                         evidence_end = max(evidence_end, last.end())
             # 评级互斥、数量非负；已披露分项已覆盖总数即可验证闭合。
             # 少于总数且仍有未披露类别时保留补核，不能把缺项当零制造错误。
-            if reason is None and computed < declared and not complete:
-                reason = '同一自评范围的已披露评级数量之和小于总数，剩余类别未完整披露，不能补零'
+            # 部分列举只核对下界；不把未披露档次补零，也不强制列齐四档。
+            complete = complete or bool(re.search(
+                r'其余(?:评级|等级|档次)(?:均|全部)?为0(?:个)?',
+                text.compact[total.end():stop]))
             if reason:
                 _unresolved(rule, doc, key, reason, unresolved,
-                            formula='self_evaluation_count compared with sum(disclosed distinct rating counts)')
+                            formula='self_evaluation_count compared with sum(disclosed distinct rating counts)',
+                            reason_codes=['text_binding_failed' if '重复' in reason else 'scope_unconfirmed'],
+                            disclosure_sources=pending_refs)
                 continue
             refs = text.refs(total.start(), evidence_end, '同一范围自评项目、已披露评级及取消数量')
             if not local_years:
                 refs += year_refs
             file_hash = getattr(getattr(doc, 'fact_context', None), 'file_hash', None)
             formula = ('self_evaluation_count = sum(disclosed distinct rating counts)'
-                       if complete or declared == computed else
+                       if complete else
                        'self_evaluation_count >= sum(disclosed distinct rating counts)')
             if cancelled:
                 formula += ' + explicitly included cancelled projects'
-            receipt(rule, doc, key, [], status='fail' if declared != computed else 'pass',
-                    formula=formula,
-                    disclosure_sources=[dict(ref, file_hash=file_hash) for ref in refs])
-            if declared == computed:
+            mismatch = computed != declared if complete else computed > declared
+            receipt(rule, doc, key, [], status='fail' if mismatch else 'pass',
+                    evidence_nature='quantity_comparison',
+                    formula=formula, reason_codes=['item_sum_mismatch'] if mismatch else [],
+                    disclosure_sources=[dict(ref, file_hash=file_hash,
+                        comparison_basis='complete_sum' if complete else 'disclosed_lower_bound',
+                        declared_count=declared, disclosed_count=computed) for ref in refs])
+            if not mismatch:
                 continue
             location = _location(doc, refs, [], title, 'performance_self_evaluation_count',
                                  declared_count=declared, rating_counts=parts,

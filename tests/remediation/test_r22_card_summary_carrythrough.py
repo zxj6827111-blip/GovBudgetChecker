@@ -53,18 +53,17 @@ def _instance(ledger: dict, obligation_id: str) -> dict:
 
 
 def _insufficient_ledger() -> dict:
-    """V33-121 取数不足并登记真实缺数位置的账本。"""
+    """V33-244 取数不足并登记真实缺数位置的账本。"""
     return build_obligation_ledger(
         _profile(),
         report_kind="final",
         rule_execution_summary=_receipt({
-            "V33-121": "insufficient_data",
-            "V33-244": "pass",
+            "V33-244": "insufficient_data",
         }),
         fact_receipts=[
             {
-                "rule_id": "V33-121",
-                "sub_check_id": "V33-121:r1",
+                "rule_id": "V33-244",
+                "sub_check_id": "V33-244:r1",
                 "status": "insufficient_data",
                 "reason_codes": ["operand_missing"],
                 "missing_operands": [
@@ -106,10 +105,10 @@ def test_operand_without_page_never_invents_one():
     ledger = build_obligation_ledger(
         _profile(),
         report_kind="final",
-        rule_execution_summary=_receipt({"V33-121": "insufficient_data", "V33-244": "pass"}),
+        rule_execution_summary=_receipt({"V33-244": "insufficient_data"}),
         fact_receipts=[
             {
-                "rule_id": "V33-121",
+                "rule_id": "V33-244",
                 "status": "insufficient_data",
                 "reason_codes": ["operand_missing"],
                 "missing_operands": [

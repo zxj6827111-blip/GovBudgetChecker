@@ -196,7 +196,8 @@ def _table_view(doc, table_code, *, include_income_sources=False):
             # 身份歧义，必须转人工，不能挑一行当答案。
             if row_signatures[code] != signature:
                 issue_text = f'{title}科目{code}存在重复行身份'
-                issues.append(issue_text)
+                # 保留编码进入关系图，但不给歧义行选择一个答案；依赖它的关系逐条阻断。
+                code_rows[code] = None
                 from .diagnostic_fields import blocker
                 _gap(doc, issue_text, codes=['row_identity_duplicate'],
                      blockers=[blocker(dimension='row', ref=f'{title}:科目{code}',
@@ -261,6 +262,13 @@ def _record_cell_gap(doc, table, cell, candidates, reason, *, code, indicator):
 
 def _select(doc, view, code, indicator):
     instance, table, mappings, source_cells, code_rows, facts = view
+    if code_rows.get(code) is None:
+        reason = f'{table.title}科目{code}存在重复行身份或层级身份歧义'
+        from .diagnostic_fields import blocker
+        _gap(doc, reason, codes=['row_identity_duplicate'],
+             blockers=[blocker(dimension='row', ref=f'{table.title}:科目{code}',
+                               reason_code='row_identity_duplicate')])
+        return None, reason
     mapping = next(m for m in mappings if m['canonical_measure'] == indicator)
     cell = source_cells.get((code_rows[code], int(mapping['source_col_idx'])))
     candidates = [f for f in facts if f.subject_code == code and f.indicator == indicator]
@@ -452,7 +460,7 @@ def _native_mirror_covered_roots(doc, view, roots, paths):
     _, table, _, _, rows, _ = view
     context = doc.fact_context
     compact = lambda value: re.sub(r'\s+', '', str(value or ''))
-    ordered = sorted(rows, key=rows.get)
+    ordered = sorted(rows, key=lambda code: rows[code] if rows[code] is not None else float("inf"))
     proofs = {}
     for code in roots:
         if len(paths[code]) != 7 or code != paths[code]:
@@ -573,9 +581,11 @@ def check_native_detail_tables(rule, doc, *, table_codes=None, include_income_so
         codes = sorted(code for code in rows if code != 'total')
         paths = hierarchy_paths(codes)
         if len(set(paths.values())) != len(paths):
-            unresolved.append(f'{title}科目层级存在重复身份')
-            continue
-        roots = [code for code in codes if not any(paths[code].startswith(paths[p]) and code != p for p in codes)]
+            for code in codes:
+                if sum(path == paths[code] for path in paths.values()) > 1:
+                    rows[code] = None
+        roots = [code for code in codes if not any(paths[code].startswith(paths[p])
+                  and len(paths[p]) < len(paths[code]) for p in codes)]
         # 不限制原件的披露深度；只排除有同原件精确完整镜像链证明的错前缀项。
         mirror_proofs = _native_mirror_covered_roots(doc, view, roots, paths)
         orphans = sorted(mirror_proofs)

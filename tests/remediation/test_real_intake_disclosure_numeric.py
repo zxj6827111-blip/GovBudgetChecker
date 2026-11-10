@@ -248,6 +248,12 @@ def test_incomplete_or_foreign_rating_scope_is_not_a_confirmed_error(change):
     elif change == 'duplicate': body += '绩效评级为“良”的项目1个。'
     elif change == 'previous_year': body = body.replace('2025年度', '2024年度')
     else: body = '乙局' + body
+    if change == 'missing':
+        # 已确认口径：部分列举只检查下界，不强制列齐四档。
+        doc = performance(body)
+        assert check_performance_counts(DisclosureRule(), doc) == []
+        assert doc.fact_receipts[-1]['status'] == 'pass'
+        return
     with pytest.raises(RuleDeferred) as signal:
         check_performance_counts(DisclosureRule(), performance(body))
     assert not signal.value.partial_issues
@@ -354,12 +360,13 @@ def test_disclosed_distinct_ratings_can_close_without_inventing_missing_zeros(to
                for ref in doc.fact_receipts[-1]['disclosure_sources'])
 
 
-def test_partial_ratings_below_total_remain_uncompleted_without_fabricated_zeros():
+def test_partial_ratings_below_total_complete_lower_bound_without_fabricated_zeros():
     doc = performance(rating_body(78, [('优', 75), ('良', 2)]))
-    with pytest.raises(RuleDeferred) as signal:
-        check_performance_counts(DisclosureRule(), doc)
-    assert not signal.value.partial_issues
-    assert '不能补零' in str(signal.value)
+    assert check_performance_counts(DisclosureRule(), doc) == []
+    receipt = doc.fact_receipts[-1]
+    assert receipt['status'] == 'pass'
+    assert '>=' in receipt['formula']
+    assert receipt['disclosure_sources'][0]['comparison_basis'] == 'disclosed_lower_bound'
 
 
 def test_partial_ratings_above_total_are_a_provable_lower_bound_error():
@@ -457,8 +464,10 @@ def test_cancelled_projects_are_not_used_to_force_an_equal_total():
     assert issue.location['computed_count'] == 275
     assert issue.location['cancelled_project_count'] == 2
     assert issue.location['rating_counts'] == {'优': 263, '良': 8, '合格': 2}
-    with pytest.raises(RuleDeferred):
-        check_performance_counts(DisclosureRule(), performance(cancelled_body(total=276)))
+    partial = performance(cancelled_body(total=276))
+    assert check_performance_counts(DisclosureRule(), partial) == []
+    assert partial.fact_receipts[-1]['status'] == 'pass'
+    assert partial.fact_receipts[-1]['disclosure_sources'][0]['comparison_basis'] == 'disclosed_lower_bound'
 
 
 @pytest.fixture(scope='module')

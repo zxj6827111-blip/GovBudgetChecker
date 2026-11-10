@@ -1352,6 +1352,7 @@ def make_fact_receipt(
     *,
     operand_fact_ids: Sequence[str] = (),
     required_fact_ids: Sequence[str] = (),
+    required_sub_check_ids: Sequence[str] = (),
     formula: Optional[str] = None,
     tolerance: Optional[Dict[str, Any]] = None,
     status: str = "pass",
@@ -1411,6 +1412,7 @@ def make_fact_receipt(
     receipt = CheckReceipt(
         rule_id=str(rule_id),
         sub_check_id=str(sub_check_id),
+        required_sub_check_ids=list(required_sub_check_ids),
         required_fact_ids=[str(item) for item in required_fact_ids]
         or list(operand_ids),
         operand_fact_ids=operand_ids,

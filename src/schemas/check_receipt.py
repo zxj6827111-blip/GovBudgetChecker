@@ -28,6 +28,7 @@ class CheckReceipt:
 
     rule_id: str
     sub_check_id: str
+    required_sub_check_ids: List[str] = field(default_factory=list)
     required_fact_ids: List[str] = field(default_factory=list)
     operand_fact_ids: List[str] = field(default_factory=list)
     required_operand_roles: List[str] = field(default_factory=list)
@@ -93,6 +94,7 @@ class CheckReceipt:
         return cls(
             rule_id=str(data.get("rule_id") or ""),
             sub_check_id=str(data.get("sub_check_id") or ""),
+            required_sub_check_ids=[str(i) for i in data.get("required_sub_check_ids") or []],
             required_fact_ids=[str(i) for i in data.get("required_fact_ids") or []],
             operand_fact_ids=[str(i) for i in data.get("operand_fact_ids") or []],
             required_operand_roles=[str(i) for i in data.get("required_operand_roles") or []],

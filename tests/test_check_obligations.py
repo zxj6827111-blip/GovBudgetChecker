@@ -179,11 +179,11 @@ def test_fail_counts_as_completed_check_with_findings():
     ledger = build_obligation_ledger(
         _profile("final"),
         report_kind="final",
-        rule_execution_summary=_receipt({"V33-121": "fail", "V33-244": "pass"}),
+        rule_execution_summary=_receipt({"V33-244": "fail"}),
     )
     total = _instance(ledger, "OBL-SG-TOTAL")
     assert total["status"] == OBLIGATION_COMPLETED
-    assert total["checkers"] == ["V33-121", "V33-244"]
+    assert total["checkers"] == ["V33-244"]
 
 
 @pytest.mark.parametrize(
@@ -198,7 +198,7 @@ def test_unresolved_rule_states_map_to_unfinished_obligation(rule_status, expect
     ledger = build_obligation_ledger(
         _profile("final"),
         report_kind="final",
-        rule_execution_summary=_receipt({"V33-121": rule_status, "V33-244": "pass"}),
+        rule_execution_summary=_receipt({"V33-244": rule_status}),
     )
     total = _instance(ledger, "OBL-SG-TOTAL")
     assert total["status"] == expected
@@ -524,7 +524,7 @@ def test_excluding_obligations_requires_a_reason():
     # 规则判定不适用 -> 有依据地移出分母；但它仍是"已判定"而不是"没查"
     total = _instance(ledger, "OBL-SG-TOTAL")
     assert total["status"] == OBLIGATION_NOT_APPLICABLE
-    assert "V33-121" in total["detail"]
+    assert "V33-244" in total["detail"]
 
 
 def test_input_gaps_are_only_recorded_when_explicitly_reported():

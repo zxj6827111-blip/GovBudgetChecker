@@ -611,7 +611,7 @@ class R33251_FunctionalDetailCompleteness(Rule):
                 factor = _AMOUNT_UNIT_FACTOR.get(unit)
                 records.append({
                     "kind": _decl_kind(match.group("kind")),
-                    "raw": raw, "unit": unit, "pos": match.start(),
+                    "raw": raw, "unit": unit, "pos": match.start(), "end": match.end(),
                     "value_wan": value * factor if value is not None and factor is not None else None,
                     "not_included_reason": (
                         None if value is not None and factor is not None
@@ -621,7 +621,44 @@ class R33251_FunctionalDetailCompleteness(Rule):
             # 应披露集合来自识别到的项级条目：每条科目都要有年初预算与支出决算
             # 两个槽位。没有数字不是“没有检查义务”，缺失槽位同样进入未纳入清单。
             clauses = _subject_clauses(joined, items)
-            clauses = _subject_clauses(joined, items)
+            from .narrative_amount_units import same_item_final_unit
+
+            def original_sources(start, end, role):
+                refs = []
+                for idx, (global_start, block_index, block_begin) in enumerate(spans):
+                    global_stop = spans[idx + 1][0] if idx + 1 < len(spans) else len(joined)
+                    low, high = max(start, global_start), min(end, global_stop)
+                    if low >= high:
+                        continue
+                    page, raw_text, _flat, positions, *_ = blocks[block_index]
+                    a, b = flat_span(positions, block_begin + low - global_start,
+                                    block_begin + high - global_start)
+                    refs.append({'page': page, 'span': raw_text[a:b], 'role': role})
+                return refs
+
+            for record in records:
+                if record['kind'] != 'final' or record['unit'] is not None:
+                    continue
+                parents = [clause for clause in clauses
+                           if clause['start'] <= record['pos'] < clause['end']]
+                basis = (same_item_final_unit(joined, parents[0]['start'], parents[0]['end'],
+                                             record['raw'], record['pos'])
+                         if len(parents) == 1 else None)
+                if basis is None:
+                    continue
+                record['effective_unit'] = basis['unit']
+                record['unit_basis'] = basis['basis']
+                record['unit_basis_sources'] = original_sources(
+                    basis['start'], basis['end'], '同条目同一决算金额的显式单位依据')
+                record['value_wan'] = _dec(record['raw']) * _AMOUNT_UNIT_FACTOR[basis['unit']]
+                record['not_included_reason'] = None
+                page, raw_text, a, b = _locate(record['pos'])
+                issues.append(issue_at(
+                    self, f"支出决算金额漏写单位：原文{record['raw']}未写金额单位；"
+                    f"已依据同条目同一金额的{basis['unit']}表述继续核对，请补写单位。",
+                    page, raw_text, a, b, severity='warn', checklist_item='C-14',
+                    defect_kind='amount_unit_omitted', raw_unit=None,
+                    effective_unit=basis['unit'], unit_basis_sources=record['unit_basis_sources']))
             accounting = _clause_declaration_accounting(
                 joined, clauses, records, tail_start
             )
@@ -648,6 +685,11 @@ class R33251_FunctionalDetailCompleteness(Rule):
                     or (item["scope"] == "ambiguous" and not item["stages"])
                 ]
                 exception_evidence = _exception_evidence(disclosure_exceptions, _locate)
+                # 完成和未完成回执都保留原文数值来源，缺口不只剩总额页。
+                for record in kind_records:
+                    exception_evidence.extend(original_sources(
+                        record['pos'], record.get('end', record['pos'] + 16), '逐项金额原文'))
+                    exception_evidence.extend(record.get('unit_basis_sources') or [])
                 if not kind_records and not not_included_items and not withheld_items:
                     continue
                 stated = _dec(total.group(key))
@@ -671,6 +713,23 @@ class R33251_FunctionalDetailCompleteness(Rule):
                     if withheld_items else ""
                 )
                 unknown = bool(not_included_items or withheld_items)
+
+                def amount_gap_diagnostic():
+                    from .diagnostic_fields import text_missing_operand, blocker
+                    # 漏单位/格式不能伪装成资金口径未确认；例外作用域歧义另有明确依据。
+                    missing = []
+                    for record in not_included_items:
+                        page, _, _, _ = _locate(record['pos'])
+                        missing.append(text_missing_operand(section="一般公共预算财政拨款支出决算具体情况",
+                            role=label + "金额或可归一单位", page=page,
+                            row_key=str(record['pos']), stage=kind))
+                    codes = list(gap_codes or ['item_amount_not_included'])
+                    blockers = []
+                    if 'exception_scope_ambiguous' in codes:
+                        codes.append('scope_unconfirmed')
+                        blockers.append(blocker(dimension='fund_scope',
+                            ref=f'V33-251:{kind}:例外声明', reason_code='scope_unconfirmed'))
+                    return dict(reason_codes=codes, missing_operands=missing, blocked_by=blockers)
                 if not included:
                     if not_included_items:
                         detail = (
@@ -731,12 +790,7 @@ class R33251_FunctionalDetailCompleteness(Rule):
                         message = "；".join(parts) + "。"
                         # DH-02：回执创建前登记结构化卡点（分项范围不一致）。
                         from .diagnostic_fields import blocker as _diag_blocker, record_gap as _diag_gap
-                        _scope_entry = dict(
-                            reason_codes=['scope_unconfirmed', 'item_amount_not_included',
-                                          'sum_scope_not_comparable'],
-                            blocked_by=[_diag_blocker(dimension='fund_scope',
-                                                      ref=f'V33-251:{kind}:{label}:分项范围',
-                                                      reason_code='scope_unconfirmed')])
+                        _scope_entry = amount_gap_diagnostic()
                         _diag_gap(doc, message, **_scope_entry)
                         page, text, s, e = _locate(total.start())
                         issues.append(issue_at(
@@ -767,12 +821,7 @@ class R33251_FunctionalDetailCompleteness(Rule):
                         )
                         if not_included_items:
                             from .diagnostic_fields import blocker, record_gap
-                            scope_entry = dict(
-                                reason_codes=['scope_unconfirmed', 'item_amount_not_included',
-                                              'sum_scope_not_comparable'],
-                                blocked_by=[blocker(dimension='fund_scope',
-                                                    ref=f'V33-251:{kind}:{label}:分项范围',
-                                                    reason_code='scope_unconfirmed')])
+                            scope_entry = amount_gap_diagnostic()
                             unresolved_text = (
                                 f"{label}有{len(not_included_items)}处金额未纳入合计：{gap_summary}"
                             )
@@ -793,18 +842,13 @@ class R33251_FunctionalDetailCompleteness(Rule):
                         if withheld_items:
                             parts.append(withheld_summary)
                         parts.append(
-                            "公开分项与全口径总额范围不一致，不计算完整加总差额，"
+                            "部分金额或单位依据不足，不计算完整加总差额，"
                             "不能视为完整分项加总"
                         )
                         message = "；".join(parts) + "。"
                         # DH-02：回执创建前登记结构化卡点（分项范围不一致）。
                         from .diagnostic_fields import blocker as _diag_blocker, record_gap as _diag_gap
-                        _scope_entry = dict(
-                            reason_codes=['scope_unconfirmed', 'item_amount_not_included',
-                                          'sum_scope_not_comparable'],
-                            blocked_by=[_diag_blocker(dimension='fund_scope',
-                                                      ref=f'V33-251:{kind}:{label}:分项范围',
-                                                      reason_code='scope_unconfirmed')])
+                        _scope_entry = amount_gap_diagnostic()
                         _diag_gap(doc, message, **_scope_entry)
                         page, text, s, e = _locate(total.start())
                         issues.append(issue_at(
@@ -833,12 +877,7 @@ class R33251_FunctionalDetailCompleteness(Rule):
                             disclosure_sources=exception_evidence,
                         )
                         from .diagnostic_fields import blocker, record_gap
-                        scope_entry = dict(
-                            reason_codes=['scope_unconfirmed', 'item_amount_not_included',
-                                          'sum_scope_not_comparable'],
-                            blocked_by=[blocker(dimension='fund_scope',
-                                                ref=f'V33-251:{kind}:{label}:分项范围',
-                                                reason_code='scope_unconfirmed')])
+                        scope_entry = amount_gap_diagnostic()
                         unresolved_text = (
                             f"{label}有{len(not_included_items)}处金额未纳入合计：{gap_summary}"
                         )
@@ -873,7 +912,7 @@ class R33251_FunctionalDetailCompleteness(Rule):
                         disclosure_sources=exception_evidence,
                     )
                     continue
-                unit_items = [record for record in included if record["unit"] != "万元"
+                unit_items = [record for record in included if record.get("effective_unit", record["unit"]) != "万元"
                               and not (record.get("source") == "explicit_zero"
                                        and record["unit"] is None and record["value_wan"] == 0)]
                 anchors = []

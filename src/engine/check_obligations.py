@@ -68,6 +68,7 @@ from src.engine.rule_outcome import (
 from src.schemas.parse_artifact import CheckReceipt
 from src.schemas.document_profile import DocumentProfile
 from src.engine.rule_policy import AMOUNT_TOLERANCE_WAN
+from src.engine.relation_coverage import canonical_obligation_id, relation_owners, scoped_rule_status
 
 #: 关系级子检查状态 → 聚合优先级（与规则六态共用优先级语义；
 #: parse_error/execution_error/insufficient_data 视为未完成，fail 覆盖 pass）
@@ -115,7 +116,7 @@ UNCOMPLETED_RULE_STATUSES = frozenset(
 #: v13（2026-11-10）：合并重复表文义务——OBL-TXT-T7 与 OBL-SG-TABLE-TEXT
 #: 为同一检查（V33-108/V33-224/CMM-001，table:FIN_07）的重复登记，人工待办
 #: 成对出现（宜川任务 5753d874… 裁定）；保留 OBL-SG-TABLE-TEXT，检查项不变。
-OBLIGATION_CATALOG_VERSION = "obligations-v13-checklist-global-20261110"
+OBLIGATION_CATALOG_VERSION = "obligations-v14-automation-restoration-20261110"
 
 # ---- 实例状态 ---------------------------------------------------------------
 
@@ -432,7 +433,7 @@ OBLIGATION_CATALOG: Tuple[Obligation, ...] = (
         group_id=GROUP_INTERNAL,
         title="表格合计行与分项之和一致（含续表合并范围）",
         report_kinds=_FINAL_ONLY,
-        checkers_by_kind=_final("V33-005"),
+        checkers_by_kind=_final("V33-005", "V33-120"),
         basis="合计行须与全部分项（含跨页续表）之和一致",
     ),
     # ---- 表间关系 ----
@@ -616,13 +617,21 @@ OBLIGATION_CATALOG: Tuple[Obligation, ...] = (
             " 2219899=105.00 vs P37 说明写 135.00，差 30.00 万元）曾漏报"
         ),
     ),
+    Obligation(
+        obligation_id="OBL-PERFORMANCE-COUNTS",
+        group_id=GROUP_PERFORMANCE,
+        title="绩效自评项目与已披露评级数量一致",
+        report_kinds=_FINAL_ONLY,
+        checkers_by_kind=_final("V33-250"),
+        basis="清单决算 B-08：部分列举不超过总数，完整构成的分项之和等于总数",
+    ),
     # ---- 文内关系 ----
     Obligation(
         obligation_id="OBL-NARRATIVE-AMOUNT",
         group_id=GROUP_NARRATIVE,
         title="文字说明中的金额与占比可复算",
         report_kinds=_FINAL_ONLY,
-        checkers_by_kind=_final("V33-235", "V33-234", "V33-232", "V33-249", "V33-250"),
+        checkers_by_kind=_final("V33-235", "V33-234", "V33-232", "V33-249"),
         basis="说明中的金额、占比须能由表格数据复算得出",
     ),
     Obligation(
@@ -745,7 +754,7 @@ OBLIGATION_CATALOG: Tuple[Obligation, ...] = (
         group_id=GROUP_SAN_GONG,
         title="三公经费合计 = 三项分项之和",
         report_kinds=_FINAL_ONLY,
-        checkers_by_kind=_final("V33-121", "V33-244"),
+        checkers_by_kind=_final("V33-244"),
         depends_on=("table:FIN_07",),
         basis="AGENTS.md 决算必查勾稽 D-007 / 规则 C-001",
     ),
@@ -801,6 +810,15 @@ OBLIGATION_CATALOG: Tuple[Obligation, ...] = (
         checkers_by_kind=_final("V33-108", "V33-224", "CMM-001"),
         depends_on=("table:FIN_07",),
         basis="AGENTS.md 表-说明配对：三公经费支出决算表对应七、三公经费说明",
+    ),
+    Obligation(
+        obligation_id="OBL-SG-SHARE",
+        group_id=GROUP_SAN_GONG,
+        title="三公说明中已披露占比可复算",
+        report_kinds=_FINAL_ONLY,
+        checkers_by_kind=_final("V33-224"),
+        depends_on=("table:FIN_07",),
+        basis="三公说明的占比按对应决算分项与决算合计复算；无占比声明时不适用",
     ),
     Obligation(
         obligation_id="OBL-SG-BUDGET-TABLE",
@@ -1087,7 +1105,7 @@ def get_obligation(obligation_id: str) -> Optional[Obligation]:
     目录一致，否则改一次措辞就得整份材料重新分析才能看到。状态/checker
     仍使用账本里的原值，不把"现在目录里有这个 checker"当成"当时跑过"。
     """
-    return _OBLIGATION_BY_ID.get(str(obligation_id))
+    return _OBLIGATION_BY_ID.get(canonical_obligation_id(obligation_id))
 
 
 def catalog_fingerprint() -> str:
@@ -1870,8 +1888,8 @@ def _attach_structured_diagnostics(
         diagnostic = {key: raw.get(key) for key in (
             "reason_codes", "blocked_by", "missing_operands", "candidates", "next_action",
         )}
-        targets = ([str(raw.get("obligation_id"))] if raw.get("obligation_id")
-                   else [key for key in obligation_ids_for_rule(rule_id) if key in selected_ids])
+        targets = [key for key in relation_owners(raw, obligation_ids_for_rule(rule_id))
+                   if key in selected_ids]
         for obligation_id in targets:
             relation_diagnostics.setdefault((str(obligation_id), rule_id), []).append(diagnostic)
 
@@ -1902,10 +1920,16 @@ def _attach_structured_diagnostics(
             instance.card_summary = OBLIGATION_REASON_LABELS.get(instance.status)
             instance.suggested_actions = ({"action": _NEXT_ACTION_LABELS["rerun_ai"]},)
             continue
+        if instance.status not in DH02_OBLIGATION_SCOPE_STATUSES:
+            continue
         diagnostics = []
         for rule_id in dict.fromkeys((*instance.checkers, *instance.missing_checkers)):
-            diagnostics.extend(relation_diagnostics.get((instance.obligation_id, str(rule_id)), []))
-            diagnostics.extend(rule_diagnostics.get(str(rule_id), []))
+            paired = relation_diagnostics.get((instance.obligation_id, str(rule_id)), [])
+            diagnostics.extend(paired)
+            # 已迁移关系各自有归属，不再把另一义务的规则级卡点混过来。
+            if not paired and scoped_rule_status(instance.obligation_id, str(rule_id),
+                    fact_receipts or [], 'final') is None:
+                diagnostics.extend(rule_diagnostics.get(str(rule_id), []))
         if not diagnostics:
             if instance.status not in DH02_OBLIGATION_SCOPE_STATUSES:
                 continue
@@ -1974,12 +1998,20 @@ def build_obligation_ledger(
             )
             continue
         if instance.checkers or instance.missing_checkers:
+            local_statuses, local_details = dict(statuses), dict(details_by_rule)
+            if fact_receipts is not None:
+                for checker in instance.checkers:
+                    scoped = scoped_rule_status(instance.obligation_id, checker, fact_receipts, kind)
+                    # 执行异常不能被局部回执覆盖；规则的正常未完成可以按本义务范围分账。
+                    if scoped is not None and statuses.get(checker) not in {'parse_error', 'execution_error'}:
+                        local_statuses[checker] = scoped
+                        local_details[checker] = '本义务适用子检查回执缺失或未全部完成' if scoped == 'insufficient_data' else ''
             _resolve_rule_backed(
                 instance,
                 registry=registry,
-                statuses=statuses,
+                statuses=local_statuses,
                 reason_codes_by_rule=reason_codes_by_rule,
-                details_by_rule=details_by_rule,
+                details_by_rule=local_details,
             )
         instance.input_gaps = tuple(
             _input_gaps(instance.depends_on, structured_ingest)
@@ -2062,8 +2094,8 @@ def build_check_receipts(
         # obligations; the first global reverse mapping can be a budget item.
         selected_ids = {item.obligation_id for item in OBLIGATION_CATALOG
                         if report_kind in item.report_kinds}
-        targets: List[Optional[str]] = ([receipt.obligation_id] if receipt.obligation_id else
-                                        [key for key in obligation_ids_for_rule(receipt.rule_id) if key in selected_ids])
+        targets: List[Optional[str]] = [key for key in relation_owners(
+            receipt.to_dict(), obligation_ids_for_rule(receipt.rule_id)) if key in selected_ids]
         for obligation_id in targets or [None]:
             projected = CheckReceipt.from_dict(receipt.to_dict())
             projected.obligation_id = obligation_id
@@ -2078,6 +2110,10 @@ def build_check_receipts(
 
     def _aggregate_pair_status(pair: Tuple[str, str], fallback: str) -> Tuple[str, Optional[str]]:
         sub_statuses = relation_status_by_pair.get(pair) or []
+        if fact_receipts is not None:
+            scoped = scoped_rule_status(pair[0], pair[1], fact_receipts, report_kind)
+            if scoped is not None and fallback not in {'parse_error', 'execution_error'}:
+                return scoped, ('适用子检查回执缺失或未全部完成' if scoped == 'insufficient_data' else None)
         if not sub_statuses:
             return fallback, None
         applicable_statuses = [status for status in sub_statuses if status != STATUS_NOT_APPLICABLE]
@@ -2258,6 +2294,9 @@ def obligation_ids_for_rule(rule_id: Any) -> List[str]:
     token = str(rule_id or "").strip().upper()
     if not token:
         return []
+    if token == "V33-121":
+        # 历史 finding 仍可归类；不恢复退役规则的执行/完成资格。
+        return ["OBL-SG-TOTAL"]
     return [
         item.obligation_id
         for item in OBLIGATION_CATALOG

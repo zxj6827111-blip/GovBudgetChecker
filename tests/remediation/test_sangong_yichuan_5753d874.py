@@ -229,4 +229,4 @@ def test_duplicate_table_text_obligation_merged_with_checkers_kept():
     # 关联检查项完整保留在合并后的义务上。
     assert set(merged['checkers']) == {'V33-108', 'V33-224', 'CMM-001'}
     assert merged['reason'] == 'insufficient_data'
-    assert OBLIGATION_CATALOG_VERSION == 'obligations-v13-checklist-global-20261110'
+    assert OBLIGATION_CATALOG_VERSION == 'obligations-v14-automation-restoration-20261110'
