@@ -41,41 +41,58 @@ def to_cn_num(n: int) -> str:
         return str(n)
     return _CN_NUM[t] + "十" + (_CN_NUM[o] if o else "")
 
+#: 交付前噪声过滤的模式词（D0 RC-5b：过滤必须显式留痕，不得静默丢弃）。
+#: 任何被过滤的问题都要进入 doc 的过滤台账并记 warn 日志——"措辞翻转交付"
+#: 的静默机制（控制试验：同一结果仅改提示词，交付数 0↔1）必须可审计。
+_DELIVERY_NOISE_PATTERNS = (
+    "表出现多次",
+    "页码异常",
+    "格式错误",
+    "解析失败",
+)
+
+
 def order_and_number_issues(doc, issues):
     """
     按 (page, pos) 排序，并把 message 前面加上 "一、二、三…"
     说明：
     - 其它规则请尽量往 location 里塞 { "page": 页码, "pos": 页内位置 }，
       这样这里才能按文中顺序排。
-    - 噪声过滤增强：剔除含"表出现多次"的问题，提升检测结果质量
+    - 噪声过滤显式化（D0 RC-5b）：命中模式词的问题不再静默丢弃——逐条
+      记入 doc 的过滤台账（规则、命中模式、消息摘要）并记 warn 日志，
+      交付对账时可追到每个被丢弃结果的明确处理依据。
     """
-    # 增强噪声过滤逻辑
+    # 增强噪声过滤逻辑（显式留痕版）
     filtered_issues = []
+    dropped: List[Dict[str, Any]] = []
     for issue in issues:
-        # 检查多种噪声模式
-        is_noise = False
-        
-        # 1. 表重复噪声
-        if "表出现多次" in issue.message:
-            is_noise = True
-            
-        # 2. 检查desc字段（如果存在）
-        if hasattr(issue, 'desc') and issue.desc and "表出现多次" in issue.desc:
-            is_noise = True
-            
-        # 3. 其他潜在噪声模式（可扩展）
-        noise_patterns = [
-            "页码异常",
-            "格式错误",
-            "解析失败"
-        ]
-        for pattern in noise_patterns:
-            if pattern in issue.message:
-                is_noise = True
-                break
-                
-        if not is_noise:
+        message = str(getattr(issue, "message", "") or "")
+        desc = str(getattr(issue, "desc", "") or "") if getattr(issue, "desc", None) else ""
+        hit_pattern = next(
+            (pattern for pattern in _DELIVERY_NOISE_PATTERNS
+             if pattern in message or pattern in desc),
+            None,
+        )
+        if hit_pattern is None:
             filtered_issues.append(issue)
+            continue
+        entry = {
+            "rule": str(getattr(issue, "rule", "") or ""),
+            "pattern": hit_pattern,
+            "message_excerpt": message[:120],
+        }
+        dropped.append(entry)
+        logger.warning(
+            "delivery_noise_filtered: rule=%s pattern=%s message=%s",
+            entry["rule"], hit_pattern, entry["message_excerpt"],
+        )
+    if dropped and doc is not None:
+        ledger = list(getattr(doc, "delivery_noise_ledger", []) or [])
+        ledger.extend(dropped)
+        try:
+            doc.delivery_noise_ledger = ledger
+        except Exception:
+            pass
     
     def sort_key(it):
         p = it.location.get("page", 10**9)   # 没页码的排在最后
@@ -90,6 +107,8 @@ def order_and_number_issues(doc, issues):
             it.message = f"{cn}、{it.message}"
     return sorted_issues
 # engine/rules_v33.py  —— v3.3 规则（修正版）
+
+import logging
 
 from dataclasses import dataclass, field
 from typing import FrozenSet, List, Dict, Any, Optional, Sequence, Set, Tuple, TypedDict
@@ -127,6 +146,8 @@ from src.utils.narration import (
     split_numbered_sections,
 )
 from rapidfuzz import fuzz
+
+logger = logging.getLogger(__name__)
 
 
 # ---------- 数据结构 ----------

@@ -96,13 +96,29 @@ def _stage_matches(fact: Any, report_kind: str) -> bool:
 
 
 def item_amounts(doc: Any, report_kind: str) -> dict:
-    """三公表各项金额（万元）：每项须唯一命中当前材料、当前阶段的合计行事实。"""
+    """三公表各项金额（万元）：每项须唯一命中当前材料、当前阶段的合计行事实。
+
+    D0 RC-5a：取不到数时通过 ``last_amount_gaps``（随 doc 记账）显式留痕，
+    不再静默返回空表——"没有检查"必须可被覆盖统计看到（2026-10-22 决议
+    只授权"不报问题"，未授权"不记账"）。
+    """
     context = getattr(doc, "fact_context", None)
+    gaps: List[Dict[str, str]] = []
+    try:
+        doc._quantity_amount_gaps = gaps
+    except Exception:
+        pass
     if context is None:
+        gaps.append({"reason": "fact_context_missing", "detail": "无统一财政事实上下文"})
         return {}
     org_name = getattr(context, "org_name", None)
     facts = [f for f in getattr(context, "facts", []) or [] if f.table_code == THREE_PUBLIC_TABLE]
-    if len({f.instance_uid for f in facts}) != 1:
+    instances = {f.instance_uid for f in facts}
+    if len(instances) != 1:
+        gaps.append({
+            "reason": "table_instance_not_unique",
+            "detail": f"三公表逻辑实例数={len(instances)}（需唯一）",
+        })
         return {}
     amounts = {}
     for indicator, *_rest in _COUNT_SPECS:
@@ -113,6 +129,14 @@ def item_amounts(doc: Any, report_kind: str) -> dict:
         ]
         if len(candidates) == 1 and not operand_rejection_reason(candidates[0], org_name):
             amounts[indicator] = Decimal(str(candidates[0].normalized_value))
+        else:
+            gaps.append({
+                "reason": "amount_fact_missing_or_ambiguous",
+                "detail": (
+                    f"{indicator} 候选 {len(candidates)} 条"
+                    + ("（操作数被拒绝）" if len(candidates) == 1 else "（需唯一）")
+                ),
+            })
     return amounts
 
 
@@ -149,16 +173,55 @@ def count_issues(
     amounts = item_amounts(doc, report_kind)
     stage_label = "决算数" if report_kind == "final" else "预算数"
     issues: List[Any] = []
+
+    # D0 RC-5a：数量要素逐项显式记账（关系级回执），消灭"零问题零回执"的
+    # 静默跳过——2026-10-22 决议"宁漏报不误报"只约束不报问题，不授权不记账。
+    def _receipt(sub_check: str, status: str, *, formula: str,
+                 incomplete_reason: Optional[str] = None) -> None:
+        from .rules_v33 import _v33_relation_receipt
+
+        _v33_relation_receipt(
+            doc, str(getattr(rule, "code", "") or "QUANTITY"), sub_check,
+            status=status, formula=formula, incomplete_reason=incomplete_reason,
+            evidence_nature="applicability_judgment",
+        )
+
+    quantity_gaps = {
+        gap.get("detail"): gap for gap in (getattr(doc, "_quantity_amount_gaps", None) or [])
+    }
     for indicator, label, stem, fields in _COUNT_SPECS:
         if items is not None and indicator not in items:
             continue
         amount = amounts.get(indicator)
-        if amount is None or amount <= 0:
+        sub_check = f"quantity:{indicator}"
+        if amount is None:
+            gap_values = list(quantity_gaps.values())
+            gap = next(
+                (g for g in gap_values if indicator in str(g.get("detail", ""))),
+                gap_values[0] if len(gap_values) == 1 else None,
+            )
+            _receipt(sub_check, "insufficient_data",
+                     formula=f"{label}{stage_label} > 0 ⇒ require count disclosure",
+                     incomplete_reason=(gap or {}).get("detail") or "三公表该项金额事实取数不足")
+            continue
+        if amount <= 0:
+            _receipt(sub_check, "not_applicable",
+                     formula=f"{label}{stage_label}={amount}，金额为0不要求数量披露")
             continue
         item_paras = _item_paragraphs(paras, stem)
         compact = _compact_text("".join(item_paras))
         if _NOT_OCCURRED_RE.search(compact):
+            _receipt(sub_check, "not_applicable",
+                     formula=f"{label}{stage_label}={amount}，说明写明未发生")
             continue
+        missing_fields = [field_label for field_key, field_label, pattern in fields
+                          if not pattern.search(compact)]
+        if missing_fields:
+            _receipt(sub_check, "fail",
+                     formula=f"{label}{stage_label}={amount} > 0 且说明未披露 {'、'.join(missing_fields)}")
+        else:
+            _receipt(sub_check, "pass",
+                     formula=f"{label}{stage_label}={amount} > 0 且数量要素已披露")
         evidence = item_paras[0] if item_paras else (paras[0] if paras else scope[:200])
         for field_key, field_label, pattern in fields:
             if pattern.search(compact):
@@ -180,6 +243,8 @@ def count_issues(
             ))
 
     whole = _compact_text(merge_page_texts(list(getattr(doc, "page_texts", None) or [])))
+    _receipt("quantity:vehicle_stock", "fail" if not _VEHICLE_STOCK_RE.search(whole) else "pass",
+             formula="全文（含国有资产占有使用情况）任一处披露车辆保有量")
     if not _VEHICLE_STOCK_RE.search(whole):
         evidence = next((p for p in paras if "公务用车" in p), paras[0] if paras else scope[:200])
         issues.append(rule._issue(
