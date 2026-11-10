@@ -64,9 +64,12 @@ def require_no_activity_disposition(rule, doc):
             start, finish = begin + match.start(), begin + match.end()
             if not context_guard(doc, text.compact, start, finish) and _wan(match['amount'], match['unit']) > 0:
                 conflict = True
-        # 空白分母不是已披露的零分母，仍保留百分比核对缺口。
-        if re.search(r'\d+(?:\.\d+)?[%％]', text.compact[begin:end]):
-            conflict = True
+        # D0 RC-8a：完成率/占比类百分比声明不再在此记冲突——表为可证零
+        # （空表说明+原件网格认证）时，0 分母上的有限百分比由
+        # V33-TREND-COMPLETION-RATE / native ratios 专项复算并交付确定性
+        # finding（党群实证：4 条"分母为0无数学定义"已交付）；本规则的
+        # insufficient 只会造成同一现象的双重人工复核。正数金额冲突保留：
+        # 说明写正数而表内十二格留空仍是真矛盾。
     terms, sources = proof
     reason = ('原表明确无三公支出且十二格原件留空，但说明存在正数或百分比，需核对披露'
               if conflict else '原表明确本年度无三公支出且十二格原件留空，金额复算不适用')

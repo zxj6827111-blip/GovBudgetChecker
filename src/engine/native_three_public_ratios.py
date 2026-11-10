@@ -247,7 +247,15 @@ def evaluate(rule: Any, doc: Any, claim: dict[str, Any], *, indicator: str,
     # 分子未披露或不为 0 的有限百分比仍无定义，不得凭空当零。
     zero_over_zero = zero and top is not None and top == 0 and claim["pct"] == 0
     computed = None if zero else top / bottom * Decimal("100")
-    differs = (zero and not zero_over_zero) or (not zero and abs(computed - claim["pct"]) > Decimal("0.1"))
+    # D0 RC-6：声明精度取整包络（"98%"整数精度覆盖±0.5pp）
+    from .rules_v33 import _declared_pct_half_step
+
+    declared_half = _declared_pct_half_step(claim.get("pct_text"))
+    differs = (zero and not zero_over_zero) or (
+        not zero
+        and abs(computed - claim["pct"]) > Decimal("0.1")
+        and not (declared_half is not None and abs(computed - claim["pct"]) <= declared_half)
+    )
     # 说明常按未取整金额计算（0.824 万元印成 0.82）：说明值落在两数显示取整范围内时
     # 不判不成立，按 AGENTS 口径标「可能为取整误差」；容差本身不放宽。
     envelope = None if zero or not differs or numerator is None else _rounding_range(numerator, denominator)

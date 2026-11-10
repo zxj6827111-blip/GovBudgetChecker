@@ -82,9 +82,11 @@ def order_and_number_issues(doc, issues):
             "message_excerpt": message[:120],
         }
         dropped.append(entry)
+        # 日志只记 ID/模式/长度——消息摘要可能含材料原文，进 doc 级台账
+        # （delivery_noise_ledger）而非日志（日志安全门禁 fail-closed）。
         logger.warning(
-            "delivery_noise_filtered: rule=%s pattern=%s message=%s",
-            entry["rule"], hit_pattern, entry["message_excerpt"],
+            "delivery_noise_filtered: rule=%s pattern=%s message_len=%s",
+            entry["rule"], hit_pattern, len(entry["message_excerpt"]),
         )
     if dropped and doc is not None:
         ledger = list(getattr(doc, "delivery_noise_ledger", []) or [])
@@ -360,6 +362,25 @@ def _v33_fact_identity(*facts: Any) -> Tuple[List[str], List[str]]:
             if str(item).strip()
         )
     return list(dict.fromkeys(fact_ids)), list(dict.fromkeys(evidence_ids))
+
+
+def _declared_pct_half_step(pct_text: Any) -> Optional[Decimal]:
+    """声明百分比的取整半步长（D0 RC-6）。
+
+    "98%"（整数精度）覆盖 [97.5, 98.5]；"97.64%"（两位精度）覆盖
+    ±0.005pp。声明值落在复算值的声明精度取整包络内时，二者按声明精度
+    一致（AGENTS：四舍五入误差默认允许；格式缺陷由 CMM-010 单独报）。
+    """
+    text = str(pct_text or "").strip().rstrip("%").replace(",", "")
+    if not text:
+        return None
+    try:
+        Decimal(text)
+    except Exception:
+        return None
+    if "." in text:
+        return Decimal("0.5") / (Decimal(10) ** len(text.split(".")[-1]))
+    return Decimal("0.5")
 
 
 def _narrative_fiscal_fund_split(sec_text: str) -> Dict[str, float]:
@@ -9100,8 +9121,30 @@ class R33220_Narrative3_T3(Rule):
         table_basic = extract_row_strict(total_row, idx_basic, "基本支出", default_unit=t3_unit)
         table_project = extract_row_strict(total_row, idx_project, "项目支出", default_unit=t3_unit)
 
+        # D0 RC-8b：合计行基本/项目支出的原件空白格按经认证的空白值约定
+        # （U-5）作 0 参与比较——与 V33-104 同一口径；无独立认证时保持
+        # 取数不足（fail-closed），不得把识别不清的空白当零。
+        from .native_empty_operands import blank_term, independent_blank_zero
+
+        def _certified_blank_observation(indicator: str):
+            if doc.fact_context is None or doc.parse_artifact is None:
+                return None
+            term = blank_term(doc, "FIN_03_expenditure", indicator,
+                              code="total", stage="决算")
+            if term is None or not independent_blank_zero(doc, term):
+                return None
+            return dict(term.extra_dims.get("native_blank_observation") or {})
+
         # 校验基本支出
         if nar_basic is not None:
+            blank_obs_basic = None
+            if not (table_basic.is_numeric and table_basic.decimal_val is not None):
+                blank_obs_basic = _certified_blank_observation("basic_actual")
+                if blank_obs_basic is not None:
+                    table_basic = StrictValue(
+                        raw_text="0", status="valid",
+                        decimal_val=Decimal("0"), scale_digits=2, unit=t3_unit,
+                    )
             if table_basic.is_numeric and table_basic.decimal_val is not None:
                 t_basic_dec = table_basic.decimal_val
                 n_basic_dec = nar_basic.decimal_val or Decimal("0")
@@ -9132,7 +9175,9 @@ class R33220_Narrative3_T3(Rule):
                     )
                     issues.append(self._issue(
                         f"说明3↔T3基本支出不一致：说明={n_basic_dec:.{max_scale_b}f}, 表内基本支出={t_basic_dec:.{max_scale_b}f} (差额={diff_b:.{max_scale_b}f})",
-                        location, "warn",
+                        {**location,
+                         **({"native_blank_sources": [blank_obs_basic]} if blank_obs_basic else {})},
+                        "warn",
                         evidence_text=f"文档说明(基本支出)：{n_basic_dec:.{max_scale_b}f}; 表3基本支出：{t_basic_dec:.{max_scale_b}f}"
                     ))
             else:
@@ -9142,6 +9187,14 @@ class R33220_Narrative3_T3(Rule):
 
         # 校验项目支出
         if nar_project is not None:
+            blank_obs_project = None
+            if not (table_project.is_numeric and table_project.decimal_val is not None):
+                blank_obs_project = _certified_blank_observation("project_actual")
+                if blank_obs_project is not None:
+                    table_project = StrictValue(
+                        raw_text="0", status="valid",
+                        decimal_val=Decimal("0"), scale_digits=2, unit=t3_unit,
+                    )
             if table_project.is_numeric and table_project.decimal_val is not None:
                 t_proj_dec = table_project.decimal_val
                 n_proj_dec = nar_project.decimal_val or Decimal("0")
@@ -9172,7 +9225,9 @@ class R33220_Narrative3_T3(Rule):
                     )
                     issues.append(self._issue(
                         f"说明3↔T3项目支出不一致：说明={n_proj_dec:.{max_scale_p}f}, 表内项目支出={t_proj_dec:.{max_scale_p}f} (差额={diff_p:.{max_scale_p}f})",
-                        location, "warn",
+                        {**location,
+                         **({"native_blank_sources": [blank_obs_project]} if blank_obs_project else {})},
+                        "warn",
                         evidence_text=f"文档说明(项目支出)：{n_proj_dec:.{max_scale_p}f}; 表3项目支出：{t_proj_dec:.{max_scale_p}f}"
                     ))
             else:
@@ -14221,6 +14276,12 @@ class R33TrendCompletionRate(Rule):
         expected = actual["wan"] / denom["wan"] * Decimal("100")
         if self._pct_close(claim["pct"], expected):
             return  # 数学一致：原因说明缺失归 V33-234 既有 warn，本规则不重复报
+        # D0 RC-6：声明精度的取整包络——"完成年初预算的 98%"（整数精度）
+        # 覆盖 [97.5, 98.5]，复算 97.64% 落在包络内即按声明精度一致，
+        # 不再按 0.36pp 的"复算不一致"误报；两位小数格式缺陷由 CMM-010 报。
+        declared_half = _declared_pct_half_step(claim.get("pct_text"))
+        if declared_half is not None and abs(claim["pct"] - expected) <= declared_half:
+            return
         conflict = self._identity_hit(claim, actual, others)
         if conflict is not None:
             other, alt = conflict

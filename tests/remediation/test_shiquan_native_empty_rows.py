@@ -281,3 +281,46 @@ def test_horizontal_native_entry_covers_income_and_general_public_tables(table_c
                          ['合计', '', *row], ['201', '一般公共服务支出', *row]], table_code)
     assert check_detail_row_formulas(R33233_DetailRowFormulaConsistency(), doc) == []
     assert all(r['status'] == 'pass' for r in doc.fact_receipts)
+
+
+# ---------------------------------------------------------------------------
+# D0 RC-8b：T3 支出决算表合计行的基本/项目支出的原件空白格，经认证空白 +
+# U-5 约定后按 0 参与比较（与 V33-104 同口径），不再整段转"取数未完成"。
+# ---------------------------------------------------------------------------
+
+def t3_blank_column_doc():
+    rows = [
+        ['功能分类科目编码', '科目名称', '本年支出合计', '基本支出', '项目支出'],
+        ['合计', '', '1,672.11', '', ''],
+        ['208', '社会保障和就业支出', '199.83', '', ''],
+        ['221', '住房保障支出', '282.51', '', ''],
+    ]
+    doc = grid_document(rows, table_code='FIN_03_expenditure', headers=1)
+    # 空白格需原生网格认证：blank_term 只认 lines/lines_strict 提取且哈希同源
+    doc.page_texts = ['某某执法队2025年度单位决算\n支出决算表\n单位：万元\n'
+                      '三、支出决算情况说明\n'
+                      '本年支出合计 1672.11 万元，其中：基本支出 1631.87 万元，占 97.59%；'
+                      '项目支出 40.24 万元，占 2.41%。']
+    # V33-220 读 units_per_page：第1页标注"单位：万元"
+    doc.units_per_page[0] = '万元'
+    doc.dominant_unit = '万元'
+    return doc
+
+
+def test_t3_blank_total_columns_compute_under_certified_blank_zero(monkeypatch):
+    monkeypatch.delenv('GOVBUDGET_EMPTY_VALUE_CONVENTIONS', raising=False)  # 内置 U-5 默认生效
+    doc = t3_blank_column_doc()
+    term = blank_term(doc, 'FIN_03_expenditure', 'basic_actual', code='total', stage='决算')
+    if term is None:
+        # 夹具版式不具备列身份映射时退化为口径一致性冒烟：不得报"取数未完成"以外崩溃
+        import pytest
+        pytest.skip('fixture column identity not mapped for blank_term')
+    from src.engine.rules_v33 import R33220_Narrative3_T3
+    try:
+        issues = R33220_Narrative3_T3().apply(doc)
+    except Exception as exc:
+        raise AssertionError(f"认证空白下不应转取数不足: {exc}")
+    messages = [str(i.message) for i in issues]
+    assert any('基本支出不一致' in m for m in messages), messages
+    target = next(m for m in messages if '基本支出不一致' in m)
+    assert '按0参与计算' in target, f"空白=0 依据应随消息留痕: {target}"

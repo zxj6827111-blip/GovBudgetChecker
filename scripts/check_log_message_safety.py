@@ -200,6 +200,7 @@ SAFE_LOG_NAMES = frozenset(
         "status",
         "role",
         "name",
+        "hit_pattern",  # 交付噪声过滤命中的固定模式词（rules_v33 白名单常量），非原文
         "default",
         "model",  # AI 模型名
         "provider",

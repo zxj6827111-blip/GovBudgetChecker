@@ -463,16 +463,15 @@ def test_real_sample_doc_positive_passes(sample):
 
 def test_real_yichuan_summary_rate_passes(yichuan):
     """宜川（REAL）：有可复算的总述；部分三公分项预算未披露，必须返回未完成。
-    批次1 年份角色修复后恢复一条真实完成率复算差异（声明 98%，按
-    20707.11→20218.21 应为 97.64%，相差 0.36 个百分点）；该 finding
-    是已核实的真实发现，仍须与未完成状态并存。"""
+
+    D0 RC-6（2026-11-10 计划裁定）订正：原文"完成年初预算的 98%"是整数
+    精度声明，复算 97.64% 落在其取整包络 [97.5, 98.5] 内——按声明精度
+    一致，不再交付"相差 0.36 个百分点"的复算不一致误报；两位小数格式
+    缺陷由 CMM-010 单独报。三公分项预算未披露的未完成状态保持不变。
+    """
     with pytest.raises(RuleDeferred) as excinfo:
         _run(_document(yichuan))
-    issues = excinfo.value.partial_issues
-    assert [item.rule for item in issues] == ["V33-TREND-COMPLETION-RATE"]
-    assert issues[0].severity == "error"
-    assert "97.64%" in issues[0].message and "98%" in issues[0].message
-    assert "0.36 个百分点" in issues[0].message
+    assert excinfo.value.partial_issues == []
     assert "预算分母" in excinfo.value.detail
 
 

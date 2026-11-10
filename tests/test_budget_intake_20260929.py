@@ -536,8 +536,9 @@ def test_yichuan_findings_stay_12(final_replays):
     # 非清单项由 13 条增至 14 条；2D 格式穷尽再增 4 条（CMM-010 小数位/千分位、
     # CMM-002 半角逗号/冒号），均为原文可见的格式问题，不是回归。
     # D0 批次C：V33-251 的"未纳入"info 撤下，CMM-011 的"4.19 漏万元"warn
-    # 接位（同一处缺陷的更精确交付），净条数不变。
-    assert len(issues) - len(checklist) == 19
+    # 接位；批次E RC-6："98% vs 97.64%"在声明精度取整包络内，复算不一致
+    # 误报撤下（格式缺陷由 CMM-010 单独报）。
+    assert len(issues) - len(checklist) == 18
 
 
 def test_wenlv_cascade_still_zero(final_replays):
