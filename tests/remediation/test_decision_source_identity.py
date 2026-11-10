@@ -114,6 +114,35 @@ def test_legacy_event_only_recovers_from_hash_verified_original_revision(tmp_pat
     assert workflow.project_job_issue_decisions('job',p,_state=dict(decision_events=[e]))==[]
 
 
+def test_many_legacy_decisions_read_each_verified_archive_once_per_projection(tmp_path,monkeypatch):
+    from pathlib import Path
+    p=payload();base=copy.deepcopy(p['result']['ai_findings'][0]);old=copy.deepcopy(p)
+    p['result']['ai_findings']=[];old['result']['ai_findings']=[];old['analysis_revision']='old'
+    events=[]
+    for number in range(20):
+        current=copy.deepcopy(base);current['id']=f'new-{number}'
+        current['evidence'][0]['source_block_id']=f'native:p3:s{number*30}:e{number*30+24}'
+        previous=copy.deepcopy(current);previous['id']=f'old-{number}'
+        p['result']['ai_findings'].append(current);old['result']['ai_findings'].append(previous)
+        events.append(dict(job_id='job',issue_id=previous['id'],analysis_revision='old',status='confirmed',
+                           decision_revision='1',identity_fingerprint=workflow.issue_identity_fingerprint(previous)))
+    folder=tmp_path/'job/preserved_analyses/version';folder.mkdir(parents=True)
+    snapshot=folder/'status.json';content=json.dumps(old).encode();snapshot.write_bytes(content)
+    (folder/'manifest.json').write_text(json.dumps(dict(files={'status.json':hashlib.sha256(content).hexdigest()})))
+    monkeypatch.setattr(workflow.runtime,'UPLOAD_ROOT',tmp_path)
+    original=Path.read_bytes;reads=[]
+    def counted(path):
+        if path==snapshot:reads.append(path)
+        return original(path)
+    monkeypatch.setattr(Path,'read_bytes',counted)
+    assert len(workflow.project_job_issue_decisions('job',p,_state=dict(decision_events=events)))==20
+    assert len(reads)==1
+    # 下一次读取必须重验；即使只是加空格、JSON仍等价也不能沿用上次通过结果。
+    snapshot.write_bytes(content+b' ')
+    assert workflow.project_job_issue_decisions('job',p,_state=dict(decision_events=events))==[]
+    assert len(reads)==2
+
+
 def test_conflicting_prior_decisions_remain_needs_review():
     p=payload();one=event(p);two=event(p,'no_issue');two['issue_id']='another-old-ai'
     result=workflow.project_job_issue_decisions('job',p,_state=dict(decision_events=[one,two]))

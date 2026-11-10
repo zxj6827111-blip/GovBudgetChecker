@@ -1063,6 +1063,9 @@ def project_job_issue_decisions(
         if identity and candidate.get('id'):
             identities.setdefault(identity['digest'], {})[str(candidate['id'])] = candidate
     archive_identities: Dict[Tuple[str, str, str], Optional[Dict[str, Any]]] = {}
+    # 同一次投影的几十条旧决定常引用同一份大报告；快照完整性只验一次，
+    # 下次请求重新读取并验哈希，不能用跨请求缓存掩盖原件/清单变化。
+    archive_snapshots: Dict[str, Optional[Dict[str, Any]]] = {}
     for issue_id in sorted(events_by_issue):
         # 顺序ID可能在后来的分析里指向另一判断对象；按强身份分别保留末态，
         # 不能让对象Y的新决定吞掉对象X更早写在同一ID下的撤销。
@@ -1076,7 +1079,7 @@ def project_job_issue_decisions(
         for event in events_by_issue[issue_id]:
             if str(event.get('analysis_revision') or '') == revision:
                 continue
-            identity = _event_source_identity(normalized_job_id, event, archive_identities)
+            identity = _event_source_identity(normalized_job_id, event, archive_identities, archive_snapshots)
             if identity is not None:
                 by_identity.setdefault(identity['digest'], []).append(event)
         for events in by_identity.values():
@@ -1090,7 +1093,7 @@ def project_job_issue_decisions(
             source_identity_match = False
             source_identity_digest = None
             if not same_revision and event.get('status') in _VALID_STATUSES:
-                old_identity = _event_source_identity(normalized_job_id, event, archive_identities)
+                old_identity = _event_source_identity(normalized_job_id, event, archive_identities, archive_snapshots)
                 successors = identities.get(old_identity['digest'], {}) if old_identity else {}
                 if len(successors) == 1:
                     issue = next(iter(successors.values()))
@@ -1134,7 +1137,7 @@ def project_job_issue_decisions(
     return projected
 
 
-def _event_source_identity(job_id, event, cache):
+def _event_source_identity(job_id, event, cache, snapshots=None):
     """旧决定只从带完整性清单的原分析快照恢复依据，不按当前措辞猜旧判断。"""
     stored = event.get('decision_identity')
     if valid_decision_identity(stored):
@@ -1150,14 +1153,21 @@ def _event_source_identity(job_id, event, cache):
     folder = (root / job_id / 'preserved_analyses').resolve()
     if not folder.is_relative_to(root) or not folder.is_dir():
         return None
+    if snapshots is None:
+        snapshots = {}
     for manifest in sorted(folder.glob('*/manifest.json'), reverse=True):
         snapshot = manifest.parent / 'status.json'
         try:
-            expected = json.loads(manifest.read_text()).get('files', {}).get('status.json')
-            content = snapshot.read_bytes()
-            if not expected or hashlib.sha256(content).hexdigest() != expected:
+            snapshot_key = str(manifest)
+            if snapshot_key not in snapshots:
+                snapshots[snapshot_key] = None
+                expected = json.loads(manifest.read_text()).get('files', {}).get('status.json')
+                content = snapshot.read_bytes()
+                if expected and hashlib.sha256(content).hexdigest() == expected:
+                    snapshots[snapshot_key] = json.loads(content)
+            previous = snapshots[snapshot_key]
+            if previous is None:
                 continue
-            previous = json.loads(content)
             if str(previous.get('analysis_revision') or '') != key[0] or previous.get('job_id') != job_id:
                 continue
             issue = _find_issue(previous, key[1])

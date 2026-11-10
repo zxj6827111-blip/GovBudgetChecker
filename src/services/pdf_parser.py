@@ -510,6 +510,7 @@ class PDFParser:
                 # 留证明，不能拿这些稀疏记录与另一候选的完整证明直接比数量。
                 from src.services.native_structure_recovery import bind_native_grid_character_sources
                 parsed = bind_native_grid_character_sources(page, parsed)
+                parsed = self._recover_native_continuation_data_header(continuation, parsed)
                 candidates.append(parsed)
             return candidates
 
@@ -1668,8 +1669,107 @@ class PDFParser:
         headers = self._collect_headers(current.rows, current.header_row_count)
         return bool(headers) and not any(self._looks_numeric(header) for header in headers)
 
+    def _native_coded_basic_continuation(self, previous: ParsedTable, current: ParsedTable, mappings) -> bool:
+        """原生列边界、逐字编码及同类编码顺序共同证明无表头的经济分类续页。"""
+        if (previous.table_code != 'FIN_06_basic_expenditure'
+                or current.page_number != self._last_page_number(previous) + 1
+                or not current.table_code.startswith('UNKNOWN_')
+                or previous.extraction_method not in {'lines', 'lines_strict'}
+                or current.extraction_method not in {'lines', 'lines_strict'}
+                or self._unit_hints_conflict(previous, current)
+                or self._fragment_titles_conflict(previous, current)
+                or not previous.rows or not current.rows):
+            return False
+        widths = [{len(row) for row in table.rows} for table in (previous, current)]
+        if len(widths[0]) != 1 or widths[0] != widths[1]:
+            return False
+        width = next(iter(widths[0]))
+        layout = {6: ((0,), 1, (3,), 4), 8: ((0, 1), 2, (4, 5), 6)}.get(width)
+        if layout is None or {m['source_col_idx'] for m in mappings} != {width // 2 - 1, width - 1}:
+            return False
+        for col in range(width):
+            bounds = []
+            for table in (previous, current):
+                boxes = [c.bbox for c in table.cells if c.col_idx == col and c.col_span == 1
+                         and c.bbox and c.extraction_method in {'lines', 'lines_strict'}
+                         and not c.ocr_provenance]
+                if not boxes:
+                    return False
+                bounds.append(min(boxes, key=lambda box: box[2] - box[0]))
+            if abs(bounds[0][0] - bounds[1][0]) > .5 or abs(bounds[0][2] - bounds[1][2]) > .5:
+                return False
+        source = {(c.row_idx, c.col_idx): c for c in current.cells}
+        if len(source) != len(current.cells):
+            return False
+        def code(row, columns):
+            parts = [str(row[col] or '').strip() for col in columns]
+            if not parts[0]:
+                return '' if not any(parts) else None
+            if not re.fullmatch(r'\d{3}(?:\d{2}){0,2}', parts[0]):
+                return None
+            if len(parts) == 2 and parts[1] and not re.fullmatch(r'\d{2}', parts[1]):
+                return None
+            joined = ''.join(parts)
+            return joined if re.fullmatch(r'\d{3}(?:\d{2}){0,2}', joined) else None
+        def literal(cell):
+            return bool(cell and cell.bbox and not cell.ocr_provenance and cell.native_text_sources
+                and normalize_text(''.join(p.get('text', '') for p in cell.native_text_sources)) == normalize_text(cell.raw_text)
+                and all(p.get('bbox') and cell.bbox[0] - .5 <= p['bbox'][0]
+                        and p['bbox'][2] <= cell.bbox[2] + .5
+                        and cell.bbox[1] - .5 <= p['bbox'][1]
+                        and p['bbox'][3] <= cell.bbox[3] + .5 for p in cell.native_text_sources))
+        seen = 0
+        first_seen = False
+        for columns, name_col in ((layout[0], layout[1]), (layout[2], layout[3])):
+            prior = [value for row in previous.rows if (value := code(row, columns))]
+            for row_index, row in enumerate(current.rows):
+                if normalize_text(str(row[columns[0]] or '')) in {'人员经费合计', '公用经费合计'}:
+                    continue
+                value = code(row, columns)
+                label = normalize_text(str(row[name_col] or ''))
+                if value == '' and not label:
+                    continue
+                if value == '' and label in {'人员经费合计', '公用经费合计'}:
+                    continue
+                name_cell = source.get((row_index, name_col))
+                if (not value or not prior or value[:3] != prior[-1][:3] or int(value) <= int(prior[-1])
+                        or not re.search(r'[\u4e00-\u9fff]', label)
+                        or name_cell is None or not name_cell.bbox or name_cell.ocr_provenance
+                        or name_cell.extraction_method not in {'lines', 'lines_strict'}
+                        or normalize_text(name_cell.raw_text) != label
+                        or any(not literal(source.get((row_index, col)))
+                               for col in columns if str(row[col] or '').strip())):
+                    return False
+                seen += 1
+                first_seen |= row_index == 0
+                prior.append(value)
+        return seen > 0 and first_seen
+
+    def _recover_native_continuation_data_header(self, previous, current):
+        """无表头续页的首条业务行不能因“至少一行表头”默认值而被丢弃。"""
+        if previous is None or current.header_row_count != 1:
+            return current
+        from src.services.fiscal_column_identity import canonical_column_mappings
+        mappings = canonical_column_mappings(previous, NINE_TABLE_RULES.get(previous.table_code)) if previous.table_code in NINE_TABLE_RULES else []
+        if not mappings or not self._native_coded_basic_continuation(previous, current, mappings):
+            return current
+        self._reconstruction_decisions.append(dict(
+            kind='native_continuation_data_row_role', page=current.page_number,
+            fragment_uid=current.fragment_uid, reference_fragment_uid=previous.fragment_uid,
+            row=0, original_header_row_count=1, recovered_header_row_count=0,
+            basis='native_columns_and_literal_same_class_code_sequence', monetary_cells_unchanged=True))
+        # 名称可以折行或被格线裁剪；这里只凭已逐字认证的编码和列界纠正行角色。
+        # 原名称不改，名称真实性与金额仍须通过各自独立的原件证据门。
+        return replace(current, header_row_count=0,
+                       cells=[replace(cell, is_header=False) if cell.row_idx == 0 else cell for cell in current.cells])
+
     def _native_blank_basic_tail_matches(self, previous: ParsedTable, current: ParsedTable, mappings) -> bool:
         """空金额经济分类尾页仍须导入；明确留空，不能生成零值事实。"""
+        if (current.rows and all(len(row) == 8 for row in current.rows)
+                and self._native_coded_basic_continuation(previous, current, mappings)):
+            amounts = [c for c in current.cells if c.col_idx in {3, 7}]
+            return bool(len(amounts) == 2 * len(current.rows)
+                        and all(not c.raw_text.strip() and c.bbox and c.native_blank_verified for c in amounts))
         if (previous.table_code != "FIN_06_basic_expenditure"
                 or current.page_number != self._last_page_number(previous) + 1
                 or not current.table_code.startswith("UNKNOWN_")
