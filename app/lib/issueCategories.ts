@@ -21,23 +21,35 @@ export function issueCategoryId(problem: CategoryInput): IssueCategoryId {
   if (problem.source === "structured_ingest") return "coverage";
   const text = `${problem.title} ${problem.description}`;
   const rule = problem.ruleId.toUpperCase();
-  if (/证据完整率|应检查事项|未实际覆盖|检查范围|未覆盖|规则因数据缺失/.test(text)) return "coverage";
+  if (["RULES_NOT_EXECUTED", "TABLE_READING_INCOMPLETE"].includes(rule)
+    || /证据完整率|应检查事项|未实际覆盖|检查范围|未覆盖|规则因数据缺失/.test(text)) return "coverage";
   // 格式规则优先于通用“金额不一致”和 AI-TEXT，避免同一类按发现来源拆开。
-  if (rule === "CMM-010" || /千分位|小数位|数字格式|金额书写格式|保留两位小数/.test(text)) return "number_format";
+  if (["CMM-010", "CMM-011", "V33-232", "V33-DISCLOSURE-PERCENT-UNIT"].includes(rule)
+    || /千分位|小数位|数字格式|金额书写格式|保留两位小数/.test(text)) return "number_format";
   // 补核卡与正式名称问题按同一业务分类，保留每项金额检查的独立处理身份。
   if (/单位名称.*(?:不一致|冲突)|原文包含其他或未确认主体|(?:项|款|类)“[^”]+”在表内找不到同名科目/.test(text)) return "scope";
+  // 年份笔误与比较年度/报告年度口径不同，同一规则内也按实际问题分类。
+  if (rule === "CMM-012") return /年份书写有误/.test(problem.title) ? "wording" : "scope";
   if (["BUD-109", "V33-227", "CMM-018"].includes(rule)
     || rule.startsWith("AI-CODE-") || /主体口径|类款项|科目.*(?:名称|编码|层级|用途).*?(?:错误|不一致|不匹配)|类级科目名称/.test(text)) return "scope";
-  if (rule.startsWith("OBL-TREND-") || ["V33-234", "V33-249"].includes(rule)
-    || /占比.*(?:分母|不一致|错误)|同比比例|比例.*(?:计算错误|不一致)|占比合计/.test(text)) return "percentage";
+  // V33-234 同时检查同比和政府采购构成；按本条真实公式归类，
+  // 不能让“总额 != 分项之和”因为共用规则编号而落入比例类。
+  if (!/占比|比例|完成率|百分比|同比/.test(problem.title)
+    && /(?:总额|总计|合计).*(?:分项|三项|明细|之和)|(?:分项|三项|明细).*(?:之和|合计)/.test(problem.title)
+    && /不一致|不相等|不平衡|差额/.test(problem.title)) return "amount";
+  if (/(?:序号|编号).*(?:跳|重号|连续性)/.test(problem.title)) return "wording";
+  if (rule.startsWith("OBL-TREND-") || rule.startsWith("V33-TREND-")
+    || ["CMM-007", "CMM-020", "V33-234", "V33-249"].includes(rule)
+    || /占比.*(?:分母|不一致|不符|错误|表算)|同比比例|比例.*(?:计算错误|不一致|不成立)|占比合计/.test(text)) return "percentage";
   if (rule === "V33-110" || /^AI-(?:DIR|DESC)-/.test(rule)
     || /比较方向|增减方向.*(?:不一致|矛盾)|增减原因|缺少实质|原因.*(?:矛盾|相反)/.test(text)) return "change";
-  if (["V33-112", "CMM-005", "CMM-008", "CMM-014"].includes(rule)
+  if (["BUD-002", "V33-112", "V33-113", "CMM-002", "CMM-005", "CMM-008", "CMM-009", "CMM-014"].includes(rule)
     || /^AI-(?:TPL|TEXT)-/.test(rule)
     || /占位符|模板残留|二选一|重复词|重复字|重复短语|重复表述|多余字词|错别字|标点|序号体例|编号.*(?:跳|重)/.test(text)) return "wording";
-  if (["V33-002", "V33-109", "V33-114", "V33-201"].includes(rule)
+  if ((rule === "V33-201" && /(?:表.*缺失|缺失.*表|表缺失)/.test(text))
+    || ["BUD-001", "V33-002", "V33-003", "V33-109", "V33-114", "V33-246", "V33-SG-COMPLETION", "CMM-016", "CMM-023"].includes(rule)
     || /缺失表|缺少表|缺表|空表|无数据说明|缺少.*(?:章节|说明)|必备章节|目录|封面|空白页|表名.*不一致/.test(text)) return "structure";
-  if (["V33-105", "V33-107", "V33-117", "V33-222", "V33-223", "V33-251"].includes(rule)
+  if (["CMM-004", "V33-004", "V33-103", "V33-104", "V33-105", "V33-107", "V33-117", "V33-122", "V33-201", "V33-222", "V33-223", "V33-251"].includes(rule)
     || /表文|勾稽|合计|总计|分项|之和|平衡|差额|金额.*(?:不一致|错误)|数量.*(?:不一致|错误)|总数/.test(text)
     || /^AI-XSEC-/.test(rule)) return "amount";
   // 兼容已分类的历史条目，不再把“AI 智能分析”当成一种业务问题。
