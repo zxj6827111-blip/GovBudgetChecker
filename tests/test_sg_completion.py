@@ -166,7 +166,9 @@ def test_truth_sgc01_finding_carries_expected_actual_and_evidence(yichuan):
     assert "期望" in issue.message and "实际" in issue.message
     assert issue.location["expected_disclosure"]
     assert "合并金额" in issue.location["actual_disclosure"]
-    assert (issue.evidence_text or "").startswith("【章节:")
+    # D0 RC-1a：章节身份走结构化 section_id，evidence 只保留原文引文
+    assert (issue.section_id or "").strip()
+    assert "【章节:" not in (issue.evidence_text or "")
     assert "公务用车购置及运行维护费" in (issue.evidence_text or "")
 
 

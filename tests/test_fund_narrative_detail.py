@@ -201,10 +201,18 @@ def test_y03_findings_carry_locatable_evidence_for_both_sides(truth):
     # 说明侧证据必须保留命中原文（能回到 PDF 原句）
     assert "住房保障支出（项）135.00 万元" in refs["情况说明"]["span"].replace("\n", "")
 
-    evidence = issues[0].evidence_text or ""
-    for token in (FIN_08_TITLE, "八、政府性基金预算财政拨款收入支出决算情况说明",
-                  "2219899", "105.00", "135.00", "30.00", "万元", "2025"):
-        assert token in evidence, f"证据缺少 {token}: {evidence}"
+    # D0 RC-1b：evidence 只保留原文 span；表身份/页码/两侧金额走
+    # location 与 message。表格侧 span 引金额原格原文。
+    import re as _re
+
+    def _norm(value):
+        return _re.sub(r"\s+", "", value or "")
+
+    assert _norm(refs["表格"]["span"]), f"表格侧 ref 应带原文 span: {refs}"
+    assert "105.00" in _norm(refs["表格"]["span"]) or "105" in _norm(refs["表格"]["span"]), (
+        f"表格侧原文应含金额: {refs['表格']['span']!r}")
+    evidence = _norm(issues[0].evidence_text or "")
+    assert "135.00" in evidence, f"说明侧原文应含金额: {issues[0].evidence_text!r}"
 
 
 def test_y03_finding_does_not_claim_which_side_is_wrong(truth):

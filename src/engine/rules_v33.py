@@ -341,6 +341,32 @@ def _v33_fact_identity(*facts: Any) -> Tuple[List[str], List[str]]:
     return list(dict.fromkeys(fact_ids)), list(dict.fromkeys(evidence_ids))
 
 
+def _narrative_quote_refs(doc: Any, quotes: Sequence[str]) -> List[Dict[str, Any]]:
+    """说明原文引文 → 带各自真实页码的 table_refs（D0 RC-1e）。
+
+    说明引文的页码在说明所在页，而不是规则 finding 挂的表格页；证据门按
+    各条引用自己的页码核验（AC-09）。定位不到的引文丢弃——宁缺毋造。
+    """
+    refs: List[Dict[str, Any]] = []
+    page_texts = [str(t or "") for t in (getattr(doc, "page_texts", None) or [])]
+    compact_pages = [re.sub(r"\s+", "", t) for t in page_texts]
+    for quote in quotes or ():
+        text = str(quote or "").strip()
+        if not text:
+            continue
+        needle = re.sub(r"\s+", "", text)
+        if not needle:
+            continue
+        page = next(
+            (idx + 1 for idx, hay in enumerate(compact_pages) if needle in hay),
+            None,
+        )
+        if page is None:
+            continue
+        refs.append({"page": page, "span": text[:200], "role": "说明原文"})
+    return refs
+
+
 def _v33_table_operand_ref(table_code: str, indicator: str, value: Any,
                            *, subject_code: Optional[str] = None,
                            subject_name: Optional[str] = None,
@@ -720,7 +746,12 @@ def _historical_narrative_checks(doc: Document, rule: Any, text: str) -> List[Is
                     incomplete_reason=None if usable else f"{year}年同主体决算事实不唯一或缺少非零分母")
                 if differs:
                     issues.append(rule._issue(f"{year}年{aliases[-1]}{relation}：表算{expected} ≠ 文本{value}",
-                        {"page": getattr(numerator.fact, "page_number", None)}, "warn",
+                        {
+                            "page": getattr(numerator.fact, "page_number", None),
+                            # D0 RC-1e：说明引文按各自真实页码绑定
+                            **({"table_refs": _narrative_quote_refs(doc, claim.quotes)}
+                               if claim.quotes else {}),
+                        }, "warn",
                         evidence_text="；".join(claim.quotes) if claim.quotes else text,
                         check_relation_id=f"{rule.code}:{sub_id}", fact_ids=fact_ids, evidence_ids=evidence_ids))
     return issues
@@ -3437,7 +3468,12 @@ class R33103_Income_vs_Text(Rule):
             if differs:
                 issues.append(self._issue(
                     f"财政拨款收入占比：表算{calculated}% ≠ 文本{p_txt}%（容差0.1个百分点）",
-                    {"page": p}, "warn",
+                    {
+                        "page": p,
+                        # D0 RC-1e：说明引文按各自真实页码绑定，不挂在表格页
+                        **({"table_refs": _narrative_quote_refs(doc, percentage_claim.quotes)}
+                           if percentage_claim.quotes else {}),
+                    }, "warn",
                     evidence_text="；".join(percentage_claim.quotes),
                     check_relation_id=percentage_relation,
                     fact_ids=fact_ids,
@@ -3665,7 +3701,13 @@ class R33104_Expense_vs_Text(Rule):
             if differs:
                 issues.append(self._issue(
                     f"{nm}占比：表算{calculated}% ≠ 文本{pct_t}%（容差0.1个百分点）",
-                    {"page": p, 'native_blank_sources': blank_observations([fact_ref, fact_total_ref])}, "warn",
+                    {
+                        "page": p,
+                        'native_blank_sources': blank_observations([fact_ref, fact_total_ref]),
+                        # D0 RC-1e：说明引文按各自真实页码绑定
+                        **({"table_refs": _narrative_quote_refs(doc, percentage_claim.quotes)}
+                           if percentage_claim.quotes else {}),
+                    }, "warn",
                     evidence_text="；".join(percentage_claim.quotes),
                     check_relation_id=relation_id,
                     fact_ids=fact_ids,
@@ -4107,10 +4149,21 @@ class R33109_EmptyTables_Statement(Rule):
                     refs = _empty_table_source_refs(doc, p, nm)
                     if refs:
                         location["table_refs"] = refs
+                    # D0 RC-1a：evidence 引该表标题所在原文行（页面上真实
+                    # 存在的文本），表名与结论在 message/location 携带；
+                    # 「空表名称/页面文本概览」拼贴会让原文匹配必然失败。
+                    title_line = next(
+                        (
+                            line.strip()
+                            for line in current_page_text.splitlines()
+                            if nm in line
+                        ),
+                        current_page_text[:120],
+                    )
                     issues.append(self._issue(
                         f"【{nm}】为空表，但该页未见针对该表的空表说明（应有'注：XXX无{table_keywords[0] if table_keywords else '相关'}支出，故本表无数据'）。",
                         location, "error",
-                        evidence_text=f"空表名称：{nm}\n页面文本概览（未发现空表说明）：\n{current_page_text[:300].replace(chr(10), ' ')}..."
+                        evidence_text=title_line[:200]
                     ))
         if unresolved:
             raise RuleDeferred(
@@ -10251,19 +10304,16 @@ class R33245_ThreePublicDirectionContradiction(Rule):
                     evidence = "；".join(clause for _, clause in hits)[:200]
                     # 页码定位用首个命中分句（原文里没有拼接用的分隔符）
                     locate_text = hits[0][1]
-                    # 结构化章节标记（GPT5.6 R6 P1-3）：规则层 scope 已限定
-                    # 本 finding 产自三公说明章节；evidence 前缀让 finding
-                    # 自带可校验的章节身份——评估器 sec 锚点消费它，
-                    # 不再依赖标注侧猜测 evidence 里的章节词。
-                    # R7 P1-3：另以独立 section_id 结构化携带（评估器可
-                    # 据此拒绝跨章节候选，不再只靠 evidence 文字）。
-                    section_tag = f"【章节:{(section_title or '').strip()[:40]}】" if section_title else ""
+                    # R7 P1-3：章节身份以独立 section_id 结构化携带（评估器
+                    # 据此拒绝跨章节候选）。evidence_text 只保留原文引文——
+                    # 拼接「【章节:…】」标签会让 evidence_guard 的原文匹配
+                    # 必然失败（D0 RC-1a），标签由消费方按 section_id 重建。
                     issues.append(self._issue(
                         f"三公说明逻辑矛盾：「{subject}」同时出现增减变化与“持平”表述，"
                         "两者不能同时成立，需核实同比口径后修正。",
                         {"page": self._locate_page(doc, locate_text)},
                         severity="medium",
-                        evidence_text=f"{section_tag}{evidence}",
+                        evidence_text=evidence,
                         section_id=section_title,
                     ))
 
@@ -10400,16 +10450,15 @@ class R33246_DomesticReceptionDisclosure(Rule):
             if not any("国内公务接待" in clause or foreign_disclosed for clause in clauses):
                 continue
             page = R33245_ThreePublicDirectionContradiction._locate_page(doc, para[:40])
-            # 结构化章节标记（R6 P1-3，同 V33-245）：规则层 scope 已限定
-            # finding 产自三公说明章节，evidence 前缀供评估器锚点消费；
-            # R7 P1-3：另以独立 section_id 结构化携带。
-            section_tag = f"【章节:{(section_title or '').strip()[:40]}】" if section_title else ""
+            # R7 P1-3（同 V33-245）：章节身份走 section_id 结构化字段；
+            # evidence_text 只保留原文段落（D0 RC-1a：标签前缀会让
+            # 原文匹配必然失败）。
             issues.append(self._issue(
                 "公务接待说明未披露国内公务接待批次、人次，"
                 "应补充「国内公务接待X批次、X人次」（含公务接待费对应口径）。",
                 {"page": page},
                 severity="medium",
-                evidence_text=f"{section_tag}{para[:200]}",
+                evidence_text=para[:200],
                 section_id=section_title,
             ))
 
@@ -10553,7 +10602,7 @@ class R33SGCompletion(Rule):
         if not found:
             raise RuleDeferred(self.code, detail="未找到三公经费说明章节")
         section_title, scope, _start, _end = found
-        section_tag = f"【章节:{(section_title or '').strip()[:40]}】" if section_title else ""
+        # 章节身份走 section_id 结构化字段（同 V33-245/246；D0 RC-1a）。
         paras = merge_soft_wrapped_lines(scope)
 
         disclosed = self._collect_disclosed(paras)
@@ -10584,7 +10633,7 @@ class R33SGCompletion(Rule):
                     "actual_disclosure": actual,
                 },
                 severity="medium",
-                evidence_text=f"{section_tag}{evidence_para[:200]}",
+                evidence_text=evidence_para[:200],
                 section_id=section_title,
             ))
         # 口径决议④（清单 A-08 八字段）：金额驱动的数量要素与车辆保有量。
@@ -10953,6 +11002,13 @@ def _econ_item_amount_from_lane(
             "name": label,
             "conflict": "",
             "code_missing": True,
+            # D0 RC-1b：携带命中行的原文（车道文本 + 金额原格），供证据
+            # 引用原件而不是计算说明。金额原格无文本时用数值原样显示。
+            "row_label": "".join(cell.text or "" for cell in cells[start:amount_col] if cell.text),
+            "cell_text": str(
+                cells[amount_col].text
+                or (cells[amount_col].number if cells[amount_col].number is not None else "")
+            ).strip(),
         }
     if not _econ_item_code_matches(code, expected_code):
         # 名称命中，但同行编码指向**另一个**业务项：两栏身份不一致，
@@ -10967,6 +11023,12 @@ def _econ_item_amount_from_lane(
         "code": code,
         "name": label,
         "conflict": "",
+        # D0 RC-1b：同上，命中行原文随命中返回。
+        "row_label": "".join(cell.text or "" for cell in cells[start:amount_col] if cell.text),
+        "cell_text": str(
+            cells[amount_col].text
+            or (cells[amount_col].number if cells[amount_col].number is not None else "")
+        ).strip(),
     }
 
 
@@ -11177,6 +11239,7 @@ class R33CrossSanGongEcon(Rule):
 
         # ---- 三公表（FIN_07）：逐业务项取决算数列 ----
         three_public: Dict[str, Decimal] = {}
+        three_public_cell_texts: Dict[str, str] = {}
         three_public_pages: Dict[str, int] = {}
         three_public_columns: Dict[str, int] = {}
         blank_keys: Set[str] = set()
@@ -11222,6 +11285,11 @@ class R33CrossSanGongEcon(Rule):
                 else None
             )
             three_public_pages[key] = int(getattr(evidence_cell, "page", None) or page7)
+            # D0 RC-1b：保留三公侧金额原格文本（空白格无文本，证据引用
+            # 该业务项标签原文），证据不再使用拼贴说明。
+            three_public_cell_texts[key] = str(
+                getattr(evidence_cell, "text", None) or ""
+            ).strip()
             item_groups[key] = subject
             three_public_columns[key] = int(column)
 
@@ -11414,16 +11482,23 @@ class R33CrossSanGongEcon(Rule):
                 [(scales.get(key, 2), unit), (_display_scale(component), unit)]
             )
             excess = component - total
+            # D0 RC-1b：两侧原文 span（基本侧行原文；三公侧原格文本，
+            # 空白格回退业务项标签原文）。
+            basic_span = str(hit.get("row_label") or "") + str(hit.get("cell_text") or "")
+            three_span = (
+                three_public_cell_texts.get(key)
+                or str(hit.get("name") or subject).strip()
+            )
             if excess <= envelope:
                 issues.append(
                     self._issue(
                         f"三公经费「{subject}」基本支出分项与本表决算数相差 {excess.normalize()} "
                         f"{unit}，在显示舍入包络（{envelope.normalize()} {unit}）内，可能为取整误差。",
                         self._location(hit, subject, key, total, component, excess, unit, year,
-                                       basic_page, three_page, key in blank_keys),
+                                       basic_page, three_page, key in blank_keys,
+                                       basic_span=basic_span, three_public_span=three_span),
                         severity="info",
-                        evidence_text=self._evidence(hit, subject, total, component, excess, unit,
-                                                     year, basic_page, three_page, key in blank_keys),
+                        evidence_text=basic_span,
                     )
                 )
                 _v33_relation_receipt(
@@ -11450,10 +11525,10 @@ class R33CrossSanGongEcon(Rule):
                     f"（{year} 年度）。基本支出是三公经费的组成部分，部分大于整体时两表不能同时成立；"
                     "现有材料无法判定哪一侧有误，需人工复核两表底稿。",
                     self._location(hit, subject, key, total, component, excess, unit, year,
-                                   basic_page, three_page, key in blank_keys),
+                                   basic_page, three_page, key in blank_keys,
+                                   basic_span=basic_span, three_public_span=three_span),
                     severity="error",
-                    evidence_text=self._evidence(hit, subject, total, component, excess, unit,
-                                                 year, basic_page, three_page, key in blank_keys),
+                    evidence_text=basic_span,
                 )
             )
             _v33_relation_receipt(
@@ -11531,6 +11606,8 @@ class R33CrossSanGongEcon(Rule):
         basic_page: int,
         three_public_page: int,
         from_blank: bool,
+        basic_span: str = "",
+        three_public_span: str = "",
     ) -> Dict[str, Any]:
         code = str(hit.get("code") or "")
         return {
@@ -11548,6 +11625,9 @@ class R33CrossSanGongEcon(Rule):
             "unit": unit,
             "fiscal_year": year,
             "three_public_amount_from_blank": from_blank,
+            # D0 RC-1b：每侧引用各自页面的原文 span（金额原格文本；空白格
+            # 引用该业务项标签原文）。证据门按各自页码逐条核验，计算解释
+            # 只留在 message，不再充当"原文摘录"。
             "table_refs": [
                 {
                     "role": "基本支出经济分类",
@@ -11556,6 +11636,7 @@ class R33CrossSanGongEcon(Rule):
                     "row": f"{code} {hit.get('name') or subject}".strip(),
                     "code": code,
                     "field": "决算数",
+                    "span": basic_span,
                 },
                 {
                     "role": "三公经费",
@@ -11563,6 +11644,7 @@ class R33CrossSanGongEcon(Rule):
                     "page": three_public_page,
                     "field": subject,
                     "col": "决算数",
+                    "span": three_public_span,
                 },
             ],
         }
@@ -11758,6 +11840,36 @@ def _txt_fund_page_for(offsets: List[int], position: int) -> int:
     return page
 
 
+def _span_page_fragments(
+    merged: str, offsets: List[int], start: int, end: int
+) -> List[Dict[str, Any]]:
+    """merged 文本 [start, end) 按物理页边界切成逐页原文引用（D0 RC-1f）。
+
+    跨页断句（如说明句"…支出决算为"在 P35 行尾、金额"19.56 万元"在 P36
+    行首）在合并文本里是一段连续原文，但在任何单页上都匹配不到——证据门
+    逐页核验必然失败。这里把跨页 span 切成每页一段的真实原文切片；单页
+    span 原样返回。切片是合并文本的子串，不改写任何字符。
+    """
+    if end <= start:
+        return []
+    first_page = _txt_fund_page_for(offsets, start)
+    last_page = _txt_fund_page_for(offsets, end - 1)
+    if first_page < 1 or last_page < first_page:
+        return []
+    if first_page == last_page:
+        return [{"page": first_page, "span": merged[start:end]}]
+    fragments: List[Dict[str, Any]] = []
+    total_pages = len(offsets)
+    for page in range(first_page, min(last_page, total_pages) + 1):
+        page_start = offsets[page - 1]
+        page_end = offsets[page] if page < total_pages else len(merged)
+        left = max(start, page_start)
+        right = min(end, page_end)
+        if right > left and merged[left:right].strip():
+            fragments.append({"page": page, "span": merged[left:right]})
+    return fragments
+
+
 def _txt_fund_body_without_page_footers(doc, section, offsets):
     """只遮掉与物理页相符的末行页码，保留长度以回到未经改写的原文证据。"""
     body = list(section['body'])
@@ -11929,7 +12041,17 @@ def _txt_fund_table_items(
             cell = row.cells[total_col]
             amount = cell.number
             page = int(getattr(cell, "page", None) or table_page)
-        items.append({"code": code, "name": name, "amount": amount, "page": page})
+        items.append({
+            "code": code,
+            "name": name,
+            "amount": amount,
+            "page": page,
+            # D0 RC-1b：命中行原文（金额原格文本；无文本时数值原样显示）
+            "cell_text": str(
+                (row.cells[total_col].text if 0 <= total_col < len(row.cells) else "")
+                or (amount if amount is not None else "")
+            ).strip(),
+        })
     return items, hierarchy
 
 
@@ -12479,6 +12601,8 @@ class R33TxtFundDetail(Rule):
                         "row": f"{item['code']} {item['name']}",
                         "code": item["code"],
                         "field": "本年支出（功能分类合计）",
+                        # D0 RC-1b：表格侧引用金额原格原文
+                        "span": str(item.get("cell_text") or ""),
                     },
                     {
                         "role": "情况说明",
@@ -12497,11 +12621,9 @@ class R33TxtFundDetail(Rule):
                         f"（{_txt_fund_display(envelope)} 万元）内，可能为取整误差。",
                         location,
                         severity="info",
-                        evidence_text=self._txt_fund_evidence(
-                            scope_label, table_title, table_unit,
-                            section["title"], item, binding,
-                            narrative_page, diff, year,
-                        ),
+                        # D0 RC-1b：证据回退值只用说明侧原文 span；
+                        # 两侧原文走 table_refs 逐页绑定
+                        evidence_text=str(binding["span"]),
                     )
                 )
                 continue
@@ -12518,11 +12640,8 @@ class R33TxtFundDetail(Rule):
                     "需人工复核表与说明底稿。",
                     location,
                     severity="error",
-                    evidence_text=self._txt_fund_evidence(
-                        scope_label, table_title, table_unit,
-                        section["title"], item, binding,
-                        narrative_page, diff, year,
-                    ),
+                    # D0 RC-1b：证据回退值只用说明侧原文 span
+                    evidence_text=str(binding["span"]),
                 )
             )
 

@@ -22,6 +22,7 @@ from .rules_v33 import (
     _nar_repeat_section_of,
     _nar_repeat_sections,
     _resolve_fiscal_year,
+    _span_page_fragments,
     _txt_fund_display,
     _txt_fund_merged_pages,
     _txt_fund_norm,
@@ -2162,6 +2163,8 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
 
     def apply(self, doc: Document) -> List[Issue]:
         merged, offsets = _txt_fund_merged_pages(doc)
+        # D0 RC-1f：_location 构建证据引用时需要按页边界切分跨页 span
+        self._merged_pages = (merged, offsets)
         if not merged.strip():
             raise RuleDeferred(
                 self.code,
@@ -2540,6 +2543,37 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
     ) -> Dict[str, Any]:
         unit_page = _txt_fund_page_for(offsets, match.start())
         section_title, _ = _nar_repeat_section_of(sections, match.start())
+        # D0 RC-1f：跨页断句的 span 在任何单页上都匹配不到，按页边界切成
+        # 逐页原文切片（合并文本的子串，不改写字符）；切不出片段时退回
+        # 单页 span。
+        merged_text, page_offsets = getattr(self, "_merged_pages", ("", []))
+        refs: List[Dict[str, Any]] = []
+        for role, span_start, span_end, fallback_page, fallback_span in (
+            ("增减句", match.start(), match.end(), unit_page,
+             re.sub(r"\s+", "", match.group(0))),
+            ("本期披露", current.get("start"), current.get("end"),
+             current["page"], current["span"]),
+        ):
+            fragments = []
+            if merged_text and span_start is not None and span_end is not None:
+                fragments = _span_page_fragments(
+                    merged_text, page_offsets, span_start, span_end
+                )
+            if fragments:
+                for fragment in fragments:
+                    refs.append({
+                        "role": role,
+                        "page": fragment["page"],
+                        "span": fragment["span"],
+                        "section": section_title if role == "增减句" else current.get("section"),
+                    })
+            else:
+                refs.append({
+                    "role": role,
+                    "page": fallback_page,
+                    "section": section_title if role == "增减句" else current.get("section"),
+                    "span": fallback_span,
+                })
         location: Dict[str, Any] = {
             "page": unit_page,
             "pages": sorted({unit_page, current["page"]}),
@@ -2556,20 +2590,7 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
             "obligation_id": _CMM007_OBLIGATION_ID,
             "zero_base": zero_base,
             "direction_conflict": direction_conflict,
-            "table_refs": [
-                {
-                    "role": "增减句",
-                    "page": unit_page,
-                    "section": section_title,
-                    "span": re.sub(r"\s+", "", match.group(0)),
-                },
-                {
-                    "role": "本期披露",
-                    "page": current["page"],
-                    "section": current["section"],
-                    "span": current["span"],
-                },
-            ],
+            "table_refs": refs,
         }
         if recomputed is not None:
             location["recomputed_percent"] = recomputed
@@ -2585,17 +2606,9 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
         current: Dict[str, Any],
         explicit_prior: Optional[Dict[str, Any]] = None,
     ) -> str:
-        lines = [
-            f"增减句：{match.group(0)}",
-            f"本期披露：{current['span']}（第{current['page']}页）",
-            f"口径：本期金额与增减额均为本年支出/预算口径，同比基期按"
-            f"{match.group('verb')}反推",
-        ]
-        if explicit_prior is not None:
-            lines.append(
-                f"上年基期披露：{explicit_prior['span']}（第{explicit_prior['page']}页）"
-            )
-        return "\n".join(lines)
+        # D0 RC-1：evidence 只保留增减句原文；本期披露与口径解释分别走
+        # location.table_refs（逐页 span）与 message，不再拼进"原文摘录"。
+        return str(match.group(0))
 
 
 # ============================================================================
@@ -2939,7 +2952,9 @@ class R33DisclosurePercentUnit(Rule):
         return self._issue(
             message,
             location,
-            evidence_text=f"发现位置：P{page}\n命中片段：{span}",
+            # D0 RC-1a：evidence 只保留命中原文，页码/位置已在 location
+            # 结构化携带；「发现位置/命中片段」标签会让原文匹配必然失败。
+            evidence_text=span,
         )
 
 

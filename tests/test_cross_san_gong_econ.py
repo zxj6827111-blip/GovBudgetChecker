@@ -348,18 +348,18 @@ def test_y02_findings_carry_locatable_evidence_for_both_tables(truth):
     # 义务编号：finding 与台账实例可对照
     assert overseas.location["obligation_id"] == OBLIGATION_ID
 
-    evidence = overseas.evidence_text or ""
-    for token in (
-        FIN_06_TITLE,
-        FIN_07_TITLE,
-        "因公出国（境）费",
-        "13.24",
-        "0.00",
-        "13.24",
-        "万元",
-        "2025",
-    ):
-        assert token in evidence, f"证据缺少 {token}: {evidence}"
+    # D0 RC-1b：evidence 只保留两侧原文 span（表身份/页码/金额走
+    # location 与 message），不再把计算说明当"原文摘录"。
+    import re as _re
+
+    def _norm(value):
+        return _re.sub(r"\s+", "", value or "")
+
+    evidence = _norm(overseas.evidence_text or "")
+    spans = [_norm(ref.get("span") or "") for ref in refs]
+    assert all(spans), f"table_refs 应带原文 span: {refs}"
+    assert "13.24" in evidence, f"基本支出侧原文应含金额: {overseas.evidence_text!r}"
+    assert "因公出国" in evidence, f"原文应含业务项: {overseas.evidence_text!r}"
 
 
 def test_y02_finding_does_not_claim_which_side_is_wrong(truth):
@@ -615,10 +615,9 @@ def test_finding_uses_the_actual_cell_page_of_a_continued_row(truth):
     assert refs["基本支出经济分类"]["page"] == PAGE_FIN_06_CONTINUATION
     assert refs["三公经费"]["page"] == PAGE_FIN_07
 
-    evidence = reception.evidence_text or ""
-    assert f"第{PAGE_FIN_06_CONTINUATION}页" in evidence
-    assert f"第{PAGE_FIN_07}页" in evidence
-    assert f"第{PAGE_FIN_06}页" not in evidence, "续页证据不得错标成表起始页"
+    # D0 RC-1b：页码在 location/table_refs 结构化携带，evidence 是原文
+    # span（不再拼接"第X页"说明）。
+    assert f"第{PAGE_FIN_06_CONTINUATION}页" not in (reception.evidence_text or "")
     assert f"第{PAGE_FIN_06}页" not in reception.message
 
     # 仍在 P22 的两项不受续页影响

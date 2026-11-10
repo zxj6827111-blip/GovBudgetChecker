@@ -4671,7 +4671,8 @@ class R33PerfPhaseAmount(Rule):
                     "obligation_id": "OBL-PERF-PHASE-AMOUNT",
                 },
                 severity="medium",
-                evidence_text=f"【章节:{section['title']}】{chunk['text'][:200]}",
+                # D0 RC-1a：evidence 只保留原文引文，章节身份走 section_id
+                evidence_text=chunk['text'][:200],
                 section_id=section["title"],
             )
         ]
@@ -4723,6 +4724,8 @@ class R33PerfPhaseAmount(Rule):
                         "kind_label": kind_label,
                         "value": Decimal(raw.replace(",", ""))
                         * _PERF_UNIT_TO_WAN[unit],
+                        # D0 RC-1：保留金额所在原句，供证据引用原文
+                        "sentence": sentence,
                         "pos": start
                         + len("年度预算安排")
                         + offset_in_body
@@ -4843,11 +4846,13 @@ class R33PerfPhaseAmount(Rule):
                     "obligation_id": "OBL-PERF-PHASE-AMOUNT",
                 },
                 severity="high",
-                evidence_text=(
-                    f"【章节:{section['title']}】年度预算安排 {annual['raw']}"
-                    f"{annual['unit']}；【申报表 p{form['page']}】年度资金申请"
-                    f"总额 {form['annual_raw']}{form['unit']}"
-                ),
+                # D0 RC-1a：evidence 只保留说明侧原句（finding 页码即
+                # 说明侧页码）；申报表侧数值已在 message/location 携带，
+                # 拼接标签与跨页内容会让原文匹配必然失败。
+                evidence_text=str(
+                    (annual.get("sentence") or "").strip()
+                    or f"年度预算安排 {annual['raw']}{annual['unit']}"
+                )[:200],
                 section_id=section["title"],
             )
         )

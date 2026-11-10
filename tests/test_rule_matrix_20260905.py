@@ -698,9 +698,9 @@ def test_v33_245_evidence_carries_section_tag():
     issues = R33245_ThreePublicDirectionContradiction().apply(doc)
     assert issues, "三公章节内矛盾应命中"
     evidence = issues[0].evidence_text or ""
-    assert evidence.startswith("【章节:"), (
-        f"evidence 应带章节标记前缀: {evidence[:40]!r}"
-    )
+    # D0 RC-1a：章节身份走 section_id，evidence 不再拼接章节标签
+    assert "【章节:" not in evidence, f"evidence 不应带章节标记前缀: {evidence[:40]!r}"
+    assert (issues[0].section_id or "").strip(), "section_id 应携带章节身份"
 
 
 def test_v33_245_cross_section_isolation_with_real_toc():

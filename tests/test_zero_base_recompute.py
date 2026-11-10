@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
@@ -152,7 +153,8 @@ def test_truth_a_yichuan_reports_exactly_the_zero_base_conflict(yichuan):
     assert location["page"] == 36
     assert location["section"] == SANGONG_SECTION
     refs = {ref["role"]: ref for ref in location["table_refs"]}
-    assert "增加0.3万元" in refs["增减句"]["span"]
+    # D0 RC-1f：span 是合并文本的逐页原文切片（保留原始字符），比对按去空白
+    assert "增加0.3万元" in re.sub(r"\s+", "", refs["增减句"]["span"])
     assert refs["增减句"]["page"] == 36
     assert "不存在有限定义" in issue.message
 
