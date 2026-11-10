@@ -48,7 +48,9 @@ def blank_table_terms(doc, table_code):
                 continue
             cell = cells.get((row,col))
             if cell is None or cell.is_header:
-                continue
+                # 全空表兜底必须覆盖每个映射金额格。缺失解析格或数据行误标表头
+                # 不能视为不存在的业务行，否则幸存的合计格会冒充完整零表。
+                return []
             if cell.raw_text.strip() or cell.numeric_value is not None or not cell.native_blank_verified:
                 return []
             labels = [cells.get((row,c)) for c in sorted(label_cols)]

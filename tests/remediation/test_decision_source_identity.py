@@ -132,6 +132,136 @@ def test_later_undo_never_resurrects_earlier_confirmed_decision(status):
     assert workflow.project_job_issue_decisions('job',p,_state=dict(decision_events=[one,two]))==[]
 
 
+@pytest.mark.parametrize('third_id',['successor-b','successor-c'])
+def test_undo_of_inherited_successor_never_revives_ancestor_ignore(tmp_path,monkeypatch,third_id):
+    first=payload();first['analysis_revision']='r1';first['result']['ai_findings'][0]['id']='ancestor-a'
+    original=workflow._decision_record(first,first['result']['ai_findings'][0],status='no_issue',
+        actor='reviewer',note='原件判断为误报',hide_from_results=True)
+    state=dict(issues={},decision_events=[],packages=[])
+    workflow._record_decision(state,original)
+    second=copy.deepcopy(first);second['analysis_revision']='r2';second['result']['ai_findings'][0]['id']='successor-b'
+    inherited=workflow.project_job_issue_decisions('job',second,_state=state)
+    assert inherited[0]['status']=='no_issue' and inherited[0]['inherited']
+
+    # 复用用户正常撤销忽略的业务入口；所有持久化都隔离在内存和tmp_path。
+    monkeypatch.setattr(workflow,'_state_lock',lambda:nullcontext())
+    monkeypatch.setattr(workflow,'_read_state',lambda:state)
+    monkeypatch.setattr(workflow,'_write_state',lambda value:None)
+    monkeypatch.setattr(workflow,'_record_persistence_state',lambda *args:None)
+    monkeypatch.setattr(workflow.runtime,'UPLOAD_ROOT',tmp_path)
+    monkeypatch.setattr(workflow.runtime,'get_job_status_payload',lambda *args,**kwargs:second)
+    workflow.set_job_ignored_issue_ids('job',set())
+    assert state['decision_events'][-1]['issue_id']=='successor-b'
+    assert state['decision_events'][-1]['status']=='pending'
+
+    third=copy.deepcopy(second);third['analysis_revision']='r3';third['result']['ai_findings'][0]['id']=third_id
+    projected=workflow.project_job_issue_decisions('job',third,_state=state)
+    assert not any(item['status'] in {'confirmed','no_issue','in_package'} for item in projected)
+    assert workflow.get_job_ignored_issue_ids('job',payload=third)==set()
+
+
+@pytest.mark.parametrize('status',['pending','needs_review'])
+@pytest.mark.parametrize('clock',['newer','same_second','missing'])
+def test_unsequenced_cross_id_undo_does_not_lose_to_larger_ancestor_revision(status,clock):
+    p=payload();p['analysis_revision']='r3'
+    original=event(p,'no_issue');original.update(analysis_revision='r1',decision_revision='5',
+        updated_at='2026-11-09T00:00:00Z',hide_from_results=True)
+    undo=event(p,status);undo.update(issue_id='new-ai',analysis_revision='r2',decision_revision='1',
+        updated_at='2026-11-09T00:00:01Z' if clock=='newer' else original['updated_at'])
+    if clock=='missing':undo.pop('updated_at')
+    result=workflow.project_job_issue_decisions('job',p,_state=dict(decision_events=[original,undo]))
+    assert not any(item['status'] in {'confirmed','no_issue','in_package'} for item in result)
+    assert not any(item['hide_from_results'] for item in result)
+
+
+def test_same_second_new_user_decisions_order_across_ids_and_preserve_history(monkeypatch):
+    monkeypatch.setattr(workflow,'_now',lambda:'2026-11-09T00:00:00Z')
+    state=dict(issues={},decision_events=[],packages=[])
+    generations=[]
+    for revision,issue_id,status in [('r1','a','no_issue'),('r2','b','pending'),('r3','c','confirmed')]:
+        p=payload();p['analysis_revision']=revision;p['result']['ai_findings'][0]['id']=issue_id
+        record=workflow._decision_record(p,p['result']['ai_findings'][0],status=status,
+            actor='reviewer',note=revision,hide_from_results=status=='no_issue')
+        workflow._record_decision(state,record);generations.append(p)
+    assert [e['event_sequence'] for e in state['decision_events']]==[1,2,3]
+    current=copy.deepcopy(generations[-1]);current['analysis_revision']='r4'
+    result=workflow.project_job_issue_decisions('job',current,_state=state)
+    assert result[0]['status']=='confirmed' and result[0]['note']=='r3'
+    # 后代撤销/确认不能改写原分析的显式决定。
+    historical=workflow.project_job_issue_decisions('job',generations[0],_state=state)
+    assert historical[0]['status']=='no_issue' and not historical[0]['inherited']
+
+
+@pytest.mark.parametrize('current_id',['old-ai','another-old-ai','new-ai'])
+def test_inherited_canonical_id_never_hides_same_generation_member_conflict(current_id):
+    p=payload();p['result']['ai_findings'][0]['id']=current_id
+    one=event(p,'no_issue');one['hide_from_results']=True
+    two=event(p,'confirmed');two['issue_id']='another-old-ai'
+    result=workflow.project_job_issue_decisions('job',p,_state=dict(decision_events=[one,two]))
+    assert result[0]['status']=='needs_review' and result[0]['conflict']
+    assert not result[0]['hide_from_results']
+
+
+@pytest.mark.parametrize('change',['source','year','policy','claim'])
+def test_newer_decision_for_other_source_basis_cannot_supersede_current_basis(change):
+    current=payload();first=event(current,'confirmed');first['event_sequence']=1
+    other=copy.deepcopy(current);issue=other['result']['ai_findings'][0]
+    if change=='source':
+        other['checksum']='b'*64;issue['evidence'][0]['file_hash']='b'*64
+    elif change=='year':other['report_year']=2024
+    elif change=='policy':other['result']['meta']['rule_policy_version']='different'
+    else:issue['actual']='另一个判断对象'
+    undo=event(other,'pending');undo.update(issue_id='other',event_sequence=2)
+    result=workflow.project_job_issue_decisions('job',current,_state=dict(decision_events=[first,undo]))
+    assert result[0]['status']=='confirmed' and not result[0]['conflict']
+
+
+def test_appending_user_order_never_rewrites_or_reorders_legacy_events():
+    p=payload();old=event(p,'no_issue');old['event_id']='old-immutable';old['updated_at']='2026-11-08T00:00:00Z'
+    state=dict(issues={},decision_events=[copy.deepcopy(old)],packages=[])
+    record=workflow._decision_record(p,p['result']['ai_findings'][0],status='pending',actor='reviewer',note=None)
+    workflow._record_decision(state,record)
+    assert state['decision_events'][0]==old and 'event_sequence' not in old
+    assert state['decision_events'][1]['event_sequence']==1
+    normalized=workflow._normalize_state(state)
+    assert normalized['decision_events'][1]['event_sequence']==1
+    assert 'event_sequence' not in normalized['decision_events'][0]
+    migrated=workflow._decision_record(p,p['result']['ai_findings'][0],status='no_issue',actor=None,note=None,
+        origin='legacy_migration')
+    workflow._record_decision(state,migrated)
+    assert 'event_sequence' not in state['decision_events'][-1]
+
+
+def test_reused_successor_id_for_another_claim_cannot_discard_old_claim_undo(monkeypatch):
+    monkeypatch.setattr(workflow,'_now',lambda:'2026-11-09T00:00:00Z')
+    state=dict(issues={},decision_events=[],packages=[])
+    first=payload();first['analysis_revision']='r1';first['result']['ai_findings'][0]['id']='a'
+    workflow._record_decision(state,workflow._decision_record(first,first['result']['ai_findings'][0],
+        status='no_issue',actor='reviewer',note='X误报',hide_from_results=True))
+    second=copy.deepcopy(first);second['analysis_revision']='r2';second['result']['ai_findings'][0]['id']='b'
+    workflow._record_decision(state,workflow._decision_record(second,second['result']['ai_findings'][0],
+        status='pending',actor='reviewer',note='撤销X'))
+    current=copy.deepcopy(second);current['analysis_revision']='r3';current['result']['ai_findings'][0]['id']='c'
+    other=copy.deepcopy(current['result']['ai_findings'][0]);other.update(id='b',actual='另一个判断对象Y')
+    current['result']['ai_findings'].append(other)
+    workflow._record_decision(state,workflow._decision_record(current,other,
+        status='confirmed',actor='reviewer',note='确认Y'))
+    result=workflow.project_job_issue_decisions('job',current,_state=state)
+    assert not any(item['issue_id']=='c' and item['status'] in {'confirmed','no_issue','in_package'} for item in result)
+    assert next(item for item in result if item['issue_id']=='b')['status']=='confirmed'
+
+
+def test_late_legacy_import_cannot_replace_same_identity_user_undo(monkeypatch):
+    monkeypatch.setattr(workflow,'_now',lambda:'2026-11-09T00:00:00Z')
+    state=dict(issues={},decision_events=[],packages=[])
+    p=payload();p['analysis_revision']='r1';issue=p['result']['ai_findings'][0]
+    workflow._record_decision(state,workflow._decision_record(p,issue,status='pending',actor='reviewer',note='撤销'))
+    workflow._record_decision(state,workflow._decision_record(p,issue,status='no_issue',actor=None,note='旧导入',
+        hide_from_results=True,origin='legacy_migration'))
+    p['analysis_revision']='r2'
+    assert workflow.project_job_issue_decisions('job',p,_state=state)==[]
+
+
 def test_same_quote_and_generic_check_do_not_prove_same_unstructured_ai_claim():
     p=payload();issue=p['result']['ai_findings'][0];issue.pop('expected');issue.pop('actual')
     e=event(p);issue['message']='另一种材料缺陷，与原判断不同'

@@ -69,3 +69,31 @@ def test_absence_or_uncertain_blank_is_never_a_zero_table(change,monkeypatch):
     elif change=='off':monkeypatch.setenv('GOVBUDGET_EMPTY_VALUE_CONVENTIONS','off')
     else:a.logical_tables.append(deepcopy(a.logical_tables[0]))
     assert blank_table_terms(doc,'FIN_06_basic_expenditure')==[]
+
+
+@pytest.mark.parametrize('change',['missing_cell','data_cell_marked_header'])
+def test_incomplete_money_grid_cannot_become_a_partial_certified_zero_table(change):
+    doc=document();table=doc.parse_artifact.table_fragments[0]
+    target=next(c for c in table.cells if (c.row_idx,c.col_idx)==(2,2))
+    if change=='missing_cell':table.cells.remove(target)
+    else:target.is_header=True
+    assert blank_table_terms(doc,'FIN_06_basic_expenditure')==[]
+    terms,reason=table_facts(doc,'FIN_06_basic_expenditure')
+    assert terms==[] and reason
+
+
+def test_missing_detail_amount_cells_cannot_make_an_expenditure_table_not_applicable():
+    from src.engine.rules_v33 import R33241_Table3_ExpenseAdvancedCheck
+    from src.engine.rule_outcome import RuleDeferred
+    doc=grid_document([
+        ['编码','名称','本年支出合计','基本支出','项目支出','上缴上级支出','经营支出','对附属单位补助支出'],
+        ['','合计','','','','','',''],
+        ['201','一般公共服务支出','','','','','',''],
+    ],table_code='FIN_03_expenditure')
+    doc.fact_context=FactContext([],doc.parse_artifact.source_file_hash,doc.parse_artifact.parse_run_uid,
+                                org_name='甲局',fiscal_year=2025,report_kind='final')
+    assert not doc.fact_context.facts
+    # 原始行仍存在，只有解析到的金额格缺失，不能把业务行当作不存在。
+    table=doc.parse_artifact.table_fragments[0]
+    table.cells=[c for c in table.cells if not (c.row_idx==2 and c.col_idx>=2)]
+    with pytest.raises(RuleDeferred):R33241_Table3_ExpenseAdvancedCheck().apply(doc)

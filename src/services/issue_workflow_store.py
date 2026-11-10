@@ -9,6 +9,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 import threading
 import time
@@ -756,6 +757,13 @@ def get_visible_state(user: Dict[str, Any], *, job_id: Optional[str] = None) -> 
                                   if item['issue_id'] == canonical_id), {})
                 visible['inherited'] = bool(projected.get('inherited'))
                 visible['inheritance_basis'] = projected.get('inheritance_basis')
+                if projected:
+                    # 同源后继的有效决定可能来自另一旧ID；不能让祖先较大的
+                    # per-issue revision 把旧备注/隐藏标记重新盖回页面。
+                    for field in ('note', 'hide_from_results', 'analysis_revision',
+                                  'decision_revision', 'updated_at'):
+                        visible[field] = projected.get(field)
+                    visible['decision_actor'] = projected.get('actor')
                 if not projected and str(record.get('analysis_revision') or '') != str(payload.get('analysis_revision') or ''):
                     prior_decisions.append({**copy.deepcopy(record), 'requires_reconfirmation': True})
                     visible.pop('note', None)
@@ -891,6 +899,42 @@ def _member_decision(item: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _latest_source_generations(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """同一强原件判断身份上，新代用户决定替代祖先ID；旧数据无法定序则不猜。"""
+    retained, by_source = [], {}
+    for item in records:
+        digest = item.get('source_identity_digest')
+        if item.get('same_revision') or not digest:
+            retained.append(item)
+        else:
+            by_source.setdefault(digest, []).append(item)
+    for values in by_source.values():
+        sequenced = [item for item in values
+                     if str((item.get('record') or {}).get('event_sequence') or '').isdigit()
+                     and int(item['record']['event_sequence']) > 0]
+        if sequenced:
+            newest = max(int(item['record']['event_sequence']) for item in sequenced)
+            generations = {str(item['record'].get('analysis_revision') or '') for item in sequenced
+                           if int(item['record']['event_sequence']) == newest}
+        else:
+            # 旧记录只在时间严格可比较时裁去更早代；同秒、缺时间的记录
+            # 一起进入冲突判断，不能凭ID、每条问题的revision或数组顺序挑赢者。
+            stamps = [str((item.get('record') or {}).get('updated_at') or '') for item in values]
+            if not all(re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z', stamp) for stamp in stamps):
+                retained.extend(values)
+                continue
+            newest = max(stamps)
+            generations = {str(item['record'].get('analysis_revision') or '') for item in values
+                           if str(item['record'].get('updated_at') or '') == newest}
+        if len(generations) == 1:
+            generation = next(iter(generations))
+            retained.extend(item for item in values
+                            if str(item['record'].get('analysis_revision') or '') == generation)
+        else:
+            retained.extend(values)
+    return retained
+
+
 def _project_group(canonical_id: str, issue: Dict[str, Any], records: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """把一个规范组上的全部事件聚合成一条投影。
 
@@ -929,14 +973,13 @@ def _project_group(canonical_id: str, issue: Dict[str, Any], records: List[Dict[
         else:
             status = statuses[0]
         superseded = [_member_decision(item) for item in inherited_members]
-    elif inherited_canonical:
-        chosen = _pick_latest(inherited_canonical)
-        status = str((chosen.get("record") or {}).get("status") or "pending")
-        inherited = True
-    elif inherited_members:
-        chosen = _pick_latest(inherited_members)
+    elif inherited_canonical or inherited_members:
+        # 只有本代显式规范决定有优先权；继承ID碰巧等于当前ID，不能使
+        # 同代其他继承成员的相反决定消失。
+        inherited_records = inherited_canonical + inherited_members
+        chosen = _pick_latest(inherited_records)
         statuses = sorted({str((item.get("record") or {}).get("status") or "pending")
-                           for item in inherited_members})
+                           for item in inherited_records})
         if len(statuses) > 1:
             status, conflict = "needs_review", True
         else:
@@ -946,6 +989,9 @@ def _project_group(canonical_id: str, issue: Dict[str, Any], records: List[Dict[
         return None
 
     record = chosen.get("record") or {}
+    if inherited and not conflict and status not in {'confirmed', 'no_issue'}:
+        # 撤销/待复核/旧整改包仍是有效的阻断事件，但不伪装成本轮已处理。
+        return None
     facts = sorted(_strings(issue.get("fact_ids")))
     evidence = sorted(_strings(issue.get("evidence_ids")))
     resolved_from_issue_id = (
@@ -976,7 +1022,7 @@ def _project_group(canonical_id: str, issue: Dict[str, Any], records: List[Dict[
         "inherited": inherited,
         "actor": record.get("decision_actor"),
         "updated_at": record.get("updated_at"),
-        "hide_from_results": bool(record.get("hide_from_results", False)),
+        "hide_from_results": status == 'no_issue' and bool(record.get("hide_from_results", False)),
         "decision_origin": record.get("decision_origin") or "workflow",
         "migration_id": record.get("migration_id"),
         "check_relation_id": issue.get("check_relation_id"),
@@ -1018,22 +1064,38 @@ def project_job_issue_decisions(
             identities.setdefault(identity['digest'], {})[str(candidate['id'])] = candidate
     archive_identities: Dict[Tuple[str, str, str], Optional[Dict[str, Any]]] = {}
     for issue_id in sorted(events_by_issue):
-        # 先确认该旧条目最后一次人工决定，再判断能否继承；否则撤销/待复核会被
-        # 跨版本筛选排除，反而让更早的“已确认/误报”决定复活。
+        # 顺序ID可能在后来的分析里指向另一判断对象；按强身份分别保留末态，
+        # 不能让对象Y的新决定吞掉对象X更早写在同一ID下的撤销。
         same_revision_events = [event for event in events_by_issue[issue_id]
                                 if str(event.get('analysis_revision') or '') == revision]
-        latest_event = max(same_revision_events or events_by_issue[issue_id], key=lambda event: (
-            _event_revision(event), str(event.get('updated_at') or '')))
-        for event in (latest_event,):
+        selected_events = []
+        if same_revision_events:
+            selected_events.append(max(same_revision_events, key=lambda event: (
+                _event_revision(event), str(event.get('updated_at') or ''))))
+        by_identity = {}
+        for event in events_by_issue[issue_id]:
+            if str(event.get('analysis_revision') or '') == revision:
+                continue
+            identity = _event_source_identity(normalized_job_id, event, archive_identities)
+            if identity is not None:
+                by_identity.setdefault(identity['digest'], []).append(event)
+        for events in by_identity.values():
+            # 同一旧ID下，后来迁入的历史记录不覆盖已存在的新用户决定。
+            selected_events.append(max(events, key=lambda event: (
+                int(str(event.get('event_sequence') or '0')) if str(event.get('event_sequence') or '0').isdigit() else 0,
+                _event_revision(event), str(event.get('updated_at') or ''))))
+        for event in selected_events:
             same_revision = bool(revision and str(event.get("analysis_revision") or "") == revision)
             issue = _find_issue(payload, issue_id)
             source_identity_match = False
-            if not same_revision and event.get('status') in {'confirmed', 'no_issue'}:
+            source_identity_digest = None
+            if not same_revision and event.get('status') in _VALID_STATUSES:
                 old_identity = _event_source_identity(normalized_job_id, event, archive_identities)
                 successors = identities.get(old_identity['digest'], {}) if old_identity else {}
                 if len(successors) == 1:
                     issue = next(iter(successors.values()))
                     source_identity_match = True
+                    source_identity_digest = old_identity['digest']
             if issue is None:
                 continue
             issue_fingerprint = issue_identity_fingerprint(issue)
@@ -1053,7 +1115,8 @@ def project_job_issue_decisions(
                 bundle = grouped.setdefault(canonical_id, {"issue": issue, "records": []})
                 bundle['records'].append({'event_issue_id': issue_id, 'record': event,
                                           'same_revision': same_revision,
-                                          'source_identity_match': source_identity_match})
+                                          'source_identity_match': source_identity_match,
+                                          'source_identity_digest': source_identity_digest})
     projected = []
     for canonical_id in sorted(grouped):
         bundle = grouped[canonical_id]
@@ -1062,6 +1125,7 @@ def project_job_issue_decisions(
         for record in bundle['records']:
             per_member.setdefault(record['event_issue_id'], []).append(record)
         records = [_pick_latest(values) for values in per_member.values()]
+        records = _latest_source_generations(records)
         projected_item = _project_group(canonical_id, bundle["issue"], records)
         if projected_item and any(value.get('source_identity_match') for value in records):
             projected_item['inheritance_basis'] = 'verified_source_identity_v1'
@@ -1122,6 +1186,12 @@ def _append_decision_event(state: Dict[str, Any], record: Dict[str, Any]) -> Dic
     event = copy.deepcopy(record)
     event["decision_revision"] = str(max(revisions, default=0) + 1)
     event["event_id"] = f"{key}::{event['decision_revision']}"
+    if record.get('decision_origin') != 'legacy_migration':
+        # 用户在锁内追加的决定使用全局顺序；不回填旧事件，也不给后来迁入的
+        # 历史决定制造“比本代撤销更新”的权威。每个旧ID的revision不可跨ID比较。
+        sequences = [int(str(item.get('event_sequence'))) for item in events
+                     if isinstance(item, dict) and str(item.get('event_sequence') or '').isdigit()]
+        event['event_sequence'] = max(sequences, default=0) + 1
     events.append(event)
     return event
 
