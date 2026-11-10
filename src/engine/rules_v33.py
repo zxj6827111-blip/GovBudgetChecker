@@ -2858,7 +2858,18 @@ def _functional_names_similar(left: str, right: str) -> bool:
 def _tolerant_functional_item_codes(
     table_entries: Dict[str, Dict[str, str]], section_name: str, item_name: str
 ) -> List[str]:
-    """精确(款,项)与精确项名都失败时，用两侧小差异定位唯一项级行。"""
+    """名称检查的定位：确定性文字候选优先，编辑距离只能用于差异报告。"""
+    from src.services.fiscal_subject_names import subject_name_candidates
+
+    leaves = {code: entry for code, entry in table_entries.items() if entry.get("level") == "项"}
+    parents = {entry.get("section_name", ""): entry.get("section_name", "") for entry in leaves.values()}
+    parent_names = subject_name_candidates(section_name, parents)
+    scoped = {code: entry for code, entry in leaves.items() if entry.get("section_name", "") in parent_names}
+    for pool in (scoped, leaves):
+        exact_or_variant = subject_name_candidates(item_name, {code: entry.get("name", "") for code, entry in pool.items()})
+        if exact_or_variant:
+            return exact_or_variant if len(exact_or_variant) == 1 else []
+
     candidates: List[str] = []
     for code, entry in table_entries.items():
         if entry.get("level") != "项":
@@ -2963,25 +2974,16 @@ def _extract_final_functional_narrative_mentions(
                         item_full_code[:7],
                     )
                 else:
-                    item_candidates = by_item.get(normalized_item, [])
-                    if len(item_candidates) == 1:
-                        item_full_code = item_candidates[0]
+                    # 同款的确定性名称变体优先于其他款里的全局同名项。
+                    # 不能先按全局项名命中另一款，再把正确的款名报成错误。
+                    tolerant = _tolerant_functional_item_codes(table_entries, section_name, item_name)
+                    if len(tolerant) == 1:
+                        item_full_code = tolerant[0]
                         matched_codes = (
                             item_full_code[:3],
                             item_full_code[:5],
                             item_full_code[:7],
                         )
-                    else:
-                        tolerant = _tolerant_functional_item_codes(
-                            table_entries, section_name, item_name
-                        )
-                        if len(tolerant) == 1:
-                            item_full_code = tolerant[0]
-                            matched_codes = (
-                                item_full_code[:3],
-                                item_full_code[:5],
-                                item_full_code[:7],
-                            )
 
             if not matched_codes:
                 continue
@@ -8473,7 +8475,9 @@ class R33227_Narrative5_T5_NameConsistency(Rule):
                     f"说明名称：{narrative_name}\n"
                     f"说明片段：{mention.get('snippet', '')}"
                 )
-                suffix_only = _functional_name_matches(table_entry["name"], narrative_name)
+                from src.services.fiscal_subject_names import subject_suffix_key
+                suffix_only = (_functional_name_matches(table_entry["name"], narrative_name)
+                               or subject_suffix_key(table_entry["name"]) == subject_suffix_key(narrative_name))
                 # 表格名称在格内折行（“一般公共服务\n支出”），提示语里按原文连写。
                 shown_table_name = re.sub(r"\s+", "", table_entry["name"])
                 issues.append(self._issue(

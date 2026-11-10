@@ -1795,6 +1795,8 @@ def _derive_card_summary(instance: ObligationInstance) -> Optional[str]:
         if text and text not in phrases:
             phrases.append(text)
     if phrases:
+        if all(operand.get("role") == "科目名称对应关系" for operand in instance.missing_operands):
+            return f"科目名称未能唯一对应：{('、'.join(phrases[:3]))}；金额核对尚未完成"
         head = label or "取数不足"
         return f"{head}：缺 {('、'.join(phrases[:3]))}"
     return label or None

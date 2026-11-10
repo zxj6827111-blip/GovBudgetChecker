@@ -258,6 +258,9 @@ def _record_text_gap(doc, text, item, *, codes, role):
         except Exception:  # noqa: BLE001 - 两种取值口径都取不到就是空
             return None
 
+    # 金额在原文里可能已披露；名称对应失败不能描述成原文缺数。
+    if "text_binding_failed" in codes or "name_mismatch_confirmed" in codes:
+        role = '科目名称对应关系'
     record_gap(doc, texts, reason_codes=codes, missing_operands=[text_missing_operand(
         section='支出决算具体情况说明', role=role, page=page,
         row_key=str(level_value('xiang') or level_value('kuan') or level_value('klass') or ''),
@@ -398,7 +401,7 @@ def _original_name_candidates(doc, pages, name, width):
 def _native_grid_name_rows(doc, pages):
     """折行原表的码名身份：原生文字按格定位，且原文七位编码全集不能漏行。
 
-    仅用于款名同字异序时的独立金额核对；不扩展全局名称别名。解析表若漏掉
+    用于名称有差异时的独立金额核对；不扩展全局名称别名。解析表若漏掉
     原文中的任何项级编码，整条恢复路径拒收，不能拿幸存候选自证唯一。
     """
     artifact, context = getattr(doc, 'parse_artifact', None), getattr(doc, 'fact_context', None)
@@ -438,8 +441,14 @@ def _native_grid_name_rows(doc, pages):
             if (not re.fullmatch(r'\d{3}|\d{5}|\d{7}', code)
                     or code_cell.page_number not in pages or code_cell.ocr_provenance or code_cell.is_header):
                 continue
+            # 类/款/项三列在数据行常合并成一格，逻辑 col_idx 会留下两个占位列。
+            # 相邻关系必须按原件网格边界判定，不能把“索引+1”当作物理相邻。
             names = [c for c in table.cells if c.row_idx == code_cell.row_idx
-                     and c.col_idx == code_cell.col_idx + 1 and c.page_number == code_cell.page_number]
+                     and c.col_idx > code_cell.col_idx and c.page_number == code_cell.page_number
+                     and c.bbox and code_cell.bbox
+                     and abs(code_cell.bbox[2] - c.bbox[0]) <= .5
+                     and abs(code_cell.bbox[1] - c.bbox[1]) <= .5
+                     and abs(code_cell.bbox[3] - c.bbox[3]) <= .5]
             if len(names) != 1 or names[0].ocr_provenance:
                 continue
             # row_idx 不能自证同排：必须为原网格中左右相邻、上下边界相同的两格。
@@ -668,6 +677,44 @@ def leaf_only_classes(doc, facts=None):
     return result
 
 
+def _native_name_variant_code(doc, facts, name, width, parent, paths, aliases):
+    """有限名称变体须由完整原生网格及逐级编码链证明，绝不用金额或编辑距离。"""
+    from src.services.fiscal_subject_names import literal_subject_name, subject_name_candidates
+
+    rows, refs = _native_grid_name_rows(doc, _general_table_pages(doc, facts))
+    native_paths = hierarchy_paths(rows)
+    names = {code: value for code, value in rows.items()
+             if len(native_paths.get(code, '')) == width
+             and native_paths[code].startswith(parent)}
+    candidates = subject_name_candidates(name, names)
+    if len(candidates) != 1:
+        return None
+    code = candidates[0]
+    if paths.get(code) != native_paths[code]:
+        return None
+    chain = []
+    for size in (3, 5, 7):
+        if size > width:
+            break
+        matching = [key for key, path in native_paths.items() if path == native_paths[code][:size]]
+        if len(matching) != 1:
+            return None
+        key = matching[0]
+        fact, error = select(doc, facts, 'total_actual', code=key)
+        if (error or not fact or fact.table_code != GENERAL
+                or fact.fund_scope != 'general_public_budget' or fact.budget_stage != '决算'
+                or literal_subject_name(fact.subject_name) != literal_subject_name(rows[key])):
+            return None
+        chain.append(key)
+    # 仅改变本条关系的定位依据，原表名称和事实快照保持原样。
+    if aliases is not None:
+        aliases.extend(ref for key in chain for ref in refs[key])
+        aliases.append({'role': 'native_subject_name_variant', 'subject_code': code,
+                        'narrative_name': name, 'table_name': rows[code],
+                        'basis': 'unique_native_code_parent_and_name_variant'})
+    return code
+
+
 def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
     paths = hierarchy_paths({str(f.subject_code) for f in facts
                              if str(f.subject_code or '').isdigit()})
@@ -791,6 +838,10 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
                       and str(f.subject_code).isdigit()
                       and paths[str(f.subject_code)].startswith(parent)
                       and _name(f.subject_name) == _name(item[group])}
+        if group != 'xiang' and len(candidates) != 1:
+            bound_code = _native_name_variant_code(doc, facts, item[group], width, parent, paths, aliases)
+            if bound_code is not None:
+                candidates = {bound_code}
         if group == 'klass' and not candidates:
             # A2（R2.2 QP-04）：类名缺口按独立身份链处理——显式编码或
             # 款/项逐字唯一的层级链 + 原件共现核验。不成立则落入既有的
@@ -821,6 +872,11 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
                     if not error and aliases is not None:
                         aliases.append(matches[0][1])
                     return fact, error
+            if group == 'xiang':
+                # 已有的原格截断补全证据优先，避免把抽断的“缴费”误作可选后缀。
+                bound_code = _native_name_variant_code(doc, facts, item[group], width, parent, paths, aliases)
+                if bound_code is not None:
+                    return select(doc, facts, 'total_actual', code=bound_code, allow_native_blank=True)
             if group == 'xiang' and not candidates:
                 rebound = rebind_leaf_under_class()
                 if rebound is not None:

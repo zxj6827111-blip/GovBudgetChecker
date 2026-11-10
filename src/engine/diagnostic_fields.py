@@ -938,7 +938,8 @@ def _diagnostic_summary(entry: Mapping[str, Any]) -> str:
         page = operand.get("page")
         source = str(operand.get("source") or "")
         place = str(operand.get("table_code") or operand.get("section") or "")
-        label = f"缺数位置 第{page}页" if isinstance(page, int) and page > 0 else "缺数位置"
+        kind = "名称对应位置" if operand.get("role") == "科目名称对应关系" else "缺数位置"
+        label = f"{kind} 第{page}页" if isinstance(page, int) and page > 0 else kind
         parts.append(f"{label}{(' ' + source) if source else ''}{(':' + place) if place else ''}")
     candidates = entry.get("candidates") if isinstance(entry.get("candidates"), list) else []
     if len(candidates) >= 2 and not missing:

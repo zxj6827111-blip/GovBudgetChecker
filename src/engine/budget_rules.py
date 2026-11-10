@@ -2179,8 +2179,28 @@ def _resolve_plain_functional_mention(
     class_name: str,
     section_name: str,
     item_name: str,
+    *,
+    name_check: bool = False,
 ) -> Optional[str]:
     """无编码提及回码：按「类名+款名+项名」归一匹配 T5 索引，唯一命中才返回。"""
+    if name_check:
+        # 名称检查可定位有限文字变体后逐字报差异；金额路径须沿用自身准入，
+        # 不能把名称检查的候选回码当成已经取得原件身份的金额操作数。
+        from src.services.fiscal_subject_names import subject_name_candidates
+        parent = ''
+        for width, name in ((3, class_name), (5, section_name), (7, item_name)):
+            candidates = subject_name_candidates(name, {
+                code: entry.get('name', '') for code, entry in name_index.items()
+                if len(code) == width and code.startswith(parent)})
+            if len(candidates) != 1:
+                if candidates:
+                    return None
+                # 新的有限变体定位无命中时保留既有规范后缀路径，
+                # 如“教育（类）”与“教育支出”；不可使已能报告的差异消失。
+                break
+            parent = candidates[0]
+        else:
+            return parent
     item_target = _normalize_functional_name(item_name)
     class_target = _normalize_functional_name(class_name)
     section_target = _normalize_functional_name(section_name)
@@ -2254,26 +2274,21 @@ def _extract_budget_functional_narrative_mentions(
                     match.group("class_name"),
                     match.group("section_name"),
                     match.group("item_name"),
+                    name_check=True,
                 )
                 if not code:
                     continue
-                name = str(match.group("item_name") or "").strip(" 　：:；;，,。.")
                 snippet = _snippet(text, match.start(), match.end(), radius=40).replace("\n", " ").strip()
-                bucket = mentions.setdefault(code, [])
-                if any(
-                    item.get("page") == str(page_num)
-                    and normalize_text(item.get("name", "")) == normalize_text(name)
-                    for item in bucket
-                ):
-                    continue
-                bucket.append(
-                    {
-                        "page": str(page_num),
-                        "name": name,
-                        "level": "项",
-                        "snippet": snippet,
-                    }
-                )
+                # 无编码条目也须逐级保留原名，不能仅记录项名而漏掉类/款差异。
+                for key, group, level in ((code[:3], 'class_name', '类'),
+                                           (code[:5], 'section_name', '款'),
+                                           (code, 'item_name', '项')):
+                    name = str(match.group(group) or '').strip(' 　：:；;，,。.')
+                    bucket = mentions.setdefault(key, [])
+                    if any(item.get('page') == str(page_num)
+                           and normalize_text(item.get('name', '')) == normalize_text(name) for item in bucket):
+                        continue
+                    bucket.append(dict(page=str(page_num), name=name, level=level, snippet=snippet))
     return mentions
 
 
