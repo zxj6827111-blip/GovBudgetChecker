@@ -123,3 +123,19 @@ def test_conflicting_duplicate_rows_stay_fail_closed():
     facts = [f for f in doc.fact_context.facts if f.table_code == 'FIN_06_basic_expenditure']
     view, reason = _economic_table_view(doc, facts)
     assert view is None and '重复原行身份' in reason
+
+
+def test_duplicate_row_delivered_as_low_finding_by_v33243():
+    """D0 复核（用户裁定）：重复原行缺陷须交付 low finding，不得只留回执。"""
+    from src.engine.rules_v33 import R33243_Table6_BasicExpenseAdvancedCheck
+    from src.engine.native_table_arithmetic import check_basic_economics
+
+    doc = duplicate_row_doc()
+    facts = [f for f in doc.fact_context.facts if f.table_code == 'FIN_06_basic_expenditure']
+    rule = R33243_Table6_BasicExpenseAdvancedCheck()
+    issues = check_basic_economics(rule, doc)
+    dup_hits = [i for i in issues if '重复科目行' in str(i.message)]
+    assert dup_hits, "重复行缺陷应交付 low finding"
+    assert dup_hits[0].severity == 'low'
+    assert '30299' in str(dup_hits[0].message)
+    assert (dup_hits[0].location or {}).get('page'), "重复行 finding 必须带页码"

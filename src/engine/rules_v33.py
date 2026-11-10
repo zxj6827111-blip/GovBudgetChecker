@@ -383,16 +383,20 @@ def _declared_pct_half_step(pct_text: Any) -> Optional[Decimal]:
     return Decimal("0.5")
 
 
-def _narrative_fiscal_fund_split(sec_text: str) -> Dict[str, float]:
+def _narrative_fiscal_fund_split(sec_text: str) -> Tuple[Dict[str, float], bool]:
     """收入说明里按资金口径拆项披露的金额（D0 RC-2b）。
 
     区级决算说明常见写法："财政拨款收入 8844.60 万元，占 98.83%；政府性
     基金预算财政拨款收入 105.00 万元，占 1.17%"——首项"财政拨款收入"
     实指一般公共预算财政拨款（与政府性基金/国资并列），表侧 FIN_02 的
-    财政拨款收入列是全口径。返回 {标签: 万元金额}；未按口径拆项返回空。
+    财政拨款收入列是全口径。返回 (拆项金额, 首项是否用了未限定的
+    "财政拨款收入"标签)；未按口径拆项返回 (空, False)。
+
+    标签布尔值与原句 span 用于口径缺陷交付（D0 复核 2026-11-10：标签与
+    表口径不符是真实缺陷，不能因数值绑定自洽而静默——静默即漏报）。
     """
     if not sec_text:
-        return {}
+        return {}, False, ""
     num = r'((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*万元'
     labels = (
         ("一般公共预算财政拨款收入", re.compile(r"一般公共预算(?:财政拨款)?收入[^\d]{0,8}" + num)),
@@ -410,16 +414,19 @@ def _narrative_fiscal_fund_split(sec_text: str) -> Dict[str, float]:
                 continue
     if "政府性基金预算财政拨款收入" not in split and "国有资本经营预算财政拨款收入" not in split:
         # 没有并列的资金口径拆项：首项就是全口径财政拨款收入，不绑定
-        return {}
+        return {}, False, ""
     if "一般公共预算财政拨款收入" not in split:
-        # 首项写作"财政拨款收入"且与基金/国资并列 → 绑定一般公共口径
+        # 首项写作"财政拨款收入"且与基金/国资并列 → 绑定一般公共口径，
+        # 同时记下标签缺陷（首项标签与表口径不符）
         general = re.search(r"(?<!一般公共预算)(?<!政府性基金)(?<!国有资本经营)财政拨款收入[^\d]{0,8}" + num, compact)
         if general:
             try:
                 split["一般公共预算财政拨款收入"] = float(general.group(1).replace(",", ""))
+                return split, True, general.group(0)
             except ValueError:
                 pass
-    return split
+        return split, False, ""
+    return split, False, ""
 
 
 def _narrative_quote_refs(doc: Any, quotes: Sequence[str]) -> List[Dict[str, Any]]:
@@ -3474,7 +3481,7 @@ class R33103_Income_vs_Text(Rule):
         # 一般公共预算口径——表侧 FIN_02 的财政拨款收入列是全口径（含基金/国资）。
         # 先按资金口径建立对应，再比较金额：表侧全口径 ↔ 说明拆项之和；
         # 口径绑定成立时占比的分子也用同口径（AGENTS.md：先确认同一口径再比较）。
-        fund_split = _narrative_fiscal_fund_split(sec_text)
+        fund_split, plain_fiscal_label, plain_label_span = _narrative_fiscal_fund_split(sec_text)
         scope_bound = (
             len(fund_split) >= 2
             and any(k != "一般公共预算财政拨款收入" for k in fund_split)
@@ -3497,6 +3504,35 @@ class R33103_Income_vs_Text(Rule):
                     formula=("text.财政拨款收入(资金口径拆项之和) == table.FIN_02.fiscal_allocation (万元)；"
                              + "；".join(f"{k}={v:g}" for k, v in sorted(fund_split.items()))),
                 )
+                if plain_fiscal_label:
+                    # D0 复核 2026-11-10（用户裁定）：数值绑定自洽≠没有缺陷——
+                    # 首项挂着未限定的"财政拨款收入"标签、金额却只有一般公共
+                    # 口径，与《收入决算表》财政拨款收入列合计相差恰为并列的
+                    # 基金/国资项。这是真实的口径标签缺陷，必须交付（medium），
+                    # 静默即漏报。证据用两侧原文（说明引文按各自页码绑定）。
+                    general_amount = fund_split.get("一般公共预算财政拨款收入")
+                    sibling_total = float(fp) - float(general_amount or 0)
+                    issues.append(self._issue(
+                        f"财政拨款收入口径标签不一致：说明首项「财政拨款收入 {tf:g} 万元」"
+                        f"实为一般公共预算财政拨款口径（同段并列披露政府性基金/国资口径 "
+                        f"{sibling_total:g} 万元），与《收入决算表》财政拨款收入列合计 "
+                        f"{fp:g} 万元相差 {float(fp) - float(tf or 0):g} 万元；按资金口径绑定后数值自洽，"
+                        "但首项标签与表口径不符。请将首项改写为「一般公共预算财政拨款收入」"
+                        "或按财政拨款全口径列示。",
+                        {
+                            "page": p,
+                            "obligation_id": "OBL-TXT-FISCAL-LABEL",
+                            "predicate": "fiscal_allocation_label_scope",
+                            "narrative_amount": tf,
+                            "table_amount": fp,
+                            "difference": float(fp) - float(tf or 0),
+                            **({"table_refs": _narrative_quote_refs(doc, [plain_label_span])}
+                               if plain_label_span else {}),
+                        },
+                        severity="medium",
+                        check_relation_id=f"{self.code}:T2:fiscal_allocation:label_scope",
+                        fact_ids=[fact_fp_ref.fact_uid] if fact_fp_ref is not None else [],
+                    ))
             elif not tolerant_equal(fp_compare, tf_compare):
                 fact_ids, evidence_ids = _v33_fact_identity(fact_fp_ref)
                 issues.append(self._issue(

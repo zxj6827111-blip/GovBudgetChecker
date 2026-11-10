@@ -957,6 +957,36 @@ def check_basic_economics(rule, doc):
         return finish(rule, [], [reason])
     rows = view[4]
     issues, unresolved = [], []
+    # D0 复核（用户裁定 2026-11-10）：同科目重复原行是原件排版缺陷，
+    # 去重参与计算之外仍须作为材料缺陷交付（low）——静默即漏报。
+    # 只由 V33-243（明细归集）交付一次，避免 V33-117/CROSS 重复报。
+    if rule.code == 'V33-243':
+        duplicates = [obs for obs in (getattr(doc, '_economic_duplicate_row_observations', None) or [])
+                      if isinstance(obs, dict) and obs.get('subject_code')]
+        if duplicates:
+            instance, table, _mappings, cells, _rows, _facts = view
+            seen_subjects, page = set(), None
+            for obs in duplicates:
+                code = str(obs['subject_code'])
+                if code not in seen_subjects:
+                    seen_subjects.add(code)
+                if page is None:
+                    entry = _rows.get(code)
+                    if entry:
+                        cell = cells.get((int(entry[0]), int(entry[2]['source_col_idx'])))
+                        page = int(getattr(cell, 'page_number', None)
+                                   or getattr(cell, 'page', None) or 0) or None
+            issues.append(rule._issue(
+                '经济分类表存在重复科目行：' + '、'.join(
+                    f"{code} {next((o['subject_name'] for o in duplicates if str(o['subject_code']) == code), '')}".strip()
+                    for code in sorted(seen_subjects)) +
+                '。原件同一科目行重复列示（内容一致，已按同一业务行归集参与计算），'
+                '请核对原件并删除重复行。',
+                {'page': page, 'predicate': 'duplicate_subject_row',
+                 'subject_codes': sorted(seen_subjects),
+                 'duplicate_count': len(duplicates)},
+                severity='low',
+            ))
     for name, codes in ([('人员经费合计', ('301', '303')), ('公用经费合计', ('302', '310'))]
                         if rule.code == 'V33-117' else []):
         parent, error = _economic_operand(doc, view, name)
