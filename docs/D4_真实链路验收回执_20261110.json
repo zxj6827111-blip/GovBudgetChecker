@@ -1,0 +1,174 @@
+{
+ "run_id": "d4link-7658e849b215",
+ "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/6000a11c0737d5149975516b44fd8682/上海市普陀区人民政府宜川路街道办事处2025年度部门决算.pdf",
+ "steps": [
+  {
+   "step": "S0_org_catalog_ready",
+   "ok": true,
+   "evidence": {
+    "org_http": 200
+   }
+  },
+  {
+   "step": "S1_upload_analyze",
+   "ok": true,
+   "evidence": {
+    "status": "review_required",
+    "job_id": "a39ec394c2bd344782d0d9aab34b5727",
+    "payload_keys": [
+     "analysis_conclusion",
+     "analysis_revision",
+     "check_coverage",
+     "checksum",
+     "conclusion_scope",
+     "created_by",
+     "doc_type",
+     "document_profile",
+     "dual_mode_enabled",
+     "expected_current_fact_revision_id",
+     "fact_overlay",
+     "filename",
+     "fiscal_year",
+     "human_decisions",
+     "job_created_at",
+     "job_id",
+     "mode",
+     "organization_id",
+     "organization_level",
+     "organization_match_confidence",
+     "organization_match_type",
+     "organization_name",
+     "page_coverage",
+     "profile_status"
+    ],
+    "result_keys": [
+     "issues",
+     "meta",
+     "source_overlap_relations",
+     "summary"
+    ],
+    "findings": 4,
+    "merged_totals": {},
+    "revision": "rev-20261110T214037-1e0aa9a4"
+   }
+  },
+  {
+   "step": "S2_persist_readback",
+   "ok": true,
+   "evidence": {
+    "snapshot_hash": "742a6bf00ef470dcd895002b7c3db555993654a7ebb9159045b636a0f07edaca",
+    "raw": 622,
+    "effective": 622,
+    "versions_http": 200
+   }
+  },
+  {
+   "step": "S3_page_location",
+   "ok": true,
+   "evidence": {
+    "issues_total": 11,
+    "evidence_total": 98,
+    "resolved": 20,
+    "page_count": 41,
+    "issues_with_page": 11
+   }
+  },
+  {
+   "step": "S4_confirm_gate",
+   "ok": true,
+   "evidence": {
+    "gate": {
+     "can_confirm_whole_report": false,
+     "blocking_reason": "存在 3 项系统未完成检查，不能整份签认",
+     "confirm_scope": "deterministic_findings_only"
+    },
+    "counts": {
+     "confirmed_material_issues": 0,
+     "genuine_ambiguities": 0,
+     "system_incomplete": 3
+    },
+    "confirm_http": 409,
+    "repeat_http": 409,
+    "record_revision": null,
+    "audit_confirm_events": 0
+   }
+  },
+  {
+   "step": "S5a_identity_and_scope",
+   "ok": true,
+   "evidence": {
+    "org_http": true,
+    "rematch_http": 200,
+    "dims_get": true,
+    "dims_post": 202,
+    "dims_skip": null,
+    "dims_post_detail": null
+   }
+  },
+  {
+   "step": "S5d_start_idempotent",
+   "ok": true,
+   "evidence": {
+    "start_a": 200,
+    "start_b": 200,
+    "starts": [
+     200,
+     200
+    ],
+    "same_session": true,
+    "start_detail": null
+   }
+  },
+  {
+   "step": "S5b_finding_decisions",
+   "ok": true,
+   "evidence": {
+    "candidates": 27,
+    "decided": 27,
+    "codes": [
+     200
+    ]
+   }
+  },
+  {
+   "step": "S5c_obligation_decisions",
+   "ok": true,
+   "evidence": {
+    "obligations": 1,
+    "codes": [
+     200
+    ],
+    "details": []
+   }
+  },
+  {
+   "step": "S5_review_lifecycle",
+   "ok": true,
+   "evidence": {
+    "slot_id": "4755c747-1f94-4f74-bd63-fe55fbb3f9e0",
+    "start_idempotent": true,
+    "complete_statuses": [
+     200
+    ],
+    "complete_blockers": [],
+    "reopen_http": 200
+   }
+  },
+  {
+   "step": "S6_export",
+   "ok": true,
+   "evidence": {
+    "sizes": {
+     "json": 8763928,
+     "csv": 1658901,
+     "docx": 62714,
+     "pdf": 3182541
+    },
+    "repeat_identical": true,
+    "revision_binding": true
+   }
+  }
+ ],
+ "job_id": "a39ec394c2bd344782d0d9aab34b5727",
+ "elapsed_seconds": 155.0
+}
