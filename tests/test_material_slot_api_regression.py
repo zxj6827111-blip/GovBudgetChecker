@@ -37,6 +37,9 @@ FROZEN_ROUTES = frozenset(
         # 年度模板 v3 新增独立维度入口；保留旧 document-scope 路由。
         ("GET", "/api/jobs/{job_id}/material-dimensions"),
         ("POST", "/api/jobs/{job_id}/material-dimensions"),
+        # D4：整份确认门禁（读取）与默认关闭的确认写侧
+        ("GET", "/api/jobs/{job_id}/report-confirmation"),
+        ("POST", "/api/jobs/{job_id}/confirm-report"),
         ("GET", "/api/jobs/{job_id}/review"),
         ("GET", "/api/jobs/{job_id}/evidence/{evidence_id}"),
         ("POST", "/api/jobs/{job_id}/corrections"),

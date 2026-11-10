@@ -823,3 +823,76 @@ async def confirm_material_dimensions(job_id:str,body:MaterialDimensionsRequest,
     await document_scope.dispatch_pending()
     await document_scope.dispatch_writing_pending()
     return {'decisions':result,'reanalysis_status':'pending_reanalysis'}
+
+
+# ---------------------------------------------------------------------------
+# D4：整份确认门禁与报告三分类（读取接口；confirm_report 写侧默认关闭）
+# ---------------------------------------------------------------------------
+
+@router.get("/api/jobs/{job_id}/report-confirmation")
+async def get_report_confirmation(job_id: str, request: Request):
+    """读取整份确认门禁与三类处理对象（确定材料问题/真实歧义/系统未完成）。
+
+    纯读取：从持久化的当前分析结果组装，不落盘、不触发重分析。
+    """
+    _, _, user, payload = require_job_access(request, job_id)
+    from src.services.report_confirmation_gate import build_report_confirmation
+
+    enabled = str(os.getenv("GOVBUDGET_CONFIRM_REPORT_ENABLED") or "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    confirmation = await run_in_threadpool(
+        lambda: build_report_confirmation(payload, confirm_report_enabled=enabled)
+    )
+    return confirmation
+
+
+class ConfirmReportRequest(BaseModel):
+    acknowledged_categories: Literal["confirmed_material_issues"] = "confirmed_material_issues"
+
+
+@router.post("/api/jobs/{job_id}/confirm-report")
+async def confirm_report(job_id: str, body: ConfirmReportRequest, request: Request):
+    """整份确认（默认关闭）：只签认当前分析版本中证据充分的确定性问题。
+
+    - 未开启 GOVBUDGET_CONFIRM_REPORT_ENABLED 时返回 403（默认关闭的兼容行为）。
+    - 系统未完成检查非空时返回 409：系统失败不能要求用户代替程序重新计算，
+      未计算的关系也不能因确认变成已完成。
+    - 确认记录绑定当前分析版本；不覆盖人工疑问、忽略决定和历史有效结论。
+    """
+    _, _, user, payload = require_job_access(request, job_id)
+    from src.services.report_confirmation_gate import build_report_confirmation, confirm_report_allowed
+
+    enabled = str(os.getenv("GOVBUDGET_CONFIRM_REPORT_ENABLED") or "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    confirmation = await run_in_threadpool(
+        lambda: build_report_confirmation(payload, confirm_report_enabled=enabled)
+    )
+    decision = confirm_report_allowed(confirmation, payload.get("analysis_revision"))
+    if not decision["allowed"]:
+        status_code = 403 if decision["code"] == "CONFIRM_REPORT_DISABLED" else 409
+        raise HTTPException(status_code=status_code, detail=decision["code"])
+    # 版本绑定 + 当前确定性问题清单快照：只签认确定性对象
+    snapshot = confirmation["categories"]["confirmed_material_issues"]
+    record = {
+        "job_id": job_id,
+        "analysis_revision": payload.get("analysis_revision"),
+        "scope": "deterministic_findings_only",
+        "confirmed_count": len(snapshot),
+        "confirmed_issue_ids": [
+            f"{item.get('rule_id')}@p{item.get('page')}" for item in snapshot
+        ],
+        "actor": str((user or {}).get("username") or "unknown"),
+        "note": "不覆盖人工疑问/忽略决定/历史结论；未计算关系不因确认变已完成",
+    }
+    append_audit_event(
+        action="confirm_report",
+        actor=record["actor"],
+        result="ok",
+        resource_type="analysis_job",
+        resource_id=job_id,
+        details={"confirmed_count": record["confirmed_count"],
+                 "analysis_revision": record["analysis_revision"]},
+    )
+    return {"result": "confirmed", "record": record}
