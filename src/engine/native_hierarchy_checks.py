@@ -422,6 +422,94 @@ def _exact_duplicate_rows(table, start, source_cells):
     return duplicates
 
 
+def _verified_native_chain(doc, view, facts):
+    """跨表层级证明比单表取数更窄：只接纳已验原生字符的原格。"""
+    _, table, mappings, cells, rows, _ = view
+    if not table.extraction_method or any(token in table.extraction_method.lower() for token in ('ocr','fallback')):
+        return False
+    start = min(int(mapping['source_col_idx']) for mapping in mappings)
+    for fact in facts:
+        refs = fact.extra_dims.get('evidence_refs') or []
+        if not refs or any(ref.get('source_method') != 'native_text' for ref in refs):
+            return False
+        labels = [cell for (row,col),cell in cells.items() if row == rows.get(fact.subject_code) and col < start and str(cell.raw_text or '').strip()]
+        if not labels or any(not cell.extraction_method or any(token in cell.extraction_method.lower() for token in ('ocr','fallback')) for cell in labels):
+            return False
+    # 规则执行早于报告的证据装订，不能依赖稍后才回填的 verified 标签；
+    # 直接复用同一原格认证器核验原文、页码、格坐标、来源哈希和证据ID。
+    from src.services.rule_source_binding import _current_cell_evidence
+    return len(_current_cell_evidence(facts, doc.parse_artifact, getattr(doc,'page_texts',[]),
+                                     doc.fact_context.file_hash)) == len(facts)
+
+
+def _native_mirror_covered_roots(doc, view, roots, paths):
+    """只用同原件另一完整原生表的精确名称链确认错前缀，不猜编码/金额。
+
+    混层披露本身合法，不能按编码长度删掉无上级明细。只有另一表实际印有
+    同名项及完整类/款链、当前表也印有相同类/款，且错码紧跟该款时，才证明
+    该项已属于当前汇总链。事实编码保持原值，单独交付原件镜像冲突。
+    """
+    _, table, _, _, rows, _ = view
+    context = doc.fact_context
+    compact = lambda value: re.sub(r'\s+', '', str(value or ''))
+    ordered = sorted(rows, key=rows.get)
+    proofs = {}
+    for code in roots:
+        if len(paths[code]) != 7 or code != paths[code]:
+            continue
+        leaf, error = _select(doc, view, code, 'total_actual')
+        if (error or leaf is None or isinstance(leaf, NativeBlankTerm) or not leaf.subject_name
+                or not _verified_native_chain(doc, view, [leaf])):
+            continue
+        candidates = [fact for fact in context.facts
+                      if fact.table_code in DETAIL_TABLES and fact.table_code != table.table_code
+                      and fact.indicator == 'total_actual' and fact.subject_code
+                      and re.fullmatch(r'\d{7}', fact.subject_code)
+                      and fact.subject_code != code and fact.subject_code[3:] == code[3:]
+                      and compact(fact.subject_name) == compact(leaf.subject_name)
+                      and not operand_rejection_reason(fact, context.org_name)
+                      and fact.fiscal_year == context.fiscal_year
+                      and _canonical_budget_stage(fact.budget_stage) == '决算']
+        mirror_codes = {fact.subject_code for fact in candidates}
+        if len(mirror_codes) != 1:
+            continue
+        mirror_code = mirror_codes.pop(); parent_code, class_code = mirror_code[:5], mirror_code[:3]
+        position = ordered.index(code)
+        if (parent_code not in rows or class_code not in rows or position == 0
+                or ordered[position-1] != parent_code or rows[code] != rows[parent_code]+1
+                or not rows[class_code] < rows[parent_code]):
+            continue
+        parent, parent_error = _select(doc, view, parent_code, 'total_actual')
+        klass, class_error = _select(doc, view, class_code, 'total_actual')
+        if (parent_error or class_error or parent is None or klass is None
+                or isinstance(parent, NativeBlankTerm) or isinstance(klass, NativeBlankTerm)
+                or not _verified_native_chain(doc, view, [klass,parent,leaf])):
+            continue
+        verified = []
+        for mirror_table in sorted({fact.table_code for fact in candidates}):
+            mirror_view, mirror_error = _table_view(doc, mirror_table)
+            if mirror_error or any(part not in mirror_view[4] for part in (class_code,parent_code,mirror_code)):
+                continue
+            chain = [_select(doc, mirror_view, part, 'total_actual') for part in (class_code,parent_code,mirror_code)]
+            if any(reason or fact is None or isinstance(fact, NativeBlankTerm) for fact,reason in chain):
+                continue
+            chain = [fact for fact,reason in chain]
+            if not _verified_native_chain(doc, mirror_view, chain):
+                continue
+            if ([compact(fact.subject_name) for fact in chain]
+                    != [compact(fact.subject_name) for fact in (klass,parent,leaf)]):
+                continue
+            mirror_rows = mirror_view[4]
+            if not mirror_rows[class_code] < mirror_rows[parent_code] < mirror_rows[mirror_code]:
+                continue
+            verified.append(chain)
+        if verified:
+            proofs[code] = {'mirror_code': mirror_code, 'class_code': class_code,
+                            'parent_code': parent_code, 'facts': [klass,parent,leaf],
+                            'mirror_facts': [fact for chain in verified for fact in chain]}
+    return proofs
+
+
 def check_native_detail_tables(rule, doc, *, table_codes=None, include_income_sources=False):
     """V33-120 的原生入口；legacy Document 的原规则实现仍保留。
 
@@ -475,7 +563,6 @@ def check_native_detail_tables(rule, doc, *, table_codes=None, include_income_so
                     row_facts = row_facts[:1]
                 if len(row_facts) == 1:
                     from .native_table_arithmetic import journal
-                    from .native_three_public_ratios import operand_ref
                     journal(rule, doc, row_facts)
                     location['operand_refs'] = [operand_ref(row_facts[0], 'duplicate_row')]
                     location['fact_context_version_token'] = doc.fact_context.version_token
@@ -489,6 +576,54 @@ def check_native_detail_tables(rule, doc, *, table_codes=None, include_income_so
             unresolved.append(f'{title}科目层级存在重复身份')
             continue
         roots = [code for code in codes if not any(paths[code].startswith(paths[p]) and code != p for p in codes)]
+        # 不限制原件的披露深度；只排除有同原件精确完整镜像链证明的错前缀项。
+        mirror_proofs = _native_mirror_covered_roots(doc, view, roots, paths)
+        orphans = sorted(mirror_proofs)
+        if orphans and rule.code == 'V33-005':
+            orphan_facts, source_refs = [], []
+            for code in orphans:
+                proof = mirror_proofs[code]
+                orphan_facts.extend([*proof['facts'], *proof['mirror_facts']])
+                row_idx = rows[code]
+                code_cells = [cell for (row, col), cell in view[3].items()
+                              if row == row_idx and col < min(int(m['source_col_idx']) for m in mappings)
+                              and str(cell.raw_text or '').strip()]
+                if code_cells:
+                    page = code_cells[0].page_number
+                    source_refs.append({'page': page, 'span': code, 'role': '原文孤立款项编码'})
+                for fact in proof['mirror_facts']:
+                    if fact.subject_code == proof['mirror_code']:
+                        for ref in fact.extra_dims.get('evidence_refs', []):
+                            source_refs.append({'page': ref['physical_page'], 'span': fact.subject_code,
+                                                'role': '同原件完整原生表的同名项编码'})
+            orphan_facts = list({fact.fact_uid:fact for fact in orphan_facts}.values())
+            mirrors = [{'raw_code':code, 'mirror_code':mirror_proofs[code]['mirror_code'],
+                        'class_code':mirror_proofs[code]['class_code'], 'parent_code':mirror_proofs[code]['parent_code']}
+                       for code in orphans]
+            reason = (f'{title}科目编码层级不一致：' + '、'.join(f"{p['raw_code']} / {p['mirror_code']}" for p in mirrors)
+                      + '。同名科目在另一完整原生表印有一致的类/款/项名称链，当前表的该项紧跟相同款级汇总，'
+                        '但原印编码前缀不一致；不能将该项再作为独立根重复累加。原编码与金额保留，请核实表间编码。')
+            ids, evidence_ids = receipt(rule, doc, f'{table_code}:orphan_classification', orphan_facts,
+                                        status='fail', formula='同原件完整类款项名称链的编码镜像一致',
+                                        reason=reason, disclosure_sources=source_refs)
+            orphan_refs = []
+            for fact in money_facts(orphan_facts):
+                role = '孤立款项原行' if fact.subject_code in orphans else '完整原生类款项链'
+                ref = operand_ref(fact, role)
+                ref.update(operand_id=f'{fact.fact_uid}:classification:{role}',
+                           relation_id=f'{table_code}:orphan_classification')
+                orphan_refs.append(ref)
+            issues.append(rule._issue(reason, {
+                'table': title, 'table_code': table_code, 'check_type': 'orphan_classification',
+                'orphan_codes': orphans, 'classification_mirrors': mirrors, 'source_refs': source_refs,
+                'page': source_refs[0]['page'] if source_refs else None,
+                'pages': sorted({ref['page'] for ref in source_refs}),
+                'operand_refs': orphan_refs,
+                'fact_context_version_token': doc.fact_context.version_token,
+            }, 'warn', evidence_text='；'.join(orphans),
+                check_relation_id=f'{rule.code}:{table_code}:orphan_classification',
+                fact_ids=ids, evidence_ids=evidence_ids))
+        roots = [code for code in roots if code not in mirror_proofs]
         relations = [('total', roots)] + [(code, [c for c in codes if paths[c].startswith(paths[code])
                                                 and len(paths[c]) == len(paths[code]) + 2])
                                         for code in codes if len(paths[code]) in (3, 5)]

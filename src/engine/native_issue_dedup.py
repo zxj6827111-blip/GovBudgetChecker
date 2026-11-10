@@ -619,11 +619,50 @@ def _table_defect_key(item):
     return (kind, codes.pop()) if len(codes) == 1 else None
 
 
+def _orphan_classification_key(item, context):
+    """同一原件内同一码、同名、同主体年度的孤立层级，在不同表只处理一次。"""
+    location = _location(item)
+    if (_rule(item) != 'V33-005' or location.get('check_type') != 'orphan_classification'
+            or context is None or _version(item, context) is None):
+        return None
+    codes, all_refs = location.get('orphan_codes') or [], location.get('operand_refs') or []
+    refs = [ref for ref in all_refs if ref.get('role') == '孤立款项原行']
+    if not codes or len(codes) != len(refs) or len(set(codes)) != len(codes):
+        return None
+    if not all(_resolve_ref(ref, context) is not None for ref in all_refs):
+        return None
+    mirrors = location.get('classification_mirrors') or []
+    if len(mirrors) != len(codes) or {m.get('raw_code') for m in mirrors} != set(codes):
+        return None
+    proof_codes = {ref.get('subject_code') for ref in all_refs}
+    if any(not all(m.get(key) in proof_codes for key in ('mirror_code','class_code','parent_code'))
+           or m['mirror_code'][:5] != m['parent_code'] or m['mirror_code'][:3] != m['class_code']
+           for m in mirrors):
+        return None
+    signatures = []
+    for ref in refs:
+        if _resolve_ref(ref, context) is None:
+            return None
+        facts = [fact for fact in context.facts if fact.fact_uid == ref.get('fact_uid')]
+        if len(facts) != 1 or facts[0].subject_code not in codes or not facts[0].subject_name:
+            return None
+        fact = facts[0]
+        signatures.append((fact.subject_code, fact.subject_name, fact.org_name, fact.org_scope,
+                           fact.fiscal_year, _canonical_budget_stage(fact.budget_stage)))
+    if {signature[0] for signature in signatures} != set(codes):
+        return None
+    mirror_signature = tuple(sorted((m['raw_code'],m['mirror_code'],m['class_code'],m['parent_code']) for m in mirrors))
+    return ('orphan_classification', tuple(sorted(signatures, key=repr)), mirror_signature, _version(item, context))
+
+
 def _keys(item, doc, context):
     """该问题的全部分组键；共享任一键的问题合并为一条（可传递）。"""
     severity = str(_get(item, 'severity') or '')
     if severity == 'manual_review':
         return []
+    orphan = _orphan_classification_key(item, context)
+    if orphan is not None:
+        return [orphan]
     table_defect = _table_defect_key(item)
     if table_defect is not None:
         return [table_defect]
@@ -795,6 +834,20 @@ def _merged(group, doc=None, *, key=None):
         _set(result, 'title', title)
         _set(result, 'difference', None)
         location['detail_sum_checks'] = [deepcopy(_location(item)) for item in ordered]
+    if key is not None and key[0] == 'orphan_classification':
+        # 多处错码共享同一原生镜像链时，主卡只展示一次同一原格/角色；
+        # 每处关系的完整证明及独立回执仍保留在 related_findings 中。
+        location['operand_refs'] = list({(ref['fact_uid'],ref.get('role')):ref
+                                        for ref in location['operand_refs']}.values())
+        codes = '、'.join(location['orphan_codes'])
+        places = '；'.join(f"{_location(item).get('table')}第{_location(item).get('page')}页" for item in group)
+        title = f'同一科目编码层级不一致（{codes}）'
+        _set(result, 'title', title)
+        mirror_codes = '、'.join(sorted({p['mirror_code'] for p in location['classification_mirrors']}))
+        _set(result, 'message', f'{title}：{places}；同原件完整原生表的同名项编码为{mirror_codes}。'
+             '类/款/项名称链一致而原印编码前缀不一致，不能将该项再作为独立根重复累加；'
+             '原编码与金额保留，请核实各处表间编码。')
+        location['source_refs'] = _unique([ref for item in group for ref in _location(item).get('source_refs') or []])
     _set(result, 'location', location)
     for key in ('fact_ids', 'evidence_ids', 'tags'):
         members = group if key == 'tags' else proof_members
