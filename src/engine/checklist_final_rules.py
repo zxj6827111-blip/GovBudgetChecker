@@ -490,6 +490,76 @@ def _clause_declaration_accounting(
     }
 
 
+def _inherit_clause_unit(
+    clauses: Sequence[Dict[str, Any]],
+    records: List[Dict[str, Any]],
+    joined: Optional[str] = None,
+    tail_start: int = 0,
+) -> None:
+    """同条目同槽位缺单位金额的唯一单位继承（D0 RC-3b）。
+
+    继承条件（全部满足才生效，宁缺毋造）：
+    - 记录数值本身可解析（value_wan 为 None 仅因缺单位）；
+    - 所属条目（clause）内同一槽位（kind）存在唯一单位的干净捐赠声明；
+    - 只继承单位，不发明数值；跨条目/跨阶段/单位冲突时不继承（fail-closed）。
+    """
+    def _clause_start_of(pos: int):
+        for clause in clauses:
+            if int(clause["start"]) <= pos < int(clause["end"]):
+                return int(clause["start"])
+        return None
+
+    grouped: Dict[Tuple[int, str], List[Dict[str, Any]]] = {}
+    for record in records:
+        clause_start = _clause_start_of(int(record["pos"]))
+        if clause_start is not None:
+            grouped.setdefault((clause_start, str(record["kind"])), []).append(record)
+
+    for record in records:
+        if record.get("value_wan") is not None or record.get("unit") is not None:
+            continue
+        if record.get("not_included_reason") not in (None, "amount_or_unit_unusable"):
+            continue
+        value = _dec(str(record.get("raw") or ""))
+        if value is None:
+            continue
+        clause_start = _clause_start_of(int(record["pos"]))
+        if clause_start is None:
+            continue
+        donors = [
+            other for other in grouped.get((clause_start, str(record["kind"])), [])
+            if other is not record
+            and other.get("value_wan") is not None
+            and other.get("unit")
+            and not other.get("not_included_reason")
+        ]
+        # 条目头金额（"（项）4.19 万元"）是同条目决算槽位的显式单位依据：
+        # 声明式记录之外，科目头自带金额带单位时同样可捐单位。
+        if joined:
+            for clause in clauses:
+                if int(clause["start"]) != clause_start:
+                    continue
+                body = joined[int(clause["start"]):int(clause["end"])]
+                head = _HEADER_AMOUNT_RE.search(body)
+                if head and head.group("unit"):
+                    donors.append({
+                        "unit": head.group("unit"),
+                        "pos": tail_start + int(clause["start"]) + head.start("amount"),
+                        "source": "subject_header",
+                    })
+                break
+        units = {str(other["unit"]) for other in donors}
+        if len(units) != 1:
+            continue
+        factor = _AMOUNT_UNIT_FACTOR.get(next(iter(units)))
+        if factor is None:
+            continue
+        record["unit"] = next(iter(units))
+        record["value_wan"] = value * factor
+        record["not_included_reason"] = None
+        record["unit_inherited_from"] = int(donors[0]["pos"])
+
+
 def _completeness_summary(items: Sequence[Dict[str, Any]], label: str) -> str:
     missing = sum(1 for item in items
                   if item.get("not_included_reason") == "item_disclosure_missing")
@@ -621,7 +691,10 @@ class R33251_FunctionalDetailCompleteness(Rule):
             # 应披露集合来自识别到的项级条目：每条科目都要有年初预算与支出决算
             # 两个槽位。没有数字不是“没有检查义务”，缺失槽位同样进入未纳入清单。
             clauses = _subject_clauses(joined, items)
-            clauses = _subject_clauses(joined, items)
+            # D0 RC-3b：同条目同槽位的缺单位金额，有唯一带单位的同槽位声明时
+            # 按该单位归一后参与合计；漏单位缺陷由 CMM-011 独立交付，
+            # 不再让整个构成检查被阻断（宜川部门决算 P29 实证）。
+            _inherit_clause_unit(clauses, records, joined, tail_start)
             accounting = _clause_declaration_accounting(
                 joined, clauses, records, tail_start
             )

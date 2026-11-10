@@ -524,6 +524,13 @@ _MISSING_UNIT_SUBJECT_RE = re.compile(r"(?:支出|收入|预算|决算)[^，。�
 # 2A：零值金额写作“0 元”，但同段其余金额以万元列示。
 _ZERO_YUAN_RE = re.compile(r"(?<![\d.,，])0(?:\.0+)?\s*元")
 _ZERO_UNIT_BEFORE_RE = re.compile(r"(?:年初预算|预算数|支出决算|决算数)为?\s*$")
+# D0 RC-3b：带小数的金额直接跟在“年初预算为/支出决算为/决算数为”等金额
+# 语境词后且不带任何单位——同段其余金额以万元列示时判漏写“万元”
+# （宜川部门决算 P29"支出决算为 4.19。"实证）。
+_AFTER_HEAD_AMOUNT_RE = re.compile(
+    r"(?:年初预算|预算数|支出决算|收入决算|决算数|决算|预算)为?是?\s*"
+    r"(?P<amount>\d[\d,]*\.\d+)(?![\d%．])"
+)
 
 
 class CMM011_AmountUnitWan(Rule):
@@ -581,6 +588,23 @@ class CMM011_AmountUnitWan(Rule):
                     issues.append(issue_at(
                         self, f"金额缺少单位“万元”：“{literal}”，同段其余金额均以万元列示。",
                         page, text, start, end, severity="warn", checklist_item="C-14",
+                    ))
+                # D0 RC-3b：金额语境词后的小数金额缺单位（同段有万元依据）
+                for match in _AFTER_HEAD_AMOUNT_RE.finditer(chunk):
+                    before = chunk[max(0, match.start() - 14):match.start()]
+                    if re.search(r"[万亿千百]$", before):
+                        continue
+                    after = chunk[match.end():match.end() + 4]
+                    if re.match(r"\s*(?:元|万元|亿元|％|%)", after):
+                        continue
+                    # 引文含金额语境词起点，能说明是哪个槽位漏了万元
+                    head_start, end = flat_span(positions,
+                                                paragraph.start() + match.start(),
+                                                paragraph.start() + match.end("amount"))
+                    literal = text[head_start:end].strip()
+                    issues.append(issue_at(
+                        self, f"金额缺少单位“万元”：“{literal}”，同段其余金额均以万元列示。",
+                        page, text, head_start, end, severity="warn", checklist_item="C-14",
                     ))
                 for match in _ZERO_YUAN_RE.finditer(chunk):
                     before = chunk[max(0, match.start() - 18):match.start()]

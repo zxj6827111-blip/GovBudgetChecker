@@ -470,22 +470,20 @@ def test_finals_unresolved_total_le_11(final_replays):
             if item:
                 assert item["detail"] == "缺少当前版本财政事实"
                 added += 1
-    item = next(x for x in final_replays["yichuan"]["summary"]["unresolved_rules"]
-                if x["rule_id"] == "V33-250")
-    assert '评级数量之和小于总数' in item['detail'] and '不能补零' in item['detail']
-    added += 1
+    # D0 RC-3a（2026-11-10 计划裁定）：部分列举按不等式校验即一致，
+    # V33-250 不再把"53个自评/优50个"整段转人工复核。
+    assert not any(x['rule_id'] == 'V33-250' for x in final_replays['yichuan']['summary']['unresolved_rules'])
     # 老page-data没有物理空格证明：说明中的零不能替代原表留空的出国决算格。
     for alias in ('yichuan','shiquan'):
         item=next(x for x in final_replays[alias]['summary']['unresolved_rules']if x['rule_id']=='V33-224')
         assert item['status']=='insufficient_data' and item['detail']=='因公出国说明或表内决算金额未唯一识别'
         added+=1
-    # 宜川非零声明缺单位仍不纳入；石泉明确零声明已与同条“年初无预算”核对。
-    assert not any(x['rule_id'] == 'V33-251' for x in final_replays['shiquan']['summary']['unresolved_rules'])
-    for alias in ('yichuan',):
-        item=next(x for x in final_replays[alias]['summary']['unresolved_rules']
-                  if x['rule_id']=='V33-251')
-        assert '未纳入合计' in item['detail']
-        added+=1
+    # D0 RC-3b：同条目同槽位唯一单位依据下的缺单位金额按该单位归一参与
+    # 合计（宜川"支出决算为 4.19"继承条目头"4.19 万元"），V33-251 不再因
+    # 单处缺单位阻断构成检查；漏单位缺陷由 CMM-011 独立交付。
+    # 石泉明确零声明已与同条“年初无预算”核对。
+    for alias in ('yichuan', 'shiquan'):
+        assert not any(x['rule_id'] == 'V33-251' for x in final_replays[alias]['summary']['unresolved_rules'])
     # 2C：石泉 p31 的 312.55% 条目在原文已写“主要原因：追加了图书购置经费…”，
     # 仅因 PDF 软换行把“主\n要原因”断开而被旧规则误判未说明；原因识别去空白后
     # 该条回到 pass，不再作为未完规则。
@@ -530,12 +528,16 @@ def test_yichuan_findings_stay_12(final_replays):
     年模板，部门模板正文表格部分不写“第二部分”。
     """
     issues = final_replays["yichuan"]["issues"]
+    # D0 RC-3b：4.19 归一后分项加总 20218.20 与总额 20218.21 差 0.01 万元，
+    # 在显示舍入包络内 → V33-251 不再交付"未纳入/范围不一致"提示。
     checklist = sorted(i.rule for i in issues if i.rule in {"CMM-013", "V33-251"})
-    assert checklist == ["V33-251"]
+    assert checklist == []
     # 批次1 年份角色修复新增一条真实完成率复算发现（97.64% vs 98%），
     # 非清单项由 13 条增至 14 条；2D 格式穷尽再增 4 条（CMM-010 小数位/千分位、
     # CMM-002 半角逗号/冒号），均为原文可见的格式问题，不是回归。
-    assert len(issues) - len(checklist) == 18
+    # D0 批次C：V33-251 的"未纳入"info 撤下，CMM-011 的"4.19 漏万元"warn
+    # 接位（同一处缺陷的更精确交付），净条数不变。
+    assert len(issues) - len(checklist) == 19
 
 
 def test_wenlv_cascade_still_zero(final_replays):

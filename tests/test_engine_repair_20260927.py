@@ -171,9 +171,9 @@ def test_unresolved_total_le_15(replays):
             if item:
                 assert item["detail"] == "缺少当前版本财政事实"
                 planned_missing += 1
-    item = replays["yichuan"]["unresolved"]["V33-250"]
-    assert '评级数量之和小于总数' in item['detail'] and '不能补零' in item['detail']
-    planned_missing += 1
+    # D0 RC-3a（2026-11-10 计划裁定）：部分列举按不等式校验即一致，
+    # 不再把"53个自评/优50个"整段转人工复核。
+    assert "V33-250" not in replays["yichuan"]["unresolved"]
     for alias in ('yichuan','shiquan'):
         item=replays[alias]['unresolved']['V33-224']
         assert item['status']=='insufficient_data' and item['detail']=='因公出国说明或表内决算金额未唯一识别'
@@ -182,11 +182,10 @@ def test_unresolved_total_le_15(replays):
     # shiquan 年初预算同类），按合同不得把该部分并入完整分项加总；规则保留
     # 已确认差额问题并转 insufficient_data，属于计划内取数不足。
     # 石泉原文同时写“年初预算为0”和“年初无预算”，该明确零声明现已纳入核对。
+    # D0 RC-3b：缺单位金额按同条目唯一单位依据归一参与合计后，
+    # V33-251 不再因单处缺单位阻断构成检查（漏单位由 CMM-011 独立交付）。
     assert "V33-251" not in replays["shiquan"]["unresolved"]
-    for alias, label in (("yichuan", "支出决算"),):
-        item = replays[alias]["unresolved"]["V33-251"]
-        assert "未纳入合计" in item["detail"] and label in item["detail"]
-        planned_missing += 1
+    assert "V33-251" not in replays["yichuan"]["unresolved"]
     # 2C：软换行断开的“主要原因”已可识别，312.55% 条目不再误报未说明原因。
     assert replays['shiquan']['summary']['rule_statuses']['V33-234'] == 'pass'
     assert not any(issue.rule == 'V33-234' and '312.55%' in issue.message
@@ -304,13 +303,16 @@ def test_yichuan_output_budget(replays):
     # 2026-10-22 检查点清单中，V33-251 具体情况差 4.20 万元仍报；D2（2026-11-03）
     # 起 2025 年部门决算照 2024 年模板，正文不写“第二部分”，CMM-013 不再报。
     issues = replays["yichuan"]["issues"]
+    # D0 RC-3b：4.19 归一后分项加总与总额差 0.01 万元（舍入包络内），
+    # V33-251 不再交付"未纳入/范围不一致"提示。
     checklist = [i for i in issues if getattr(i, "rule", "") in {"CMM-013", "V33-251"}]
-    assert len(checklist) == 1 and checklist[0].rule == "V33-251"
+    assert not checklist
     # 批次1 年份角色修复恢复了完成率复算：yichuan 声明 98%，按
     # 20707.11→20218.21 应为 97.64%，相差 0.36pp；这是真实新增发现，
     # 不是回归，也不能为了维持旧条数而删除检查。
     # 2D 格式穷尽：CMM-010/CMM-002 在宜川样张新增 4 条可见格式问题。
-    assert len(issues) - len(checklist) <= 18
+    # D0 批次C：V33-251 info 撤下、CMM-011 warn 接位，净条数不变（19）。
+    assert len(issues) - len(checklist) <= 19
 
 
 # ---------------------------------------------------------------------------

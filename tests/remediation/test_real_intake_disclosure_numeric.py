@@ -239,18 +239,35 @@ def test_performance_rating_counts_have_no_currency_or_rounding_tolerance():
     assert issue.location['difference_count'] == -19
 
 
-@pytest.mark.parametrize('change', ['missing', 'duplicate', 'previous_year', 'foreign_owner'])
+@pytest.mark.parametrize('change', ['duplicate', 'previous_year', 'foreign_owner'])
 def test_incomplete_or_foreign_rating_scope_is_not_a_confirmed_error(change):
     body = '绩效自评的2025年度项目108个，' + RATINGS
-    if change == 'missing':
-        # 未披露类别仍可能解释差额；已披露合计超过总数则已构成确定矛盾。
-        body = body.replace('绩效评级为“不合格”的项目1个。', '').replace('项目108个', '项目128个')
-    elif change == 'duplicate': body += '绩效评级为“良”的项目1个。'
+    if change == 'duplicate': body += '绩效评级为“良”的项目1个。'
     elif change == 'previous_year': body = body.replace('2025年度', '2024年度')
     else: body = '乙局' + body
     with pytest.raises(RuleDeferred) as signal:
         check_performance_counts(DisclosureRule(), performance(body))
     assert not signal.value.partial_issues
+
+
+def test_partial_rating_enumeration_completes_by_inequality():
+    """D0 RC-3a："其中优X个"是部分列举——不等式校验即一致，不再阻断。
+
+    宜川部门决算实证（2026-11-10）：自评 53 个、评级仅披露"优50个"，
+    旧实现要求 优+良+中+差 加总闭合 → insufficient_data 人工复核过度阻断。
+    """
+    doc = performance('绩效自评的2025年度项目53个，涉及预算金额6993.22万元，'
+                      '平均得分95.55分（其中，绩效评级为“优”的项目50个）。')
+    assert check_performance_counts(DisclosureRule(), doc) == []
+
+
+def test_rating_count_exceeding_total_is_confirmed_error():
+    """部分列举但数量超过总数：矛盾照常交付，不因列举不全而豁免。"""
+    doc = performance('绩效自评的2025年度项目53个，'
+                      '（其中，绩效评级为“优”的项目60个）。')
+    issue, = check_performance_counts(DisclosureRule(), doc)
+    assert issue.location['declared_count'] == 53
+    assert issue.location['computed_count'] == 60
 
 
 def test_distinct_evaluation_scope_is_not_added_to_self_evaluation():
@@ -354,12 +371,20 @@ def test_disclosed_distinct_ratings_can_close_without_inventing_missing_zeros(to
                for ref in doc.fact_receipts[-1]['disclosure_sources'])
 
 
-def test_partial_ratings_below_total_remain_uncompleted_without_fabricated_zeros():
+def test_partial_ratings_below_total_complete_by_inequality_without_fabricated_zeros():
+    """D0 RC-3a（计划裁定）：部分列举按不等式校验即一致，不再阻断人工复核。
+
+    旧口径（2026-11-03 冻结）把"已披露之和<总数且未披露全部档次"整段转补核；
+    计划明确其为过度阻断——不补零、也不把缺项当零，仅校验已披露各档 ≤ 总数。
+    """
     doc = performance(rating_body(78, [('优', 75), ('良', 2)]))
-    with pytest.raises(RuleDeferred) as signal:
-        check_performance_counts(DisclosureRule(), doc)
-    assert not signal.value.partial_issues
-    assert '不能补零' in str(signal.value)
+    assert check_performance_counts(DisclosureRule(), doc) == []
+    receipts = [r for r in doc.fact_receipts
+                if 'rating' in str(r.get('sub_check_id', '') or '')
+                or 'rating' in str(r.get('formula', '') or '')]
+    assert receipts, "部分列举应以不等式口径留回执"
+    assert receipts[-1]['status'] == 'pass'
+    assert '>= sum' in receipts[-1]['formula']
 
 
 def test_partial_ratings_above_total_are_a_provable_lower_bound_error():
@@ -457,8 +482,8 @@ def test_cancelled_projects_are_not_used_to_force_an_equal_total():
     assert issue.location['computed_count'] == 275
     assert issue.location['cancelled_project_count'] == 2
     assert issue.location['rating_counts'] == {'优': 263, '良': 8, '合格': 2}
-    with pytest.raises(RuleDeferred):
-        check_performance_counts(DisclosureRule(), performance(cancelled_body(total=276)))
+    # D0 RC-3a：取消项目计入后仍少于总数 → 部分列举一致（不等式），不再阻断
+    assert check_performance_counts(DisclosureRule(), performance(cancelled_body(total=276))) == []
 
 
 @pytest.fixture(scope='module')

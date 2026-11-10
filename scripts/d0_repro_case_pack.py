@@ -38,22 +38,27 @@ async def run(pdf: str, org: str, year: int, kind: str, out: str | None,
     parse_artifact = None
     page_texts: list[str] = []
     if task_dir:
-        # 冻结输入复现：读保存的事实上下文（与当次分析同一取数版本）
-        fc_path = Path(task_dir) / "fact_context.json"
-        if fc_path.exists():
-            fact_context = json.loads(fc_path.read_text(encoding="utf-8"))
+        # --task 仅记录复现归属（哪次分析的输入）；页文本与表格用 runner
+        # 自身的抽取器从原件重建（与全新解析同一路径，保证表格规则可用）。
+        # 事实上下文不回灌：旧快照缺少 parse_artifact 绑定时表格规则会整体
+        # 降级为"表缺失"，不如直接以当前代码从原件重算（D0 复现纪律）。
         status = {}
         st_path = Path(task_dir) / "status.json"
         if st_path.exists():
             status = json.loads(st_path.read_text(encoding="utf-8"))
         meta_saved = ((status.get("result") or {}).get("meta") or {})
-        parse_artifact = meta_saved.get("parse_artifact_obj") or meta_saved.get("parse_artifact")
-        # 页文本从原件重建（保证证据校验可用）
         try:
+            from src.services.pdf_page_extract import (
+                extract_tables_from_page,
+                extract_visible_text_from_page,
+            )
+
             import pdfplumber
 
             with pdfplumber.open(pdf) as pdf_doc:
-                page_texts = [(p.extract_text() or "") for p in pdf_doc.pages]
+                for page in pdf_doc.pages:
+                    page_texts.append(extract_visible_text_from_page(page))
+                    page_tables.append(extract_tables_from_page(page))
         except Exception:
             page_texts = []
     ctx = JobContext(
@@ -73,8 +78,12 @@ async def run(pdf: str, org: str, year: int, kind: str, out: str | None,
     )
     config = AnalysisConfig(dual_mode=False, ai_enabled=False, rule_enabled=True,
                             enable_ai_analysis=False, enable_ai_locator=False)
-    # 规则集由 runner 按 report_kind 自选（与线上 select_rules 同一入口）
-    issues = await run_engine_rules(ctx, [], config)
+    # 规则集由 runner 按 report_kind 自选（与线上 select_rules 同一入口）；
+    # 用实例化 runner 以便取回与线上同源的执行摘要/未决诊断
+    from src.services.engine_rule_runner import EngineRuleRunner
+
+    runner = EngineRuleRunner()
+    issues = await runner.run_rules(ctx, [], config)
 
     findings = []
     for it in issues:
@@ -113,10 +122,7 @@ async def run(pdf: str, org: str, year: int, kind: str, out: str | None,
     except Exception as exc:  # noqa: BLE001 - 证据校验失败时如实记录
         evidence_summary = {"error": str(exc)}
 
-    # 规则执行摘要与未决规则从 runner 统计里取（与线上同源）
-    from src.services.engine_rule_runner import EngineRuleRunner  # noqa: E402
-
-    runner = EngineRuleRunner()
+    # 规则执行摘要与未决规则从同一 runner 实例读取（与线上同源）
     summary = runner.get_rule_execution_summary() if hasattr(runner, "get_rule_execution_summary") else {}
 
     report = {

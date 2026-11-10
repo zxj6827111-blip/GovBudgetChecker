@@ -1400,10 +1400,16 @@ def check_performance_counts(rule, doc):
                         cancelled_count = int(last['count'])
                         computed += cancelled_count
                         evidence_end = max(evidence_end, last.end())
-            # 评级互斥、数量非负；已披露分项已覆盖总数即可验证闭合。
-            # 少于总数且仍有未披露类别时保留补核，不能把缺项当零制造错误。
-            if reason is None and computed < declared and not complete:
-                reason = '同一自评范围的已披露评级数量之和小于总数，剩余类别未完整披露，不能补零'
+            # D0 RC-3a：区分"完整构成"与"部分列举"（计划第二节裁定：不得把
+            # 部分列举当完整构成要求加总，造成过度阻断）。
+            # - 完整构成（四档全部披露）：加总等式必须成立，缺项不得当零；
+            #   加总不等（小于或大于总数）都是确定矛盾，照常交付。
+            # - 部分列举（如"其中，绩效评级为'优'的项目50个"）："其中"表明
+            #   是子集披露而非完整构成——已披露各档数量不超过总数即为一致
+            #   （不等式校验），不再要求加总闭合，也不转人工复核（宜川部门
+            #   决算 53 个自评/优 50 个实证：旧实现把合法部分列举整段阻断）。
+            # - 已披露之和超过总数（无论完整与否）：矛盾，照常交付。
+            partial_enumeration = not complete and computed <= declared
             if reason:
                 _unresolved(rule, doc, key, reason, unresolved,
                             formula='self_evaluation_count compared with sum(disclosed distinct rating counts)')
@@ -1417,10 +1423,11 @@ def check_performance_counts(rule, doc):
                        'self_evaluation_count >= sum(disclosed distinct rating counts)')
             if cancelled:
                 formula += ' + explicitly included cancelled projects'
-            receipt(rule, doc, key, [], status='fail' if declared != computed else 'pass',
+            inconsistent = (declared != computed) and not partial_enumeration
+            receipt(rule, doc, key, [], status='fail' if inconsistent else 'pass',
                     formula=formula,
                     disclosure_sources=[dict(ref, file_hash=file_hash) for ref in refs])
-            if declared == computed:
+            if not inconsistent:
                 continue
             location = _location(doc, refs, [], title, 'performance_self_evaluation_count',
                                  declared_count=declared, rating_counts=parts,
