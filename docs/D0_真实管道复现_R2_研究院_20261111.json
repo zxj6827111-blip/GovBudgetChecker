@@ -1,0 +1,867 @@
+{
+ "input": {
+  "pdf": "uploads/0b507c0dfb58921a6780870a4681f48c/上海市自然资源调查利用研究院2025年度决算.pdf",
+  "original_sha256": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+  "org": "上海市自然资源调查利用研究院",
+  "year": 2025,
+  "kind": "final"
+ },
+ "frozen_versions": {
+  "git_head": "45d553f95e4ec11a0739f6b12a7cbc621abeb071",
+  "key_source_sha256": {
+   "src/engine/rules_v33.py": "077c974ce4839fda017a4eb8ce10d04f6050792904cb7ed85ef98bc917faaeaf",
+   "src/engine/pipeline.py": "f639093ffee1a8116b819f5bd035768c789aea59d95491b161f1b54622d6a3ba",
+   "src/engine/issue_evidence.py": "073c8f49b94246ba7728e1964e3cd1dfdd9f19ca4ff81ce0ca37c2dabc33fbb4",
+   "src/services/rule_source_binding.py": "296d299343ab2aa4db8a99b8c084a0be0c63cc1e5e60e9b1b7b200243e6ec462",
+   "src/services/evidence_guard.py": "4e6ff64ab85339d0cffab2dc8afd3d672fb7c30b77a22f2ccaf30f4bc3e6edb2",
+   "src/services/pdf_parser.py": "80d100fe7e6ec786178e9687b4a0ed5a5446c749289a48ddf9445238e8cc9a5d"
+  },
+  "parse_run_uid": "dfb0898948316db863f4da079608d005",
+  "fact_count": 605,
+  "page_count": 25,
+  "config": {
+   "use_ai_assist": false,
+   "ocr": "disabled",
+   "empty_value_conventions": "builtin(U-5)"
+  }
+ },
+ "elapsed_seconds": 0.4,
+ "rule_execution_summary": {
+  "total_rules": 90,
+  "executed": 86,
+  "pass": 80,
+  "fail": 4,
+  "not_applicable": 2,
+  "insufficient_data": 4,
+  "parse_error": 0,
+  "execution_error": 0,
+  "unresolved_total": 4,
+  "failed_rules": [
+   "V33-CROSS-SAN-GONG-ECON",
+   "CMM-004",
+   "CMM-010",
+   "CMM-011"
+  ],
+  "unresolved_rules": [
+   {
+    "rule_id": "V33-234",
+    "status": "insufficient_data",
+    "detail": "第23页原文关系未完成：同一句政府采购汇总未唯一列出货物、工程、服务三项",
+    "unresolved_reasons": [
+     "第23页原文关系未完成：同一句政府采购汇总未唯一列出货物、工程、服务三项"
+    ],
+    "diagnostics": [
+     {
+      "reason_codes": [
+       "text_statement_unparsed"
+      ],
+      "blocked_by": [],
+      "missing_operands": [
+       {
+        "source": "text",
+        "section": "（二）政府采购支出情况",
+        "role": "政府采购分项显式金额",
+        "page": 23,
+        "row_key": null,
+        "column": "金额",
+        "fund_scope": null,
+        "stage": "决算",
+        "year": 2025,
+        "bbox": null
+       }
+      ],
+      "candidates": [],
+      "next_action": "system_recheck",
+      "root_cause_key": "rc:f5c4ca983c430974038864d462e07d8ecc185b3aeb63a62c2faa18a0169b0aeb"
+     }
+    ]
+   },
+   {
+    "rule_id": "V33-248",
+    "status": "insufficient_data",
+    "detail": "total的income_actual/决算操作数缺失或不唯一",
+    "unresolved_reasons": [
+     "total的income_actual/决算操作数缺失或不唯一"
+    ],
+    "diagnostics": [
+     {
+      "reason_codes": [
+       "operand_missing"
+      ],
+      "blocked_by": [],
+      "missing_operands": [
+       {
+        "source": "table",
+        "table_code": "FIN_08_gov_fund",
+        "role": "income_actual/决算操作数",
+        "page": 15,
+        "row_key": "total",
+        "column": "income_actual",
+        "fund_scope": "government_fund",
+        "stage": "决算",
+        "year": 2025,
+        "bbox": [
+         262.250005,
+         183.6200000000001,
+         334.250005,
+         208.13
+        ]
+       }
+      ],
+      "candidates": [],
+      "next_action": "system_recheck",
+      "root_cause_key": "rc:ecad5220ac8cefa29fea5a4a26c1922969ff94d0aa395b63345db74a8cc6dbe4"
+     }
+    ]
+   },
+   {
+    "rule_id": "CMM-018",
+    "status": "insufficient_data",
+    "detail": "写法口径未确认；主体用语子项未完成",
+    "unresolved_reasons": [
+     "写法口径未确认；主体用语子项未完成"
+    ],
+    "diagnostics": [
+     {
+      "reason_codes": [
+       "rule_no_reason"
+      ],
+      "blocked_by": [],
+      "missing_operands": [],
+      "candidates": [],
+      "next_action": "tech_fix",
+      "root_cause_key": "rc:6100cb42140df931e0f30949198871b75a8feb9b0c90f607119496fd18ce769d"
+     }
+    ]
+   },
+   {
+    "rule_id": "CMM-019",
+    "status": "insufficient_data",
+    "detail": "封面文种缺少独立依据",
+    "unresolved_reasons": [
+     "封面文种缺少独立依据"
+    ],
+    "diagnostics": [
+     {
+      "reason_codes": [
+       "scope_unconfirmed"
+      ],
+      "blocked_by": [
+       {
+        "dimension": "org_scope",
+        "ref": "封面文种缺少独立依据",
+        "reason_code": "scope_unconfirmed"
+       }
+      ],
+      "missing_operands": [],
+      "candidates": [],
+      "next_action": "human_confirm",
+      "root_cause_key": "rc:2540ece44c0828dbcf48fa691820c958da41bff7348e47ea2f285f5204fb0b41"
+     }
+    ]
+   }
+  ],
+  "partial_findings_total": 0,
+  "rule_statuses": {
+   "V33-001": "pass",
+   "V33-002": "pass",
+   "V33-003": "pass",
+   "V33-004": "pass",
+   "V33-005": "pass",
+   "V33-101": "pass",
+   "V33-102": "pass",
+   "V33-103": "pass",
+   "V33-104": "pass",
+   "V33-105": "pass",
+   "V33-106": "pass",
+   "V33-107": "pass",
+   "V33-108": "pass",
+   "V33-109": "pass",
+   "V33-110": "pass",
+   "V33-111": "pass",
+   "V33-112": "pass",
+   "V33-113": "pass",
+   "V33-115": "pass",
+   "V33-119": "pass",
+   "V33-120": "pass",
+   "V33-117": "pass",
+   "V33-121": "pass",
+   "V33-122": "pass",
+   "V33-114": "pass",
+   "V33-200": "pass",
+   "V33-201": "pass",
+   "V33-202": "pass",
+   "V33-203": "pass",
+   "V33-243": "pass",
+   "V33-214": "pass",
+   "V33-244": "pass",
+   "V33-245": "pass",
+   "V33-246": "pass",
+   "V33-SG-COMPLETION": "pass",
+   "V33-242": "pass",
+   "V33-240": "pass",
+   "V33-241": "pass",
+   "V33-225": "pass",
+   "V33-226": "pass",
+   "V33-220": "pass",
+   "V33-221": "pass",
+   "V33-222": "pass",
+   "V33-227": "pass",
+   "V33-223": "pass",
+   "V33-224": "pass",
+   "V33-204": "pass",
+   "V33-CROSS-SAN-GONG-ECON": "fail",
+   "V33-TXT-FUND-DETAIL": "pass",
+   "V33-NARRATIVE-INDICATOR-REPEAT": "pass",
+   "V33-TREND-COMPLETION-RATE": "pass",
+   "V33-233": "pass",
+   "V33-234": "insufficient_data",
+   "V33-235": "pass",
+   "V33-236": "pass",
+   "V33-230": "not_applicable",
+   "V33-232": "pass",
+   "V33-248": "insufficient_data",
+   "V33-249": "pass",
+   "V33-250": "pass",
+   "V33-251": "pass",
+   "V33-252": "pass",
+   "CMM-001": "pass",
+   "CMM-002": "pass",
+   "CMM-003": "pass",
+   "CMM-004": "fail",
+   "CMM-005": "pass",
+   "CMM-006": "pass",
+   "CMM-007": "pass",
+   "V33-DISCLOSURE-PERCENT-UNIT": "pass",
+   "CMM-008": "pass",
+   "CMM-009": "pass",
+   "CMM-010": "fail",
+   "CMM-011": "fail",
+   "CMM-012": "pass",
+   "CMM-013": "pass",
+   "CMM-014": "pass",
+   "CMM-015": "pass",
+   "CMM-016": "pass",
+   "CMM-017": "pass",
+   "CMM-018": "insufficient_data",
+   "CMM-019": "insufficient_data",
+   "CMM-027": "not_applicable",
+   "CMM-020": "pass",
+   "CMM-021": "pass",
+   "CMM-022": "pass",
+   "CMM-023": "pass",
+   "CMM-024": "pass",
+   "CMM-025": "pass",
+   "CMM-026": "pass"
+  }
+ },
+ "binding": {
+  "rule_source_binding": {
+   "bound_rule_findings": 7,
+   "scope": "source identity only; evidence guard and human business adjudication remain required"
+  }
+ },
+ "locations": {
+  "rule_source_locations": {
+   "checked_rule_findings": 7
+  }
+ },
+ "evidence_completeness": {
+  "total": 7,
+  "complete": 7,
+  "incomplete": 0,
+  "completeness_rate": 1.0,
+  "locatable_total": 7,
+  "locatable_complete": 7,
+  "locatable_completeness_rate": 1.0,
+  "document_level_total": 0,
+  "verified_count": 7,
+  "unverified_count": 0,
+  "failed_count": 0,
+  "degraded_count": 0,
+  "rule_warning_count": 0,
+  "formal_issue_total": 6,
+  "degraded": [],
+  "rule_warnings": [],
+  "detail_truncated": false
+ },
+ "counts": {
+  "findings": 7,
+  "verified": 7,
+  "failed": 0,
+  "unverified": 0
+ },
+ "findings": [
+  {
+   "id": "CMM-004-4",
+   "rule_id": "CMM-004",
+   "severity": "manual_review",
+   "page": 6,
+   "message": "一、同一科目在收入决算表与支出决算表金额差异较大（2200150 事业运行）：收入9470.03万元、支出10675.35万元，相差1205.32万元。可能因结转结余造成，请人工核对。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     6,
+     9
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "9,470.03",
+     "quote": "9,470.03",
+     "page": 6,
+     "physical_page": 6,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": "9a1b0f02a434068b:r21c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "10,675.35",
+     "quote": "10,675.35",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": "fcde03fa9046daaf:r1c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-CROSS-SAN-GONG-ECON-1",
+   "rule_id": "V33-CROSS-SAN-GONG-ECON",
+   "severity": "error",
+   "page": 13,
+   "message": "二、跨表资金来源冲突：「因公出国（境）费」在基本支出经济分类表列示 21.00 万元（30212，第13页决算数），大于三公经费支出决算表第14页同一业务项的决算数 0.00 万元，差额 21 万元（2025 年度）。基本支出是三公经费的组成部分，部分大于整体时两表不能同时成立；现有材料无法判定哪一侧有误，需人工复核两",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     13,
+     14
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "21.00",
+     "quote": "21.00",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": "4713c26497e44ae7:r12c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": "a1af0a4dfd955ab2:r4c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-CROSS-SAN-GONG-ECON-2",
+   "rule_id": "V33-CROSS-SAN-GONG-ECON",
+   "severity": "error",
+   "page": 13,
+   "message": "三、跨表资金来源冲突：「公务用车运行维护费」在基本支出经济分类表列示 14.00 万元（30231，第13页决算数），大于三公经费支出决算表第14页同一业务项的决算数 0.00 万元，差额 14 万元（2025 年度）。基本支出是三公经费的组成部分，部分大于整体时两表不能同时成立；现有材料无法判定哪一侧有误，需人工复核",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     13,
+     14
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "14.00",
+     "quote": "14.00",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": "4713c26497e44ae7:r25c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": "a1af0a4dfd955ab2:r4c9",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-CROSS-SAN-GONG-ECON-3",
+   "rule_id": "V33-CROSS-SAN-GONG-ECON",
+   "severity": "error",
+   "page": 13,
+   "message": "四、跨表资金来源冲突：「公务接待费」在基本支出经济分类表列示 8.00 万元（30217，第13页决算数），大于三公经费支出决算表第14页同一业务项的决算数 0.00 万元，差额 8 万元（2025 年度）。基本支出是三公经费的组成部分，部分大于整体时两表不能同时成立；现有材料无法判定哪一侧有误，需人工复核两表底稿。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     13,
+     14
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "8.00",
+     "quote": "8.00",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": "4713c26497e44ae7:r17c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": "a1af0a4dfd955ab2:r4c11",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "CMM-010-6",
+   "rule_id": "CMM-010",
+   "severity": "warn",
+   "page": 17,
+   "message": "五、金额未按半角逗号分千分位：全文共 29 处（如“资源调查利用研究院 2025 年度收入支出总计\n16427.30 万元。与 2024 年度相比，收入支出总计增加 27”），应写作 1,234.56 万元。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "16427.30 万元",
+     "quote": "16427.30 万元",
+     "page": 17,
+     "physical_page": 17,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "2723.18\n, ,\n万元",
+     "quote": "2723.18\n, ,\n万元",
+     "page": 17,
+     "physical_page": 17,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "14816.70 万元",
+     "quote": "14816.70 万元",
+     "page": 17,
+     "physical_page": 17,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "7687.99\n, ,\n万元",
+     "quote": "7687.99\n, ,\n万元",
+     "page": 17,
+     "physical_page": 17,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "业收入 3080.97 万元，占 2",
+     "quote": "业收入 3080.97 万元，占 2",
+     "page": 17,
+     "physical_page": 17,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "入 3956.86 万元，占 2",
+     "quote": "入 3956.86 万元，占 2",
+     "page": 17,
+     "physical_page": 17,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "16022.02 万元",
+     "quote": "16022.02 万元",
+     "page": 17,
+     "physical_page": 17,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "6347.37 万\n, ,\n元",
+     "quote": "6347.37 万\n, ,\n元",
+     "page": 17,
+     "physical_page": 17,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "目支出 5717.79 万元，占 3",
+     "quote": "目支出 5717.79 万元，占 3",
+     "page": 17,
+     "physical_page": 17,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "3956.86 万元，占 24.69",
+     "quote": "3956.86 万元，占 24.69",
+     "page": 17,
+     "physical_page": 17,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "出总计 7687.99 万元。与 2",
+     "quote": "出总计 7687.99 万元。与 2",
+     "page": 17,
+     "physical_page": 17,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "款支出 6412.49 万元，占本年",
+     "quote": "款支出 6412.49 万元，占本年",
+     "page": 17,
+     "physical_page": 17,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "款支出 6412.49 万元，主要用",
+     "quote": "款支出 6412.49 万元，主要用",
+     "page": 18,
+     "physical_page": 18,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "区支出 1253.49 万元，占 1",
+     "quote": "区支出 1253.49 万元，占 1",
+     "page": 18,
+     "physical_page": 18,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "等支出 4314.56 万元，占 6",
+     "quote": "等支出 4314.56 万元，占 6",
+     "page": 18,
+     "physical_page": 18,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "决算为 6412.49 万元，完成年",
+     "quote": "决算为 6412.49 万元，完成年",
+     "page": 18,
+     "physical_page": 18,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "预算为 2117 万元，支出决",
+     "quote": "预算为 2117 万元，支出决",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "决算为 1253.49 万元。决",
+     "quote": "决算为 1253.49 万元。决",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "决算为 1137.84 万元。决",
+     "quote": "决算为 1137.84 万元。决",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "预算为 2186.23 万元，支出决",
+     "quote": "预算为 2186.23 万元，支出决",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "为 2341.32 万元，决算数",
+     "quote": "为 2341.32 万元，决算数",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "本支出 3134.44 万元。其中：",
+     "quote": "本支出 3134.44 万元。其中：",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "经费 2775.96 万元，主要包",
+     "quote": "经费 2775.96 万元，主要包",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "款收入 1275.50 万元，支出",
+     "quote": "款收入 1275.50 万元，支出",
+     "page": 21,
+     "physical_page": 21,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1275.50\n, ,\n万元",
+     "quote": "1275.50\n, ,\n万元",
+     "page": 21,
+     "physical_page": 21,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "预算为 1284.16 万元，支",
+     "quote": "预算为 1284.16 万元，支",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "决算为 1275.50 万元。决算数",
+     "quote": "决算为 1275.50 万元。决算数",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "准）为 3008.38 万元，其中：",
+     "quote": "准）为 3008.38 万元，其中：",
+     "page": 23,
+     "physical_page": 23,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "购金额 2102.88 万元。",
+     "quote": "购金额 2102.88 万元。",
+     "page": 23,
+     "physical_page": 23,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "CMM-011-7",
+   "rule_id": "CMM-011",
+   "severity": "warn",
+   "page": 19,
+   "message": "六、金额单位疑似漏写“万”字：“141.55元”，说明正文金额应以万元为单位。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     19
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "预算为 141.55 元，支出决",
+     "quote": "预算为 141.55 元，支出决",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "CMM-010-5",
+   "rule_id": "CMM-010",
+   "severity": "warn",
+   "page": 19,
+   "message": "七、金额或百分比小数位不统一：全文共 6 处未保留两位小数（如“目、城市维护养护项目等项目\n的支出。年初预算为 2117 万元，支出决算为 1253.49 万元。决\n, ,”），金额与百分比均应统一保留两位小数。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     19,
+     21
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "预算为 2117 万元，支出决",
+     "quote": "预算为 2117 万元，支出决",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "预算为 0 万元，支出决",
+     "quote": "预算为 0 万元，支出决",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "国（境）费支出 0 万元。",
+     "quote": "国（境）费支出 0 万元。",
+     "page": 21,
+     "physical_page": 21,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "护支出 0 万元。202",
+     "quote": "护支出 0 万元。202",
+     "page": 21,
+     "physical_page": 21,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "公务接待费支出 0 万元。",
+     "quote": "公务接待费支出 0 万元。",
+     "page": 21,
+     "physical_page": 21,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "占 100%；公务接待费支出",
+     "quote": "占 100%；公务接待费支出",
+     "page": 21,
+     "physical_page": 21,
+     "file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  }
+ ],
+ "note": "verified 才算恢复；unverified/failed/未执行均不算（IR-03）"
+}

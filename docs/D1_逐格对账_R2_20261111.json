@@ -1,0 +1,149 @@
+{
+ "input": {
+  "pdf": "uploads/6000a11c0737d5149975516b44fd8682/上海市普陀区人民政府宜川路街道办事处2025年度部门决算.pdf",
+  "mode": "auto"
+ },
+ "instances": 9,
+ "pass": 9,
+ "gap": 0,
+ "results": [
+  {
+   "table_code": "FIN_01_income_expenditure_total",
+   "title": "收入支出决算总表",
+   "pages": [
+    6
+   ],
+   "rows": 30,
+   "missing_numbers": {},
+   "extra_numbers": {},
+   "missing_codes": [],
+   "row_mismatches": [],
+   "merged_view_errors": [],
+   "verdict": "PASS"
+  },
+  {
+   "table_code": "FIN_02_income",
+   "title": "收入决算表",
+   "pages": [
+    7,
+    8,
+    9,
+    10,
+    11
+   ],
+   "rows": 74,
+   "missing_numbers": {},
+   "extra_numbers": {},
+   "missing_codes": [],
+   "row_mismatches": [],
+   "merged_view_errors": [],
+   "verdict": "PASS"
+  },
+  {
+   "table_code": "FIN_03_expenditure",
+   "title": "支出决算表",
+   "pages": [
+    12,
+    13,
+    14,
+    15,
+    16
+   ],
+   "rows": 74,
+   "missing_numbers": {},
+   "extra_numbers": {},
+   "missing_codes": [],
+   "row_mismatches": [],
+   "merged_view_errors": [],
+   "verdict": "PASS"
+  },
+  {
+   "table_code": "FIN_04_fiscal_grant_total",
+   "title": "财政拨款收入支出决算总表",
+   "pages": [
+    17,
+    18
+   ],
+   "rows": 32,
+   "missing_numbers": {},
+   "extra_numbers": {},
+   "missing_codes": [],
+   "row_mismatches": [],
+   "merged_view_errors": [],
+   "verdict": "PASS"
+  },
+  {
+   "table_code": "FIN_05_general_public_expenditure",
+   "title": "一般公共预算财政拨款支出决算表",
+   "pages": [
+    19,
+    20,
+    21
+   ],
+   "rows": 72,
+   "missing_numbers": {},
+   "extra_numbers": {},
+   "missing_codes": [],
+   "row_mismatches": [],
+   "merged_view_errors": [],
+   "verdict": "PASS"
+  },
+  {
+   "table_code": "FIN_06_basic_expenditure",
+   "title": "一般公共预算财政拨款基本支出决算表",
+   "pages": [
+    22,
+    23
+   ],
+   "rows": 41,
+   "missing_numbers": {},
+   "extra_numbers": {},
+   "missing_codes": [],
+   "row_mismatches": [],
+   "merged_view_errors": [],
+   "verdict": "PASS"
+  },
+  {
+   "table_code": "FIN_07_three_public",
+   "title": "财政拨款“三公”经费支出决算表",
+   "pages": [
+    24
+   ],
+   "rows": 5,
+   "missing_numbers": {},
+   "extra_numbers": {},
+   "missing_codes": [],
+   "row_mismatches": [],
+   "merged_view_errors": [],
+   "verdict": "PASS"
+  },
+  {
+   "table_code": "FIN_08_gov_fund",
+   "title": "政府性基金预算财政拨款收入支出决算表",
+   "pages": [
+    25
+   ],
+   "rows": 6,
+   "missing_numbers": {},
+   "extra_numbers": {},
+   "missing_codes": [],
+   "row_mismatches": [],
+   "merged_view_errors": [],
+   "verdict": "PASS"
+  },
+  {
+   "table_code": "FIN_09_state_capital",
+   "title": "国有资本经营预算财政拨款收入支出决算表",
+   "pages": [
+    26
+   ],
+   "rows": 6,
+   "missing_numbers": {},
+   "extra_numbers": {},
+   "missing_codes": [],
+   "row_mismatches": [],
+   "merged_view_errors": [],
+   "verdict": "PASS"
+  }
+ ]
+}
