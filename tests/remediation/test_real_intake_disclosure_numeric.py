@@ -516,6 +516,40 @@ def test_conflicting_same_scope_declarations_are_explicit_ambiguity():
     assert '冲突' in str(signal.value)
 
 
+# ---------------------------------------------------------------------------
+# R5-01：资料标题不新增评级数量关系；无条件披露必须绑定实际数量归属
+# ---------------------------------------------------------------------------
+
+PARTIAL_BODY = '绩效自评的2025年度项目53个，其中，绩效评级为“优”的项目50个。'
+
+
+@pytest.mark.parametrize('title', [
+    '部分项目评级资料如下：项目自评表、评审意见。',
+    '相关评级材料如下：项目自评表、整改资料。',
+])
+def test_material_titles_do_not_create_rating_count_relations(title):
+    doc = performance(PARTIAL_BODY + title)
+    assert check_performance_counts(DisclosureRule(), doc) == []
+    receipt = doc.fact_receipts[-1]
+    assert receipt['status'] == 'pass'
+    assert '>= sum' in receipt['formula']
+
+
+def test_bare_disclosure_requires_actual_rating_counts_in_sentence():
+    """“评级结果如下”只有实际引出评级数量才构成完整声明。"""
+    body = ('绩效自评的2025年度项目53个，评级结果如下：'
+            '绩效评级为“优”的项目50个，其余评级均为0个。')
+    issue, = check_performance_counts(DisclosureRule(), performance(body))
+    assert issue.location['comparison_basis'] == 'declared_complete_sum'
+
+
+def test_material_title_sentence_does_not_absorb_following_claims():
+    """材料句在前、数量句在后：标题句内没有数量，不得当完整声明。"""
+    body = ('绩效自评的2025年度项目53个，相关评级材料如下：自评表。'
+            '其中，绩效评级为“优”的项目50个。')
+    assert check_performance_counts(DisclosureRule(), performance(body)) == []
+
+
 @pytest.mark.parametrize('conflict', ['duplicate_zero', 'duplicate_positive', 'unknown_rating',
                                      'rating_year', 'rating_previous', 'rating_owner', 'rating_scope'])
 def test_equal_rating_sum_cannot_override_identity_or_scope_conflict(conflict):

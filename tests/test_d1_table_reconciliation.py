@@ -208,6 +208,85 @@ def test_negative_and_zero_amounts_are_still_compared():
 
 
 # ---------------------------------------------------------------------------
+# R5-02：无编码双栏表、同值编码/金额、年份形态金额按列角色与车道状态定角色
+# ---------------------------------------------------------------------------
+
+MULTILANE_TEXT = (
+    "收入支出决算总表\n"
+    "收入项目 金额 支出项目 金额\n"
+    "本年收入A 100 本年支出A 100\n"
+    "本年收入B 200 本年支出B 200\n"
+    "收入总计 300 支出总计 300\n"
+)
+
+
+def _multilane_rows(expenditure=(100, 200)):
+    return [
+        {"page": 1, "cells": ["本年收入A", "100", "本年支出A", str(expenditure[0])]},
+        {"page": 1, "cells": ["本年收入B", "200", "本年支出B", str(expenditure[1])]},
+        {"page": 1, "cells": ["收入总计", "300", "支出总计", "300"]},
+    ]
+
+
+def test_no_code_multilane_keeps_all_amounts_verified():
+    """无编码双栏表：6 个金额格全部进入逐位核对，不得学成编码后零比较。"""
+    result = _reconcile_row_alignment(_multilane_rows(), [MULTILANE_TEXT], [1])
+    assert result["row_mismatches"] == []
+    assert set(result["merged_row_identities"]) == {
+        "本年收入A|本年支出A", "本年收入B|本年支出B", "收入总计|支出总计"}
+
+
+def test_no_code_multilane_swap_is_rejected():
+    """互换两格支出金额（加总仍平衡）必须 GAP。"""
+    result = _reconcile_row_alignment(
+        _multilane_rows(expenditure=(200, 100)), [MULTILANE_TEXT], [1])
+    kinds = {item["kind"] for item in result["row_mismatches"]}
+    assert "row_number_sequence_mismatch" in kinds
+
+
+def test_same_value_as_code_and_amount_split_by_lane_state():
+    """301/302 是编码列身份；合计行金额 301 改 302 仍必须 GAP。"""
+    page = ("支出决算表\n"
+            "301 工资福利支出 100\n"
+            "302 商品和服务支出 200\n"
+            "合计 301\n")
+    normal = _reconcile_row_alignment(
+        [{"page": 1, "cells": ["301", "工资福利支出", "100"]},
+         {"page": 1, "cells": ["302", "商品和服务支出", "200"]},
+         {"page": 1, "cells": ["合计", "", "301"]}], [page], [1])
+    assert normal["row_mismatches"] == []
+    corrupted = _reconcile_row_alignment(
+        [{"page": 1, "cells": ["301", "工资福利支出", "100"]},
+         {"page": 1, "cells": ["302", "商品和服务支出", "200"]},
+         {"page": 1, "cells": ["合计", "", "302"]}], [page], [1])
+    assert corrupted["row_mismatches"]
+
+
+def test_year_shaped_amounts_are_verified():
+    """金额列的 2025→2026 必须被对账拒绝；标题“2025 年度…”不是金额。"""
+    page = ("收入支出决算总表\n"
+            "某局 2025 年度决算表\n"
+            "合计 2025\n")
+    normal = _reconcile_row_alignment(
+        [{"page": 1, "cells": ["合计", "2025"]}], [page], [1])
+    assert normal["row_mismatches"] == []
+    corrupted = _reconcile_row_alignment(
+        [{"page": 1, "cells": ["合计", "2026"]}], [page], [1])
+    assert corrupted["row_mismatches"]
+
+
+def test_midrow_lane_code_followed_by_amount_is_identity():
+    """`30399 30240 税金及附加费用 20.81`：30240 是下一车道编码不是金额。"""
+    page = "基本支出决算表\n30399 30240 税金及附加费用 20.81\n"
+    result = _reconcile_row_alignment(
+        [{"page": 1, "cells": ["30399", "其他对个人和家庭的补助", "",
+                               "30240", "税金及附加费用", "20.81"]}],
+        [page], [1])
+    assert result["row_mismatches"] == []
+    assert result["merged_row_identities"] == ["30399|30240"]
+
+
+# ---------------------------------------------------------------------------
 # R2-02：验收对象是实际逻辑合并视图；逻辑/物理任一侧损坏都必须拒绝
 # ---------------------------------------------------------------------------
 

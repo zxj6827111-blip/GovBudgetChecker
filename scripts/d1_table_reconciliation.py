@@ -235,24 +235,50 @@ def _is_table_header_text(text: str) -> bool:
 
 
 def _codes_from_rows(merged_rows: List[Dict[str, Any]]) -> set:
-    """从合并表学习科目编码集合（R4-02）。
+    """列角色学习（R5-02）：编码只能来自**编码列**，不做全表数值词表。
 
-    只有"3~7 位整数 + 后随名称或两位款/项码"的格才算编码：金额格后面
-    是另一个金额或没有后续格，不会被学习。整数金额表（如"合计 100"）
-    由此不会把金额误学成编码。
+    先按列统计 3~7 位整数占比得到候选编码列；若把候选列全部当成编码
+    会让表内不再剩下任何金额列（数字列整体消失、验收对象为空），则判
+    定学习失败并整表退回"全部数值都是金额"的角色——身份由标签/合计行
+    承担，金额逐位核对照常进行，不会出现零比较 PASS。同一个数值在编
+    码列是编码、在金额列是金额，角色跟列走，不跟数值走。
     """
+    stats: Dict[int, List[int]] = {}
+    for row in merged_rows:
+        for index, cell in enumerate(row["cells"]):
+            token = _norm(cell)
+            if not token:
+                continue
+            hits, total = stats.setdefault(index, [0, 0])
+            stats[index] = [hits + (1 if _is_code_token(token) else 0), total + 1]
+    candidates = {
+        index for index, (hits, total) in stats.items()
+        if total and hits * 2 >= total
+    }
+    if not candidates:
+        return set()
+    numeric_elsewhere = False
+    for row in merged_rows:
+        for index, cell in enumerate(row["cells"]):
+            if index in candidates:
+                continue
+            token = _norm(cell)
+            if token and _is_number_token(token):
+                numeric_elsewhere = True
+                break
+        if numeric_elsewhere:
+            break
+    if not numeric_elsewhere:
+        # 金额守卫：所有数字列都会被当成编码 → 角色学习不可信。
+        return set()
     codes: set = set()
     for row in merged_rows:
-        cells = [_norm(cell) for cell in row["cells"] if _norm(cell)]
-        for index, token in enumerate(cells):
-            if not _is_code_token(token):
+        for index, cell in enumerate(row["cells"]):
+            if index not in candidates:
                 continue
-            following = cells[index + 1] if index + 1 < len(cells) else ""
-            if not following:
-                continue
-            if _is_number_token(following) and not _is_two_digit_token(following):
-                continue
-            codes.add(token)
+            token = _norm(cell)
+            if _is_code_token(token):
+                codes.add(token)
     return codes
 
 
@@ -286,14 +312,6 @@ def _parse_lanes(tokens: List[str], known_codes: Optional[set] = None) -> List[D
             index += 1
             continue
         if _is_code_token(cleaned):
-            # 已学习的编码总是编码（含换行名称后紧跟金额的行）；
-            # 未学习的 3~7 位整数只有在车道起点且后随名称/两位款/项码时
-            # 才当编码，否则一律是金额（"合计 100" 的 100）。
-            if cleaned in known_codes:
-                flush()
-                current["cls"] = cleaned
-                index += 1
-                continue
             at_lane_start = not (current["cls"] or current["label"]
                                  or current["numbers"])
             following = ""
@@ -301,7 +319,39 @@ def _parse_lanes(tokens: List[str], known_codes: Optional[set] = None) -> List[D
                 following = _clean_number_token(tokens[index + 1])
             followed_by_label = bool(following) and not _NUM_TOKEN_RE.fullmatch(following)
             followed_by_subcode = bool(following) and _is_two_digit_token(following)
-            if at_lane_start and (followed_by_label or followed_by_subcode):
+            if cleaned in known_codes:
+                # R5-02：已知编码按车道状态定角色，不做全表词表。
+                # 金额只出现在"车道已有身份且尚未记数"的位置：
+                #   合计行 `合计 301`（无编码身份、有标签）→ 金额；
+                #   空名称车道 `301 … 100`（编码后第一个数值）→ 金额；
+                #   同值金额在行尾 `301 工资 301` → 金额；
+                # 其余（车道起点、上一车道已记数、编码身份后还有后续格）
+                # 都是下一车道的编码，如 `30113 … 431.39 30212 13.24`、
+                # `30310 个人农业生产补贴 30231 81.11`。
+                lane_has_cls = current["cls"] is not None
+                lane_has_label = bool(current["label"])
+                lane_has_numbers = bool(current["numbers"])
+                if not lane_has_cls:
+                    is_amount = lane_has_label and not lane_has_numbers
+                elif not lane_has_label and not lane_has_numbers:
+                    # 编码后的第一个数值通常是金额（空名称车道）；但它本身
+                    # 是已知编码且后随名称时，是下一车道的编码
+                    # （`30399 30240 税金及附加费用 20.81`）。
+                    is_amount = not (cleaned in known_codes
+                                     and (followed_by_label or followed_by_subcode))
+                elif lane_has_label and not lane_has_numbers:
+                    is_amount = not (following or followed_by_label
+                                     or followed_by_subcode)
+                else:
+                    is_amount = False
+                if not is_amount:
+                    flush()
+                    current["cls"] = cleaned
+                    index += 1
+                    continue
+            elif at_lane_start and (followed_by_label or followed_by_subcode):
+                # 未学习的 3~7 位整数只有在车道起点且后随名称/两位款/项码
+                # 时才当编码（编码列被守卫拒绝后保留单行表的编码身份）。
                 flush()
                 current["cls"] = cleaned
                 index += 1
@@ -318,11 +368,18 @@ def _parse_lanes(tokens: List[str], known_codes: Optional[set] = None) -> List[D
                 index += 1
                 continue
         if _NUM_TOKEN_RE.fullmatch(cleaned):
-            if not _is_year_token(cleaned):
-                canonical = _canonical_number(cleaned)
-                if canonical is not None:
-                    current["numbers"].append(canonical)
-                    seen_number = True
+            following_token = ""
+            if index + 1 < len(tokens):
+                following_token = _clean_number_token(tokens[index + 1])
+            if _is_year_token(cleaned) and following_token.startswith("年"):
+                # “2025 年度…”日期短语不是金额；金额列的 2025（后随其他
+                # 数值或行尾）仍是金额，2025→2026 必须被对账拒绝。
+                index += 1
+                continue
+            canonical = _canonical_number(cleaned)
+            if canonical is not None:
+                current["numbers"].append(canonical)
+                seen_number = True
             index += 1
             continue
         if seen_number:

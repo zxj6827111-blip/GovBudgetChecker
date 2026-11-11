@@ -1567,9 +1567,24 @@ def check_performance_counts(rule, doc):
                 _qualifier_governs_ratings(match) for match in re.finditer(
                     r'(?:全部|所有|整体|全量)(?:项目|自评项目|单位)?'
                     r'[^。；;，,（）()]{0,12}(?:评级|评价)', scope_compact))
-            declares_ratings = bool(re.search(
-                r'评级(?:结果|情况|等级)?[^。；;]{0,6}(?:如下|见下)',
-                scope_compact))
+            # R5-01：无条件披露与限定词走同一声明依据——披露对象必须是
+            # 评级数量本身。“评级（结果/情况/等级）如下”只在其实际引出
+            # 内容（同一句内）出现评级数量（“评级为…项目N个”）时才算
+            # 数量披露；“评级资料/材料如下：项目自评表、评审意见”引出的
+            # 是材料清单，不新增任何评级数量关系，不得触发完整构成。
+            def _introduces_rating_counts(match: 're.Match[str]') -> bool:
+                introduced = scope_compact[match.end():]
+                sentence_end = len(introduced)
+                for boundary in '。；;':
+                    found = introduced.find(boundary)
+                    if found >= 0:
+                        sentence_end = min(sentence_end, found)
+                return bool(_RATING.search(introduced[:sentence_end]))
+
+            declares_ratings = any(
+                _introduces_rating_counts(match) for match in re.finditer(
+                    r'(?:评级|评价)(?:结果|情况|等级)?(?:如下|见下)',
+                    scope_compact))
             if partial_declared and complete_declared:
                 reason = reason or '同一评级声明范围内完整构成与部分列举冲突，范围不能唯一确定'
             complete_declaration = (not partial_declared
