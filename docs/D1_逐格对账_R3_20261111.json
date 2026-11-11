@@ -1,0 +1,478 @@
+{
+ "yichuan": {
+  "instances": 9,
+  "pass": 9,
+  "gap": 0,
+  "results": [
+   {
+    "table_code": "FIN_01_income_expenditure_total",
+    "pages": [
+     6
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_02_income",
+    "pages": [
+     7,
+     8,
+     9,
+     10,
+     11
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_03_expenditure",
+    "pages": [
+     12,
+     13,
+     14,
+     15,
+     16
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_04_fiscal_grant_total",
+    "pages": [
+     17,
+     18
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_05_general_public_expenditure",
+    "pages": [
+     19,
+     20,
+     21
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_06_basic_expenditure",
+    "pages": [
+     22,
+     23
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_07_three_public",
+    "pages": [
+     24
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_08_gov_fund",
+    "pages": [
+     25
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_09_state_capital",
+    "pages": [
+     26
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   }
+  ]
+ },
+ "price": {
+  "instances": 9,
+  "pass": 9,
+  "gap": 0,
+  "results": [
+   {
+    "table_code": "FIN_01_income_expenditure_total",
+    "pages": [
+     6
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_02_income",
+    "pages": [
+     7
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_03_expenditure",
+    "pages": [
+     8
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_04_fiscal_grant_total",
+    "pages": [
+     9,
+     10
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_05_general_public_expenditure",
+    "pages": [
+     11
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_06_basic_expenditure",
+    "pages": [
+     12,
+     13
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_07_three_public",
+    "pages": [
+     14
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_08_gov_fund",
+    "pages": [
+     15
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_09_state_capital",
+    "pages": [
+     16
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   }
+  ]
+ },
+ "digital": {
+  "instances": 9,
+  "pass": 9,
+  "gap": 0,
+  "results": [
+   {
+    "table_code": "FIN_01_income_expenditure_total",
+    "pages": [
+     6
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_02_income",
+    "pages": [
+     7
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_03_expenditure",
+    "pages": [
+     8
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_04_fiscal_grant_total",
+    "pages": [
+     9,
+     10
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_05_general_public_expenditure",
+    "pages": [
+     11
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_06_basic_expenditure",
+    "pages": [
+     12
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_07_three_public",
+    "pages": [
+     13
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_08_gov_fund",
+    "pages": [
+     14
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_09_state_capital",
+    "pages": [
+     15
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   }
+  ]
+ },
+ "school": {
+  "instances": 9,
+  "pass": 9,
+  "gap": 0,
+  "results": [
+   {
+    "table_code": "FIN_01_income_expenditure_total",
+    "pages": [
+     5
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_02_income",
+    "pages": [
+     6
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_03_expenditure",
+    "pages": [
+     7
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_04_fiscal_grant_total",
+    "pages": [
+     8,
+     9
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_05_general_public_expenditure",
+    "pages": [
+     10
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_06_basic_expenditure",
+    "pages": [
+     11
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_07_three_public",
+    "pages": [
+     12
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_08_gov_fund",
+    "pages": [
+     13
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   },
+   {
+    "table_code": "FIN_09_state_capital",
+    "pages": [
+     14
+    ],
+    "verdict": "PASS",
+    "row_mismatches": [],
+    "missing_numbers": {},
+    "extra_numbers": {},
+    "missing_codes": [],
+    "merged_view_errors": []
+   }
+  ]
+ }
+}

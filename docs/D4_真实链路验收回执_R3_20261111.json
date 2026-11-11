@@ -1,0 +1,445 @@
+{
+ "run_id": "d4link-18084b90af6a",
+ "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/6000a11c0737d5149975516b44fd8682/上海市普陀区人民政府宜川路街道办事处2025年度部门决算.pdf",
+ "steps": [
+  {
+   "step": "S0_org_catalog_ready",
+   "ok": true,
+   "evidence": {
+    "org_http": 200
+   }
+  },
+  {
+   "step": "S1_upload_analyze",
+   "ok": true,
+   "evidence": {
+    "status": "done",
+    "job_id": "6b4ee4d06ce0558c8ce18110a898ccae",
+    "revision": "rev-20261111T140955-0034fb21",
+    "findings": 28,
+    "result_keys": [
+     "delivery_suppressions",
+     "issues",
+     "meta",
+     "source_overlap_relations",
+     "summary"
+    ]
+   }
+  },
+  {
+   "step": "S2_persist_readback",
+   "ok": true,
+   "evidence": {
+    "snapshot_hash": "452da809c6f2a211dda85d3f09f0bd9787ba2a6edb17402cf428e376ec91b747",
+    "raw": 622,
+    "effective": 622,
+    "versions_http": 200
+   }
+  },
+  {
+   "step": "S3_all_evidence_grounded",
+   "ok": true,
+   "evidence": {
+    "findings_total": 28,
+    "findings_grounded": 28,
+    "evidence_total": 423,
+    "evidence_grounded": 423,
+    "table_refs_total": 75,
+    "table_refs_grounded": 75,
+    "multi_side_total": 5,
+    "multi_side_grounded": 5,
+    "failures": [],
+    "failure_count": 0,
+    "documents_without_page": [],
+    "operand_relations_total": 3,
+    "operand_relations_ok": 3,
+    "operand_failures": [],
+    "operand_failure_count": 0
+   }
+  },
+  {
+   "step": "S4_gate_truth_and_state",
+   "ok": true,
+   "evidence": {
+    "truth": {
+     "ok": true,
+     "problems": [],
+     "expected_confirmed": 28,
+     "actual_confirmed": 28,
+     "manual_review_ids": 0,
+     "failed_evidence_ids": 0,
+     "expected_blocking_obligations": [],
+     "gate": {
+      "can_confirm_whole_report": true,
+      "blocking_reason": null,
+      "blocking_system_incomplete": 0,
+      "nonblocking_system_incomplete": 1,
+      "confirm_scope": "deterministic_findings_only"
+     },
+     "counts": {
+      "confirmed_material_issues": 28,
+      "genuine_ambiguities": 0,
+      "system_incomplete": 1
+     }
+    },
+    "blocking_system_incomplete": 0,
+    "blocked_branch_exercised": false,
+    "post_http": null,
+    "post_detail": null,
+    "records_after": 0
+   }
+  },
+  {
+   "step": "S5a_identity_and_scope",
+   "ok": true,
+   "evidence": {
+    "rematch_http": 200,
+    "dims_get": 200,
+    "dims_post": 202,
+    "revision_r1": "rev-20261111T140955-0034fb21",
+    "revision_r2": "rev-20261111T141607-8efc8f75",
+    "dims_detail": null
+   }
+  },
+  {
+   "step": "S3b_all_evidence_grounded_after_scope",
+   "ok": true,
+   "evidence": {
+    "findings_total": 28,
+    "findings_grounded": 28,
+    "evidence_total": 423,
+    "evidence_grounded": 423,
+    "table_refs_total": 75,
+    "table_refs_grounded": 75,
+    "multi_side_total": 5,
+    "multi_side_grounded": 5,
+    "failures": [],
+    "failure_count": 0,
+    "documents_without_page": [],
+    "operand_relations_total": 3,
+    "operand_relations_ok": 3,
+    "operand_failures": [],
+    "operand_failure_count": 0
+   }
+  },
+  {
+   "step": "S3c_operand_identity_adversarial_control",
+   "ok": true,
+   "evidence": {
+    "ok": true,
+    "expected": "title_only_operands_must_fail",
+    "control_failures": [
+     {
+      "finding": "V33-CROSS-SAN-GONG-ECON-21",
+      "reason": "cross_relation_without_operands"
+     }
+    ]
+   }
+  },
+  {
+   "step": "S4b_persist_failure_is_transactional",
+   "ok": true,
+   "evidence": {
+    "truth": {
+     "ok": true,
+     "problems": [],
+     "expected_confirmed": 28,
+     "actual_confirmed": 28,
+     "manual_review_ids": 0,
+     "failed_evidence_ids": 0,
+     "expected_blocking_obligations": [],
+     "gate": {
+      "can_confirm_whole_report": true,
+      "blocking_reason": null,
+      "blocking_system_incomplete": 0,
+      "nonblocking_system_incomplete": 1,
+      "confirm_scope": "deterministic_findings_only"
+     },
+     "counts": {
+      "confirmed_material_issues": 28,
+      "genuine_ambiguities": 0,
+      "system_incomplete": 1
+     }
+    },
+    "can_confirm": true,
+    "persist_http": 500,
+    "persist_detail": "confirm_record_persist_failed",
+    "records_before": 0,
+    "records_after": 0,
+    "failed_key_records": 0
+   }
+  },
+  {
+   "step": "S4c_confirm_success_idempotent_concurrent",
+   "ok": true,
+   "evidence": {
+    "first_http": 200,
+    "repeat_http": 200,
+    "concurrent": [
+     200,
+     200,
+     200
+    ],
+    "record_revision": "rev-20261111T141607-8efc8f75",
+    "confirmed_count": 28,
+    "expected_confirmed_count": 28,
+    "records_for_key": 1,
+    "latest_matches": true,
+    "excluded": {
+     "genuine_ambiguities": 0,
+     "system_incomplete": 1
+    }
+   }
+  },
+  {
+   "step": "S4e_decision_change_and_fresh_key_concurrency",
+   "ok": true,
+   "evidence": {
+    "decision": {
+     "ignored_id": "V33-005-1",
+     "ignore_http": 200,
+     "decision_changed": true,
+     "second_confirm_http": 200,
+     "second_count": 27,
+     "first_count": 28
+    },
+    "fresh_http": [
+     200,
+     200
+    ],
+    "fresh_records": 2,
+    "latest_is_current": true,
+    "decision_changed_after": false
+   }
+  },
+  {
+   "step": "S4d_stale_revision_rejected",
+   "ok": true,
+   "evidence": {
+    "revision_old": "rev-20261111T140955-0034fb21",
+    "revision_current": "rev-20261111T141607-8efc8f75",
+    "stale_http": 409,
+    "stale_detail": {
+     "error": "REVISION_CHANGED",
+     "expected": "rev-20261111T140955-0034fb21",
+     "current": "rev-20261111T141607-8efc8f75"
+    },
+    "records_on_old_revision": 0
+   }
+  },
+  {
+   "step": "S5d_start_idempotent",
+   "ok": true,
+   "evidence": {
+    "start_a": 200,
+    "start_b": 200,
+    "starts": [
+     200,
+     200
+    ],
+    "session_present": true
+   }
+  },
+  {
+   "step": "S5_review_lifecycle_decisions",
+   "ok": true,
+   "evidence": {
+    "pre_complete_http": 409,
+    "pre_blockers": "[{'code': 'pending_findings', 'count': 14}]",
+    "formal_problems": 14,
+    "decided": 14,
+    "undecided": [],
+    "decisions_sample": [
+     {
+      "issue_id": "V33-243-13",
+      "http": 200,
+      "severity": "error"
+     },
+     {
+      "issue_id": "V33-CROSS-SAN-GONG-ECON-21",
+      "http": 200,
+      "severity": "error"
+     },
+     {
+      "issue_id": "V33-CROSS-SAN-GONG-ECON-22",
+      "http": 200,
+      "severity": "error"
+     },
+     {
+      "issue_id": "V33-CROSS-SAN-GONG-ECON-23",
+      "http": 200,
+      "severity": "error"
+     },
+     {
+      "issue_id": "V33-TXT-FUND-DETAIL-24",
+      "http": 200,
+      "severity": "error"
+     }
+    ],
+    "complete_after_http": 200,
+    "complete_after_blockers": "[]",
+    "reopen_http": 200,
+    "recomplete_http": 200,
+    "refreshed_session_status": "in_progress"
+   }
+  },
+  {
+   "step": "S6_export_membership",
+   "ok": true,
+   "evidence": {
+    "sizes": {
+     "json": 8796884,
+     "csv": 1657584,
+     "docx": 59879,
+     "pdf": 3184059
+    },
+    "repeat_identical": true,
+    "exported_issues": 14,
+    "expected_export_issues": 14,
+    "membership_ok": true,
+    "export_pages_ok": true,
+    "revision_binding": true,
+    "format_content": {
+     "ok": true,
+     "issues": 14,
+     "formats": {
+      "csv": {
+       "ok": true,
+       "member_count": 14,
+       "missing_members": [],
+       "duplicate_members": [],
+       "extra_members": [],
+       "failed_members": [],
+       "revision_present": true
+      },
+      "docx": {
+       "ok": true,
+       "member_count": 14,
+       "missing_members": [],
+       "duplicate_members": [],
+       "extra_members": [],
+       "failed_members": [],
+       "revision_present": true
+      },
+      "pdf": {
+       "ok": true,
+       "member_count": 14,
+       "missing_members": [],
+       "duplicate_members": [],
+       "extra_members": [],
+       "failed_members": [],
+       "revision_present": true
+      }
+     }
+    },
+    "missing_from_export": [],
+    "extra_in_export": []
+   }
+  },
+  {
+   "step": "S7_required_ai_not_run_blocks_confirm",
+   "ok": true,
+   "evidence": {
+    "job_id": "3be1139d1d0939e42681effbad63d929",
+    "revision": "rev-20261111T142329-c2d98415",
+    "control_input": "same-content byte copy (PDF comment appended)",
+    "gate": {
+     "can_confirm_whole_report": false,
+     "blocking_reason": "存在 1 项阻塞性未完成检查，不能整份签认",
+     "blocking_system_incomplete": 1,
+     "nonblocking_system_incomplete": 0,
+     "confirm_scope": "deterministic_findings_only"
+    },
+    "counts": {
+     "confirmed_material_issues": 28,
+     "genuine_ambiguities": 0,
+     "system_incomplete": 1
+    },
+    "ai_instance": {
+     "status": "ai_not_run",
+     "blocks_gate": true
+    },
+    "truth_ok": true,
+    "truth_problems": [],
+    "post_http": 409,
+    "post_detail": "SYSTEM_INCOMPLETE",
+    "records": 0
+   }
+  }
+ ],
+ "frozen": {
+  "git_head": "0144e6248303570a712f5b8841acc163a161e30e",
+  "key_source_sha256": {
+   "src/services/report_confirmation_gate.py": "034f96871606cd7af2a045aaf95dcf46bac8aaab5f3f108752397799355aeb90",
+   "src/services/evidence_guard.py": "4e6ff64ab85339d0cffab2dc8afd3d672fb7c30b77a22f2ccaf30f4bc3e6edb2",
+   "src/services/rule_source_binding.py": "296d299343ab2aa4db8a99b8c084a0be0c63cc1e5e60e9b1b7b200243e6ec462",
+   "src/engine/pipeline.py": "f639093ffee1a8116b819f5bd035768c789aea59d95491b161f1b54622d6a3ba",
+   "src/engine/issue_evidence.py": "073c8f49b94246ba7728e1964e3cd1dfdd9f19ca4ff81ce0ca37c2dabc33fbb4",
+   "api/routes/jobs.py": "49e0363e808c95167226626219f6be21d98b14a9c773683e54a78a6f37553a93"
+  },
+  "original_sha256": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+  "page_count": 41
+ },
+ "job_id": "6b4ee4d06ce0558c8ce18110a898ccae",
+ "elapsed_seconds": 849.4,
+ "conclusion": {
+  "steps_passed": 16,
+  "confirmed_issue_ids": [
+   "V33-005-2",
+   "V33-240-15",
+   "V33-240-16",
+   "V33-005-3",
+   "V33-005-4",
+   "V33-241-17",
+   "V33-233-26",
+   "V33-005-5",
+   "V33-005-6",
+   "V33-233-27",
+   "V33-243-13",
+   "V33-CROSS-SAN-GONG-ECON-21",
+   "V33-CROSS-SAN-GONG-ECON-22",
+   "V33-CROSS-SAN-GONG-ECON-23",
+   "V33-TXT-FUND-DETAIL-24",
+   "CMM-010-34",
+   "CMM-010-33",
+   "CMM-002-29",
+   "V33-DISCLOSURE-PERCENT-UNIT-32",
+   "CMM-011-35",
+   "V33-222-19",
+   "CMM-002-28",
+   "V33-NARRATIVE-INDICATOR-REPEAT-25",
+   "V33-SG-COMPLETION-14",
+   "CMM-007-30",
+   "CMM-007-31",
+   "V33-227-20"
+  ],
+  "excluded": {
+   "genuine_ambiguities": 1,
+   "system_incomplete": 1
+  },
+  "scripted_reviewer_decisions": [
+   "V33-243-13",
+   "V33-CROSS-SAN-GONG-ECON-21",
+   "V33-CROSS-SAN-GONG-ECON-22",
+   "V33-CROSS-SAN-GONG-ECON-23",
+   "V33-TXT-FUND-DETAIL-24",
+   "CMM-010-34",
+   "CMM-010-33",
+   "CMM-002-29",
+   "CMM-011-35",
+   "CMM-002-28",
+   "V33-SG-COMPLETION-14",
+   "CMM-007-30",
+   "CMM-007-31",
+   "V33-227-20"
+  ],
+  "note": "本回执验证链路机制：证据逐条回原件核对、门禁如实阻塞/放行、确认写侧版本绑定/幂等/事务失败、刷新读回、复核完成/重开、导出成员与版本一致。复核决定由脚本以复核人身份按原件核对后作出（逐条依据见 S3b 覆盖与 decisions），不计为程序自动完成，也不构成人工工作量下降的证据。"
+ },
+ "cleanup": {
+  "container": "govbudget-d4link-18084b90af6a",
+  "attempted": true,
+  "removed": true,
+  "rm_ok": true,
+  "still_running": false
+ }
+}

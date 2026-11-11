@@ -1,0 +1,13 @@
+{
+ "git_head": "0144e6248303570a712f5b8841acc163a161e30e",
+ "source_sha256": {
+  "src/engine/native_final_disclosure.py": "acc9d938efaeec89e94bf3c4b8a2ebd90f33087d2d8f284a68f689f0dd6b951a",
+  "api/routes/reports.py": "bc971e5b6bd94f254378542f794a3f9de8377556e8bd01ab40e3ecd4b758c590",
+  "scripts/d1_table_reconciliation.py": "60e8416028205313fc74044d9dfba459306a6287184e8c1d976a882f4c43cc7d",
+  "scripts/d4_real_link_acceptance.py": "8099e6cf312c61f1a95e5becced5478a463044f315ca89567cf68cbaf56b1d79",
+  "scripts/r3_independent_controls_repro.py": "e81c51aeba0fa93166c7270039c694f9140fcc8e90175ac99f4337098b6b674a",
+  "tests/test_d1_table_reconciliation.py": "c827ec1f9ba848793a984696bfefb29346e0ad4c56d5c6c05d58191effa58375",
+  "tests/test_export_member_verification.py": "89ada1be0c4f39202c0cc3c3ae00a60ef14bfe81ed346995dd1c24c1c8631f3b",
+  "tests/remediation/test_real_intake_disclosure_numeric.py": "8899fb8f208f8616d2069bf7568071900be0ef32ff8b7344e49b2a17b62ffcf3"
+ }
+}

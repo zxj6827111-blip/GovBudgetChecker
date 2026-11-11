@@ -1,0 +1,45 @@
+{
+ "ok": true,
+ "cases": [
+  {
+   "case": "partial",
+   "expected_issues": 0,
+   "actual_issues": 0,
+   "receipt_status": "pass",
+   "formula": "self_evaluation_count >= sum(disclosed distinct rating counts)",
+   "pass": true
+  },
+  {
+   "case": "complete",
+   "expected_issues": 1,
+   "actual_issues": 1,
+   "receipt_status": "fail",
+   "formula": "self_evaluation_count = sum(disclosed distinct rating counts)",
+   "pass": true
+  },
+  {
+   "case": "complete_plus_archive_after",
+   "expected_issues": 1,
+   "actual_issues": 1,
+   "receipt_status": "fail",
+   "formula": "self_evaluation_count = sum(disclosed distinct rating counts)",
+   "pass": true
+  },
+  {
+   "case": "complete_plus_archive_before",
+   "expected_issues": 1,
+   "actual_issues": 1,
+   "receipt_status": "fail",
+   "formula": "self_evaluation_count = sum(disclosed distinct rating counts)",
+   "pass": true
+  },
+  {
+   "case": "plain_partial",
+   "expected_issues": 0,
+   "actual_issues": 0,
+   "receipt_status": "pass",
+   "formula": "self_evaluation_count >= sum(disclosed distinct rating counts)",
+   "pass": true
+  }
+ ]
+}

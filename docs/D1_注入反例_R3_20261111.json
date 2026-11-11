@@ -1,0 +1,46 @@
+{
+ "d1_split_code_and_column_swap": {
+  "ok": true,
+  "split_code_normal_mismatches": 0,
+  "split_code_identities": [
+   "301:01|302:01",
+   "301:02|302:02"
+  ],
+  "column_swap_mismatches": 2
+ },
+ "d1_real_injections": {
+  "ok": true,
+  "normal": {
+   "pass": 9,
+   "gap": 0
+  },
+  "logical_total_class_swap": {
+   "pass": 8,
+   "gap": 1
+  },
+  "physical_basic_project_swap": {
+   "pass": 8,
+   "gap": 1
+  },
+  "physical_fragments_unchanged": true,
+  "physical_changes": [
+   {
+    "page": 12,
+    "columns": [
+     3,
+     4
+    ]
+   }
+  ],
+  "logical_change": {
+   "before": [
+    "20323.21",
+    "207.40"
+   ],
+   "after": [
+    "207.40",
+    "20323.21"
+   ]
+  }
+ }
+}

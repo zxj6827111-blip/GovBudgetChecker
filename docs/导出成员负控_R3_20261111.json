@@ -1,0 +1,109 @@
+{
+ "minimal_export_membership": {
+  "ok": true,
+  "expected": "reject: relation-B/page24/81.11/19.56 omitted in all three",
+  "actual": {
+   "ok": false,
+   "csv_missing": [
+    "relation-A",
+    "relation-B"
+   ],
+   "docx_missing": [
+    "relation-A",
+    "relation-B"
+   ],
+   "pdf_missing": [
+    "relation-A",
+    "relation-B"
+   ],
+   "pdf_one_side_missing": [
+    {
+     "issue_id": "relation-B",
+     "failures": [
+      "page_not_bound",
+      "revision_not_bound",
+      "evidence_not_bound"
+     ],
+     "missing_evidence": [
+      "81.11",
+      "19.56"
+     ]
+    }
+   ],
+   "pdf_wrong_page": [
+    {
+     "issue_id": "relation-B",
+     "failures": [
+      "page_not_bound",
+      "revision_not_bound",
+      "evidence_not_bound"
+     ],
+     "missing_evidence": [
+      "81.11",
+      "19.56"
+     ]
+    }
+   ]
+  }
+ },
+ "actual_csv_missing_issue": {
+  "ok": true,
+  "removed": "V33-CROSS-SAN-GONG-ECON-22",
+  "original_issue_rows": 14,
+  "mutated_issue_rows": 1625,
+  "missing_members": [
+   "V33-CROSS-SAN-GONG-ECON-22"
+  ],
+  "member_count": 13
+ },
+ "real_export_chain": {
+  "ok": true,
+  "normal": {
+   "ok": true,
+   "member_counts": {
+    "csv": 2,
+    "docx": 2,
+    "pdf": 2
+   }
+  },
+  "csv_missing_member": [
+   "relation-B"
+  ],
+  "docx_missing_evidence": [
+   {
+    "issue_id": "relation-B",
+    "failures": [
+     "evidence_not_bound"
+    ],
+    "missing_evidence": [
+     "19.56"
+    ]
+   }
+  ],
+  "wrong_page": [
+   {
+    "issue_id": "relation-A",
+    "failures": [
+     "page_not_bound"
+    ],
+    "missing_evidence": []
+   }
+  ],
+  "wrong_revision": [
+   {
+    "issue_id": "relation-A",
+    "failures": [
+     "revision_not_bound"
+    ],
+    "missing_evidence": []
+   },
+   {
+    "issue_id": "relation-B",
+    "failures": [
+     "revision_not_bound"
+    ],
+    "missing_evidence": []
+   }
+  ]
+ }
+}
