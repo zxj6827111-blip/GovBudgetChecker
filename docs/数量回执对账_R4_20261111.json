@@ -1,0 +1,926 @@
+{
+ "git_head": "1be90c920c6b0ec0c1bf583af30545185896f3b8",
+ "manifest": "data/quantity_reconciliation_cases.json",
+ "cases": [
+  {
+   "case": {
+    "name": "宜川路街道（空白格U-5+说明零披露）",
+    "pdf": "uploads/6000a11c0737d5149975516b44fd8682/上海市普陀区人民政府宜川路街道办事处2025年度部门决算.pdf",
+    "org": "上海市普陀区人民政府宜川路街道办事处",
+    "year": 2025,
+    "kind": "final"
+   },
+   "source_file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+   "git_head": "1be90c920c6b0ec0c1bf583af30545185896f3b8",
+   "coverage": {
+    "applicable_total": 62,
+    "completed_total": 60,
+    "unresolved_total": 2,
+    "blocking_total": 1,
+    "coverage_rate": 0.9677,
+    "blocking_obligation_ids": [
+     "OBL-STRUCT-COVER"
+    ]
+   },
+   "rows": [
+    {
+     "indicator": "vehicle_purchase",
+     "sub_check_id": "quantity:vehicle_purchase",
+     "relation_status": "not_applicable",
+     "rule_id": "V33-SG-COMPLETION",
+     "rule_status": "fail",
+     "rule_detail": null,
+     "formula": "公务用车购置费决算数取数不足，但三公表本项决算格原件空白并经空白值约定（U-5）认证为0（第24页），金额驱动数量义务不适用",
+     "incomplete_reason": null,
+     "reason_codes": [],
+     "disclosure_sources": [
+      {
+       "page": 24,
+       "table_code": "FIN_07_three_public",
+       "indicator": "vehicle_purchase",
+       "source_cell_id": "eddca25f2f31ca4a:r4c7",
+       "bbox": [
+        473.1,
+        222.65999999999997,
+        526.7,
+        238.40999999999997
+       ],
+       "note": "certified_blank_zero"
+      }
+     ],
+     "disclosure_pages": [
+      24
+     ],
+     "disclosure_sources_grounded": [],
+     "finding_ids": [],
+     "finding_pages": [],
+     "obligations": [
+      {
+       "obligation_id": "OBL-SG-COMPLETION",
+       "status": "completed",
+       "blocks_gate": true
+      },
+      {
+       "obligation_id": "OBL-SG-COUNTS",
+       "status": "completed",
+       "blocks_gate": true
+      }
+     ],
+     "evidence_page": 24
+    },
+    {
+     "indicator": "overseas",
+     "sub_check_id": "quantity:overseas",
+     "relation_status": "not_applicable",
+     "rule_id": "V33-SG-COMPLETION",
+     "rule_status": "fail",
+     "rule_detail": null,
+     "formula": "因公出国（境）费决算数取数不足，但说明明确本项决算为0（第35页），金额驱动数量义务不适用",
+     "incomplete_reason": null,
+     "reason_codes": [],
+     "disclosure_sources": [
+      {
+       "page": 35,
+       "span": "“三公”经费财政拨款支出年初预算为 31.47 万元，支出决\n算为 19.86 万元，完成预算的 63.11%，其中：因公出国（境）\n费决算为 0.00 万元",
+       "role": "说明明确该项决算为0"
+      },
+      {
+       "page": 36,
+       "span": "具体情况如下：\n1、因公出国（境）费支出 0.00 万元",
+       "role": "说明明确该项决算为0"
+      }
+     ],
+     "disclosure_pages": [
+      35,
+      36
+     ],
+     "disclosure_sources_grounded": [],
+     "finding_ids": [],
+     "finding_pages": [],
+     "obligations": [
+      {
+       "obligation_id": "OBL-SG-COMPLETION",
+       "status": "completed",
+       "blocks_gate": true
+      },
+      {
+       "obligation_id": "OBL-SG-COUNTS",
+       "status": "completed",
+       "blocks_gate": true
+      }
+     ],
+     "evidence_page": 35
+    },
+    {
+     "indicator": "reception",
+     "sub_check_id": "quantity:reception",
+     "relation_status": "pass",
+     "rule_id": "V33-SG-COMPLETION",
+     "rule_status": "fail",
+     "rule_detail": null,
+     "formula": "公务接待费决算数=0.30 > 0 且数量要素已披露",
+     "incomplete_reason": null,
+     "reason_codes": [],
+     "disclosure_sources": [],
+     "disclosure_pages": [],
+     "disclosure_sources_grounded": [],
+     "finding_ids": [],
+     "finding_pages": [],
+     "obligations": [
+      {
+       "obligation_id": "OBL-SG-COMPLETION",
+       "status": "completed",
+       "blocks_gate": true
+      },
+      {
+       "obligation_id": "OBL-SG-COUNTS",
+       "status": "completed",
+       "blocks_gate": true
+      }
+     ],
+     "evidence_page": null
+    },
+    {
+     "indicator": "vehicle_stock",
+     "sub_check_id": "quantity:vehicle_stock",
+     "relation_status": "pass",
+     "rule_id": "V33-SG-COMPLETION",
+     "rule_status": "fail",
+     "rule_detail": null,
+     "formula": "全文（含国有资产占有使用情况）任一处披露车辆保有量",
+     "incomplete_reason": null,
+     "reason_codes": [],
+     "disclosure_sources": [],
+     "disclosure_pages": [],
+     "disclosure_sources_grounded": [],
+     "finding_ids": [],
+     "finding_pages": [],
+     "obligations": [
+      {
+       "obligation_id": "OBL-SG-COMPLETION",
+       "status": "completed",
+       "blocks_gate": true
+      },
+      {
+       "obligation_id": "OBL-SG-COUNTS",
+       "status": "completed",
+       "blocks_gate": true
+      }
+     ],
+     "evidence_page": null
+    }
+   ],
+   "checks": [
+    {
+     "check": "vehicle_purchase:na_has_legal_basis",
+     "ok": true,
+     "detail": {
+      "formula": "公务用车购置费决算数取数不足，但三公表本项决算格原件空白并经空白值约定（U-5）认证为0（第24页），金额驱动数量义务不适用",
+      "disclosure_pages": [
+       24
+      ],
+      "sources_grounded": []
+     }
+    },
+    {
+     "check": "vehicle_purchase:rule_maps_to_obligation",
+     "ok": true,
+     "detail": {
+      "rule_id": "V33-SG-COMPLETION",
+      "obligations": [
+       {
+        "obligation_id": "OBL-SG-COMPLETION",
+        "status": "completed",
+        "blocks_gate": true
+       },
+       {
+        "obligation_id": "OBL-SG-COUNTS",
+        "status": "completed",
+        "blocks_gate": true
+       }
+      ]
+     }
+    },
+    {
+     "check": "overseas:na_has_legal_basis",
+     "ok": true,
+     "detail": {
+      "formula": "因公出国（境）费决算数取数不足，但说明明确本项决算为0（第35页），金额驱动数量义务不适用",
+      "disclosure_pages": [
+       35,
+       36
+      ],
+      "sources_grounded": []
+     }
+    },
+    {
+     "check": "overseas:rule_maps_to_obligation",
+     "ok": true,
+     "detail": {
+      "rule_id": "V33-SG-COMPLETION",
+      "obligations": [
+       {
+        "obligation_id": "OBL-SG-COMPLETION",
+        "status": "completed",
+        "blocks_gate": true
+       },
+       {
+        "obligation_id": "OBL-SG-COUNTS",
+        "status": "completed",
+        "blocks_gate": true
+       }
+      ]
+     }
+    },
+    {
+     "check": "reception:rule_maps_to_obligation",
+     "ok": true,
+     "detail": {
+      "rule_id": "V33-SG-COMPLETION",
+      "obligations": [
+       {
+        "obligation_id": "OBL-SG-COMPLETION",
+        "status": "completed",
+        "blocks_gate": true
+       },
+       {
+        "obligation_id": "OBL-SG-COUNTS",
+        "status": "completed",
+        "blocks_gate": true
+       }
+      ]
+     }
+    },
+    {
+     "check": "vehicle_stock:rule_maps_to_obligation",
+     "ok": true,
+     "detail": {
+      "rule_id": "V33-SG-COMPLETION",
+      "obligations": [
+       {
+        "obligation_id": "OBL-SG-COMPLETION",
+        "status": "completed",
+        "blocks_gate": true
+       },
+       {
+        "obligation_id": "OBL-SG-COUNTS",
+        "status": "completed",
+        "blocks_gate": true
+       }
+      ]
+     }
+    },
+    {
+     "check": "vehicle_purchase:single_receipt",
+     "ok": true,
+     "detail": {
+      "count": 1
+     }
+    },
+    {
+     "check": "overseas:single_receipt",
+     "ok": true,
+     "detail": {
+      "count": 1
+     }
+    },
+    {
+     "check": "reception:single_receipt",
+     "ok": true,
+     "detail": {
+      "count": 1
+     }
+    },
+    {
+     "check": "vehicle_stock:single_receipt",
+     "ok": true,
+     "detail": {
+      "count": 1
+     }
+    },
+    {
+     "check": "no_unknown_quantity_relation",
+     "ok": true,
+     "detail": {
+      "unknown": []
+     }
+    }
+   ],
+   "ok": true,
+   "failed_checks": []
+  },
+  {
+   "case": {
+    "name": "老干部活动室（空表说明+明确无三公支出）",
+    "pdf": "uploads/0a8a27f6c4b683b21e931cf9ff342442/上海市粮食和物资储备局老干部活动室2025年度决算.pdf",
+    "org": "上海市粮食和物资储备局老干部活动室",
+    "year": 2025,
+    "kind": "final"
+   },
+   "source_file_hash": "6a4f88d513dc5f41d1e51fbc6f9dabf4cbd68d16b28b5be0a4abb29597ee29f3",
+   "git_head": "1be90c920c6b0ec0c1bf583af30545185896f3b8",
+   "coverage": {
+    "applicable_total": 58,
+    "completed_total": 55,
+    "unresolved_total": 3,
+    "blocking_total": 2,
+    "coverage_rate": 0.9483,
+    "blocking_obligation_ids": [
+     "OBL-STRUCT-COVER",
+     "OBL-STRUCT-TERMINOLOGY"
+    ]
+   },
+   "rows": [
+    {
+     "indicator": "vehicle_purchase",
+     "sub_check_id": "quantity:vehicle_purchase",
+     "relation_status": "not_applicable",
+     "rule_id": "V33-SG-COMPLETION",
+     "rule_status": "pass",
+     "rule_detail": null,
+     "formula": "公务用车购置费决算数取数不足，但三公表本项决算格原件空白并经空白值约定（U-5）认证为0（第14页），金额驱动数量义务不适用",
+     "incomplete_reason": null,
+     "reason_codes": [],
+     "disclosure_sources": [
+      {
+       "page": 14,
+       "table_code": "FIN_07_three_public",
+       "indicator": "vehicle_purchase",
+       "source_cell_id": "c0962cdc9ad14778:r4c7",
+       "bbox": [
+        474.35,
+        227.53999999999996,
+        528.1,
+        243.59000000000003
+       ],
+       "note": "certified_blank_zero"
+      }
+     ],
+     "disclosure_pages": [
+      14
+     ],
+     "disclosure_sources_grounded": [],
+     "finding_ids": [],
+     "finding_pages": [],
+     "obligations": [
+      {
+       "obligation_id": "OBL-SG-COMPLETION",
+       "status": "completed",
+       "blocks_gate": true
+      },
+      {
+       "obligation_id": "OBL-SG-COUNTS",
+       "status": "completed",
+       "blocks_gate": true
+      }
+     ],
+     "evidence_page": 14
+    },
+    {
+     "indicator": "overseas",
+     "sub_check_id": "quantity:overseas",
+     "relation_status": "not_applicable",
+     "rule_id": "V33-SG-COMPLETION",
+     "rule_status": "pass",
+     "rule_detail": null,
+     "formula": "因公出国（境）费决算数取数不足，但三公表本项决算格原件空白并经空白值约定（U-5）认证为0（第14页），金额驱动数量义务不适用",
+     "incomplete_reason": null,
+     "reason_codes": [],
+     "disclosure_sources": [
+      {
+       "page": 14,
+       "table_code": "FIN_07_three_public",
+       "indicator": "overseas",
+       "source_cell_id": "c0962cdc9ad14778:r4c3",
+       "bbox": [
+        259.35,
+        227.53999999999996,
+        313.1,
+        243.59000000000003
+       ],
+       "note": "certified_blank_zero"
+      }
+     ],
+     "disclosure_pages": [
+      14
+     ],
+     "disclosure_sources_grounded": [],
+     "finding_ids": [],
+     "finding_pages": [],
+     "obligations": [
+      {
+       "obligation_id": "OBL-SG-COMPLETION",
+       "status": "completed",
+       "blocks_gate": true
+      },
+      {
+       "obligation_id": "OBL-SG-COUNTS",
+       "status": "completed",
+       "blocks_gate": true
+      }
+     ],
+     "evidence_page": 14
+    },
+    {
+     "indicator": "reception",
+     "sub_check_id": "quantity:reception",
+     "relation_status": "not_applicable",
+     "rule_id": "V33-SG-COMPLETION",
+     "rule_status": "pass",
+     "rule_detail": null,
+     "formula": "公务接待费决算数取数不足，但三公表本项决算格原件空白并经空白值约定（U-5）认证为0（第14页），金额驱动数量义务不适用",
+     "incomplete_reason": null,
+     "reason_codes": [],
+     "disclosure_sources": [
+      {
+       "page": 14,
+       "table_code": "FIN_07_three_public",
+       "indicator": "reception",
+       "source_cell_id": "c0962cdc9ad14778:r4c11",
+       "bbox": [
+        689.4,
+        227.53999999999996,
+        743.6,
+        243.59000000000003
+       ],
+       "note": "certified_blank_zero"
+      }
+     ],
+     "disclosure_pages": [
+      14
+     ],
+     "disclosure_sources_grounded": [],
+     "finding_ids": [],
+     "finding_pages": [],
+     "obligations": [
+      {
+       "obligation_id": "OBL-SG-COMPLETION",
+       "status": "completed",
+       "blocks_gate": true
+      },
+      {
+       "obligation_id": "OBL-SG-COUNTS",
+       "status": "completed",
+       "blocks_gate": true
+      }
+     ],
+     "evidence_page": 14
+    },
+    {
+     "indicator": "vehicle_stock",
+     "sub_check_id": "quantity:vehicle_stock",
+     "relation_status": "pass",
+     "rule_id": "V33-SG-COMPLETION",
+     "rule_status": "pass",
+     "rule_detail": null,
+     "formula": "全文（含国有资产占有使用情况）任一处披露车辆保有量",
+     "incomplete_reason": null,
+     "reason_codes": [],
+     "disclosure_sources": [],
+     "disclosure_pages": [],
+     "disclosure_sources_grounded": [],
+     "finding_ids": [],
+     "finding_pages": [],
+     "obligations": [
+      {
+       "obligation_id": "OBL-SG-COMPLETION",
+       "status": "completed",
+       "blocks_gate": true
+      },
+      {
+       "obligation_id": "OBL-SG-COUNTS",
+       "status": "completed",
+       "blocks_gate": true
+      }
+     ],
+     "evidence_page": null
+    }
+   ],
+   "checks": [
+    {
+     "check": "vehicle_purchase:na_has_legal_basis",
+     "ok": true,
+     "detail": {
+      "formula": "公务用车购置费决算数取数不足，但三公表本项决算格原件空白并经空白值约定（U-5）认证为0（第14页），金额驱动数量义务不适用",
+      "disclosure_pages": [
+       14
+      ],
+      "sources_grounded": []
+     }
+    },
+    {
+     "check": "vehicle_purchase:rule_maps_to_obligation",
+     "ok": true,
+     "detail": {
+      "rule_id": "V33-SG-COMPLETION",
+      "obligations": [
+       {
+        "obligation_id": "OBL-SG-COMPLETION",
+        "status": "completed",
+        "blocks_gate": true
+       },
+       {
+        "obligation_id": "OBL-SG-COUNTS",
+        "status": "completed",
+        "blocks_gate": true
+       }
+      ]
+     }
+    },
+    {
+     "check": "overseas:na_has_legal_basis",
+     "ok": true,
+     "detail": {
+      "formula": "因公出国（境）费决算数取数不足，但三公表本项决算格原件空白并经空白值约定（U-5）认证为0（第14页），金额驱动数量义务不适用",
+      "disclosure_pages": [
+       14
+      ],
+      "sources_grounded": []
+     }
+    },
+    {
+     "check": "overseas:rule_maps_to_obligation",
+     "ok": true,
+     "detail": {
+      "rule_id": "V33-SG-COMPLETION",
+      "obligations": [
+       {
+        "obligation_id": "OBL-SG-COMPLETION",
+        "status": "completed",
+        "blocks_gate": true
+       },
+       {
+        "obligation_id": "OBL-SG-COUNTS",
+        "status": "completed",
+        "blocks_gate": true
+       }
+      ]
+     }
+    },
+    {
+     "check": "reception:na_has_legal_basis",
+     "ok": true,
+     "detail": {
+      "formula": "公务接待费决算数取数不足，但三公表本项决算格原件空白并经空白值约定（U-5）认证为0（第14页），金额驱动数量义务不适用",
+      "disclosure_pages": [
+       14
+      ],
+      "sources_grounded": []
+     }
+    },
+    {
+     "check": "reception:rule_maps_to_obligation",
+     "ok": true,
+     "detail": {
+      "rule_id": "V33-SG-COMPLETION",
+      "obligations": [
+       {
+        "obligation_id": "OBL-SG-COMPLETION",
+        "status": "completed",
+        "blocks_gate": true
+       },
+       {
+        "obligation_id": "OBL-SG-COUNTS",
+        "status": "completed",
+        "blocks_gate": true
+       }
+      ]
+     }
+    },
+    {
+     "check": "vehicle_stock:rule_maps_to_obligation",
+     "ok": true,
+     "detail": {
+      "rule_id": "V33-SG-COMPLETION",
+      "obligations": [
+       {
+        "obligation_id": "OBL-SG-COMPLETION",
+        "status": "completed",
+        "blocks_gate": true
+       },
+       {
+        "obligation_id": "OBL-SG-COUNTS",
+        "status": "completed",
+        "blocks_gate": true
+       }
+      ]
+     }
+    },
+    {
+     "check": "vehicle_purchase:single_receipt",
+     "ok": true,
+     "detail": {
+      "count": 1
+     }
+    },
+    {
+     "check": "overseas:single_receipt",
+     "ok": true,
+     "detail": {
+      "count": 1
+     }
+    },
+    {
+     "check": "reception:single_receipt",
+     "ok": true,
+     "detail": {
+      "count": 1
+     }
+    },
+    {
+     "check": "vehicle_stock:single_receipt",
+     "ok": true,
+     "detail": {
+      "count": 1
+     }
+    },
+    {
+     "check": "no_unknown_quantity_relation",
+     "ok": true,
+     "detail": {
+      "unknown": []
+     }
+    }
+   ],
+   "ok": true,
+   "failed_checks": []
+  },
+  {
+   "case": {
+    "name": "自然资源调查利用研究院（非零三公+数量披露）",
+    "pdf": "uploads/0b507c0dfb58921a6780870a4681f48c/上海市自然资源调查利用研究院2025年度决算.pdf",
+    "org": "上海市自然资源调查利用研究院",
+    "year": 2025,
+    "kind": "final"
+   },
+   "source_file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+   "git_head": "1be90c920c6b0ec0c1bf583af30545185896f3b8",
+   "coverage": {
+    "applicable_total": 62,
+    "completed_total": 57,
+    "unresolved_total": 5,
+    "blocking_total": 4,
+    "coverage_rate": 0.9194,
+    "blocking_obligation_ids": [
+     "OBL-STRUCT-COVER",
+     "OBL-STRUCT-TERMINOLOGY",
+     "OBL-TXT-FUND-DETAIL",
+     "OBL-NARRATIVE-AMOUNT"
+    ]
+   },
+   "rows": [
+    {
+     "indicator": "vehicle_purchase",
+     "sub_check_id": "quantity:vehicle_purchase",
+     "relation_status": "pass",
+     "rule_id": "V33-SG-COMPLETION",
+     "rule_status": "pass",
+     "rule_detail": null,
+     "formula": "公务用车购置费决算数=24.90 > 0 且数量要素已披露",
+     "incomplete_reason": null,
+     "reason_codes": [],
+     "disclosure_sources": [],
+     "disclosure_pages": [],
+     "disclosure_sources_grounded": [],
+     "finding_ids": [],
+     "finding_pages": [],
+     "obligations": [
+      {
+       "obligation_id": "OBL-SG-COMPLETION",
+       "status": "completed",
+       "blocks_gate": true
+      },
+      {
+       "obligation_id": "OBL-SG-COUNTS",
+       "status": "completed",
+       "blocks_gate": true
+      }
+     ],
+     "evidence_page": null
+    },
+    {
+     "indicator": "overseas",
+     "sub_check_id": "quantity:overseas",
+     "relation_status": "not_applicable",
+     "rule_id": "V33-SG-COMPLETION",
+     "rule_status": "pass",
+     "rule_detail": null,
+     "formula": "因公出国（境）费决算数=0.00，金额为0不要求数量披露",
+     "incomplete_reason": null,
+     "reason_codes": [],
+     "disclosure_sources": [],
+     "disclosure_pages": [],
+     "disclosure_sources_grounded": [],
+     "finding_ids": [],
+     "finding_pages": [],
+     "obligations": [
+      {
+       "obligation_id": "OBL-SG-COMPLETION",
+       "status": "completed",
+       "blocks_gate": true
+      },
+      {
+       "obligation_id": "OBL-SG-COUNTS",
+       "status": "completed",
+       "blocks_gate": true
+      }
+     ],
+     "evidence_page": null
+    },
+    {
+     "indicator": "reception",
+     "sub_check_id": "quantity:reception",
+     "relation_status": "not_applicable",
+     "rule_id": "V33-SG-COMPLETION",
+     "rule_status": "pass",
+     "rule_detail": null,
+     "formula": "公务接待费决算数=0.00，金额为0不要求数量披露",
+     "incomplete_reason": null,
+     "reason_codes": [],
+     "disclosure_sources": [],
+     "disclosure_pages": [],
+     "disclosure_sources_grounded": [],
+     "finding_ids": [],
+     "finding_pages": [],
+     "obligations": [
+      {
+       "obligation_id": "OBL-SG-COMPLETION",
+       "status": "completed",
+       "blocks_gate": true
+      },
+      {
+       "obligation_id": "OBL-SG-COUNTS",
+       "status": "completed",
+       "blocks_gate": true
+      }
+     ],
+     "evidence_page": null
+    },
+    {
+     "indicator": "vehicle_stock",
+     "sub_check_id": "quantity:vehicle_stock",
+     "relation_status": "pass",
+     "rule_id": "V33-SG-COMPLETION",
+     "rule_status": "pass",
+     "rule_detail": null,
+     "formula": "全文（含国有资产占有使用情况）任一处披露车辆保有量",
+     "incomplete_reason": null,
+     "reason_codes": [],
+     "disclosure_sources": [],
+     "disclosure_pages": [],
+     "disclosure_sources_grounded": [],
+     "finding_ids": [],
+     "finding_pages": [],
+     "obligations": [
+      {
+       "obligation_id": "OBL-SG-COMPLETION",
+       "status": "completed",
+       "blocks_gate": true
+      },
+      {
+       "obligation_id": "OBL-SG-COUNTS",
+       "status": "completed",
+       "blocks_gate": true
+      }
+     ],
+     "evidence_page": null
+    }
+   ],
+   "checks": [
+    {
+     "check": "vehicle_purchase:rule_maps_to_obligation",
+     "ok": true,
+     "detail": {
+      "rule_id": "V33-SG-COMPLETION",
+      "obligations": [
+       {
+        "obligation_id": "OBL-SG-COMPLETION",
+        "status": "completed",
+        "blocks_gate": true
+       },
+       {
+        "obligation_id": "OBL-SG-COUNTS",
+        "status": "completed",
+        "blocks_gate": true
+       }
+      ]
+     }
+    },
+    {
+     "check": "overseas:na_has_legal_basis",
+     "ok": true,
+     "detail": {
+      "formula": "因公出国（境）费决算数=0.00，金额为0不要求数量披露",
+      "disclosure_pages": [],
+      "sources_grounded": []
+     }
+    },
+    {
+     "check": "overseas:rule_maps_to_obligation",
+     "ok": true,
+     "detail": {
+      "rule_id": "V33-SG-COMPLETION",
+      "obligations": [
+       {
+        "obligation_id": "OBL-SG-COMPLETION",
+        "status": "completed",
+        "blocks_gate": true
+       },
+       {
+        "obligation_id": "OBL-SG-COUNTS",
+        "status": "completed",
+        "blocks_gate": true
+       }
+      ]
+     }
+    },
+    {
+     "check": "reception:na_has_legal_basis",
+     "ok": true,
+     "detail": {
+      "formula": "公务接待费决算数=0.00，金额为0不要求数量披露",
+      "disclosure_pages": [],
+      "sources_grounded": []
+     }
+    },
+    {
+     "check": "reception:rule_maps_to_obligation",
+     "ok": true,
+     "detail": {
+      "rule_id": "V33-SG-COMPLETION",
+      "obligations": [
+       {
+        "obligation_id": "OBL-SG-COMPLETION",
+        "status": "completed",
+        "blocks_gate": true
+       },
+       {
+        "obligation_id": "OBL-SG-COUNTS",
+        "status": "completed",
+        "blocks_gate": true
+       }
+      ]
+     }
+    },
+    {
+     "check": "vehicle_stock:rule_maps_to_obligation",
+     "ok": true,
+     "detail": {
+      "rule_id": "V33-SG-COMPLETION",
+      "obligations": [
+       {
+        "obligation_id": "OBL-SG-COMPLETION",
+        "status": "completed",
+        "blocks_gate": true
+       },
+       {
+        "obligation_id": "OBL-SG-COUNTS",
+        "status": "completed",
+        "blocks_gate": true
+       }
+      ]
+     }
+    },
+    {
+     "check": "vehicle_purchase:single_receipt",
+     "ok": true,
+     "detail": {
+      "count": 1
+     }
+    },
+    {
+     "check": "overseas:single_receipt",
+     "ok": true,
+     "detail": {
+      "count": 1
+     }
+    },
+    {
+     "check": "reception:single_receipt",
+     "ok": true,
+     "detail": {
+      "count": 1
+     }
+    },
+    {
+     "check": "vehicle_stock:single_receipt",
+     "ok": true,
+     "detail": {
+      "count": 1
+     }
+    },
+    {
+     "check": "no_unknown_quantity_relation",
+     "ok": true,
+     "detail": {
+      "unknown": []
+     }
+    }
+   ],
+   "ok": true,
+   "failed_checks": []
+  }
+ ],
+ "ok": true,
+ "note": "数量回执对账：验证关系→规则→义务→页面可追溯，合法空白/空表说明/明确无三公支出得到适用性结论，且规则 pass 不掩盖关系 insufficient_data。"
+}

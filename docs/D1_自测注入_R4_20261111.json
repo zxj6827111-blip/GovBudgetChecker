@@ -1,0 +1,46 @@
+{
+ "ok": true,
+ "instance": "FIN_02_income",
+ "pages": [
+  7,
+  8,
+  9,
+  10,
+  11
+ ],
+ "swap": {
+  "page": 7,
+  "identity_a": "合计",
+  "identity_b": "201"
+ },
+ "normal_mismatches": [],
+ "injected_mismatches": [
+  {
+   "identity": "合计",
+   "page": 7,
+   "kind": "row_number_sequence_mismatch",
+   "merged": [
+    "207.4",
+    "207.4"
+   ],
+   "original": [
+    "20323.21",
+    "20323.21"
+   ]
+  },
+  {
+   "identity": "201",
+   "page": 7,
+   "kind": "row_number_sequence_mismatch",
+   "merged": [
+    "20323.21",
+    "20323.21"
+   ],
+   "original": [
+    "207.4",
+    "207.4"
+   ]
+  }
+ ],
+ "detected": true
+}

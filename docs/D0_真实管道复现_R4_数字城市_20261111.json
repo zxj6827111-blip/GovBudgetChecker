@@ -1,0 +1,1092 @@
+{
+ "input": {
+  "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/89427638fd7f13ca51ed4decd613512b/上海市数字城市规划研究中心2025年度决算.pdf",
+  "original_sha256": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+  "org": "上海市数字城市规划研究中心",
+  "year": 2025,
+  "kind": "final"
+ },
+ "frozen_versions": {
+  "git_head": "1be90c920c6b0ec0c1bf583af30545185896f3b8",
+  "key_source_sha256": {
+   "src/engine/rules_v33.py": "077c974ce4839fda017a4eb8ce10d04f6050792904cb7ed85ef98bc917faaeaf",
+   "src/engine/pipeline.py": "f639093ffee1a8116b819f5bd035768c789aea59d95491b161f1b54622d6a3ba",
+   "src/engine/issue_evidence.py": "073c8f49b94246ba7728e1964e3cd1dfdd9f19ca4ff81ce0ca37c2dabc33fbb4",
+   "src/services/rule_source_binding.py": "296d299343ab2aa4db8a99b8c084a0be0c63cc1e5e60e9b1b7b200243e6ec462",
+   "src/services/evidence_guard.py": "4e6ff64ab85339d0cffab2dc8afd3d672fb7c30b77a22f2ccaf30f4bc3e6edb2",
+   "src/services/pdf_parser.py": "80d100fe7e6ec786178e9687b4a0ed5a5446c749289a48ddf9445238e8cc9a5d"
+  },
+  "parse_run_uid": "3667da5517f6809553e3a06168f32ab7",
+  "fact_count": 492,
+  "page_count": 24,
+  "config": {
+   "use_ai_assist": false,
+   "ocr": "disabled",
+   "empty_value_conventions": "builtin(U-5)"
+  }
+ },
+ "elapsed_seconds": 0.4,
+ "rule_execution_summary": {
+  "total_rules": 90,
+  "executed": 87,
+  "pass": 77,
+  "fail": 8,
+  "not_applicable": 2,
+  "insufficient_data": 3,
+  "parse_error": 0,
+  "execution_error": 0,
+  "unresolved_total": 3,
+  "failed_rules": [
+   "V33-115",
+   "V33-117",
+   "V33-243",
+   "V33-227",
+   "V33-224",
+   "CMM-002",
+   "CMM-007",
+   "CMM-014"
+  ],
+  "unresolved_rules": [
+   {
+    "rule_id": "V33-222",
+    "status": "insufficient_data",
+    "detail": "说明中的款“城乡社区支出”在表内找不到同名科目（可能使用了旧科目名称或写错），无法与表格金额对应",
+    "unresolved_reasons": [
+     "说明中的款“城乡社区支出”在表内找不到同名科目（可能使用了旧科目名称或写错），无法与表格金额对应"
+    ],
+    "diagnostics": [
+     {
+      "reason_codes": [
+       "text_binding_failed"
+      ],
+      "blocked_by": [],
+      "missing_operands": [
+       {
+        "source": "text",
+        "section": "支出决算具体情况说明",
+        "role": "科目名称对应关系",
+        "page": 18,
+        "row_key": "城乡社区规划与管理",
+        "column": "决算金额",
+        "fund_scope": null,
+        "stage": "决算",
+        "year": 2025,
+        "bbox": null
+       }
+      ],
+      "candidates": [],
+      "next_action": "system_recheck",
+      "root_cause_key": "rc:d95add07dfe6093890c0e674d6d297e4d0108676315c4f4377625198dcba30bb"
+     }
+    ]
+   },
+   {
+    "rule_id": "CMM-018",
+    "status": "insufficient_data",
+    "detail": "写法口径未确认；主体用语子项未完成",
+    "unresolved_reasons": [
+     "写法口径未确认；主体用语子项未完成"
+    ],
+    "diagnostics": [
+     {
+      "reason_codes": [
+       "rule_no_reason"
+      ],
+      "blocked_by": [],
+      "missing_operands": [],
+      "candidates": [],
+      "next_action": "tech_fix",
+      "root_cause_key": "rc:6100cb42140df931e0f30949198871b75a8feb9b0c90f607119496fd18ce769d"
+     }
+    ]
+   },
+   {
+    "rule_id": "CMM-019",
+    "status": "insufficient_data",
+    "detail": "封面文种缺少独立依据",
+    "unresolved_reasons": [
+     "封面文种缺少独立依据"
+    ],
+    "diagnostics": [
+     {
+      "reason_codes": [
+       "scope_unconfirmed"
+      ],
+      "blocked_by": [
+       {
+        "dimension": "org_scope",
+        "ref": "封面文种缺少独立依据",
+        "reason_code": "scope_unconfirmed"
+       }
+      ],
+      "missing_operands": [],
+      "candidates": [],
+      "next_action": "human_confirm",
+      "root_cause_key": "rc:2540ece44c0828dbcf48fa691820c958da41bff7348e47ea2f285f5204fb0b41"
+     }
+    ]
+   }
+  ],
+  "partial_findings_total": 0,
+  "rule_statuses": {
+   "V33-001": "pass",
+   "V33-002": "pass",
+   "V33-003": "pass",
+   "V33-004": "pass",
+   "V33-005": "pass",
+   "V33-101": "pass",
+   "V33-102": "pass",
+   "V33-103": "pass",
+   "V33-104": "pass",
+   "V33-105": "pass",
+   "V33-106": "pass",
+   "V33-107": "pass",
+   "V33-108": "pass",
+   "V33-109": "pass",
+   "V33-110": "pass",
+   "V33-111": "pass",
+   "V33-112": "pass",
+   "V33-113": "pass",
+   "V33-115": "fail",
+   "V33-119": "pass",
+   "V33-120": "pass",
+   "V33-117": "fail",
+   "V33-121": "pass",
+   "V33-122": "pass",
+   "V33-114": "pass",
+   "V33-200": "pass",
+   "V33-201": "pass",
+   "V33-202": "pass",
+   "V33-203": "pass",
+   "V33-243": "fail",
+   "V33-214": "pass",
+   "V33-244": "pass",
+   "V33-245": "pass",
+   "V33-246": "pass",
+   "V33-SG-COMPLETION": "pass",
+   "V33-242": "pass",
+   "V33-240": "pass",
+   "V33-241": "pass",
+   "V33-225": "pass",
+   "V33-226": "pass",
+   "V33-220": "pass",
+   "V33-221": "pass",
+   "V33-222": "insufficient_data",
+   "V33-227": "fail",
+   "V33-223": "pass",
+   "V33-224": "fail",
+   "V33-204": "pass",
+   "V33-CROSS-SAN-GONG-ECON": "pass",
+   "V33-TXT-FUND-DETAIL": "pass",
+   "V33-NARRATIVE-INDICATOR-REPEAT": "pass",
+   "V33-TREND-COMPLETION-RATE": "pass",
+   "V33-233": "pass",
+   "V33-234": "pass",
+   "V33-235": "pass",
+   "V33-236": "pass",
+   "V33-230": "not_applicable",
+   "V33-232": "pass",
+   "V33-248": "pass",
+   "V33-249": "pass",
+   "V33-250": "pass",
+   "V33-251": "pass",
+   "V33-252": "pass",
+   "CMM-001": "pass",
+   "CMM-002": "fail",
+   "CMM-003": "pass",
+   "CMM-004": "pass",
+   "CMM-005": "pass",
+   "CMM-006": "pass",
+   "CMM-007": "fail",
+   "V33-DISCLOSURE-PERCENT-UNIT": "pass",
+   "CMM-008": "pass",
+   "CMM-009": "pass",
+   "CMM-010": "pass",
+   "CMM-011": "pass",
+   "CMM-012": "pass",
+   "CMM-013": "pass",
+   "CMM-014": "fail",
+   "CMM-015": "pass",
+   "CMM-016": "pass",
+   "CMM-017": "pass",
+   "CMM-018": "insufficient_data",
+   "CMM-019": "insufficient_data",
+   "CMM-027": "not_applicable",
+   "CMM-020": "pass",
+   "CMM-021": "pass",
+   "CMM-022": "pass",
+   "CMM-023": "pass",
+   "CMM-024": "pass",
+   "CMM-025": "pass",
+   "CMM-026": "pass"
+  }
+ },
+ "binding": {
+  "rule_source_binding": {
+   "bound_rule_findings": 11,
+   "scope": "source identity only; evidence guard and human business adjudication remain required"
+  }
+ },
+ "locations": {
+  "rule_source_locations": {
+   "checked_rule_findings": 11
+  }
+ },
+ "evidence_completeness": {
+  "total": 11,
+  "complete": 11,
+  "incomplete": 0,
+  "completeness_rate": 1.0,
+  "locatable_total": 11,
+  "locatable_complete": 11,
+  "locatable_completeness_rate": 1.0,
+  "document_level_total": 0,
+  "verified_count": 11,
+  "unverified_count": 0,
+  "failed_count": 0,
+  "degraded_count": 0,
+  "rule_warning_count": 0,
+  "formal_issue_total": 6,
+  "degraded": [],
+  "rule_warnings": [],
+  "detail_truncated": false
+ },
+ "counts": {
+  "findings": 11,
+  "verified": 11,
+  "failed": 0,
+  "unverified": 0
+ },
+ "findings": [
+  {
+   "id": "V33-115-1",
+   "rule_id": "V33-115",
+   "severity": "info",
+   "page": 6,
+   "message": "一、收入侧合计与分项存在 0.01 万元差异，在显示舍入包络内，可能为取整误差。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     6
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "2,311.95",
+     "quote": "2,311.95",
+     "page": 6,
+     "physical_page": 6,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "370161defa70019d:r29c1",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "2,184.98",
+     "quote": "2,184.98",
+     "page": 6,
+     "physical_page": 6,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "370161defa70019d:r26c1",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "116.28",
+     "quote": "116.28",
+     "page": 6,
+     "physical_page": 6,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "370161defa70019d:r27c1",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "10.70",
+     "quote": "10.70",
+     "page": 6,
+     "physical_page": 6,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "370161defa70019d:r28c1",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-115-2",
+   "rule_id": "V33-115",
+   "severity": "info",
+   "page": 6,
+   "message": "二、支出侧合计与分项存在 0.01 万元差异，在显示舍入包络内，可能为取整误差。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     6
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "2,311.95",
+     "quote": "2,311.95",
+     "page": 6,
+     "physical_page": 6,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "370161defa70019d:r29c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "2,249.95",
+     "quote": "2,249.95",
+     "page": 6,
+     "physical_page": 6,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "370161defa70019d:r26c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 6,
+     "physical_page": 6,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "370161defa70019d:r27c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "62.01",
+     "quote": "62.01",
+     "page": 6,
+     "physical_page": 6,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "370161defa70019d:r28c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-117-3",
+   "rule_id": "V33-117",
+   "severity": "info",
+   "page": 12,
+   "message": "三、人员经费合计：表内合计1672.45万元，分项之和1672.44万元，差额0.01万元。可能为取整误差。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     12
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "1,672.45",
+     "quote": "1,672.45",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r39c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,671.29",
+     "quote": "1,671.29",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r1c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1.15",
+     "quote": "1.15",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r15c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-243-4",
+   "rule_id": "V33-243",
+   "severity": "info",
+   "page": 12,
+   "message": "四、经济分类301明细归集：表内合计1671.29万元，分项之和1671.31万元，差额0.02万元。可能为取整误差。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     12
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "1,671.29",
+     "quote": "1,671.29",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r1c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "226.52",
+     "quote": "226.52",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r2c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "33.22",
+     "quote": "33.22",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r3c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r4c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r5c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "948.57",
+     "quote": "948.57",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r6c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "142.08",
+     "quote": "142.08",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r7c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "91.90",
+     "quote": "91.90",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r8c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "89.77",
+     "quote": "89.77",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r9c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r10c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "6.19",
+     "quote": "6.19",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r11c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "82.02",
+     "quote": "82.02",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r12c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r13c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "51.04",
+     "quote": "51.04",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r14c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-243-5",
+   "rule_id": "V33-243",
+   "severity": "info",
+   "page": 12,
+   "message": "五、经济分类302明细归集：表内合计239.34万元，分项之和239.35万元，差额0.01万元。可能为取整误差。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     12
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "239.34",
+     "quote": "239.34",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r1c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "70.62",
+     "quote": "70.62",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r2c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.03",
+     "quote": "0.03",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r3c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r4c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r5c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r6c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "6.43",
+     "quote": "6.43",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r7c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "12.57",
+     "quote": "12.57",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r8c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r9c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "41.96",
+     "quote": "41.96",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r10c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "19.19",
+     "quote": "19.19",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r11c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "11.67",
+     "quote": "11.67",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r12c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "8.83",
+     "quote": "8.83",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r13c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "3.78",
+     "quote": "3.78",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r14c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.87",
+     "quote": "0.87",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r15c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "7.71",
+     "quote": "7.71",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r16c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r17c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r18c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r19c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r20c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1.54",
+     "quote": "1.54",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r21c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r22c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "14.64",
+     "quote": "14.64",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r23c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "12.96",
+     "quote": "12.96",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r24c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "4.49",
+     "quote": "4.49",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r25c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1.42",
+     "quote": "1.42",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r26c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r27c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "20.64",
+     "quote": "20.64",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "e9ab0714d7fcaeb5:r28c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "CMM-002-8",
+   "rule_id": "CMM-002",
+   "severity": "warn",
+   "page": 17,
+   "message": "六、中文语境使用半角逗号/分号，应使用全角“，”/“；”。全文共 1 处（如“卫生健康\n支出 89.77 万元，占 4.21%;城乡社区支出 1,723.59 万元，占\n80.”）。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     17
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "，占 4.21%;城乡社区支出 1",
+     "quote": "，占 4.21%;城乡社区支出 1",
+     "page": 17,
+     "physical_page": 17,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-227-6",
+   "rule_id": "V33-227",
+   "severity": "warn",
+   "page": 18,
+   "message": "七、说明5款级科目名称与T5不一致（212-02）：表格“城乡社区规划与管理”，说明“城乡社区支出”",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     11,
+     18
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "5、“城乡社区支出—城乡社区支出—城乡社区规划与管理”",
+     "quote": "5、“城乡社区支出—城乡社区支出—城乡社区规划与管理”",
+     "page": 18,
+     "physical_page": 18,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "21202 城乡社区规划与管理",
+     "quote": "21202 城乡社区规划与管理",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "CMM-014-11",
+   "rule_id": "CMM-014",
+   "severity": "warn",
+   "page": 18,
+   "message": "八、标题编号重号：编号“4、”与上一条同级标题重复。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     18
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "4、“卫生健康支出—行政事业",
+     "quote": "4、“卫生健康支出—行政事业",
+     "page": 18,
+     "physical_page": 18,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "CMM-007-9",
+   "rule_id": "CMM-007",
+   "severity": "error",
+   "page": 19,
+   "message": "九、增减额与同比百分比复算不一致（因公出国(境)费）：本期 11.67 万元、减少 1.92 万元，复算基期 13.59 万元，应为下降14.13%，声明 16.45%，相差 2.32 个百分点。本期金额、增减额与增长百分比三者不能同时成立，需人工复核底稿。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     19
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "因公出国（境）费支出决算\n减少 1.92 万元，下降 16.45%；",
+     "quote": "因公出国（境）费支出决算\n减少 1.92 万元，下降 16.45%；",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "因公出国（境）\n费决算为 11.67 万元，完成预算的 233.40%；",
+     "quote": "因公出国（境）\n费决算为 11.67 万元，完成预算的 233.40%；",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "CMM-007-10",
+   "rule_id": "CMM-007",
+   "severity": "error",
+   "page": 19,
+   "message": "十、增减额与同比百分比复算不一致（公务用车购置及运行维护费）：本期 4.49 万元、减少 1.05 万元，复算基期 5.54 万元，应为下降18.95%，声明 23.39%，相差 4.44 个百分点。本期金额、增减额与增长百分比三者不能同时成立，需人工复核底稿。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     19
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "公务用车购置及运行维护费支出\n决算减少1.05万元，下降23.39%；",
+     "quote": "公务用车购置及运行维护费支出\n决算减少1.05万元，下降23.39%；",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "公务用车购置及运\n行维护费支出决算为 4.49 万元，完成预算的 70.16%；",
+     "quote": "公务用车购置及运\n行维护费支出决算为 4.49 万元，完成预算的 70.16%；",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-224-7",
+   "rule_id": "V33-224",
+   "severity": "error",
+   "page": 20,
+   "message": "十一、公务用车购置及运行维护费占三公经费决算合计的比例不成立：说明70.16%，表内4.49÷16.16×100=27.78%。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     13,
+     20
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "4.49",
+     "quote": "4.49",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "d5087e79a713cbd0:r4c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "16.16",
+     "quote": "16.16",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": "d5087e79a713cbd0:r4c1",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "公务用车购置及运行维护费支出\n决算 4.49 万元，占 70.16%",
+     "quote": "公务用车购置及运行维护费支出\n决算 4.49 万元，占 70.16%",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  }
+ ],
+ "note": "verified 才算恢复；unverified/failed/未执行均不算（IR-03）"
+}
