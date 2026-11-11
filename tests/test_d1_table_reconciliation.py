@@ -70,8 +70,84 @@ def test_right_lane_subject_code_is_not_an_amount():
     cells = ["301", "工资福利支出", "11,860.23", "302", "商品和服务支出", "1,844.57"]
     known = {"301", "302"}
     identity, numbers = _row_identity_and_numbers(cells, known)
-    assert identity == "301"
+    # R3-03：多车道行身份包含两条车道的完整类码，金额逐位保留。
+    assert identity == "301|302"
     assert numbers == ["11860.23", "1844.57"]
+
+
+# ---------------------------------------------------------------------------
+# R3-03：拆码（301 01）、续行名称、纯金额行必须按完整科目身份对账
+# ---------------------------------------------------------------------------
+
+SPLIT_CODE_TEXT = (
+    "一般公共预算财政拨款基本支出决算表\n"
+    "301 01 基本工资 100.00 302 01 办公费 10.00\n"
+    "301 02 津贴补贴 200.00 302 02 印刷费 20.00\n"
+)
+
+
+def _split_rows(second_amount: str = "200.00"):
+    return [
+        {"page": 1, "cells": ["301", "01", "基本工资", "100.00",
+                              "302", "01", "办公费", "10.00"]},
+        {"page": 1, "cells": ["301", "02", "津贴补贴", second_amount,
+                              "302", "02", "印刷费", "20.00"]},
+    ]
+
+
+def test_split_codes_are_distinct_identities_and_pass():
+    result = _reconcile_row_alignment(_split_rows(), [SPLIT_CODE_TEXT], [1])
+    assert result["row_mismatches"] == []
+    assert "301:01|302:01" in result["merged_row_identities"]
+    assert "301:02|302:02" in result["merged_row_identities"]
+
+
+def test_split_code_amount_swap_is_rejected():
+    """拆码行本身不能变成同一身份；金额互换仍必须被发现。"""
+    rows = _split_rows()
+    rows[0]["cells"][3], rows[1]["cells"][3] = "200.00", "100.00"
+    result = _reconcile_row_alignment(rows, [SPLIT_CODE_TEXT], [1])
+    kinds = {item["kind"] for item in result["row_mismatches"]}
+    assert "row_number_sequence_mismatch" in kinds
+
+
+WRAPPED_NAME_TEXT = (
+    "财政拨款收入支出决算总表\n"
+    "二十二、灾害防治及应急管理支\n"
+    "0.00 0.00 0.00 0.00\n"
+    "出\n"
+    "二十三、其他支出 1.00 1.00 0.00 0.00\n"
+)
+
+
+def test_wrapped_long_row_name_keeps_identity():
+    rows = [
+        {"page": 1, "cells": ["二十二、灾害防治及应急管理支出",
+                              "0.00", "0.00", "0.00", "0.00"]},
+        {"page": 1, "cells": ["二十三、其他支出", "1.00", "1.00", "0.00", "0.00"]},
+    ]
+    result = _reconcile_row_alignment(rows, [WRAPPED_NAME_TEXT], [1])
+    assert result["row_mismatches"] == []
+
+
+def test_wrapped_row_amount_corruption_is_rejected():
+    rows = [
+        {"page": 1, "cells": ["二十二、灾害防治及应急管理支出",
+                              "0.00", "2.00", "0.00", "0.00"]},
+        {"page": 1, "cells": ["二十三、其他支出", "1.00", "1.00", "0.00", "0.00"]},
+    ]
+    result = _reconcile_row_alignment(rows, [WRAPPED_NAME_TEXT], [1])
+    kinds = {item["kind"] for item in result["row_mismatches"]}
+    assert "row_number_sequence_mismatch" in kinds
+
+
+def test_numeric_only_rows_do_not_swallow_codes():
+    """三公表纯金额行身份为 #numeric；带编码行不得被并入金额行。"""
+    text = "31.47 19.86 30.67 19.56\n301 08 67.84\n"
+    rows = [{"page": 1, "cells": ["31.47", "19.86", "30.67", "19.56"]},
+            {"page": 1, "cells": ["301", "08", "", "67.84"]}]
+    result = _reconcile_row_alignment(rows, [text], [1])
+    assert result["row_mismatches"] == []
 
 
 # ---------------------------------------------------------------------------

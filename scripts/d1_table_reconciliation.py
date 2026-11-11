@@ -172,7 +172,6 @@ def _merged_cells_text(doc: Any, instances: List[Any]) -> List[Dict[str, Any]]:
 
 
 _NUM_TOKEN_RE = re.compile(r"^-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$")
-_HEADER_NOISE = ("编码", "科目名称", "项目")
 
 
 def _clean_number_token(token: str) -> str:
@@ -187,74 +186,249 @@ def _is_code_token(token: str) -> bool:
     return bool(re.fullmatch(r"\d{3,7}", _clean_number_token(token)))
 
 
-def _numbers_without_codes(items: List[Tuple[int, str]],
-                           known_codes: set) -> List[str]:
-    """数值序列：排除**已登记的科目编码**（3~7 位纯整数）。
+_YEAR_TOKEN_RE = re.compile(r"(?:19|20)\d{2}")
+_CN_NUMERAL_LABEL_RE = re.compile(r"^[一二三四五六七八九十百]+、")
+_ROW_LABEL_PREFIXES = (
+    "合计", "总计", "本年", "年初", "年末", "使用非财政",
+    "人员经费", "公用经费", "其中", "其他",
+)
 
-    编码集合来自合并表各行的身份；金额统一带小数，因此不会与编码混淆。
-    右栏编码（如 30212）即使名称被拆到下一行也能排除；错行/错列注入仍会
-    改变序列或页归属。"""
-    numbers: List[str] = []
-    for _index, text in items:
-        cleaned = _clean_number_token(text)
-        if not _NUM_TOKEN_RE.fullmatch(cleaned):
+
+def _is_year_token(token: str) -> bool:
+    return bool(_YEAR_TOKEN_RE.fullmatch(_clean_number_token(token)))
+
+
+def _is_two_digit_token(token: str) -> bool:
+    return bool(re.fullmatch(r"\d{1,2}", _clean_number_token(token)))
+
+
+def _looks_like_row_label(text: str) -> bool:
+    """续行名称与真正行标签的区分依据（中文序号/合计/本年等）。"""
+    value = str(text or "").strip()
+    if not value:
+        return False
+    if _CN_NUMERAL_LABEL_RE.match(value):
+        return True
+    return value.startswith(_ROW_LABEL_PREFIXES)
+
+
+def _looks_like_name_continuation(text: str) -> bool:
+    """换行名称片段：短、无数字、非注/说明、非新行标签。"""
+    value = str(text or "").strip()
+    if not value or len(value) > 8:
+        return False
+    if any(char.isdigit() for char in value):
+        return False
+    if value[0] in "注说表单第" or value[-1] in "。：；;:":
+        return False
+    if _looks_like_row_label(value):
+        return False
+    return True
+
+
+def _is_table_header_text(text: str) -> bool:
+    value = str(text or "")
+    return any(noise in value for noise in (
+        "科目编码", "科目名称", "经济分类", "功能分类", "决算数", "预算数",
+        "单位：", "金额单位", "年初预算", "调整预算", "编码", "科目",
+    ))
+
+
+def _parse_lanes(tokens: List[str]) -> List[Dict[str, Any]]:
+    """一行 → 语义车道序列：每条车道含 (类码, 款/项码, 名称, 金额序列)。
+
+    R3-03：完整科目身份必须包含拆开的款/项码（301 01 ≠ 301 02），
+    编码不得进入金额统计；多车道（基本/项目、人员/公用、收入/支出）
+    按出现顺序保留，列位置本身不参与身份。
+    """
+    lanes: List[Dict[str, Any]] = []
+    current: Dict[str, Any] = {"cls": None, "item": None,
+                               "label": [], "numbers": []}
+    seen_number = False
+
+    def flush() -> None:
+        nonlocal current, seen_number
+        if current["cls"] or current["label"] or current["numbers"]:
+            lanes.append(current)
+        current = {"cls": None, "item": None, "label": [], "numbers": []}
+        seen_number = False
+
+    index = 0
+    while index < len(tokens):
+        cleaned = _clean_number_token(tokens[index])
+        if not cleaned:
+            index += 1
             continue
-        if _is_code_token(cleaned) and cleaned.lstrip("0") in known_codes:
+        if _is_code_token(cleaned):
+            if current["cls"] or current["label"] or current["numbers"]:
+                flush()
+            current["cls"] = cleaned
+            index += 1
             continue
-        canonical = _canonical_number(cleaned)
-        if canonical is not None:
-            numbers.append(canonical)
-    return numbers
+        if (_is_two_digit_token(cleaned) and current["cls"]
+                and current["item"] is None and not current["numbers"]
+                and not current["label"]):
+            following = ""
+            if index + 1 < len(tokens):
+                following = _clean_number_token(tokens[index + 1])
+            # 两位款/项码后必须是名称或金额（行尾单独两位数仍按金额处理）。
+            if following:
+                current["item"] = cleaned
+                index += 1
+                continue
+        if _NUM_TOKEN_RE.fullmatch(cleaned):
+            if not _is_year_token(cleaned):
+                canonical = _canonical_number(cleaned)
+                if canonical is not None:
+                    current["numbers"].append(canonical)
+                    seen_number = True
+            index += 1
+            continue
+        if seen_number:
+            flush()
+        current["label"].append(cleaned)
+        index += 1
+    flush()
+    return lanes
 
 
-def _row_identity_and_numbers(cells: List[str], known_codes: set) -> Tuple[str, List[str]]:
-    """行身份与数值序列：合计/总计 > 纯整数科目编码 > 行标签 > 纯数值行。"""
-    items = [(index, _norm(cell)) for index, cell in enumerate(cells) if _norm(cell)]
-    if not items:
-        return "", []
-    identity = ""
-    skip_index = None
-    for index, text in items[:3]:
-        if text.startswith(("合计", "总计")):
-            identity, skip_index = text[:2], index
-            break
-        if _is_code_token(text):
-            identity, skip_index = _clean_number_token(text), index
-            break
-    if not identity:
-        for index, text in items:
-            if not _is_number_token(text):
-                identity, skip_index = text, index
-                break
-    if not identity:
+def _lanes_identity_and_numbers(
+    lanes: List[Dict[str, Any]],
+) -> Tuple[str, List[str], str]:
+    """车道序列 → (完整身份, 金额序列, 名称摘要)。
+
+    有编码的车道用「类码[:款/项码]」按序拼接作为身份；纯标签行用
+    车道名称拼接作为身份（金额顺序仍逐位比较）。
+    """
+    codes = [
+        f"{lane['cls']}:{lane['item']}" if lane.get("item") else str(lane["cls"])
+        for lane in lanes if lane.get("cls")
+    ]
+    labels = ["".join(lane.get("label") or []) for lane in lanes if lane.get("label")]
+    numbers = [number for lane in lanes for number in lane.get("numbers") or []]
+    if codes:
+        identity = "|".join(codes)
+    elif labels:
+        identity = "|".join(labels)
+    elif numbers:
         identity = "#numeric"
-    rest = [(index, text) for index, text in items if index != skip_index]
-    return identity, _numbers_without_codes(rest, known_codes)
-
-
-def _parse_original_line(raw_line: str, known_codes: set) -> Optional[Tuple[str, List[str]]]:
-    """原件单行 → (行身份, 数值序列)；纯数值行归入 ``#numeric``。"""
-    tokens = [token for token in unicodedata.normalize("NFKC", raw_line).split() if token]
-    if not tokens:
-        return None
-    first = tokens[0]
-    cleaned_first = _clean_number_token(first)
-    if cleaned_first.startswith(("合计", "总计")):
-        identity = cleaned_first[:2]
-        rest_tokens = tokens[1:]
-    elif _is_code_token(first):
-        identity = cleaned_first
-        rest_tokens = tokens[1:]
-    elif _is_number_token(first):
-        identity = "#numeric"
-        rest_tokens = tokens
     else:
-        if any(noise in first for noise in _HEADER_NOISE) and len(tokens) <= 3:
-            return None
-        identity = first
-        rest_tokens = tokens[1:]
-    rest = [(index, token) for index, token in enumerate(rest_tokens)]
-    return identity, _numbers_without_codes(rest, known_codes)
+        identity = ""
+    return identity, numbers, "|".join(labels)
+
+
+def _codes_in_identity(identity: str) -> List[str]:
+    """身份串中的 3~7 位类级编码（``301:01|302:01`` → ``301``/``302``）。"""
+    codes: List[str] = []
+    for part in str(identity or "").split("|"):
+        cls = part.split(":", 1)[0]
+        if _is_code_token(cls):
+            codes.append(cls)
+    return codes
+
+
+def _row_identity_and_numbers(cells: List[str],
+                              known_codes: Optional[set] = None) -> Tuple[str, List[str]]:
+    """合并行 → (完整科目身份, 金额序列)；兼容旧调用签名。"""
+    tokens = [_norm(cell) for cell in cells if _norm(cell)]
+    if not tokens:
+        return "", []
+    lanes = _parse_lanes(tokens)
+    identity, numbers, _label = _lanes_identity_and_numbers(lanes)
+    return identity, numbers
+
+
+def _parse_original_page(page_text: str, page_number: int) -> List[Dict[str, Any]]:
+    """原件单页文本 → 行记录（身份、金额序列、名称）。
+
+    处理真实版式的三类跨行：
+    1. 名称在金额行之前（`二十二、…支` / `0.00 0.00 …` / `出`），
+       名称续行并回已生成的行；
+    2. 名称在金额行之后（`机关事业单位基本养老` / `2080505 518.69 …`），
+       前缀只作车道名称，身份仍按编码；
+    3. 纯金额行（三公表、总表）没有标签时身份为 ``#numeric``。
+    """
+    rows: List[Dict[str, Any]] = []
+    pending: List[str] = []
+
+    def append_continuation(fragment: str) -> None:
+        if not rows:
+            return
+        row = rows[-1]
+        if row.get("basis") == "label":
+            row["label"] = str(row.get("label") or "") + fragment
+            row["identity"] = row["label"]
+
+    for raw_line in str(page_text or "").splitlines():
+        tokens = [token for token in unicodedata.normalize("NFKC", raw_line).split()
+                  if token]
+        cleaned = [_clean_number_token(token) for token in tokens]
+        cleaned = [token for token in cleaned if token]
+        if not cleaned:
+            continue
+        if (all(_is_number_token(token) for token in cleaned)
+                and not any(_is_code_token(token) for token in cleaned)):
+            # 页码/孤立序号行（如页脚 "12"）不是表格金额。
+            if len(cleaned) == 1 and re.fullmatch(r"\d{1,4}", cleaned[0]):
+                if int(cleaned[0]) == int(page_number):
+                    pending = []
+                    continue
+            numbers = []
+            for token in cleaned:
+                if _is_year_token(token):
+                    continue
+                canonical = _canonical_number(token)
+                if canonical is not None:
+                    numbers.append(canonical)
+            if not numbers:
+                pending = []
+                continue
+            if pending and _looks_like_row_label("".join(pending)):
+                label = "".join(pending)
+                rows.append({"identity": label, "label": label,
+                             "numbers": numbers, "basis": "label"})
+                pending = []
+            elif pending:
+                # 表头/标题残留不构成数据行：按纯金额行登记。
+                pending = []
+                rows.append({"identity": "#numeric", "label": "",
+                             "numbers": numbers, "basis": "numeric"})
+            elif rows:
+                # 同一行的金额换行续写。
+                rows[-1]["numbers"].extend(numbers)
+            else:
+                rows.append({"identity": "#numeric", "label": "",
+                             "numbers": numbers, "basis": "numeric"})
+            continue
+        lanes = _parse_lanes(tokens)
+        numbers = [number for lane in lanes for number in lane.get("numbers") or []]
+        if numbers:
+            identity, sequence, label = _lanes_identity_and_numbers(lanes)
+            if not identity:
+                continue
+            basis = "code" if any(lane.get("cls") for lane in lanes) else "label"
+            # 前置名称片段（换行名称的前半句）并入首车道名称，不改编码身份。
+            if pending and basis == "code":
+                label = "".join(pending) + label
+            rows.append({"identity": identity, "label": label,
+                         "numbers": sequence, "basis": basis})
+            pending = []
+            continue
+        line_text = "".join(cleaned)
+        if _is_table_header_text(line_text):
+            pending = []
+            continue
+        if _looks_like_row_label(line_text):
+            # 真正的行标签（中文序号/合计/本年…）覆盖此前的标题/表头残留。
+            pending = [line_text]
+            continue
+        if pending:
+            pending.append(line_text)
+        elif rows and _looks_like_name_continuation(line_text):
+            append_continuation(line_text)
+        else:
+            pending = [line_text]
+    return [row for row in rows if row["numbers"]]
 
 
 def _reconcile_row_alignment(
@@ -262,71 +436,76 @@ def _reconcile_row_alignment(
     page_texts: List[str],
     pages: List[int],
 ) -> Dict[str, Any]:
-    """按「行=科目/合计身份、列=数值序列」逐页对齐。
+    """按「语义车道身份 + 逐位金额序列」逐页对齐。
 
-    数字多重集合比较对错行/错列注入全盲（Codex 注入反例 9/9 误 PASS）。
-    这里把每行身份（科目编码或合计/总计）绑定到该页原件的数值序列，
-    逐位比较顺序与归属页；错行/错列/错页/拆行名称都会产生 row_mismatches。
+    R2-02 的严格性保留：错列/错行/合并视图损坏都会改变该身份下的金额
+    顺序；R3-03 修正身份归一：拆码（301 01/301 02）是不同身份，编码与
+    两位款/项码不再当作金额，换行名称与续页行按原件阅读顺序归并。
     """
-    # 先登记合并表的科目编码集合：原件右侧车道编码（名称可能被拆到下一行）
-    # 也按同一集合排除，避免把编码当金额。
-    known_codes: set = set()
+    merged_by_page: Dict[int, Dict[str, List[List[str]]]] = {}
     for row in merged_rows:
-        for cell in row["cells"]:
-            if _is_code_token(cell):
-                known_codes.add(_clean_number_token(cell).lstrip("0"))
-
-    merged_row_index: Dict[str, List[Dict[str, Any]]] = {}
-    for row in merged_rows:
-        identity, numbers = _row_identity_and_numbers(row["cells"], known_codes)
+        identity, numbers = _row_identity_and_numbers(row["cells"])
         if not identity or not numbers:
             # 纯表头/空行不参与数值对齐（没有金额可逐格核对）。
             continue
-        merged_row_index.setdefault(identity, []).append(
-            {"page": row["page"], "numbers": numbers})
+        page = row["page"]
+        merged_by_page.setdefault(page, {}).setdefault(identity, []).append(numbers)
 
-    original_rows_by_page: Dict[int, Dict[str, List[str]]] = {}
+    original_by_page: Dict[int, Dict[str, List[List[str]]]] = {}
     for page in pages:
         if not (1 <= page <= len(page_texts)):
             continue
-        rows_map: Dict[str, List[str]] = {}
-        for raw_line in str(page_texts[page - 1] or "").splitlines():
-            parsed = _parse_original_line(raw_line, known_codes)
-            if parsed is None:
-                continue
-            identity, nums = parsed
-            rows_map.setdefault(identity, []).extend(nums or [])
-        original_rows_by_page[page] = rows_map
+        for record in _parse_original_page(page_texts[page - 1], page):
+            original_by_page.setdefault(page, {}).setdefault(
+                record["identity"], []).append(record["numbers"])
 
     row_mismatches: List[Dict[str, Any]] = []
-    for identity, entries in merged_row_index.items():
-        for entry in entries:
-            page = entry["page"]
-            original_map = original_rows_by_page.get(page) or {}
-            original_seq = original_map.get(identity)
-            if original_seq is None:
-                row_mismatches.append({
-                    "identity": identity, "page": page, "kind": "row_missing_on_page",
-                    "merged": entry["numbers"][:6],
-                })
-                continue
-            if identity == "#numeric":
-                # 无行标签的纯数值行（如三公表金额行）：同页按物理顺序拼接比较。
-                if entry["numbers"] != original_seq[:len(entry["numbers"])]:
+    for page, identities in merged_by_page.items():
+        original_map = original_by_page.get(page) or {}
+        for identity, sequences in identities.items():
+            original_sequences = original_map.get(identity)
+            if original_sequences is None:
+                # 名称被原件换行拆开而合并侧截断时，按前缀唯一匹配回退。
+                candidates = [
+                    key for key in original_map
+                    if identity and (key.startswith(identity) or identity.startswith(key))
+                    and min(len(key), len(identity)) >= 6
+                ]
+                if len(candidates) == 1:
+                    original_sequences = original_map[candidates[0]]
+                else:
                     row_mismatches.append({
                         "identity": identity, "page": page,
-                        "kind": "numeric_row_sequence_mismatch",
-                        "merged": entry["numbers"][:8], "original": original_seq[:8],
+                        "kind": "row_missing_on_page",
+                        "merged": sequences[0][:6],
                     })
-                continue
-            if entry["numbers"] != original_seq[:len(entry["numbers"])]:
+                    continue
+            for index, numbers in enumerate(sequences):
+                if index >= len(original_sequences):
+                    row_mismatches.append({
+                        "identity": identity, "page": page,
+                        "kind": "row_extra_in_merged",
+                        "merged": numbers[:6],
+                    })
+                    continue
+                original_numbers = original_sequences[index]
+                if numbers != original_numbers:
+                    row_mismatches.append({
+                        "identity": identity, "page": page,
+                        "kind": ("numeric_row_sequence_mismatch" if identity == "#numeric"
+                                 else "row_number_sequence_mismatch"),
+                        "merged": numbers[:8], "original": original_numbers[:8],
+                    })
+            for extra in original_sequences[len(sequences):]:
                 row_mismatches.append({
                     "identity": identity, "page": page,
-                    "kind": "row_number_sequence_mismatch",
-                    "merged": entry["numbers"][:6], "original": original_seq[:6],
+                    "kind": "row_missing_in_merged",
+                    "original": extra[:8],
                 })
     return {
-        "merged_row_identities": sorted(merged_row_index),
+        "merged_row_identities": sorted({
+            identity for identities in merged_by_page.values() for identity in identities
+        }),
         "row_mismatches": row_mismatches,
     }
 
@@ -352,30 +531,22 @@ def reconcile(pdf: str, anchor: str, page_spec: str) -> Dict[str, Any]:
     # 行归属页过滤：只对账落在所查页范围内的合并行
     merged_rows = [row for row in merged_rows if row["page"] in set(pages)]
 
-    # 原件侧数字清单（去千分位归一），排除表头/页码等纯序号
+    # 原件侧数字清单：只取解析出的表格行（排除表头、页码、年份、编码）
     original_numbers: Dict[str, List[int]] = {}
     original_codes: Dict[str, List[int]] = {}
     for page in pages:
-        text = page_texts[page - 1]
-        for match in _NUM_RE.finditer(text):
-            canonical = _canonical_number(match.group())
-            if canonical is None:
-                continue
-            # 页码/序号过滤：纯整数且值等于页码本身或行序（<= 页行数经验阈值）
-            if re.fullmatch(r"-?\d+", canonical) and abs(int(canonical)) <= 60 and "." not in match.group():
-                continue
-            if re.fullmatch(r"(?:19|20)\d{2}", canonical):
-                continue  # 年份词（标题行）不是表格数据格
-            original_numbers.setdefault(canonical, []).append(page)
-        for match in _CODE_RE.finditer(text):
-            code = match.group(1)
-            original_codes.setdefault(code, []).append(page)
+        for record in _parse_original_page(page_texts[page - 1], page):
+            for number in record["numbers"]:
+                original_numbers.setdefault(number, []).append(page)
+            for code in _codes_in_identity(record["identity"]):
+                original_codes.setdefault(code, []).append(page)
 
     alignment = _reconcile_row_alignment(merged_rows, page_texts, pages)
     identities = set(alignment["merged_row_identities"])
-    missing_codes = {code: pages for code in original_codes if code not in identities}
+    merged_codes = {code for identity in identities for code in _codes_in_identity(identity)}
+    missing_codes = {code: pages for code in original_codes if code not in merged_codes}
     merged_pages_by_code = {
-        identity: sorted(pages) for identity in identities if identity.isdigit()}
+        code: sorted(pages) for code in merged_codes}
     return {
         "input": {"pdf": pdf, "anchor": anchor, "pages": pages},
         "merged_instances": len(instances),
@@ -556,30 +727,19 @@ def reconcile_auto(pdf: str) -> Dict[str, Any]:
         for page in sorted(pages_set):
             if not (1 <= page <= len(page_texts)):
                 continue
-            text = page_texts[page - 1]
-            for match in _NUM_RE.finditer(text):
-                canonical = _canonical_number(match.group())
-                if canonical is None:
-                    continue
-                if re.fullmatch(r"-?\d+", canonical) and abs(int(canonical)) <= 60 and "." not in match.group():
-                    continue
-                if re.fullmatch(r"(?:19|20)\d{2}", canonical):
-                    continue  # 年份词（标题行）不是表格数据格
-                original_numbers[canonical] = original_numbers.get(canonical, 0) + 1
-            for code_match in _CODE_RE.finditer(text):
-                code = code_match.group(1)
-                if len(code) >= 3:
-                    original_codes.add(code)
+            for record in _parse_original_page(page_texts[page - 1], page):
+                for number in record["numbers"]:
+                    original_numbers[number] = original_numbers.get(number, 0) + 1
+                original_codes.update(_codes_in_identity(record["identity"]))
         merged_numbers: Dict[str, int] = {}
         merged_codes: set = set()
         for row in merged_rows:
-            for cell_text in row["cells"]:
-                canonical = _canonical_number(str(cell_text))
-                if canonical is not None and re.search(r"\d", str(cell_text)):
-                    merged_numbers[canonical] = merged_numbers.get(canonical, 0) + 1
-                for code_match in _CODE_RE.finditer(_norm(cell_text)):
-                    if len(code_match.group(1)) >= 3:
-                        merged_codes.add(code_match.group(1))
+            identity, numbers = _row_identity_and_numbers(row["cells"])
+            if not identity or not numbers:
+                continue
+            for number in numbers:
+                merged_numbers[number] = merged_numbers.get(number, 0) + 1
+            merged_codes.update(_codes_in_identity(identity))
         missing = {
             value: pages_count
             for value, pages_count in original_numbers.items()

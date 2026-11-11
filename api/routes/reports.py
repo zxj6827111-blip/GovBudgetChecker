@@ -41,7 +41,7 @@ _SEVERITY_LABELS: Dict[str, str] = {
     "manual_review": "待人工复核",
 }
 _DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-_PDF_EXPORT_RENDERER_VERSION = "canonical-v3-manual-suggestions"
+_PDF_EXPORT_RENDERER_VERSION = "canonical-v4-member-evidence"
 _ERROR_SEVERITIES = {"critical", "high", "error"}
 _RISK_SEVERITIES = {"medium", "warn", "warning"}
 _CSV_FIELDNAMES: List[str] = [
@@ -94,6 +94,7 @@ _CSV_FIELDNAMES: List[str] = [
     "table_ref_count",
     "evidence_role_summary",
     "table_refs",
+    "evidence_quotes",
     "text_snippet",
     "suggestion",
     "message",
@@ -396,6 +397,41 @@ def _evidence_excerpt_label(issue: Dict[str, Any]) -> str:
     ):
         return "原文摘录"
     return "候选证据/计算说明（原文绑定未完成）"
+
+
+def _issue_evidence_excerpts(issue: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """逐条关系的每一侧证据（页码 + 原文），供导出与接收方逐成员核对。
+
+    R3-02：只导出第一条引文会让多侧关系（如跨表金额 81.11/19.56）的
+    另一侧在 CSV/DOCX/PDF 中失去原件依据；这里保留全部已交付证据，
+    短金额引文同样保留，不因长度过滤。
+    """
+    excerpts: List[Dict[str, Any]] = []
+    evidence = issue.get("evidence")
+    if isinstance(evidence, list):
+        for item in evidence:
+            if not isinstance(item, dict):
+                continue
+            quote = str(item.get("quote") or item.get("text")
+                        or item.get("text_snippet") or "").strip()
+            if not quote:
+                continue
+            page = item.get("page")
+            if page in (None, ""):
+                page = item.get("physical_page")
+            excerpts.append({"page": page if page not in (None, "") else "",
+                             "quote": quote})
+    if not excerpts:
+        snippet = str(issue.get("text_snippet") or "").strip()
+        if snippet:
+            page = issue.get("page_number")
+            if page in (None, ""):
+                location = issue.get("location")
+                if isinstance(location, dict):
+                    page = location.get("page")
+            excerpts.append({"page": page if page not in (None, "") else "",
+                             "quote": snippet})
+    return excerpts
 
 
 def _resolve_suggestion(issue: Dict[str, Any]) -> str:
@@ -885,6 +921,8 @@ def _build_csv_row(issue: Dict[str, Any], analysis_revision: str = "") -> Dict[s
         "table_ref_count": export_location.get("table_ref_count") or 0,
         "evidence_role_summary": role_summary,
         "table_refs": table_refs_text,
+        "evidence_quotes": json.dumps(
+            _issue_evidence_excerpts(enriched), ensure_ascii=False),
         "text_snippet": _resolve_text_snippet(enriched),
         "suggestion": suggestion,
         "message": enriched.get("message") or "",
@@ -1061,6 +1099,13 @@ def _build_docx_document_xml(
     from src.schemas.review_report import normalize_manual_review
 
     enriched_issues = [_enrich_issue(item) for item in issues]
+    review_report = status_payload.get("review_report")
+    tip_ids = {
+        str(item.get("id") or "")
+        for item in (review_report.get("tips") if isinstance(review_report, dict) else [])
+        or []
+        if isinstance(item, dict)
+    }
     error_count = sum(1 for item in enriched_issues if _issue_bucket(item) == "错误")
     risk_count = sum(1 for item in enriched_issues if _issue_bucket(item) == "风险提示")
     suggestion_count = sum(1 for item in enriched_issues if _issue_bucket(item) == "规范性建议")
@@ -1120,10 +1165,13 @@ def _build_docx_document_xml(
                 title = str(issue.get("title") or display.get("summary") or issue.get("message") or "").strip()
                 message = str(issue.get("message") or title).strip()
                 page = export_location.get("page") or ""
-                evidence = _resolve_text_snippet(issue) or str(display.get("evidence_text") or "").strip()
+                excerpts = _issue_evidence_excerpts(issue)
                 suggestion = _resolve_suggestion(issue) or "请结合原文和表格数据复核，并按公开口径修正。"
+                # R3-02：提示与正式问题使用不同成员标记，导出成员数可逐项核对。
+                issue_marker = ("TIP_ID" if str(issue.get("id") or "") in tip_ids
+                                else "ISSUE_ID")
                 rows = [
-                    ("问题编号", f"ISSUE_ID|{issue.get('id') or ''}|"),
+                    ("问题编号", f"{issue_marker}|{issue.get('id') or ''}|"),
                     ("序号", str(issue_index)),
                     ("问题等级", bucket),
                     ("规则编号", rule_id),
@@ -1141,9 +1189,21 @@ def _build_docx_document_xml(
                         f"{issue.get('check_relation_id') or ''} / facts={issue.get('fact_ids') or []} / "
                         f"evidence={issue.get('evidence_ids') or []}",
                     ),
-                    (_evidence_excerpt_label(issue), evidence),
-                    ("建议处理方式", suggestion),
                 ]
+                # R3-02：每一侧证据单独成行（含页码），短金额引文也不省略。
+                if excerpts:
+                    for excerpt in excerpts:
+                        page_label = (f"（第{excerpt['page']}页）"
+                                      if excerpt.get("page") not in (None, "") else "")
+                        rows.append((f"{_evidence_excerpt_label(issue)}{page_label}",
+                                     str(excerpt["quote"])))
+                else:
+                    rows.append((_evidence_excerpt_label(issue),
+                                 str(display.get("evidence_text") or "").strip()))
+                rows.extend([
+                    ("分析版本", str(status_payload.get("analysis_revision") or "旧版未记录")),
+                    ("建议处理方式", suggestion),
+                ])
                 decision = issue.get("human_decision")
                 if isinstance(decision, dict):
                     rows.extend([
@@ -1743,6 +1803,11 @@ def _append_report_appendix_pages(
     report = status_payload.get("review_report")
     report = report if isinstance(report, dict) else {}
     conclusion = _build_export_conclusion(status_payload, len(issues))
+    analysis_revision = str(
+        status_payload.get("analysis_revision")
+        or (report.get("analysis_revision") if isinstance(report, dict) else "")
+        or ""
+    )
     lines: List[str] = ["系统生成附录 · 审校清单", f"任务：{job_id}", ""]
     decisions = report.get("human_decisions")
     decisions_by_issue = {
@@ -1822,17 +1887,26 @@ def _append_report_appendix_pages(
             for value in (human_decision.get("status"), human_decision.get("note"))
             if str(value or "").strip()
         )
+        issue_marker = "TIP_ID" if issue_id in tip_ids else "ISSUE_ID"
         lines.extend(
             [
-                f"ISSUE_ID|{issue_id}|",
+                f"{issue_marker}|{issue_id}|",
                 f"{index}. [{category}] {issue.get('title') or issue.get('rule_id') or '未命名'}；严重度={issue.get('severity') or '未标级'}",
                 f"规则：{issue.get('rule_id') or '未识别到'}；页码：{page if page else '未定位'}；定位等级：{issue.get('location_level') or location.get('location_level') or 'unresolved'}；验证：{issue.get('verification_status') or location.get('verification_status') or ''}；坐标：{issue.get('bbox') or location.get('bbox') or '当前无法定位'}",
                 f"关系/事实/证据身份：{issue.get('check_relation_id') or ''}；{issue.get('fact_ids') or []}；{issue.get('evidence_ids') or []}",
                 f"说明：{issue.get('message') or '未识别到'}",
+                f"分析版本：{analysis_revision or '旧版未记录'}",
                 f"人工处理决定：{decision_summary or '未记录'}",
             ]
         )
-        if snippet:
+        # R3-02：每一侧证据单独成行（含页码），短金额引文同样保留。
+        excerpt_items = _issue_evidence_excerpts(issue)
+        if excerpt_items:
+            for excerpt in excerpt_items:
+                page_label = (f"（第{excerpt['page']}页）"
+                              if excerpt.get("page") not in (None, "") else "")
+                lines.append(f"{_evidence_excerpt_label(issue)}{page_label}：{excerpt['quote']}")
+        elif snippet:
             lines.append(f"{_evidence_excerpt_label(issue)}：{snippet}")
         if issue.get("suggestion"):
             lines.append(f"建议：{issue.get('suggestion')}")

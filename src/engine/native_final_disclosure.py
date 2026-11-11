@@ -1530,27 +1530,52 @@ def check_performance_counts(rule, doc):
             # 没有逐项出现（如"其余评级均为0"），也必须按加总等式核对：
             # "全部53个，优50个，其余评级均为0个"=50≠53 是确定矛盾，
             # 不得因缺四档标签而当作部分列举放行。
-            scope_compact = text.compact[total.end():stop]
-            # R2-04：先识别声明的**范围**，再决定用等式还是不等式。
-            # "其中部分项目评级结果如下"是明确的部分限定：即使出现
-            # "评级结果如下"也不能当成完整构成；"全部/所有…评级"才是
-            # 完整声明。两者同时出现时，部分限定优先（不能用完整提示
-            # 覆盖同一范围内明确的部分限定）。
+            # R2-04/R3-01：先识别声明的**范围**，再决定用等式还是不等式。
+            # 范围限定必须绑定到实际评级数字所在的局部声明，不能拿章节内
+            # 任意位置的"部分"（如"部分项目评级资料已归档"）覆盖本次完整
+            # 构成声明。定位方式：
+            #   1) 从第一个实际评级数字往前找最近的句末（。；），
+            #   2) 若同一句内有"全部/所有/部分…评级（结果）如下"声明短语，
+            #      以该短语起点为范围起点（归档句等前置句被排除）。
+            first_rating = ratings[0]
+            local_start = total.end()
+            for boundary in '。；;':
+                found = text.compact.rfind(boundary, total.end(), first_rating.start())
+                if found >= 0:
+                    local_start = max(local_start, found + 1)
+            declaration_matches = list(re.finditer(
+                r'(?:其中)?(?:全部|所有|整体|全量|部分)(?:项目|单位|自评项目)?'
+                r'[^。；;，,]{0,12}(?:评级|评价)',
+                text.compact[total.end():first_rating.start()]))
+            if declaration_matches:
+                # 取最靠近实际评级数字的范围声明：前面的归档/资料句
+                # （即使只用逗号分隔）不能覆盖本次评级声明。
+                declaration = declaration_matches[-1]
+                local_start = max(local_start, total.end() + declaration.start())
+            scope_compact = text.compact[local_start:ratings[-1].end()]
+            # 局部范围内同时出现完整构成与部分列举：范围不能唯一确定，
+            # 按明确歧义处理（不默认"部分优先"放行，也不默认完整而误报）。
             partial_declared = bool(re.search(
-                r'(?:其中)?部分(?:项目|单位|自评项目)?[^。；]{0,12}(?:评级|评价)'
+                r'(?:其中)?部分(?:项目|单位|自评项目)?[^。；;]{0,12}(?:评级|评价)'
                 r'|部分(?:项目)?评级(?:结果|情况)',
                 scope_compact))
             complete_declared = bool(re.search(
-                r'(?:全部|所有|整体|全量)(?:项目|自评项目|单位)?[^。；]{0,12}(?:评级|评价)'
+                r'(?:全部|所有|整体|全量)(?:项目|自评项目|单位)?[^。；;]{0,12}(?:评级|评价)'
                 r'|(?:全部|所有)项目评级',
                 scope_compact))
             declares_ratings = bool(re.search(
-                r'评级(?:结果|情况|等级)?[^。；]{0,6}(?:如下|见下)',
+                r'评级(?:结果|情况|等级)?[^。；;]{0,6}(?:如下|见下)',
                 scope_compact))
+            if partial_declared and complete_declared:
+                reason = reason or '同一评级声明范围内完整构成与部分列举冲突，范围不能唯一确定'
             complete_declaration = (not partial_declared
                                     and (complete_declared or declares_ratings))
+            comparison_basis = ('complete_sum' if complete else
+                                'declared_complete_sum' if complete_declaration else
+                                'disclosed_lower_bound')
             partial_enumeration = (
-                not complete and not complete_declaration and computed <= declared
+                not complete and comparison_basis == 'disclosed_lower_bound'
+                and computed <= declared
             )
             if reason:
                 _unresolved(rule, doc, key, reason, unresolved,
@@ -1560,9 +1585,11 @@ def check_performance_counts(rule, doc):
             if not local_years:
                 refs += year_refs
             file_hash = getattr(getattr(doc, 'fact_context', None), 'file_hash', None)
+            # 关系类型与比较公式必须一致：完整构成用等式；只有已明确为
+            # 子集披露的部分列举才用不等式。不能对 fail 仍回执 ">="。
             formula = ('self_evaluation_count = sum(disclosed distinct rating counts)'
-                       if complete or declared == computed else
-                       'self_evaluation_count >= sum(disclosed distinct rating counts)')
+                       if comparison_basis in ('complete_sum', 'declared_complete_sum')
+                       else 'self_evaluation_count >= sum(disclosed distinct rating counts)')
             if cancelled:
                 formula += ' + explicitly included cancelled projects'
             inconsistent = (declared != computed) and not partial_enumeration

@@ -420,6 +420,73 @@ def test_complete_four_ratings_below_total_remain_a_confirmed_error():
     assert issue.location['computed_count'] == 77
 
 
+# ---------------------------------------------------------------------------
+# R3-01：范围限定必须绑定实际评级数字；章节内无关“部分”句不得撤销完整构成
+# ---------------------------------------------------------------------------
+
+COMPLETE_BODY = ('绩效自评的{year}年度项目{total}个，全部项目评级结果如下：'
+                 '绩效评级为“优”的项目{count}个，其余评级均为0个。')
+
+
+@pytest.mark.parametrize('archive_position', ['after', 'before', 'comma_before'])
+def test_unrelated_partial_archive_sentence_does_not_cancel_complete_declaration(
+        archive_position):
+    archive = '部分项目评级资料已归档。'
+    body = COMPLETE_BODY.format(year=2025, total=53, count=50)
+    if archive_position == 'after':
+        body += archive
+    elif archive_position == 'before':
+        body = body.replace('全部项目评级结果如下', archive + '全部项目评级结果如下')
+    else:
+        body = body.replace(
+            '全部项目评级结果如下',
+            '部分项目评级资料已归档，全部项目评级结果如下')
+    issue, = check_performance_counts(DisclosureRule(), performance(body))
+    assert issue.location['comparison_basis'] == 'declared_complete_sum'
+    assert issue.location['declared_count'] == 53
+    assert issue.location['computed_count'] == 50
+
+
+def test_complete_declaration_fail_receipt_uses_equality_formula():
+    """R3-01：完整构成 53≠50 的 fail 回执不能仍写 53>=50。"""
+    doc = performance(COMPLETE_BODY.format(year=2025, total=53, count=50))
+    check_performance_counts(DisclosureRule(), doc)
+    receipt = doc.fact_receipts[-1]
+    assert receipt['status'] == 'fail'
+    assert '= sum' in receipt['formula']
+    assert '>= sum' not in receipt['formula']
+
+
+@pytest.mark.parametrize(('year', 'total', 'count'), [
+    (2024, 7, 6), (2025, 120, 118), (2026, 3, 2),
+])
+def test_complete_scope_binding_is_generic_across_year_total_and_count(year, total, count):
+    body = COMPLETE_BODY.format(year=year, total=total, count=count)
+    body = body.replace('全部项目评级结果如下', '部分资料已归档。全部项目评级结果如下')
+    pages = [f'甲局\n{year}年度部门决算\n十、预算绩效管理情况\n' + body]
+    doc = SimpleNamespace(page_texts=pages, report_kind='final',
+                          fiscal_year=year, organization_name='甲局')
+    issue, = check_performance_counts(DisclosureRule(), doc)
+    assert issue.location['declared_count'] == total
+    assert issue.location['computed_count'] == count
+
+
+def test_complete_scope_binding_survives_line_break_before_rating_counts():
+    body = ('绩效自评的2025年度项目53个，全部项目评级结果如下：\n'
+            '绩效评级为“优”的项目50个，其余评级均为0个。')
+    issue, = check_performance_counts(DisclosureRule(), performance(body))
+    assert issue.location['comparison_basis'] == 'declared_complete_sum'
+
+
+def test_conflicting_same_scope_declarations_are_explicit_ambiguity():
+    """同一范围同时写“全部”和“部分”时不默认部分优先放行。"""
+    body = ('绩效自评的2025年度项目53个，全部项目评级结果如下：'
+            '其中部分项目评级为“优”的项目50个。')
+    with pytest.raises(RuleDeferred) as signal:
+        check_performance_counts(DisclosureRule(), performance(body))
+    assert '冲突' in str(signal.value)
+
+
 @pytest.mark.parametrize('conflict', ['duplicate_zero', 'duplicate_positive', 'unknown_rating',
                                      'rating_year', 'rating_previous', 'rating_owner', 'rating_scope'])
 def test_equal_rating_sum_cannot_override_identity_or_scope_conflict(conflict):

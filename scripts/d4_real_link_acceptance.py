@@ -377,34 +377,193 @@ def _export_plain_text(suffix: str, content: bytes) -> str:
     return content.decode("utf-8-sig", errors="replace")
 
 
+_ISSUE_MARKER_RE = re.compile(r"ISSUE_ID\|([^|]*)\|")
+_EXPORT_BLOCK_BOUNDARY_RE = re.compile(
+    r"ISSUE_ID\|[^|]*\||TIP_ID\|[^|]*\||DECISION_ID\|[^|]*\||MANUAL_ID\|[^|]*\||CHECK_ID\|[^|]*\|"
+    r"|待人工复核（|检查回执（|检查覆盖台账|未完成检查事项")
+
+
+def _export_expected_members(issues: list[dict]) -> list[dict]:
+    """导出应出现的每个问题成员：身份、页码、逐侧证据（不按长度过滤）。"""
+    members: list[dict] = []
+    for issue in issues:
+        location = issue.get("location") if isinstance(issue.get("location"), dict) else {}
+        page = location.get("page")
+        if page in (None, ""):
+            page = issue.get("page_number")
+        excerpts: list[dict] = []
+        for item in issue.get("evidence") or []:
+            if not isinstance(item, dict):
+                continue
+            quote = str(item.get("quote") or item.get("text")
+                        or item.get("text_snippet") or "").strip()
+            if not quote:
+                continue
+            item_page = item.get("page")
+            if item_page in (None, ""):
+                item_page = item.get("physical_page")
+            excerpts.append({
+                "page": item_page if item_page not in (None, "") else "",
+                "quote": quote,
+            })
+        members.append({
+            "id": str(issue.get("id") or "").strip(),
+            "page": page if page not in (None, "") else "",
+            "evidence": excerpts,
+            "label": _export_evidence_label(issue),
+        })
+    return members
+
+
+def _export_evidence_label(issue: dict) -> str:
+    """与导出实现一致的证据标签（verified 才是“原文摘录”）。"""
+    verification = issue.get("evidence_verification")
+    if (
+        issue.get("evidence_status") in {"complete", "verified"}
+        and isinstance(verification, dict)
+        and verification.get("status") == "verified"
+        and verification.get("source_identity_complete") is True
+    ):
+        return "原文摘录"
+    return "候选证据/计算说明（原文绑定未完成）"
+
+
+def _export_text_blocks(text: str) -> list[tuple[str, str]]:
+    """按 ISSUE_ID 标记切出问题块，并在台账/决定/回执边界处截断。
+
+    附录或台账中对同一 ID 的引用没有 ISSUE_ID 块，不能补偿正文漏成员；
+    若出现重复块，按成员重复计数拒绝。
+    """
+    blocks: list[tuple[str, str]] = []
+    matches = list(_ISSUE_MARKER_RE.finditer(text))
+    for index, match in enumerate(matches):
+        start = match.start()
+        next_start = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        boundary = _EXPORT_BLOCK_BOUNDARY_RE.search(text, match.end(), next_start)
+        end = boundary.start() if boundary else next_start
+        blocks.append((match.group(1).strip(), text[start:end]))
+    return blocks
+
+
+def _export_norm(value: object) -> str:
+    return "".join(str(value or "").split())
+
+
+def _export_norm_loose(value: object) -> str:
+    """去空白与冒号：DOCX 表格单元格与 PDF 文本行的分隔差异不影响内容核对。"""
+    return _export_norm(value).replace("：", "").replace(":", "")
+
+
+def _verify_text_issue_block(
+    block: str,
+    member: dict,
+    revision: str,
+) -> dict:
+    loose = _export_norm_loose(block)
+    failures: list[str] = []
+    page = member.get("page")
+    if page not in (None, ""):
+        if f"证据页码{page}" not in loose and f"页码{page}" not in loose:
+            failures.append("page_not_bound")
+    if revision and _export_norm(revision) not in _export_norm(block):
+        failures.append("revision_not_bound")
+    missing_quotes: list[str] = []
+    for excerpt in member.get("evidence") or []:
+        quote = _export_norm_loose(excerpt.get("quote"))
+        if not quote:
+            continue
+        page_label = (f"（第{excerpt['page']}页）"
+                      if excerpt.get("page") not in (None, "") else "")
+        # 证据必须出现在本成员的证据行内，而不是只出现在问题说明/台账引用中。
+        bound = f"{_export_norm_loose(member.get('label'))}{page_label}{quote}"
+        if bound not in loose:
+            missing_quotes.append(str(excerpt.get("quote"))[:40])
+    if missing_quotes:
+        failures.append("evidence_not_bound")
+    return {
+        "ok": not failures,
+        "failures": failures,
+        "missing_evidence": missing_quotes[:10],
+    }
+
+
+def _verify_csv_members(content: bytes, members: list[dict], revision: str) -> dict:
+    import csv
+    import io
+    import json as _json
+
+    reader = csv.DictReader(io.StringIO(content.decode("utf-8-sig", errors="replace")))
+    rows = [row for row in reader if (row.get("record_type") or "") == "issue"]
+    by_id: dict[str, list[dict]] = {}
+    for row in rows:
+        by_id.setdefault(str(row.get("issue_id") or ""), []).append(row)
+    expected_ids = [member["id"] for member in members]
+    missing_members = [issue_id for issue_id in expected_ids
+                       if issue_id not in by_id]
+    duplicate_members = [issue_id for issue_id, items in by_id.items() if len(items) > 1]
+    extra_members = [issue_id for issue_id in by_id if issue_id not in set(expected_ids)]
+    failures: list[dict] = []
+    if len(rows) != len(members):
+        failures.append({"kind": "member_count_mismatch",
+                         "expected": len(members), "actual": len(rows)})
+    for member in members:
+        items = by_id.get(member["id"]) or []
+        if not items:
+            continue
+        row = items[0]
+        member_failures: list[str] = []
+        page = member.get("page")
+        if page not in (None, "") and str(row.get("页码") or "").strip() != str(page):
+            member_failures.append("page_not_bound")
+        if revision and str(row.get("analysis_revision") or "").strip() != str(revision):
+            member_failures.append("revision_not_bound")
+        try:
+            delivered = _json.loads(row.get("evidence_quotes") or "[]")
+        except Exception:  # noqa: BLE001
+            delivered = []
+        delivered_keys = {
+            (_export_norm(item.get("page")), _export_norm(item.get("quote")))
+            for item in delivered if isinstance(item, dict)
+        }
+        missing_quotes = [
+            excerpt["quote"] for excerpt in member.get("evidence") or []
+            if (_export_norm(excerpt.get("page")), _export_norm(excerpt.get("quote")))
+            not in delivered_keys
+        ]
+        if missing_quotes:
+            member_failures.append("evidence_not_bound")
+        if member_failures:
+            failures.append({"issue_id": member["id"], "failures": member_failures,
+                             "missing_evidence": [quote[:40] for quote in missing_quotes[:10]]})
+    return {
+        "ok": not (missing_members or duplicate_members or extra_members or failures),
+        "member_count": len(rows),
+        "missing_members": missing_members[:10],
+        "duplicate_members": duplicate_members[:10],
+        "extra_members": extra_members[:10],
+        "failed_members": failures[:20],
+        "revision_present": bool(revision) and all(
+            str(row.get("analysis_revision") or "").strip() == str(revision) for row in rows),
+    }
+
+
 def verify_export_formats(
     contents: dict,
     issues: list[dict],
     revision: str,
 ) -> dict:
-    """R2-07：CSV/DOCX/PDF 的问题成员、必要证据与当前版本逐项核对。
+    """R3-02：CSV/DOCX/PDF 逐成员、逐侧必要证据、逐成员版本核对。
 
-    只验非空/字节重复不足以证明内容正确：每个导出格式都必须包含
-    （1）导出 JSON 的每条问题身份（rule_id + 可定位页）；
-    （2）该问题第一条证据引文（去空白后至少 8 字符）；
-    （3）当前 analysis_revision。
+    与 R2-07 的差别：
+    1. 按问题成员身份（ISSUE_ID/CSV issue 行）计数并比对集合，不以
+       rule_id 在全篇出现替代；同一 rule_id 的多个关系不能互相顶替。
+    2. 每条证据（含 13.24/19.56 等短金额）都必须绑定到本成员的证据行，
+       不能用问题说明或附录/台账中的同值补偿。
+    3. 页码与 analysis_revision 绑定到成员本身（CSV 行字段、DOCX/PDF 块内）。
     """
-    def _norm(value) -> str:
-        return "".join(str(value or "").split())
-
-    expected = []
-    for issue in issues:
-        rule_id = str(issue.get("rule_id") or issue.get("rule") or "").strip()
-        page = ((issue.get("location") or {}).get("page") or issue.get("page"))
-        evidence = [item for item in issue.get("evidence") or [] if isinstance(item, dict)]
-        snippet = ""
-        for item in evidence:
-            text = _norm(item.get("quote") or item.get("text") or item.get("text_snippet"))
-            if len(text) >= 8:
-                snippet = text[:24]
-                break
-        expected.append({"rule_id": rule_id, "page": page, "snippet": snippet})
-    details = {}
+    members = _export_expected_members(issues)
+    expected_ids = [member["id"] for member in members]
+    details: dict = {}
     ok = True
     for suffix in ("csv", "docx", "pdf"):
         content = contents.get(suffix)
@@ -412,21 +571,45 @@ def verify_export_formats(
             details[suffix] = {"ok": False, "reason": "empty"}
             ok = False
             continue
-        text = _norm(_export_plain_text(suffix, content))
-        missing_members = [item["rule_id"] for item in expected
-                           if item["rule_id"] and item["rule_id"] not in text]
-        missing_evidence = [item["rule_id"] for item in expected
-                            if item["snippet"] and item["snippet"] not in text]
-        revision_ok = bool(revision) and _norm(revision) in text
-        format_ok = not missing_members and not missing_evidence and revision_ok
-        details[suffix] = {
-            "ok": format_ok,
-            "missing_members": missing_members[:10],
-            "missing_evidence": missing_evidence[:10],
-            "revision_present": revision_ok,
-        }
-        ok = ok and format_ok
-    return {"ok": ok, "issues": len(expected), "formats": details}
+        if suffix == "csv":
+            result = _verify_csv_members(content, members, revision)
+        else:
+            text = _export_plain_text(suffix, content)
+            blocks = _export_text_blocks(text)
+            block_ids = [issue_id for issue_id, _block in blocks]
+            missing_members = [issue_id for issue_id in expected_ids
+                               if issue_id not in block_ids]
+            duplicate_members = sorted({
+                issue_id for issue_id in block_ids if block_ids.count(issue_id) > 1})
+            extra_members = [issue_id for issue_id in block_ids
+                             if issue_id not in set(expected_ids)]
+            failed_members = []
+            for issue_id, block in blocks:
+                if issue_id not in set(expected_ids):
+                    continue
+                member = next(item for item in members if item["id"] == issue_id)
+                check = _verify_text_issue_block(block, member, revision)
+                if not check["ok"]:
+                    failed_members.append({
+                        "issue_id": issue_id,
+                        "failures": check["failures"],
+                        "missing_evidence": check["missing_evidence"],
+                    })
+            count_mismatch = len(blocks) != len(members)
+            result = {
+                "ok": not (count_mismatch or missing_members or duplicate_members
+                           or extra_members or failed_members),
+                "member_count": len(blocks),
+                "missing_members": missing_members[:10],
+                "duplicate_members": duplicate_members[:10],
+                "extra_members": extra_members[:10],
+                "failed_members": failed_members[:20],
+                "revision_present": bool(revision) and all(
+                    _export_norm(revision) in _export_norm(block) for _id, block in blocks),
+            }
+        details[suffix] = result
+        ok = ok and result["ok"]
+    return {"ok": ok, "issues": len(members), "formats": details}
 
 
 _SPAN_UNIT_AMOUNT_RE = re.compile(
