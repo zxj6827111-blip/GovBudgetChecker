@@ -1,0 +1,4984 @@
+{
+ "input": {
+  "pdf": "uploads/6000a11c0737d5149975516b44fd8682/上海市普陀区人民政府宜川路街道办事处2025年度部门决算.pdf",
+  "original_sha256": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+  "org": "上海市普陀区人民政府宜川路街道办事处",
+  "year": 2025,
+  "kind": "final"
+ },
+ "frozen_versions": {
+  "git_head": "cab6ea5627115078f6c233d8f3a2345038a47fe2",
+  "key_source_sha256": {
+   "src/engine/rules_v33.py": "d5161bfaa4ff24932693939892418c7ea9ff668e007eee7dcbe95a09939fa5f6",
+   "src/engine/pipeline.py": "f639093ffee1a8116b819f5bd035768c789aea59d95491b161f1b54622d6a3ba",
+   "src/engine/issue_evidence.py": "073c8f49b94246ba7728e1964e3cd1dfdd9f19ca4ff81ce0ca37c2dabc33fbb4",
+   "src/services/rule_source_binding.py": "296d299343ab2aa4db8a99b8c084a0be0c63cc1e5e60e9b1b7b200243e6ec462",
+   "src/services/evidence_guard.py": "4e6ff64ab85339d0cffab2dc8afd3d672fb7c30b77a22f2ccaf30f4bc3e6edb2",
+   "src/services/pdf_parser.py": "80d100fe7e6ec786178e9687b4a0ed5a5446c749289a48ddf9445238e8cc9a5d"
+  },
+  "parse_run_uid": "008c67e64b0d68e3caa69bb7e4474d4e",
+  "fact_count": 622,
+  "page_count": 41,
+  "config": {
+   "use_ai_assist": false,
+   "ocr": "disabled",
+   "empty_value_conventions": "builtin(U-5)"
+  }
+ },
+ "elapsed_seconds": 3.2,
+ "rule_execution_summary": {
+  "total_rules": 90,
+  "executed": 89,
+  "pass": 70,
+  "fail": 17,
+  "not_applicable": 2,
+  "insufficient_data": 1,
+  "parse_error": 0,
+  "execution_error": 0,
+  "unresolved_total": 1,
+  "failed_rules": [
+   "V33-005",
+   "V33-120",
+   "V33-243",
+   "V33-SG-COMPLETION",
+   "V33-240",
+   "V33-241",
+   "V33-222",
+   "V33-227",
+   "V33-CROSS-SAN-GONG-ECON",
+   "V33-TXT-FUND-DETAIL",
+   "V33-NARRATIVE-INDICATOR-REPEAT",
+   "V33-233",
+   "CMM-002",
+   "CMM-007",
+   "V33-DISCLOSURE-PERCENT-UNIT",
+   "CMM-010",
+   "CMM-011"
+  ],
+  "unresolved_rules": [
+   {
+    "rule_id": "CMM-019",
+    "status": "insufficient_data",
+    "detail": "封面文种缺少独立依据",
+    "unresolved_reasons": [
+     "封面文种缺少独立依据"
+    ],
+    "diagnostics": [
+     {
+      "reason_codes": [
+       "scope_unconfirmed"
+      ],
+      "blocked_by": [
+       {
+        "dimension": "org_scope",
+        "ref": "封面文种缺少独立依据",
+        "reason_code": "scope_unconfirmed"
+       }
+      ],
+      "missing_operands": [],
+      "candidates": [],
+      "next_action": "human_confirm",
+      "root_cause_key": "rc:2540ece44c0828dbcf48fa691820c958da41bff7348e47ea2f285f5204fb0b41"
+     }
+    ]
+   }
+  ],
+  "partial_findings_total": 0,
+  "rule_statuses": {
+   "V33-001": "pass",
+   "V33-002": "pass",
+   "V33-003": "pass",
+   "V33-004": "pass",
+   "V33-005": "fail",
+   "V33-101": "pass",
+   "V33-102": "pass",
+   "V33-103": "pass",
+   "V33-104": "pass",
+   "V33-105": "pass",
+   "V33-106": "pass",
+   "V33-107": "pass",
+   "V33-108": "pass",
+   "V33-109": "pass",
+   "V33-110": "pass",
+   "V33-111": "pass",
+   "V33-112": "pass",
+   "V33-113": "pass",
+   "V33-115": "pass",
+   "V33-119": "pass",
+   "V33-120": "fail",
+   "V33-117": "pass",
+   "V33-121": "pass",
+   "V33-122": "pass",
+   "V33-114": "pass",
+   "V33-200": "pass",
+   "V33-201": "pass",
+   "V33-202": "pass",
+   "V33-203": "pass",
+   "V33-243": "fail",
+   "V33-214": "pass",
+   "V33-244": "pass",
+   "V33-245": "pass",
+   "V33-246": "pass",
+   "V33-SG-COMPLETION": "fail",
+   "V33-242": "pass",
+   "V33-240": "fail",
+   "V33-241": "fail",
+   "V33-225": "pass",
+   "V33-226": "pass",
+   "V33-220": "pass",
+   "V33-221": "pass",
+   "V33-222": "fail",
+   "V33-227": "fail",
+   "V33-223": "pass",
+   "V33-224": "pass",
+   "V33-204": "pass",
+   "V33-CROSS-SAN-GONG-ECON": "fail",
+   "V33-TXT-FUND-DETAIL": "fail",
+   "V33-NARRATIVE-INDICATOR-REPEAT": "fail",
+   "V33-TREND-COMPLETION-RATE": "pass",
+   "V33-233": "fail",
+   "V33-234": "pass",
+   "V33-235": "pass",
+   "V33-236": "pass",
+   "V33-230": "not_applicable",
+   "V33-232": "pass",
+   "V33-248": "pass",
+   "V33-249": "pass",
+   "V33-250": "pass",
+   "V33-251": "pass",
+   "V33-252": "pass",
+   "CMM-001": "pass",
+   "CMM-002": "fail",
+   "CMM-003": "pass",
+   "CMM-004": "pass",
+   "CMM-005": "pass",
+   "CMM-006": "pass",
+   "CMM-007": "fail",
+   "V33-DISCLOSURE-PERCENT-UNIT": "fail",
+   "CMM-008": "pass",
+   "CMM-009": "pass",
+   "CMM-010": "fail",
+   "CMM-011": "fail",
+   "CMM-012": "pass",
+   "CMM-013": "pass",
+   "CMM-014": "pass",
+   "CMM-015": "pass",
+   "CMM-016": "pass",
+   "CMM-017": "pass",
+   "CMM-018": "pass",
+   "CMM-019": "insufficient_data",
+   "CMM-027": "not_applicable",
+   "CMM-020": "pass",
+   "CMM-021": "pass",
+   "CMM-022": "pass",
+   "CMM-023": "pass",
+   "CMM-024": "pass",
+   "CMM-025": "pass",
+   "CMM-026": "pass"
+  }
+ },
+ "binding": {
+  "rule_source_binding": {
+   "bound_rule_findings": 28,
+   "scope": "source identity only; evidence guard and human business adjudication remain required"
+  }
+ },
+ "locations": {
+  "rule_source_locations": {
+   "checked_rule_findings": 28
+  }
+ },
+ "evidence_completeness": {
+  "total": 28,
+  "complete": 28,
+  "incomplete": 0,
+  "completeness_rate": 1.0,
+  "locatable_total": 28,
+  "locatable_complete": 28,
+  "locatable_completeness_rate": 1.0,
+  "document_level_total": 0,
+  "verified_count": 28,
+  "unverified_count": 0,
+  "failed_count": 0,
+  "degraded_count": 0,
+  "rule_warning_count": 0,
+  "formal_issue_total": 14,
+  "degraded": [],
+  "rule_warnings": [],
+  "detail_truncated": false
+ },
+ "counts": {
+  "findings": 28,
+  "verified": 28,
+  "failed": 0,
+  "unverified": 0
+ },
+ "findings": [
+  {
+   "id": "V33-005-1",
+   "rule_id": "V33-005",
+   "severity": "info",
+   "page": 7,
+   "message": "一、收入决算表科目total/total_actual与其明细之和差额0.02万元，可能为取整误差。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     7,
+     8,
+     9,
+     10,
+     11
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "20323.21",
+     "quote": "20323.21",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7e93eba6220adf2c:r2c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "207.40",
+     "quote": "207.40",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7e93eba6220adf2c:r3c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "556.78",
+     "quote": "556.78",
+     "page": 8,
+     "physical_page": 8,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "99f9bbc110522cc5:r1c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "26.02",
+     "quote": "26.02",
+     "page": 8,
+     "physical_page": 8,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "99f9bbc110522cc5:r4c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "10.00",
+     "quote": "10.00",
+     "page": 8,
+     "physical_page": 8,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "99f9bbc110522cc5:r7c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "86.55",
+     "quote": "86.55",
+     "page": 8,
+     "physical_page": 8,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "99f9bbc110522cc5:r10c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "2,452.66",
+     "quote": "2,452.66",
+     "page": 8,
+     "physical_page": 8,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "99f9bbc110522cc5:r15c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "265.57",
+     "quote": "265.57",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r15c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "125.00",
+     "quote": "125.00",
+     "page": 10,
+     "physical_page": 10,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "68c391a4528739b4:r5c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "15,411.43",
+     "quote": "15,411.43",
+     "page": 10,
+     "physical_page": 10,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "68c391a4528739b4:r8c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,181.78",
+     "quote": "1,181.78",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "54f09a083335a580:r4c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-005-2",
+   "rule_id": "V33-005",
+   "severity": "info",
+   "page": 7,
+   "message": "二、收入决算表共5处合计相差0.01万元，可能为显示取整误差。差异位置：\n1. 收入决算表 · 第7页 · 201 一般公共服务支出合计207.40万元；明细统计信息事务=39.99万元、群众团体事务=37.51万元、组织事务=74.33万元、宣传事务=29.79万元、市场监督管理事务=25.79万元，明细合计207.",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     7,
+     8,
+     9,
+     10
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "207.40",
+     "quote": "207.40",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7e93eba6220adf2c:r3c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "39.99",
+     "quote": "39.99",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7e93eba6220adf2c:r4c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "37.51",
+     "quote": "37.51",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7e93eba6220adf2c:r6c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "74.33",
+     "quote": "74.33",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7e93eba6220adf2c:r8c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "29.79",
+     "quote": "29.79",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7e93eba6220adf2c:r10c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "25.79",
+     "quote": "25.79",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7e93eba6220adf2c:r12c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "2,452.66",
+     "quote": "2,452.66",
+     "page": 8,
+     "physical_page": 8,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "99f9bbc110522cc5:r15c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,205.67",
+     "quote": "1,205.67",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r0c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "76.08",
+     "quote": "76.08",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r6c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "196.51",
+     "quote": "196.51",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r9c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "8.43",
+     "quote": "8.43",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r11c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "965.98",
+     "quote": "965.98",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r13c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,205.67",
+     "quote": "1,205.67",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r0c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "201.59",
+     "quote": "201.59",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r1c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "210.68",
+     "quote": "210.68",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r2c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "518.69",
+     "quote": "518.69",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r3c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "269.86",
+     "quote": "269.86",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r4c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "4.84",
+     "quote": "4.84",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r5c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "76.08",
+     "quote": "76.08",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r6c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "50.11",
+     "quote": "50.11",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r7c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "25.96",
+     "quote": "25.96",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r8c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "265.57",
+     "quote": "265.57",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r15c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "19.90",
+     "quote": "19.90",
+     "page": 10,
+     "physical_page": 10,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "68c391a4528739b4:r0c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "245.68",
+     "quote": "245.68",
+     "page": 10,
+     "physical_page": 10,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "68c391a4528739b4:r2c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-240-15",
+   "rule_id": "V33-240",
+   "severity": "info",
+   "page": 7,
+   "message": "三、收入决算表共2处合计相差0.02万元，可能为显示取整误差。差异位置：\n1. 收入决算表 · 第7、8、9、10、11页 · 合计合计20323.21万元；明细一般公共服务支出=207.40万元、公共安全支出=556.78万元、教育支出=26.02万元、科学技术支出=10.00万元、文化旅游体育与传媒支出=86.55",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     7,
+     8,
+     9,
+     10,
+     11
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "20323.21",
+     "quote": "20323.21",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7e93eba6220adf2c:r2c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "207.40",
+     "quote": "207.40",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7e93eba6220adf2c:r3c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "556.78",
+     "quote": "556.78",
+     "page": 8,
+     "physical_page": 8,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "99f9bbc110522cc5:r1c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "26.02",
+     "quote": "26.02",
+     "page": 8,
+     "physical_page": 8,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "99f9bbc110522cc5:r4c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "10.00",
+     "quote": "10.00",
+     "page": 8,
+     "physical_page": 8,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "99f9bbc110522cc5:r7c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "86.55",
+     "quote": "86.55",
+     "page": 8,
+     "physical_page": 8,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "99f9bbc110522cc5:r10c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "2,452.66",
+     "quote": "2,452.66",
+     "page": 8,
+     "physical_page": 8,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "99f9bbc110522cc5:r15c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "265.57",
+     "quote": "265.57",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r15c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "125.00",
+     "quote": "125.00",
+     "page": 10,
+     "physical_page": 10,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "68c391a4528739b4:r5c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "15,411.43",
+     "quote": "15,411.43",
+     "page": 10,
+     "physical_page": 10,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "68c391a4528739b4:r8c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,181.78",
+     "quote": "1,181.78",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "54f09a083335a580:r4c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "20323.21",
+     "quote": "20323.21",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7e93eba6220adf2c:r2c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "207.40",
+     "quote": "207.40",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7e93eba6220adf2c:r3c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "556.78",
+     "quote": "556.78",
+     "page": 8,
+     "physical_page": 8,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "99f9bbc110522cc5:r1c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "26.02",
+     "quote": "26.02",
+     "page": 8,
+     "physical_page": 8,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "99f9bbc110522cc5:r4c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "10.00",
+     "quote": "10.00",
+     "page": 8,
+     "physical_page": 8,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "99f9bbc110522cc5:r7c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "86.55",
+     "quote": "86.55",
+     "page": 8,
+     "physical_page": 8,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "99f9bbc110522cc5:r10c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "2,452.66",
+     "quote": "2,452.66",
+     "page": 8,
+     "physical_page": 8,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "99f9bbc110522cc5:r15c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "265.57",
+     "quote": "265.57",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r15c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "125.00",
+     "quote": "125.00",
+     "page": 10,
+     "physical_page": 10,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "68c391a4528739b4:r5c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "15,411.43",
+     "quote": "15,411.43",
+     "page": 10,
+     "physical_page": 10,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "68c391a4528739b4:r8c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,181.78",
+     "quote": "1,181.78",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "54f09a083335a580:r4c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-240-16",
+   "rule_id": "V33-240",
+   "severity": "info",
+   "page": 7,
+   "message": "四、收入决算表共10处合计相差0.01万元，可能为显示取整误差。差异位置：\n1. 收入决算表 · 第7页 · 201 一般公共服务支出合计207.40万元；明细统计信息事务=39.99万元、群众团体事务=37.51万元、组织事务=74.33万元、宣传事务=29.79万元、市场监督管理事务=25.79万元，明细合计207",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     7,
+     8,
+     9,
+     10
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "207.40",
+     "quote": "207.40",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7e93eba6220adf2c:r3c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "39.99",
+     "quote": "39.99",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7e93eba6220adf2c:r4c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "37.51",
+     "quote": "37.51",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7e93eba6220adf2c:r6c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "74.33",
+     "quote": "74.33",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7e93eba6220adf2c:r8c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "29.79",
+     "quote": "29.79",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7e93eba6220adf2c:r10c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "25.79",
+     "quote": "25.79",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7e93eba6220adf2c:r12c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "207.40",
+     "quote": "207.40",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7e93eba6220adf2c:r3c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "39.99",
+     "quote": "39.99",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7e93eba6220adf2c:r4c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "37.51",
+     "quote": "37.51",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7e93eba6220adf2c:r6c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "74.33",
+     "quote": "74.33",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7e93eba6220adf2c:r8c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "29.79",
+     "quote": "29.79",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7e93eba6220adf2c:r10c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "25.79",
+     "quote": "25.79",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7e93eba6220adf2c:r12c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "2,452.66",
+     "quote": "2,452.66",
+     "page": 8,
+     "physical_page": 8,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "99f9bbc110522cc5:r15c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,205.67",
+     "quote": "1,205.67",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r0c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "76.08",
+     "quote": "76.08",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r6c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "196.51",
+     "quote": "196.51",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r9c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "8.43",
+     "quote": "8.43",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r11c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "965.98",
+     "quote": "965.98",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r13c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "2,452.66",
+     "quote": "2,452.66",
+     "page": 8,
+     "physical_page": 8,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "99f9bbc110522cc5:r15c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,205.67",
+     "quote": "1,205.67",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r0c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "76.08",
+     "quote": "76.08",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r6c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "196.51",
+     "quote": "196.51",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r9c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "8.43",
+     "quote": "8.43",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r11c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "965.98",
+     "quote": "965.98",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r13c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,205.67",
+     "quote": "1,205.67",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r0c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "201.59",
+     "quote": "201.59",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r1c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "210.68",
+     "quote": "210.68",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r2c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "518.69",
+     "quote": "518.69",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r3c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "269.86",
+     "quote": "269.86",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r4c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "4.84",
+     "quote": "4.84",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r5c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,205.67",
+     "quote": "1,205.67",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r0c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "201.59",
+     "quote": "201.59",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r1c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "210.68",
+     "quote": "210.68",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r2c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "518.69",
+     "quote": "518.69",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r3c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "269.86",
+     "quote": "269.86",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r4c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "4.84",
+     "quote": "4.84",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r5c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "76.08",
+     "quote": "76.08",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r6c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "50.11",
+     "quote": "50.11",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r7c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "25.96",
+     "quote": "25.96",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r8c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "76.08",
+     "quote": "76.08",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r6c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "50.11",
+     "quote": "50.11",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r7c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "25.96",
+     "quote": "25.96",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r8c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "265.57",
+     "quote": "265.57",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r15c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "19.90",
+     "quote": "19.90",
+     "page": 10,
+     "physical_page": 10,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "68c391a4528739b4:r0c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "245.68",
+     "quote": "245.68",
+     "page": 10,
+     "physical_page": 10,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "68c391a4528739b4:r2c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "265.57",
+     "quote": "265.57",
+     "page": 9,
+     "physical_page": 9,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "f9161632450f19d2:r15c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "19.90",
+     "quote": "19.90",
+     "page": 10,
+     "physical_page": 10,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "68c391a4528739b4:r0c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "245.68",
+     "quote": "245.68",
+     "page": 10,
+     "physical_page": 10,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "68c391a4528739b4:r2c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-005-3",
+   "rule_id": "V33-005",
+   "severity": "info",
+   "page": 12,
+   "message": "五、支出决算表科目total/total_actual与其明细之和差额0.02万元，可能为取整误差。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     12,
+     13,
+     14,
+     15,
+     16
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "20,323.21",
+     "quote": "20,323.21",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r2c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "207.40",
+     "quote": "207.40",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r3c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "556.78",
+     "quote": "556.78",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r0c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "26.02",
+     "quote": "26.02",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r3c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "10.00",
+     "quote": "10.00",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r6c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "86.55",
+     "quote": "86.55",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r9c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "2,452.66",
+     "quote": "2,452.66",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r14c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "265.57",
+     "quote": "265.57",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r14c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "125.00",
+     "quote": "125.00",
+     "page": 15,
+     "physical_page": 15,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "96b72c15ca5f749a:r5c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "15,411.43",
+     "quote": "15,411.43",
+     "page": 15,
+     "physical_page": 15,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "96b72c15ca5f749a:r8c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,181.78",
+     "quote": "1,181.78",
+     "page": 16,
+     "physical_page": 16,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "aacb4b999522a199:r4c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "20,323.21",
+     "quote": "20,323.21",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r2c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "207.40",
+     "quote": "207.40",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r3c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "556.78",
+     "quote": "556.78",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r0c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "26.02",
+     "quote": "26.02",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r3c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "10.00",
+     "quote": "10.00",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r6c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "86.55",
+     "quote": "86.55",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r9c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "2,452.66",
+     "quote": "2,452.66",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r14c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "265.57",
+     "quote": "265.57",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r14c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "125.00",
+     "quote": "125.00",
+     "page": 15,
+     "physical_page": 15,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "96b72c15ca5f749a:r5c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "15,411.43",
+     "quote": "15,411.43",
+     "page": 15,
+     "physical_page": 15,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "96b72c15ca5f749a:r8c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,181.78",
+     "quote": "1,181.78",
+     "page": 16,
+     "physical_page": 16,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "aacb4b999522a199:r4c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-005-4",
+   "rule_id": "V33-005",
+   "severity": "info",
+   "page": 12,
+   "message": "六、支出决算表共9处合计相差0.01万元，可能为显示取整误差。差异位置：\n1. 支出决算表 · 第12、13、14、15、16页 · 合计合计6215.76万元；明细一般公共服务支出=207.40万元、公共安全支出=556.78万元、教育支出=26.02万元、科学技术支出=10.00万元、文化旅游体育与传媒支\n出=86",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     12,
+     13,
+     14,
+     15,
+     16
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "6,215.76",
+     "quote": "6,215.76",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r2c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "207.40",
+     "quote": "207.40",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r3c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "556.78",
+     "quote": "556.78",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r0c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "26.02",
+     "quote": "26.02",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r3c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "10.00",
+     "quote": "10.00",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r6c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "86.55",
+     "quote": "86.55",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r9c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "480.47",
+     "quote": "480.47",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r14c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "19.90",
+     "quote": "19.90",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r14c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "125.00",
+     "quote": "125.00",
+     "page": 15,
+     "physical_page": 15,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "96b72c15ca5f749a:r5c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "4,357.61",
+     "quote": "4,357.61",
+     "page": 15,
+     "physical_page": 15,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "96b72c15ca5f749a:r8c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "346.02",
+     "quote": "346.02",
+     "page": 16,
+     "physical_page": 16,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "aacb4b999522a199:r4c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "207.40",
+     "quote": "207.40",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r3c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "39.99",
+     "quote": "39.99",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r4c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "37.51",
+     "quote": "37.51",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r6c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "74.33",
+     "quote": "74.33",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r8c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "29.79",
+     "quote": "29.79",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r10c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "25.79",
+     "quote": "25.79",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r12c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "207.40",
+     "quote": "207.40",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r3c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "39.99",
+     "quote": "39.99",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r4c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "37.51",
+     "quote": "37.51",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r6c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "74.33",
+     "quote": "74.33",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r8c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "29.79",
+     "quote": "29.79",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r10c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "25.79",
+     "quote": "25.79",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r12c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "2,452.66",
+     "quote": "2,452.66",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r14c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,205.67",
+     "quote": "1,205.67",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r15c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "76.08",
+     "quote": "76.08",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r5c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "196.51",
+     "quote": "196.51",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r8c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "8.43",
+     "quote": "8.43",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r10c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "965.98",
+     "quote": "965.98",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r12c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,205.67",
+     "quote": "1,205.67",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r15c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "201.59",
+     "quote": "201.59",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r0c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "210.68",
+     "quote": "210.68",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r1c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "518.69",
+     "quote": "518.69",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r2c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "269.86",
+     "quote": "269.86",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r3c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "4.84",
+     "quote": "4.84",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r4c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,205.67",
+     "quote": "1,205.67",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r15c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "201.59",
+     "quote": "201.59",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r0c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "210.68",
+     "quote": "210.68",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r1c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "518.69",
+     "quote": "518.69",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r2c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "269.86",
+     "quote": "269.86",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r3c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "4.84",
+     "quote": "4.84",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r4c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "76.08",
+     "quote": "76.08",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r5c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "50.11",
+     "quote": "50.11",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r6c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "25.96",
+     "quote": "25.96",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r7c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "76.08",
+     "quote": "76.08",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r5c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "50.11",
+     "quote": "50.11",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r6c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "25.96",
+     "quote": "25.96",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r7c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "265.57",
+     "quote": "265.57",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r14c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "19.90",
+     "quote": "19.90",
+     "page": 15,
+     "physical_page": 15,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "96b72c15ca5f749a:r0c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "245.68",
+     "quote": "245.68",
+     "page": 15,
+     "physical_page": 15,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "96b72c15ca5f749a:r2c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-241-17",
+   "rule_id": "V33-241",
+   "severity": "info",
+   "page": 13,
+   "message": "七、支出决算表共12处合计相差0.01万元，可能为显示取整误差。差异位置：\n1. FIN_03_expenditure · 第13页 · 208 社会保障和就业支出合计2452.66万元；明细社会保障和就业支出=1972.20万元、社会保障和就业支出=480.47万元，明细合计2452.67万元，字段决算金额，差额0.",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     12,
+     13,
+     14,
+     15,
+     16
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "2,452.66",
+     "quote": "2,452.66",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r14c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,972.20",
+     "quote": "1,972.20",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r14c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "480.47",
+     "quote": "480.47",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r14c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "265.57",
+     "quote": "265.57",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r14c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "245.68",
+     "quote": "245.68",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r14c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "19.90",
+     "quote": "19.90",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r14c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "20,323.21",
+     "quote": "20,323.21",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r2c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "14,107.46",
+     "quote": "14,107.46",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r2c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "6,215.76",
+     "quote": "6,215.76",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r2c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "207.40",
+     "quote": "207.40",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r3c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "39.99",
+     "quote": "39.99",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r4c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "37.51",
+     "quote": "37.51",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r6c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "74.33",
+     "quote": "74.33",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r8c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "29.79",
+     "quote": "29.79",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r10c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "25.79",
+     "quote": "25.79",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r12c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "207.40",
+     "quote": "207.40",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r3c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "39.99",
+     "quote": "39.99",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r4c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "37.51",
+     "quote": "37.51",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r6c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "74.33",
+     "quote": "74.33",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r8c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "29.79",
+     "quote": "29.79",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r10c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "25.79",
+     "quote": "25.79",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r12c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "2,452.66",
+     "quote": "2,452.66",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r14c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,205.67",
+     "quote": "1,205.67",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r15c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "76.08",
+     "quote": "76.08",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r5c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "196.51",
+     "quote": "196.51",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r8c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "8.43",
+     "quote": "8.43",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r10c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "965.98",
+     "quote": "965.98",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r12c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,205.67",
+     "quote": "1,205.67",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r15c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "201.59",
+     "quote": "201.59",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r0c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "210.68",
+     "quote": "210.68",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r1c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "518.69",
+     "quote": "518.69",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r2c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "269.86",
+     "quote": "269.86",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r3c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "4.84",
+     "quote": "4.84",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r4c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,205.67",
+     "quote": "1,205.67",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r15c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "201.59",
+     "quote": "201.59",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r0c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "210.68",
+     "quote": "210.68",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r1c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "518.69",
+     "quote": "518.69",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r2c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "269.86",
+     "quote": "269.86",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r3c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "4.84",
+     "quote": "4.84",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r4c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "76.08",
+     "quote": "76.08",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r5c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "50.11",
+     "quote": "50.11",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r6c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "25.96",
+     "quote": "25.96",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r7c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "76.08",
+     "quote": "76.08",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r5c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "50.11",
+     "quote": "50.11",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r6c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "25.96",
+     "quote": "25.96",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r7c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "265.57",
+     "quote": "265.57",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r14c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "19.90",
+     "quote": "19.90",
+     "page": 15,
+     "physical_page": 15,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "96b72c15ca5f749a:r0c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "245.68",
+     "quote": "245.68",
+     "page": 15,
+     "physical_page": 15,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "96b72c15ca5f749a:r2c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "6,215.76",
+     "quote": "6,215.76",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r2c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "207.40",
+     "quote": "207.40",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r3c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "556.78",
+     "quote": "556.78",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r0c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "26.02",
+     "quote": "26.02",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r3c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "10.00",
+     "quote": "10.00",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r6c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "86.55",
+     "quote": "86.55",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r9c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "480.47",
+     "quote": "480.47",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r14c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "19.90",
+     "quote": "19.90",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r14c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "125.00",
+     "quote": "125.00",
+     "page": 15,
+     "physical_page": 15,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "96b72c15ca5f749a:r5c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "4,357.61",
+     "quote": "4,357.61",
+     "page": 15,
+     "physical_page": 15,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "96b72c15ca5f749a:r8c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "346.02",
+     "quote": "346.02",
+     "page": 16,
+     "physical_page": 16,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "aacb4b999522a199:r4c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-233-26",
+   "rule_id": "V33-233",
+   "severity": "info",
+   "page": 12,
+   "message": "八、支出决算表共3处合计相差0.01万元，可能为显示取整误差。差异位置：\n1. 支出决算表 · 第12页 · 合计合计20323.21万元；明细合计=14107.46万元、合计=6215.76万元，明细合计20323.22万元，字段决算金额，差额0.01万元（可能为显示取整误差）\n2. 支出决算表 · 第13页 · 2",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     12,
+     13,
+     14
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "20,323.21",
+     "quote": "20,323.21",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r2c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "14,107.46",
+     "quote": "14,107.46",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r2c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "6,215.76",
+     "quote": "6,215.76",
+     "page": 12,
+     "physical_page": 12,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "6048c1ea2b3883b5:r2c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "2,452.66",
+     "quote": "2,452.66",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r14c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,972.20",
+     "quote": "1,972.20",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r14c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "480.47",
+     "quote": "480.47",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "7a13001e25984482:r14c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "265.57",
+     "quote": "265.57",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r14c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "245.68",
+     "quote": "245.68",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r14c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "19.90",
+     "quote": "19.90",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "1ec4cd3fe4518ea1:r14c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-005-5",
+   "rule_id": "V33-005",
+   "severity": "info",
+   "page": 21,
+   "message": "九、一般公共预算财政拨款支出决算表科目total/total_actual与其明细之和差额0.02万元，可能为取整误差。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     19,
+     20,
+     21
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "20,218.21",
+     "quote": "20,218.21",
+     "page": 21,
+     "physical_page": 21,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "aafa7beb4ab65f33:r24c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "207.40",
+     "quote": "207.40",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "5ba549451f148efd:r2c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "556.78",
+     "quote": "556.78",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "5ba549451f148efd:r14c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "26.02",
+     "quote": "26.02",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "5ba549451f148efd:r17c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "10.00",
+     "quote": "10.00",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "5ba549451f148efd:r20c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "86.55",
+     "quote": "86.55",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "5ba549451f148efd:r23c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "2,452.66",
+     "quote": "2,452.66",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r4c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "265.57",
+     "quote": "265.57",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r20c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "125.00",
+     "quote": "125.00",
+     "page": 21,
+     "physical_page": 21,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "aafa7beb4ab65f33:r3c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "15,411.43",
+     "quote": "15,411.43",
+     "page": 21,
+     "physical_page": 21,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "aafa7beb4ab65f33:r6c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,076.78",
+     "quote": "1,076.78",
+     "page": 21,
+     "physical_page": 21,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "aafa7beb4ab65f33:r18c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-005-6",
+   "rule_id": "V33-005",
+   "severity": "info",
+   "page": 21,
+   "message": "十、一般公共预算财政拨款支出决算表共9处合计相差0.01万元，可能为显示取整误差。差异位置：\n1. 一般公共预算财政拨款支出决算表 · 第19、20、21页 · 合计合计6110.76万元；明细一般公共服务\n支出=207.40万元、公共安全支出=556.78万元、教育支出=26.02万元、科学技术支出=10.00万元、",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     19,
+     20,
+     21
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "6,110.76",
+     "quote": "6,110.76",
+     "page": 21,
+     "physical_page": 21,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "aafa7beb4ab65f33:r24c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "207.40",
+     "quote": "207.40",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "5ba549451f148efd:r2c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "556.78",
+     "quote": "556.78",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "5ba549451f148efd:r14c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "26.02",
+     "quote": "26.02",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "5ba549451f148efd:r17c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "10.00",
+     "quote": "10.00",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "5ba549451f148efd:r20c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "86.55",
+     "quote": "86.55",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "5ba549451f148efd:r23c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "480.47",
+     "quote": "480.47",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r4c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "19.90",
+     "quote": "19.90",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r20c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "125.00",
+     "quote": "125.00",
+     "page": 21,
+     "physical_page": 21,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "aafa7beb4ab65f33:r3c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "4,357.61",
+     "quote": "4,357.61",
+     "page": 21,
+     "physical_page": 21,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "aafa7beb4ab65f33:r6c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "241.02",
+     "quote": "241.02",
+     "page": 21,
+     "physical_page": 21,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "aafa7beb4ab65f33:r18c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "207.40",
+     "quote": "207.40",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "5ba549451f148efd:r2c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "39.99",
+     "quote": "39.99",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "5ba549451f148efd:r3c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "37.51",
+     "quote": "37.51",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "5ba549451f148efd:r5c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "74.33",
+     "quote": "74.33",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "5ba549451f148efd:r7c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "29.79",
+     "quote": "29.79",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "5ba549451f148efd:r9c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "25.79",
+     "quote": "25.79",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "5ba549451f148efd:r11c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "207.40",
+     "quote": "207.40",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "5ba549451f148efd:r2c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "39.99",
+     "quote": "39.99",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "5ba549451f148efd:r3c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "37.51",
+     "quote": "37.51",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "5ba549451f148efd:r5c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "74.33",
+     "quote": "74.33",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "5ba549451f148efd:r7c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "29.79",
+     "quote": "29.79",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "5ba549451f148efd:r9c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "25.79",
+     "quote": "25.79",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "5ba549451f148efd:r11c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "2,452.66",
+     "quote": "2,452.66",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r4c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,205.67",
+     "quote": "1,205.67",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r5c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "76.08",
+     "quote": "76.08",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r11c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "196.51",
+     "quote": "196.51",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r14c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "8.43",
+     "quote": "8.43",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r16c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "965.98",
+     "quote": "965.98",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r18c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,205.67",
+     "quote": "1,205.67",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r5c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "201.59",
+     "quote": "201.59",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r6c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "210.68",
+     "quote": "210.68",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r7c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "518.69",
+     "quote": "518.69",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r8c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "269.86",
+     "quote": "269.86",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r9c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "4.84",
+     "quote": "4.84",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r10c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,205.67",
+     "quote": "1,205.67",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r5c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "201.59",
+     "quote": "201.59",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r6c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "210.68",
+     "quote": "210.68",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r7c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "518.69",
+     "quote": "518.69",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r8c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "269.86",
+     "quote": "269.86",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r9c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "4.84",
+     "quote": "4.84",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r10c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "76.08",
+     "quote": "76.08",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r11c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "50.11",
+     "quote": "50.11",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r12c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "25.96",
+     "quote": "25.96",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r13c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "76.08",
+     "quote": "76.08",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r11c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "50.11",
+     "quote": "50.11",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r12c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "25.96",
+     "quote": "25.96",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r13c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "265.57",
+     "quote": "265.57",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r20c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "19.90",
+     "quote": "19.90",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r21c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "245.68",
+     "quote": "245.68",
+     "page": 21,
+     "physical_page": 21,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "aafa7beb4ab65f33:r0c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-233-27",
+   "rule_id": "V33-233",
+   "severity": "info",
+   "page": 20,
+   "message": "十一、一般公共预算财政拨款支出决算表共3处合计相差0.01万元，可能为显示取整误差。差异位置：\n1. 一般公共预算财政拨款支出决算表 · 第20页 · 208 社会保障和就\n业支出合计2452.66万元；明细社会保障和就\n业支出=1972.20万元、社会保障和就\n业支出=480.47万元，明细合计2452.67万元，字",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     20,
+     21
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "2,452.66",
+     "quote": "2,452.66",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r4c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,972.20",
+     "quote": "1,972.20",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r4c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "480.47",
+     "quote": "480.47",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r4c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "265.57",
+     "quote": "265.57",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r20c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "245.68",
+     "quote": "245.68",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r20c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "19.90",
+     "quote": "19.90",
+     "page": 20,
+     "physical_page": 20,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "44d0b09b9e3f3e97:r20c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "20,218.21",
+     "quote": "20,218.21",
+     "page": 21,
+     "physical_page": 21,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "aafa7beb4ab65f33:r24c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "14,107.46",
+     "quote": "14,107.46",
+     "page": 21,
+     "physical_page": 21,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "aafa7beb4ab65f33:r24c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "6,110.76",
+     "quote": "6,110.76",
+     "page": 21,
+     "physical_page": 21,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "aafa7beb4ab65f33:r24c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-243-13",
+   "rule_id": "V33-243",
+   "severity": "error",
+   "page": 22,
+   "message": "十二、经济分类302明细归集：表内合计1844.57万元，分项之和3689.14万元，差额1844.57万元。超过金额容差。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     22
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "1,844.57",
+     "quote": "1,844.57",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "2f4b32f04573504e:r1c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "534.52",
+     "quote": "534.52",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "2f4b32f04573504e:r2c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "2f4b32f04573504e:r3c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.67",
+     "quote": "0.67",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "2f4b32f04573504e:r4c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "10.16",
+     "quote": "10.16",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "2f4b32f04573504e:r5c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "99.20",
+     "quote": "99.20",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "2f4b32f04573504e:r6c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "26.23",
+     "quote": "26.23",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "2f4b32f04573504e:r7c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "2f4b32f04573504e:r8c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "419.21",
+     "quote": "419.21",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "2f4b32f04573504e:r9c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "7.60",
+     "quote": "7.60",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "2f4b32f04573504e:r10c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "2f4b32f04573504e:r11c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "13.24",
+     "quote": "13.24",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "2f4b32f04573504e:r12c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "226.51",
+     "quote": "226.51",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "2f4b32f04573504e:r13c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1.84",
+     "quote": "1.84",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "2f4b32f04573504e:r14c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.33",
+     "quote": "0.33",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "2f4b32f04573504e:r15c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.30",
+     "quote": "0.30",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "2f4b32f04573504e:r16c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "8.31",
+     "quote": "8.31",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "2f4b32f04573504e:r17c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "2f4b32f04573504e:r18c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "2f4b32f04573504e:r19c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "2.99",
+     "quote": "2.99",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "2f4b32f04573504e:r20c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "138.97",
+     "quote": "138.97",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "2f4b32f04573504e:r21c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "75.37",
+     "quote": "75.37",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "2f4b32f04573504e:r22c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "157.64",
+     "quote": "157.64",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "2f4b32f04573504e:r23c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "19.56",
+     "quote": "19.56",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "2f4b32f04573504e:r24c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "81.11",
+     "quote": "81.11",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "2f4b32f04573504e:r25c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "2f4b32f04573504e:r26c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "20.81",
+     "quote": "20.81",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "2f4b32f04573504e:r27c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,844.57",
+     "quote": "1,844.57",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": "2f4b32f04573504e:r28c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-CROSS-SAN-GONG-ECON-21",
+   "rule_id": "V33-CROSS-SAN-GONG-ECON",
+   "severity": "error",
+   "page": 22,
+   "message": "十三、跨表资金来源冲突：「因公出国（境）费」在基本支出经济分类表列示 13.24 万元（30212，第22页决算数），大于三公经费支出决算表第24页同一业务项的决算数 0.00 万元，差额 13.24 万元（2025 年度）。基本支出是三公经费的组成部分，部分大于整体时两表不能同时成立；现有材料无法判定哪一侧有误，需人",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     22,
+     24
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "13.24",
+     "quote": "13.24",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "财政拨款“三公”经费支出决算表",
+     "quote": "财政拨款“三公”经费支出决算表",
+     "page": 24,
+     "physical_page": 24,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-CROSS-SAN-GONG-ECON-22",
+   "rule_id": "V33-CROSS-SAN-GONG-ECON",
+   "severity": "error",
+   "page": 22,
+   "message": "十四、跨表资金来源冲突：「公务用车运行维护费」在基本支出经济分类表列示 81.11 万元（30231，第22页决算数），大于三公经费支出决算表第24页同一业务项的决算数 19.56 万元，差额 61.55 万元（2025 年度）。基本支出是三公经费的组成部分，部分大于整体时两表不能同时成立；现有材料无法判定哪一侧有误，",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     22,
+     24
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "81.11",
+     "quote": "81.11",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "财政拨款“三公”经费支出决算表",
+     "quote": "财政拨款“三公”经费支出决算表",
+     "page": 24,
+     "physical_page": 24,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-CROSS-SAN-GONG-ECON-23",
+   "rule_id": "V33-CROSS-SAN-GONG-ECON",
+   "severity": "error",
+   "page": 22,
+   "message": "十五、跨表资金来源冲突：「公务接待费」在基本支出经济分类表列示 8.31 万元（30217，第22页决算数），大于三公经费支出决算表第24页同一业务项的决算数 0.30 万元，差额 8.01 万元（2025 年度）。基本支出是三公经费的组成部分，部分大于整体时两表不能同时成立；现有材料无法判定哪一侧有误，需人工复核两表",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     22,
+     24
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "8.31",
+     "quote": "8.31",
+     "page": 22,
+     "physical_page": 22,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "财政拨款“三公”经费支出决算表",
+     "quote": "财政拨款“三公”经费支出决算表",
+     "page": 24,
+     "physical_page": 24,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-TXT-FUND-DETAIL-24",
+   "rule_id": "V33-TXT-FUND-DETAIL",
+   "severity": "error",
+   "page": 25,
+   "message": "十六、政府性基金支出说明不一致：功能分类项「住房保障支出（类）超长期特别国债安排的支出（款）其他住房保障支出（项）」在《政府性基金预算财政拨款收入支出决算表》（第25页，本年支出·功能分类合计）列示 105.00 万元，但「八、政府性基金预算财政拨款收入支出决算情况说明」（第37页）写 135.00 万元，相差 30.",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     25,
+     37
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "其他住房保障支出 105.00",
+     "quote": "其他住房保障支出 105.00",
+     "page": 25,
+     "physical_page": 25,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "住房保障支出（类）超长期特别国债安排的支出（款）其他\n住房保障支出（项）135.00 万元",
+     "quote": "住房保障支出（类）超长期特别国债安排的支出（款）其他\n住房保障支出（项）135.00 万元",
+     "page": 37,
+     "physical_page": 37,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "CMM-010-34",
+   "rule_id": "CMM-010",
+   "severity": "warn",
+   "page": 27,
+   "message": "十七、金额未按半角逗号分千分位：全文共 39 处（如“宜川路街道办事处 2025 年度收入支\n出总计 20323.21 万元。与 2024 年度相比，收入支出总计减少\n95”），应写作 1,234.56 万元。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     27,
+     28,
+     33,
+     35,
+     37,
+     38
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "出总计 20323.21 万元。与 2024 年度相比，收入支",
+     "quote": "出总计 20323.21 万元。与 2024 年度相比，收入支",
+     "page": 27,
+     "physical_page": 27,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "入合计 20323.21 万元，其中：",
+     "quote": "入合计 20323.21 万元，其中：",
+     "page": 27,
+     "physical_page": 27,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "款收入 20323.21\n万元，占 1",
+     "quote": "款收入 20323.21\n万元，占 1",
+     "page": 27,
+     "physical_page": 27,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "出合计 20323.21 万元，其中：",
+     "quote": "出合计 20323.21 万元，其中：",
+     "page": 27,
+     "physical_page": 27,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "14107.46 万\n元",
+     "quote": "14107.46 万\n元",
+     "page": 27,
+     "physical_page": 27,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "目支出 6215.76 万元，占 3",
+     "quote": "目支出 6215.76 万元，占 3",
+     "page": 27,
+     "physical_page": 27,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "款收入支出总计 20323.21 万元。与 2024",
+     "quote": "款收入支出总计 20323.21 万元。与 2024",
+     "page": 27,
+     "physical_page": 27,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "20218.21 万元",
+     "quote": "20218.21 万元",
+     "page": 27,
+     "physical_page": 27,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "款支出 20218.21 万元，主要用",
+     "quote": "款支出 20218.21 万元，主要用",
+     "page": 28,
+     "physical_page": 28,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "出(类)2452.66 万元，占 1",
+     "quote": "出(类)2452.66 万元，占 1",
+     "page": 28,
+     "physical_page": 28,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "15411.43 万元",
+     "quote": "15411.43 万元",
+     "page": 28,
+     "physical_page": 28,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "出(类)1076.78 万\n元，占 5",
+     "quote": "出(类)1076.78 万\n元，占 5",
+     "page": 28,
+     "physical_page": 28,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "20707.11 万元",
+     "quote": "20707.11 万元",
+     "page": 28,
+     "physical_page": 28,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "决算为 20218.21 万元，完成年",
+     "quote": "决算为 20218.21 万元，完成年",
+     "page": 28,
+     "physical_page": 28,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "（项）1942.73 万元，主要用",
+     "quote": "（项）1942.73 万元，主要用",
+     "page": 33,
+     "physical_page": 33,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "预算为 2194.76 万元，支出决",
+     "quote": "预算为 2194.76 万元，支出决",
+     "page": 33,
+     "physical_page": 33,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "决算为 1942.73 万\n元。决算数",
+     "quote": "决算为 1942.73 万\n元。决算数",
+     "page": 33,
+     "physical_page": 33,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "务（项）1037.82 万元，主要用",
+     "quote": "务（项）1037.82 万元，主要用",
+     "page": 33,
+     "physical_page": 33,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "预算为 1054.48 万元，支出决",
+     "quote": "预算为 1054.48 万元，支出决",
+     "page": 33,
+     "physical_page": 33,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "决算为 1037.82 万元。决算数",
+     "quote": "决算为 1037.82 万元。决算数",
+     "page": 33,
+     "physical_page": 33,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "（项）1153.50 万元，主要用",
+     "quote": "（项）1153.50 万元，主要用",
+     "page": 33,
+     "physical_page": 33,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "预算为 1135.65 万元，支出决",
+     "quote": "预算为 1135.65 万元，支出决",
+     "page": 33,
+     "physical_page": 33,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "决算为 1153.50 万元。",
+     "quote": "决算为 1153.50 万元。",
+     "page": 33,
+     "physical_page": 33,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "出（项）7957.59 万元，主要用",
+     "quote": "出（项）7957.59 万元，主要用",
+     "page": 33,
+     "physical_page": 33,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "预算为 7851.46 万元，支出决",
+     "quote": "预算为 7851.46 万元，支出决",
+     "page": 33,
+     "physical_page": 33,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "决算为 7957.59\n万元。决算数",
+     "quote": "决算为 7957.59\n万元。决算数",
+     "page": 33,
+     "physical_page": 33,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "出（项）2417.73 万元，主要用",
+     "quote": "出（项）2417.73 万元，主要用",
+     "page": 33,
+     "physical_page": 33,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "预算为 2319.49 万元，支出决",
+     "quote": "预算为 2319.49 万元，支出决",
+     "page": 33,
+     "physical_page": 33,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "决算为 2417.73 万元。",
+     "quote": "决算为 2417.73 万元。",
+     "page": 33,
+     "physical_page": 33,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "14107.46 万元",
+     "quote": "14107.46 万元",
+     "page": 35,
+     "physical_page": 35,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "12192.15 万元",
+     "quote": "12192.15 万元",
+     "page": 35,
+     "physical_page": 35,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "用经费 1915.3 万元，主要包",
+     "quote": "用经费 1915.3 万元，主要包",
+     "page": 35,
+     "physical_page": 35,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "预算金额7352.06万元；绩效跟",
+     "quote": "预算金额7352.06万元；绩效跟",
+     "page": 37,
+     "physical_page": 37,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "预算金额7352.06万元；绩效自",
+     "quote": "预算金额7352.06万元；绩效自",
+     "page": 37,
+     "physical_page": 37,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "预算金额6993.22万元，平均得",
+     "quote": "预算金额6993.22万元，平均得",
+     "page": 37,
+     "physical_page": 37,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "准）为 1771.11 万元，其中：",
+     "quote": "准）为 1771.11 万元，其中：",
+     "page": 38,
+     "physical_page": 38,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "采购金额1550.22\n万元。",
+     "quote": "采购金额1550.22\n万元。",
+     "page": 38,
+     "physical_page": 38,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1771.11 万元，面向小",
+     "quote": "1771.11 万元，面向小",
+     "page": 38,
+     "physical_page": 38,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "购金额 1771.11 万元；在面向",
+     "quote": "购金额 1771.11 万元；在面向",
+     "page": 38,
+     "physical_page": 38,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "CMM-010-33",
+   "rule_id": "CMM-010",
+   "severity": "warn",
+   "page": 27,
+   "message": "十八、金额或百分比小数位不统一：全文共 11 处未保留两位小数（如“其中：财政拨款收入 20323.21\n万元，占 100%。\n三、支出决算情况说明\n本年支出合计 2032”），金额与百分比均应统一保留两位小数。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     27,
+     28,
+     34,
+     35,
+     36,
+     38
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": ".21\n万元，占 100%。\n三、支",
+     "quote": ".21\n万元，占 100%。\n三、支",
+     "page": 27,
+     "physical_page": 27,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "预算的 98%。决算数",
+     "quote": "预算的 98%。决算数",
+     "page": 28,
+     "physical_page": 28,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "420.6 万元，支出决",
+     "quote": "420.6 万元，支出决",
+     "page": 34,
+     "physical_page": 34,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "用经费 1915.3 万元，主要包",
+     "quote": "用经费 1915.3 万元，主要包",
+     "page": 35,
+     "physical_page": 35,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "决算为 0.3 万\n元，完成预",
+     "quote": "决算为 0.3 万\n元，完成预",
+     "page": 36,
+     "physical_page": 36,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "加 0.3 万元，增长 100%",
+     "quote": "加 0.3 万元，增长 100%",
+     "page": 36,
+     "physical_page": 36,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "出决算 0.3\n万元，占 1",
+     "quote": "出决算 0.3\n万元，占 1",
+     "page": 36,
+     "physical_page": 36,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "费支出 0.3 万元。其中：",
+     "quote": "费支出 0.3 万元。其中：",
+     "page": 36,
+     "physical_page": 36,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "预算的 37.5%。202",
+     "quote": "预算的 37.5%。202",
+     "page": 36,
+     "physical_page": 36,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "，增长 100%。公务用",
+     "quote": "，增长 100%。公务用",
+     "page": 36,
+     "physical_page": 36,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "度减少 165.4 万\n元，下降",
+     "quote": "度减少 165.4 万\n元，下降",
+     "page": 38,
+     "physical_page": 38,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "CMM-002-29",
+   "rule_id": "CMM-002",
+   "severity": "warn",
+   "page": 28,
+   "message": "十九、中文语境使用半角逗号/分号，应使用全角“，”/“；”。全文共 7 处（如“全支出（类）556.78 万元，占 2.75%;教育支出（类）26.02 万\n元，占 0.13%”）。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     28
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "，占 2.75%;教育支出（类）2",
+     "quote": "，占 2.75%;教育支出（类）2",
+     "page": 28,
+     "physical_page": 28,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "，占 0.05%;文化旅",
+     "quote": "，占 0.05%;文化旅",
+     "page": 28,
+     "physical_page": 28,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "，占 0.43%;社会保障和就业支",
+     "quote": "，占 0.43%;社会保障和就业支",
+     "page": 28,
+     "physical_page": 28,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "占 12.13%;卫生健康支出(类",
+     "quote": "占 12.13%;卫生健康支出(类",
+     "page": 28,
+     "physical_page": 28,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "占 1.31%;节能环保支出(类",
+     "quote": "占 1.31%;节能环保支出(类",
+     "page": 28,
+     "physical_page": 28,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "，占 0.62%;城乡社区支",
+     "quote": "，占 0.62%;城乡社区支",
+     "page": 28,
+     "physical_page": 28,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "，占 76.23;住房保障支出(类",
+     "quote": "，占 76.23;住房保障支出(类",
+     "page": 28,
+     "physical_page": 28,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-DISCLOSURE-PERCENT-UNIT-32",
+   "rule_id": "V33-DISCLOSURE-PERCENT-UNIT",
+   "severity": "info",
+   "page": 28,
+   "message": "二十、百分比单位缺失：原文「支\n出(类)15411.43 万元，占 76.23;住房保障支出(类)1076.78 」中「占76.23」使用了明确的占比语义，但数值 76.23 后未披露“%/％/百分之”等百分比单位，当前口径不完整，请核实原稿并补充正确的百分比单位。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     28
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "支\n出(类)15411.43 万元，占 76.23;住房保障支出(类)1076.78",
+     "quote": "支\n出(类)15411.43 万元，占 76.23;住房保障支出(类)1076.78",
+     "page": 28,
+     "physical_page": 28,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "CMM-011-35",
+   "rule_id": "CMM-011",
+   "severity": "warn",
+   "page": 29,
+   "message": "二十一、金额缺少单位“万元”：“支出决算为\n4.19”，同段其余金额均以万元列示。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     29
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "万元，支出决算为\n4.19。决算数",
+     "quote": "万元，支出决算为\n4.19。决算数",
+     "page": 29,
+     "physical_page": 29,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-222-19",
+   "rule_id": "V33-222",
+   "severity": "info",
+   "page": 30,
+   "message": "二十二、说明第30页写类名“文化体育与传媒支出”，表内第19页编码 207 科目为“文化旅游体育\n与传媒支出”；本条目已按款/项独立身份链核对金额，类名差异请核对是否漏字。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     30
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "文化体育与传媒支出",
+     "quote": "文化体育与传媒支出",
+     "page": 30,
+     "physical_page": 30,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "CMM-002-28",
+   "rule_id": "CMM-002",
+   "severity": "warn",
+   "page": 30,
+   "message": "二十三、中文语境使用半角冒号“:”，应使用全角“：”。全文共 4 处（如“行政单位离退休（项）201.59 万元，主要用于:行政单位离退休\n干部活动费、离休干部津贴发放等。”）。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     30,
+     31
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "万元，主要用于:行政单位离退休",
+     "quote": "万元，主要用于:行政单位离退休",
+     "page": 30,
+     "physical_page": 30,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "万元，主要用于:退休人员福利费、",
+     "quote": "万元，主要用于:退休人员福利费、",
+     "page": 31,
+     "physical_page": 31,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "用于:机关事业单位基本",
+     "quote": "用于:机关事业单位基本",
+     "page": 31,
+     "physical_page": 31,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "9.85 万元，主要用于:",
+     "quote": "9.85 万元，主要用于:",
+     "page": 31,
+     "physical_page": 31,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-NARRATIVE-INDICATOR-REPEAT-25",
+   "rule_id": "V33-NARRATIVE-INDICATOR-REPEAT",
+   "severity": "info",
+   "page": 31,
+   "message": "二十四、文内同一指标重复披露不一致（机关事业单位职业年金缴费支出）：第31页披露 269.85 万元，第31页披露 269.86 万元，相差 0.01 万元。同一指标在同一口径（本年支出决算）下两处披露不能同时成立，需人工复核底稿确认正确金额。相差在显示舍入包络（0.01 万元）内，可能为取整误差或抄写差异，需人工复核",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     31
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "社会保障和就业支出（类）行政事业单位养老支出（款）\n机关事业单位职业年金缴费支出（项）269.85 万元",
+     "quote": "社会保障和就业支出（类）行政事业单位养老支出（款）\n机关事业单位职业年金缴费支出（项）269.85 万元",
+     "page": 31,
+     "physical_page": 31,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "支\n出决算为 269.86 万元",
+     "quote": "支\n出决算为 269.86 万元",
+     "page": 31,
+     "physical_page": 31,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-SG-COMPLETION-14",
+   "rule_id": "V33-SG-COMPLETION",
+   "severity": "warn",
+   "page": 36,
+   "message": "二十五、三公经费披露完整性：「公务用车购置费」在三公经费支出决算情况说明中未细化披露。期望：说明应在「公务用车购置及运行维护费」下细化披露公务用车购置费的支出金额（金额为 0 或未发生的也应明示）。实际：说明仅披露「公务用车购置及运行维护费」合并金额，未细化到公务用车购置费。请核实原稿并补充细化披露。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     36
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "2、公务用车购置及运行维护费支出 19.56 万元。其中：",
+     "quote": "2、公务用车购置及运行维护费支出 19.56 万元。其中：",
+     "page": 36,
+     "physical_page": 36,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "CMM-007-30",
+   "rule_id": "CMM-007",
+   "severity": "warn",
+   "page": 36,
+   "message": "二十六、增减额与同比百分比复算不一致（公务用车购置及运行维护费）：本期 19.56 万元、减少 3.59 万元，复算基期 23.15 万元，应为下降15.51%，声明 15.31%，相差 0.20 个百分点。本期金额、增减额与增长百分比三者不能同时成立，需人工复核底稿。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     35,
+     36
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "公务用车购置及运行维护费\n支出决算减少 3.59 万元，下降 15.31%；",
+     "quote": "公务用车购置及运行维护费\n支出决算减少 3.59 万元，下降 15.31%；",
+     "page": 36,
+     "physical_page": 36,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "公务用车购置及运行维护费支出决算为",
+     "quote": "公务用车购置及运行维护费支出决算为",
+     "page": 35,
+     "physical_page": 35,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "19.56 万元，完成预算的 63.76%；",
+     "quote": "19.56 万元，完成预算的 63.76%；",
+     "page": 36,
+     "physical_page": 36,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "CMM-007-31",
+   "rule_id": "CMM-007",
+   "severity": "error",
+   "page": 36,
+   "message": "二十七、同比零基数百分比无定义（公务接待费）：本期 0.3 万元，增\n加 0.3 万元，复算基期为 0，却声明「增长100%」——分母为 0，同比百分比不存在有限定义。本期金额、增减额与增长百分比三者不能同时成立，需人工复核底稿。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     36
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "公务接待费支出决算增\n加 0.3 万元，增长 100%。",
+     "quote": "公务接待费支出决算增\n加 0.3 万元，增长 100%。",
+     "page": 36,
+     "physical_page": 36,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "公务接待费支出决算为 0.3 万\n元，完成预算的 37.5%。",
+     "quote": "公务接待费支出决算为 0.3 万\n元，完成预算的 37.5%。",
+     "page": 36,
+     "physical_page": 36,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-227-20",
+   "rule_id": "V33-227",
+   "severity": "warn",
+   "page": 30,
+   "message": "二十八、说明5类级科目名称与T5不一致（207）：表格“文化旅游体育与传媒支出”，说明“文化体育与传媒支出”",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     30
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "10、文化体育与传媒支出（类）体育（款）群众体育（项）",
+     "quote": "10、文化体育与传媒支出（类）体育（款）群众体育（项）",
+     "page": 30,
+     "physical_page": 30,
+     "file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  }
+ ],
+ "note": "verified 才算恢复；unverified/failed/未执行均不算（IR-03）"
+}
