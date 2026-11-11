@@ -1,0 +1,1348 @@
+{
+ "input": {
+  "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/075e31ba6f282134daad0b9ae225d0a5/上海科技管理学校2025年度决算.pdf",
+  "original_sha256": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+  "org": "上海科技管理学校",
+  "year": 2025,
+  "kind": "final"
+ },
+ "frozen_versions": {
+  "git_head": "69be5d13e14656dcd4025b4a19548a6f6f769ebb",
+  "key_source_sha256": {
+   "src/engine/rules_v33.py": "077c974ce4839fda017a4eb8ce10d04f6050792904cb7ed85ef98bc917faaeaf",
+   "src/engine/pipeline.py": "f639093ffee1a8116b819f5bd035768c789aea59d95491b161f1b54622d6a3ba",
+   "src/engine/issue_evidence.py": "073c8f49b94246ba7728e1964e3cd1dfdd9f19ca4ff81ce0ca37c2dabc33fbb4",
+   "src/services/rule_source_binding.py": "296d299343ab2aa4db8a99b8c084a0be0c63cc1e5e60e9b1b7b200243e6ec462",
+   "src/services/evidence_guard.py": "4e6ff64ab85339d0cffab2dc8afd3d672fb7c30b77a22f2ccaf30f4bc3e6edb2",
+   "src/services/pdf_parser.py": "80d100fe7e6ec786178e9687b4a0ed5a5446c749289a48ddf9445238e8cc9a5d"
+  },
+  "parse_run_uid": "84f791176246f9c765aeef2d44abff41",
+  "fact_count": 491,
+  "page_count": 23,
+  "config": {
+   "use_ai_assist": false,
+   "ocr": "disabled",
+   "empty_value_conventions": "builtin(U-5)"
+  }
+ },
+ "elapsed_seconds": 0.3,
+ "rule_execution_summary": {
+  "total_rules": 90,
+  "executed": 88,
+  "pass": 74,
+  "fail": 12,
+  "not_applicable": 2,
+  "insufficient_data": 2,
+  "parse_error": 0,
+  "execution_error": 0,
+  "unresolved_total": 2,
+  "failed_rules": [
+   "V33-005",
+   "V33-120",
+   "V33-243",
+   "V33-240",
+   "V33-241",
+   "V33-233",
+   "V33-234",
+   "V33-235",
+   "V33-251",
+   "CMM-004",
+   "CMM-007",
+   "CMM-010"
+  ],
+  "unresolved_rules": [
+   {
+    "rule_id": "CMM-018",
+    "status": "insufficient_data",
+    "detail": "写法口径未确认；主体用语子项未完成",
+    "unresolved_reasons": [
+     "写法口径未确认；主体用语子项未完成"
+    ],
+    "diagnostics": [
+     {
+      "reason_codes": [
+       "rule_no_reason"
+      ],
+      "blocked_by": [],
+      "missing_operands": [],
+      "candidates": [],
+      "next_action": "tech_fix",
+      "root_cause_key": "rc:6100cb42140df931e0f30949198871b75a8feb9b0c90f607119496fd18ce769d"
+     }
+    ]
+   },
+   {
+    "rule_id": "CMM-019",
+    "status": "insufficient_data",
+    "detail": "封面文种缺少独立依据",
+    "unresolved_reasons": [
+     "封面文种缺少独立依据"
+    ],
+    "diagnostics": [
+     {
+      "reason_codes": [
+       "scope_unconfirmed"
+      ],
+      "blocked_by": [
+       {
+        "dimension": "org_scope",
+        "ref": "封面文种缺少独立依据",
+        "reason_code": "scope_unconfirmed"
+       }
+      ],
+      "missing_operands": [],
+      "candidates": [],
+      "next_action": "human_confirm",
+      "root_cause_key": "rc:2540ece44c0828dbcf48fa691820c958da41bff7348e47ea2f285f5204fb0b41"
+     }
+    ]
+   }
+  ],
+  "partial_findings_total": 0,
+  "rule_statuses": {
+   "V33-001": "pass",
+   "V33-002": "pass",
+   "V33-003": "pass",
+   "V33-004": "pass",
+   "V33-005": "fail",
+   "V33-101": "pass",
+   "V33-102": "pass",
+   "V33-103": "pass",
+   "V33-104": "pass",
+   "V33-105": "pass",
+   "V33-106": "pass",
+   "V33-107": "pass",
+   "V33-108": "pass",
+   "V33-109": "pass",
+   "V33-110": "pass",
+   "V33-111": "pass",
+   "V33-112": "pass",
+   "V33-113": "pass",
+   "V33-115": "pass",
+   "V33-119": "pass",
+   "V33-120": "fail",
+   "V33-117": "pass",
+   "V33-121": "pass",
+   "V33-122": "pass",
+   "V33-114": "pass",
+   "V33-200": "pass",
+   "V33-201": "pass",
+   "V33-202": "pass",
+   "V33-203": "pass",
+   "V33-243": "fail",
+   "V33-214": "pass",
+   "V33-244": "pass",
+   "V33-245": "pass",
+   "V33-246": "pass",
+   "V33-SG-COMPLETION": "pass",
+   "V33-242": "pass",
+   "V33-240": "fail",
+   "V33-241": "fail",
+   "V33-225": "pass",
+   "V33-226": "pass",
+   "V33-220": "pass",
+   "V33-221": "pass",
+   "V33-222": "pass",
+   "V33-227": "pass",
+   "V33-223": "pass",
+   "V33-224": "pass",
+   "V33-204": "pass",
+   "V33-CROSS-SAN-GONG-ECON": "pass",
+   "V33-TXT-FUND-DETAIL": "pass",
+   "V33-NARRATIVE-INDICATOR-REPEAT": "pass",
+   "V33-TREND-COMPLETION-RATE": "pass",
+   "V33-233": "fail",
+   "V33-234": "fail",
+   "V33-235": "fail",
+   "V33-236": "pass",
+   "V33-230": "not_applicable",
+   "V33-232": "pass",
+   "V33-248": "pass",
+   "V33-249": "pass",
+   "V33-250": "pass",
+   "V33-251": "fail",
+   "V33-252": "pass",
+   "CMM-001": "pass",
+   "CMM-002": "pass",
+   "CMM-003": "pass",
+   "CMM-004": "fail",
+   "CMM-005": "pass",
+   "CMM-006": "pass",
+   "CMM-007": "fail",
+   "V33-DISCLOSURE-PERCENT-UNIT": "pass",
+   "CMM-008": "pass",
+   "CMM-009": "pass",
+   "CMM-010": "fail",
+   "CMM-011": "pass",
+   "CMM-012": "pass",
+   "CMM-013": "pass",
+   "CMM-014": "pass",
+   "CMM-015": "pass",
+   "CMM-016": "pass",
+   "CMM-017": "pass",
+   "CMM-018": "insufficient_data",
+   "CMM-019": "insufficient_data",
+   "CMM-027": "not_applicable",
+   "CMM-020": "pass",
+   "CMM-021": "pass",
+   "CMM-022": "pass",
+   "CMM-023": "pass",
+   "CMM-024": "pass",
+   "CMM-025": "pass",
+   "CMM-026": "pass"
+  }
+ },
+ "binding": {
+  "rule_source_binding": {
+   "bound_rule_findings": 13,
+   "scope": "source identity only; evidence guard and human business adjudication remain required"
+  }
+ },
+ "locations": {
+  "rule_source_locations": {
+   "checked_rule_findings": 13
+  }
+ },
+ "evidence_completeness": {
+  "total": 13,
+  "complete": 13,
+  "incomplete": 0,
+  "completeness_rate": 1.0,
+  "locatable_total": 13,
+  "locatable_complete": 13,
+  "locatable_completeness_rate": 1.0,
+  "document_level_total": 0,
+  "verified_count": 13,
+  "unverified_count": 0,
+  "failed_count": 0,
+  "degraded_count": 0,
+  "rule_warning_count": 0,
+  "formal_issue_total": 5,
+  "degraded": [],
+  "rule_warnings": [],
+  "detail_truncated": false
+ },
+ "counts": {
+  "findings": 13,
+  "verified": 13,
+  "failed": 0,
+  "unverified": 0
+ },
+ "findings": [
+  {
+   "id": "V33-005-1",
+   "rule_id": "V33-005",
+   "severity": "info",
+   "page": 6,
+   "message": "一、收入决算表科目total/total_actual与其明细之和差额0.01万元，可能为取整误差。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     6
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "10,367.43",
+     "quote": "10,367.43",
+     "page": 6,
+     "physical_page": 6,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "b66953ec504d88e0:r2c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "8,488.26",
+     "quote": "8,488.26",
+     "page": 6,
+     "physical_page": 6,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "b66953ec504d88e0:r3c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,317.79",
+     "quote": "1,317.79",
+     "page": 6,
+     "physical_page": 6,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "b66953ec504d88e0:r6c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "315.65",
+     "quote": "315.65",
+     "page": 6,
+     "physical_page": 6,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "b66953ec504d88e0:r12c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "245.74",
+     "quote": "245.74",
+     "page": 6,
+     "physical_page": 6,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "b66953ec504d88e0:r15c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-240-6",
+   "rule_id": "V33-240",
+   "severity": "info",
+   "page": 6,
+   "message": "二、收入决算表共2处合计相差0.01万元，可能为显示取整误差。差异位置：\n1. 收入决算表 · 第6页 · 合计合计10367.43万元；明细教育支出=8488.26万元、社会保障和就业支出=1317.79万元、卫生健康支出=315.65万元、住房保障支出=245.74万元，明细合计10367.44万元，字段决算金额，",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     6
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "10,367.43",
+     "quote": "10,367.43",
+     "page": 6,
+     "physical_page": 6,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "b66953ec504d88e0:r2c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "8,488.26",
+     "quote": "8,488.26",
+     "page": 6,
+     "physical_page": 6,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "b66953ec504d88e0:r3c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,317.79",
+     "quote": "1,317.79",
+     "page": 6,
+     "physical_page": 6,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "b66953ec504d88e0:r6c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "315.65",
+     "quote": "315.65",
+     "page": 6,
+     "physical_page": 6,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "b66953ec504d88e0:r12c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "245.74",
+     "quote": "245.74",
+     "page": 6,
+     "physical_page": 6,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "b66953ec504d88e0:r15c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "7,267.65",
+     "quote": "7,267.65",
+     "page": 6,
+     "physical_page": 6,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "b66953ec504d88e0:r2c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "5,388.48",
+     "quote": "5,388.48",
+     "page": 6,
+     "physical_page": 6,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "b66953ec504d88e0:r3c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,317.79",
+     "quote": "1,317.79",
+     "page": 6,
+     "physical_page": 6,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "b66953ec504d88e0:r6c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "315.65",
+     "quote": "315.65",
+     "page": 6,
+     "physical_page": 6,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "b66953ec504d88e0:r12c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "245.74",
+     "quote": "245.74",
+     "page": 6,
+     "physical_page": 6,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "b66953ec504d88e0:r15c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "CMM-004-12",
+   "rule_id": "CMM-004",
+   "severity": "manual_review",
+   "page": 6,
+   "message": "三、同一科目在收入决算表与支出决算表金额差异较大（2080502 事业单位离退休）：收入475.55万元、支出384.80万元，相差90.75万元。可能因结转结余造成，请人工核对。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     6,
+     7
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "475.55",
+     "quote": "475.55",
+     "page": 6,
+     "physical_page": 6,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "b66953ec504d88e0:r8c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "384.80",
+     "quote": "384.80",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "112c846a43399905:r8c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "CMM-004-13",
+   "rule_id": "CMM-004",
+   "severity": "manual_review",
+   "page": 6,
+   "message": "四、同一科目在收入决算表与支出决算表金额差异较大（2080599 其他行政事业单位养老支出）：收入6.92万元、支出13.64万元，相差6.72万元。可能因结转结余造成，请人工核对。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     6,
+     7
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "6.92",
+     "quote": "6.92",
+     "page": 6,
+     "physical_page": 6,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "b66953ec504d88e0:r11c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "13.64",
+     "quote": "13.64",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "112c846a43399905:r11c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-005-2",
+   "rule_id": "V33-005",
+   "severity": "info",
+   "page": 7,
+   "message": "五、支出决算表科目total/basic_actual与其明细之和差额0.01万元，可能为取整误差。本列（基本支出）逐类复算：205=4481.52 + 208=1233.76 + 210=315.65 + 221=245.74 = 6276.67万元。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     7
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "6,276.68",
+     "quote": "6,276.68",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "112c846a43399905:r2c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "4,481.52",
+     "quote": "4,481.52",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "112c846a43399905:r3c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,233.76",
+     "quote": "1,233.76",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "112c846a43399905:r6c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "315.65",
+     "quote": "315.65",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "112c846a43399905:r12c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "245.74",
+     "quote": "245.74",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "112c846a43399905:r15c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-241-7",
+   "rule_id": "V33-241",
+   "severity": "info",
+   "page": 7,
+   "message": "六、支出决算表共2处合计相差0.01万元，可能为显示取整误差。差异位置：\n1. FIN_03_expenditure · 第7页 · 合计合计10511.02万元；明细合计=6276.68万元、合计=4234.35万元、合计=0.00万元、合计=0.00万元、合计=0.00万元，明细合计10511.03万元，字段决算金",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     7
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "10,511.02",
+     "quote": "10,511.02",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "112c846a43399905:r2c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "6,276.68",
+     "quote": "6,276.68",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "112c846a43399905:r2c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "4,234.35",
+     "quote": "4,234.35",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "112c846a43399905:r2c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "112c846a43399905:r2c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "112c846a43399905:r2c6",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "112c846a43399905:r2c7",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "6,276.68",
+     "quote": "6,276.68",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "112c846a43399905:r2c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "4,481.52",
+     "quote": "4,481.52",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "112c846a43399905:r3c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1,233.76",
+     "quote": "1,233.76",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "112c846a43399905:r6c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "315.65",
+     "quote": "315.65",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "112c846a43399905:r12c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "245.74",
+     "quote": "245.74",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "112c846a43399905:r15c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-233-8",
+   "rule_id": "V33-233",
+   "severity": "info",
+   "page": 7,
+   "message": "七、支出决算表科目total横向合计：表内合计10511.02万元，分项之和10511.03万元，差额0.01万元。可能为取整误差。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     7
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "10,511.02",
+     "quote": "10,511.02",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "112c846a43399905:r2c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "6,276.68",
+     "quote": "6,276.68",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "112c846a43399905:r2c3",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "4,234.35",
+     "quote": "4,234.35",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "112c846a43399905:r2c4",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "112c846a43399905:r2c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "112c846a43399905:r2c6",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 7,
+     "physical_page": 7,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "112c846a43399905:r2c7",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-243-5",
+   "rule_id": "V33-243",
+   "severity": "info",
+   "page": 11,
+   "message": "八、一般公共预算财政拨款基本支出决算表共2处合计相差0.01万元，可能为显示取整误差。差异位置：\n1. FIN_06_basic_expenditure · 第11页 · 302 商品和服务支出合计686.12万元；明细办公费=21.38万元、印刷费=0.99万元、手续费=0.00万元、水费=28.68万元、电费=12",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     11
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "686.12",
+     "quote": "686.12",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r1c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "21.38",
+     "quote": "21.38",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r2c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.99",
+     "quote": "0.99",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r3c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r4c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "28.68",
+     "quote": "28.68",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r5c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "129.66",
+     "quote": "129.66",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r6c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "3.09",
+     "quote": "3.09",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r7c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r8c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r9c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "3.80",
+     "quote": "3.80",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r10c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r11c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "217.10",
+     "quote": "217.10",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r12c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r13c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r14c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "1.57",
+     "quote": "1.57",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r15c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r16c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r17c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r18c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r19c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "8.80",
+     "quote": "8.80",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r20c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "19.25",
+     "quote": "19.25",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r21c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "71.77",
+     "quote": "71.77",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r22c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "46.64",
+     "quote": "46.64",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r23c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "4.15",
+     "quote": "4.15",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r24c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.05",
+     "quote": "0.05",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r25c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r26c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "129.20",
+     "quote": "129.20",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r27c5",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "369.23",
+     "quote": "369.23",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r15c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "12.23",
+     "quote": "12.23",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r16c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "357.01",
+     "quote": "357.01",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r17c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r18c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r19c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r20c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r21c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r22c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r23c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r24c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r25c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r26c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "0.00",
+     "quote": "0.00",
+     "page": 11,
+     "physical_page": 11,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": "e80a13af90ea76d4:r27c2",
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-234-9",
+   "rule_id": "V33-234",
+   "severity": "warn",
+   "page": 13,
+   "message": "九、条件性空表仍保留“仍保留该表格式，并在本表下方作下述说明”等编制操作提示；建议清理模板提示，保留无收入支出的事实说明。本问题不表示缺表或缺少空表说明。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     13,
+     14
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "无政府性基金预算财政拨款收入支出的，仍保留该表格式，并在本表下方作下述说明：",
+     "quote": "无政府性基金预算财政拨款收入支出的，仍保留该表格式，并在本表下方作下述说明：",
+     "page": 13,
+     "physical_page": 13,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "无国有资本经营预算财政拨款收入支出的，仍保留该表格式，并在本表下方作下述说明：",
+     "quote": "无国有资本经营预算财政拨款收入支出的，仍保留该表格式，并在本表下方作下述说明：",
+     "page": 14,
+     "physical_page": 14,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-251-11",
+   "rule_id": "V33-251",
+   "severity": "warn",
+   "page": 16,
+   "message": "十、支出决算具体情况逐项列示的年初预算合计7282.10万元（纳入7项），与该部分所列年初预算总额7278.10万元不一致，相差4.00万元；分项合计超出总额。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     16
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "年初预算为 7,278.10 万元，",
+     "quote": "年初预算为 7,278.10 万元，",
+     "page": 16,
+     "physical_page": 16,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "V33-235-10",
+   "rule_id": "V33-235",
+   "severity": "warn",
+   "page": 17,
+   "message": "十一、同条决算说明前后金额不一致（教育支出（类）职业教育（款）中等职业教育（项））：条目开头=4294.20万元，“支出决算/决算数”=5567.32万元",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     17
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "1、教育支出（类）职业教育（款）中等职业教育（项）。主\n要用于：基本支出 4,294.20 万元，包含基本工资、津补贴和绩\n效工资等人员经费及公用经费支出；项目支出 1,273.12 万元。\n年初预算为 5,309.48 万元，支出决算为 5,567.32 万元。决算数\n大于预算数的主要原因是收到中央专款 2025 年学生资助补助经\n费、部分 2024 年财政项目延期至 2025 年执行产生的经费差额。",
+     "quote": "1、教育支出（类）职业教育（款）中等职业教育（项）。主\n要用于：基本支出 4,294.20 万元，包含基本工资、津补贴和绩\n效工资等人员经费及公用经费支出；项目支出 1,273.12 万元。\n年初预算为 5,309.48 万元，支出决算为 5,567.32 万元。决算数\n大于预算数的主要原因是收到中央专款 2025 年学生资助补助经\n费、部分 2024 年财政项目延期至 2025 年执行产生的经费差额。",
+     "page": 17,
+     "physical_page": 17,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "CMM-010-15",
+   "rule_id": "CMM-010",
+   "severity": "warn",
+   "page": 18,
+   "message": "十二、金额未按半角逗号分千分位：全文共 2 处（如“支出决算情况说明\n一般公共预算财政拨款基本支出 6089.35 万元。其中：人员\n经费 5392.43 万元，主要包”），应写作 1,234.56 万元。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     18
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "本支出 6089.35 万元。其中：",
+     "quote": "本支出 6089.35 万元。其中：",
+     "page": 18,
+     "physical_page": 18,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "经费 5392.43 万元，主要包",
+     "quote": "经费 5392.43 万元，主要包",
+     "page": 18,
+     "physical_page": 18,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  },
+  {
+   "id": "CMM-007-14",
+   "rule_id": "CMM-007",
+   "severity": "error",
+   "page": 19,
+   "message": "十三、增减额与同比百分比复算不一致（公务用车购置及运行维护费）：本期 4.15 万元、增加 1.43 万元，复算基期 2.72 万元，应为增长52.57%，声明 14.90%，相差 37.67 个百分点。本期金额、增减额与增长百分比三者不能同时成立，需人工复核底稿。",
+   "evidence_verification": {
+    "status": "verified",
+    "reasons": [],
+    "checked_pages": [
+     19
+    ],
+    "source_identity_complete": true
+   },
+   "evidence": [
+    {
+     "text": "公务用车购置及运行维护费支出\n决算增加1.43万元，增长14.90%；",
+     "quote": "公务用车购置及运行维护费支出\n决算增加1.43万元，增长14.90%；",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    },
+    {
+     "text": "公务用车购置及运行维\n护费支出决算为 4.15 万元，完成预算的 43.23%；",
+     "quote": "公务用车购置及运行维\n护费支出决算为 4.15 万元，完成预算的 43.23%；",
+     "page": 19,
+     "physical_page": 19,
+     "file_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+     "source_cell_id": null,
+     "verification_status": "verified",
+     "source_identity_status": "verified"
+    }
+   ]
+  }
+ ],
+ "note": "verified 才算恢复；unverified/failed/未执行均不算（IR-03）"
+}
