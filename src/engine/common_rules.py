@@ -2547,11 +2547,30 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
         # 逐页原文切片（合并文本的子串，不改写字符）；切不出片段时退回
         # 单页 span。
         merged_text, page_offsets = getattr(self, "_merged_pages", ("", []))
+
+        def _sentence_end(start: int, end: int) -> int:
+            """IR-03：证据 span 延伸到最近的句读边界，保证页内唯一可绑定。
+
+            跨页断句的金额声明（"…支出决算为/19.56 万元"）其后半段裸数字
+            在页上多次出现、无法唯一绑定来源身份；延伸到句末（"19.56 万元，
+            完成预算的 63.76%"）后唯一。延伸只发生在证据切片，不改变规则
+            取数范围（match 边界）。
+            """
+            import re as _re
+
+            if not merged_text or end is None:
+                return end
+            found = _re.compile(r"[。；;]").search(merged_text, end)
+            if found is not None and found.end() - end <= 40:
+                return found.end()
+            return min(len(merged_text), end + 40)
+
         refs: List[Dict[str, Any]] = []
         for role, span_start, span_end, fallback_page, fallback_span in (
-            ("增减句", match.start(), match.end(), unit_page,
+            ("增减句", match.start(), _sentence_end(0, match.end()), unit_page,
              re.sub(r"\s+", "", match.group(0))),
-            ("本期披露", current.get("start"), current.get("end"),
+            ("本期披露", current.get("start"),
+             _sentence_end(0, current.get("end")),
              current["page"], current["span"]),
         ):
             fragments = []

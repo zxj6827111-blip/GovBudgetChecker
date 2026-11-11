@@ -41,61 +41,49 @@ def to_cn_num(n: int) -> str:
         return str(n)
     return _CN_NUM[t] + "十" + (_CN_NUM[o] if o else "")
 
-#: 交付前噪声过滤的模式词（D0 RC-5b：过滤必须显式留痕，不得静默丢弃）。
-#: 任何被过滤的问题都要进入 doc 的过滤台账并记 warn 日志——"措辞翻转交付"
-#: 的静默机制（控制试验：同一结果仅改提示词，交付数 0↔1）必须可审计。
-_DELIVERY_NOISE_PATTERNS = (
-    "表出现多次",
-    "页码异常",
-    "格式错误",
-    "解析失败",
-)
-
-
 def order_and_number_issues(doc, issues):
+    """按 (page, pos) 排序，并把 message 前面加上 "一、二、三…"
+
+    IR-01（Codex 独立核验 2026-11-10，RETURN_FOR_REWORK）：**移除以消息
+    关键词为唯一依据的丢弃机制**。控制试验证明同一 fail 结果仅在消息中
+    加入"格式错误"四字，交付数就从 1 变 0——按措辞删除真实结果属于
+    非法抑制，任何合法抑制都必须基于结构化类型/政策。
+
+    合法抑制的唯一入口：规则在 issue.location["delivery_suppressed"] 上
+    显式写入 {policy_id, relation_id, reason} 的结构化决定（当前仓库没有
+    任何规则使用它）。被抑制的条目逐条记入 doc 的抑制台账
+    （delivery_suppression_ledger：规则、政策ID、关系ID、理由），由
+    build_issues_payload / engine_rule_runner 收割进返回 payload，
+    读取与导出可对账——"每个失败关系必须能追到交付问题，或有明确、
+    合法的处理依据"。
     """
-    按 (page, pos) 排序，并把 message 前面加上 "一、二、三…"
-    说明：
-    - 其它规则请尽量往 location 里塞 { "page": 页码, "pos": 页内位置 }，
-      这样这里才能按文中顺序排。
-    - 噪声过滤显式化（D0 RC-5b）：命中模式词的问题不再静默丢弃——逐条
-      记入 doc 的过滤台账（规则、命中模式、消息摘要）并记 warn 日志，
-      交付对账时可追到每个被丢弃结果的明确处理依据。
-    """
-    # 增强噪声过滤逻辑（显式留痕版）
-    filtered_issues = []
-    dropped: List[Dict[str, Any]] = []
+    filtered_issues: List[Any] = []
     for issue in issues:
-        message = str(getattr(issue, "message", "") or "")
-        desc = str(getattr(issue, "desc", "") or "") if getattr(issue, "desc", None) else ""
-        hit_pattern = next(
-            (pattern for pattern in _DELIVERY_NOISE_PATTERNS
-             if pattern in message or pattern in desc),
-            None,
-        )
-        if hit_pattern is None:
+        decision = ((getattr(issue, "location", None) or {}).get("delivery_suppressed")
+                   if isinstance(getattr(issue, "location", None), dict) else None)
+        if not isinstance(decision, dict) or not str(decision.get("policy_id") or "").strip():
             filtered_issues.append(issue)
             continue
         entry = {
             "rule": str(getattr(issue, "rule", "") or ""),
-            "pattern": hit_pattern,
-            "message_excerpt": message[:120],
+            "policy_id": str(decision.get("policy_id") or ""),
+            "relation_id": str(decision.get("relation_id") or ""),
+            "reason": str(decision.get("reason") or "")[:200],
         }
-        dropped.append(entry)
-        # 日志只记 ID/模式/长度——消息摘要可能含材料原文，进 doc 级台账
-        # （delivery_noise_ledger）而非日志（日志安全门禁 fail-closed）。
-        logger.warning(
-            "delivery_noise_filtered: rule=%s pattern=%s message_len=%s",
-            entry["rule"], hit_pattern, len(entry["message_excerpt"]),
+        if doc is not None:
+            ledger = list(getattr(doc, "delivery_suppression_ledger", []) or [])
+            ledger.append(entry)
+            try:
+                doc.delivery_suppression_ledger = ledger
+            except Exception:
+                pass
+        # 日志只记 ID 与理由，不记消息原文（日志安全门禁 fail-closed）
+        logger.info(
+            "delivery_suppressed: rule=%s policy=%s relation=%s reason=%s",
+            entry["rule"], entry["policy_id"], entry["relation_id"],
+            len(entry["reason"]),
         )
-    if dropped and doc is not None:
-        ledger = list(getattr(doc, "delivery_noise_ledger", []) or [])
-        ledger.extend(dropped)
-        try:
-            doc.delivery_noise_ledger = ledger
-        except Exception:
-            pass
-    
+
     def sort_key(it):
         p = it.location.get("page", 10**9)   # 没页码的排在最后
         s = it.location.get("pos", 0)        # 没 pos 的当 0 处理
@@ -11677,13 +11665,33 @@ class R33CrossSanGongEcon(Rule):
                 [(scales.get(key, 2), unit), (_display_scale(component), unit)]
             )
             excess = component - total
-            # D0 RC-1b：两侧原文 span（基本侧行原文；三公侧原格文本，
-            # 空白格回退业务项标签原文）。
-            basic_span = str(hit.get("row_label") or "") + str(hit.get("cell_text") or "")
-            three_span = (
-                three_public_cell_texts.get(key)
-                or str(hit.get("name") or subject).strip()
-            )
+            # IR-03（Codex 核验 2026-11-10）：两侧原文 span 用**原格文本**，
+            # 并要求其在该页唯一可定位；不唯一（如三公表两列同值 19.56、
+            # 或空白格无文本）时回退到三公表合计格原文本——空白格按本表
+            # 勾稽（合计 = 各分项之和）确认为 0，合计格正是该勾稽的锚点。
+            # 不再用行标签拼接（车道/表头在页文本层不连续，必然 text_not_found）。
+            def _unique_on_page(_doc, span, page):
+                if not str(span or "").strip() or type(page) is not int:
+                    return False
+                pages = getattr(_doc, "page_texts", None) or []
+                if not (1 <= page <= len(pages)):
+                    return False
+                needle = "".join(str(span).split())
+                return bool(needle) and "".join(str(pages[page - 1]).split()).count(needle) == 1
+
+            basic_span = str(hit.get("cell_text") or "")
+            if not _unique_on_page(doc, basic_span, basic_page):
+                basic_span = ""
+            three_span = three_public_cell_texts.get(key) or ""
+            if not _unique_on_page(doc, three_span, three_page):
+                three_span = three_public_cell_texts.get("total") or ""
+                if not _unique_on_page(doc, three_span, three_page):
+                    # 空白格无文本、合计格又不唯一时，退到三公表表名行——
+                    # 表名在该页唯一，能锚定三公表所在页；分项勾稽依据在
+                    # message 与回执里完整保留。
+                    three_span = _FIN_07_TABLE_TITLE
+                    if not _unique_on_page(doc, three_span, three_page):
+                        three_span = ""
             if excess <= envelope:
                 issues.append(
                     self._issue(
@@ -12797,7 +12805,10 @@ class R33TxtFundDetail(Rule):
                         "code": item["code"],
                         "field": "本年支出（功能分类合计）",
                         # D0 RC-1b：表格侧引用金额原格原文
-                        "span": str(item.get("cell_text") or ""),
+                        # IR-03：纯数字 span 在页上不唯一、无法绑定原格；
+                        # 表侧引用带上科目名（row=编码+名称，span=名称+金额原格）
+                        "span": (str(item.get("name") or "")
+                                 + str(item.get("cell_text") or "")),
                     },
                     {
                         "role": "情况说明",

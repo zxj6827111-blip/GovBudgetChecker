@@ -572,3 +572,25 @@ def test_other_department_real_partial_rating_counts_close_without_zeros(origina
     assert receipts and all(r['status'] == 'pass' for r in receipts)
     assert all(ref['span'] in doc.page_texts[ref['page'] - 1]
                for r in receipts for ref in r['disclosure_sources'])
+
+
+def test_declared_complete_with_remainder_zero_is_a_definite_error():
+    """IR-05 反例：声明完整构成时缺档不得按部分列举放行。
+
+    "全部项目评级结果如下：优50个，其余评级均为0个"——原文声明全部
+    评级结果，50+0≠53 是确定矛盾，必须交付 error，不得 pass。
+    """
+    doc = performance('绩效自评的2025年度项目53个，全部项目评级结果如下：'
+                      '绩效评级为“优”的项目50个，其余评级均为0个。')
+    issue, = check_performance_counts(DisclosureRule(), doc)
+    assert issue.location['declared_count'] == 53
+    assert issue.location['computed_count'] == 50
+    assert issue.location['comparison_basis'] == 'declared_complete_sum'
+    assert '53' in issue.message and '50' in issue.message
+
+
+def test_partial_enumeration_positive_still_passes():
+    """IR-05 正例（保持）：'其中优50个'部分列举按不等式通过。"""
+    doc = performance('绩效自评的2025年度项目53个，平均得分95.55分'
+                      '（其中，绩效评级为“优”的项目50个）。')
+    assert check_performance_counts(DisclosureRule(), doc) == []

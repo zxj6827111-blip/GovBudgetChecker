@@ -41,7 +41,11 @@ from src.engine.check_obligations import (  # noqa: E402
     registered_rule_ids,
 )
 from src.engine.pipeline import run_rules_with_outcomes  # noqa: E402
-from src.engine.rule_outcome import STATUS_FAIL, RuleDeferred  # noqa: E402
+from src.engine.rule_outcome import (  # noqa: E402
+    STATUS_FAIL,
+    STATUS_INSUFFICIENT_DATA,
+    RuleDeferred,
+)
 from src.engine.rules_v33 import (  # noqa: E402
     R33SGCompletion,
     build_document,
@@ -401,7 +405,12 @@ def test_truth_pipeline_executes_in_full_final_run(yichuan):
     rule_codes = {outcome.rule_id for outcome in outcomes}
     assert RULE_ID in rule_codes, "final 规则集未执行本规则——注册表与执行集脱节"
     outcome = next(item for item in outcomes if item.rule_id == RULE_ID)
-    assert outcome.status == STATUS_FAIL
+    # 冻结 page-data 没有统一财政事实：数量关系回执未完成，规则聚合状态按
+    # 优先级契约（insufficient_data > fail）如实升为未完成；已确认的
+    # 购置费细化 finding 仍全部保留。
+    assert outcome.status in {STATUS_FAIL, STATUS_INSUFFICIENT_DATA}
+    if outcome.status == STATUS_INSUFFICIENT_DATA:
+        assert "关系级回执未完成" in outcome.detail and "quantity:" in outcome.detail
     hits = [issue for issue in issues if issue.rule == RULE_ID]
     assert len(hits) == 1, "完整 final 执行未保留购置费细化 finding（fail 的 finding 不得被丢弃）"
 

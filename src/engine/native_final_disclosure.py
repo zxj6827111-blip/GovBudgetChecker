@@ -35,8 +35,41 @@ _DASH_ITEM = re.compile(
     r'(?P<klass>[\u4e00-\u9fff]{1,28}支出)[-—–]'
     r'(?P<kuan>[\u4e00-\u9fff()]{2,40}?)[-—–]'
     r'(?P<xiang>[\u4e00-\u9fff()]{2,60}?)[”"]?(?=[。.]|主要用于)')
-_DECISION = re.compile(rf'(?:支出决算(?:数)?|决算数)(?:为|是)?'
-                       rf'(?P<amount>{_NUMBER})(?:为)?(?P<unit>{_UNIT})')
+# IR-02：原件文本层会在"支出决算"与"为"之间夹游离逗号/换行
+# （自然资源研究院 P20"支出决算\n,\n为 2341.32 万元"），[，,]? 容忍该形态。
+class _BareClaimWithUnit:
+    """IR-02：裸金额声明继承条目首句单位后的声明视图（与正则 match 同接口）。"""
+
+    __slots__ = ('_amount', '_unit', '_start', '_end')
+
+    def __init__(self, amount, unit, start, end):
+        self._amount, self._unit, self._start, self._end = amount, unit, start, end
+
+    def __getitem__(self, key):
+        if key == 'amount':
+            return self._amount
+        if key == 'unit':
+            return self._unit
+        raise KeyError(key)
+
+    def start(self):
+        return self._start
+
+    def end(self):
+        return self._end
+
+
+def _dec(raw):
+    from decimal import Decimal, InvalidOperation
+
+    try:
+        return Decimal(str(raw).replace(',', ''))
+    except InvalidOperation:
+        return None
+
+
+_DECISION = re.compile(rf'(?:支出决算(?:数)?|决算数)[，,]?(?:为|是)?'
+                       rf'(?P<amount>{_NUMBER})[，,]?(?:为)?(?P<unit>{_UNIT})')
 _GENERAL_AMOUNT = re.compile(
     rf'一般公共预算(?:财政拨款)?支出(?:决算(?:数)?)?(?:为|共计|合计为|是)?'
     rf'(?P<amount>{_NUMBER})(?P<unit>{_UNIT})')
@@ -312,25 +345,77 @@ def _chain_visible_in_original(doc, chain):
     return True
 
 
-def _original_table_rows(doc, pages):
+def _original_table_rows(doc, pages, codes=None):
     """完整原表行清单（A2/IR03）：给定 1 基页码集合上的「行首编码+名称」。
 
     只读 doc.page_texts 原始文本行，不经解析产物——"已解析唯一"不等于
     原件唯一。行形态：行首 3-7 位编码 + 名称（NFKC 归一）；名称取编码后
     的连续非数字前缀（金额数字跟在名称之后，不属名称）。
+
+    IR-02（Codex 独立核验 2026-11-10）：原表文本层会把长名称拆到金额行
+    的上下两行（"一般公共服务\n201 207.40 207.40\n支出"），纯编码+金额行
+    用单行正则匹配不到，导致类级行（207 等）整体缺席、A2 身份链在
+    "类行必须在原表存在"判据上失败。这里按「编码行上一行是名称头、
+    下一行是名称尾」重建拆行类目；编码歧义（201 vs 20120）用调用方
+    已知的合法编码集合（``codes``）消解，无提示集合时跳过歧义行
+    （fail-closed，不猜）。
     """
     rows = []
+    seen_codes = []
     all_pages = getattr(doc, 'page_texts', []) or []
+    hint = {str(c) for c in (codes or ())}
+
+    def _split_name_rows(page_lines):
+        parsed = []
+        amount_tail = re.compile(
+            r'(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?'
+            r'(?:\s*(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)?\s*$')
+        for index, normalized in enumerate(page_lines):
+            match = re.match(r'^(\d{3,7})(\D+)', normalized)
+            if match and not match.group(2).startswith('.'):
+                parsed.append((match.group(1), match.group(2)))
+                continue
+            # IR-02：纯"编码+金额"行（名称被文本层拆到上下两行）。
+            # 编码宽度按长→短消歧（'2012902' 不得被 '201' 抢走）；候选编码
+            # 必须全为数字且在调用方已知编码集合内；余部必须能整段解释为
+            # 金额（一到两列），否则跳过（fail-closed，不猜）。
+            code = None
+            for width in (7, 5, 3):
+                prefix = normalized[:width]
+                if not prefix.isdigit():
+                    continue
+                if hint and prefix not in hint:
+                    continue
+                rest = normalized[width:].strip()
+                if rest and not amount_tail.fullmatch(rest):
+                    continue
+                code = prefix
+                break
+            if code is None:
+                continue
+            head = page_lines[index - 1] if index > 0 and re.match(r'^\D', page_lines[index - 1]) else ''
+            tail = ''
+            if index + 1 < len(page_lines) and re.match(r'^\D+$', page_lines[index + 1]):
+                tail = page_lines[index + 1]
+            name = head + tail
+            if name:
+                parsed.append((code, name))
+        return parsed
+
     for page_number in pages:
         if not isinstance(page_number, int) or not 1 <= page_number <= len(all_pages):
             continue
-        for line in str(all_pages[page_number - 1] or '').splitlines():
-            normalized = ''.join(
-                ch for ch in unicodedata.normalize('NFKC', line) if not ch.isspace())
-            match = re.match(r'^(\d{3,7})(\D+)', normalized)
-            if match:
-                rows.append((match.group(1), match.group(2)))
-    return rows
+        normalized_lines = [
+            ''.join(ch for ch in unicodedata.normalize('NFKC', line) if not ch.isspace())
+            for line in str(all_pages[page_number - 1] or '').splitlines()
+        ]
+        rows.extend(_split_name_rows(normalized_lines))
+    # 同页同码重复行（名称拆分多段重复）保序去重
+    deduped = []
+    for code, name in rows:
+        if (code, name) not in deduped:
+            deduped.append((code, name))
+    return deduped
 
 
 def _general_table_pages(doc, facts):
@@ -547,7 +632,8 @@ def _bind_klass_via_independent_chain(doc, facts, item, paths, aliases):
         return None
     klass_code = kuan_code[:3]
     # 类行必须在原表存在（层级链来源完整性：款行挂在真实类行之下）
-    if not any(code == klass_code for code, _row_name in _original_table_rows(doc, table_pages)):
+    if not any(code == klass_code for code, _row_name
+                in _original_table_rows(doc, table_pages, codes=set(paths))):
         return None
     table_klass_name = next((_name(f.subject_name) for f in facts
                              if str(f.subject_code) == klass_code
@@ -1067,16 +1153,45 @@ def check_function_disclosures(rule, doc):
                 f"{name_hint.get('table_page') or '?'}页编码 "
                 f"{name_hint['klass_code']} 科目为“{name_hint['table_name']}”；"
                 "本条目已按款/项独立身份链核对金额，类名差异请核对是否漏字。",
-                {'pages': hint_pages, 'page': hint_pages[0] if hint_pages else None} if hint_pages else {},
+                {'pages': hint_pages,
+                 'page': hint_page or (hint_pages[0] if hint_pages else None),
+                 'klass_code': name_hint['klass_code'],
+                 'narrative_class_name': name_hint['narrative_name'],
+                 'table_class_name': name_hint['table_name']} if hint_pages else {},
                 'info',
-                evidence_text=(f"说明类名：{name_hint['narrative_name']}；"
-                               f"表内类名：{name_hint['table_name']}（编码 {name_hint['klass_code']}）"),
+                # IR-03：证据只引说明侧原文类名（缺陷所在页）；表内类名与编码
+                # 在 message/location 结构化携带，不用拼贴说明冒充原文。
+                evidence_text=name_hint['narrative_name'],
                 check_relation_id=f'{rule.code}:general:text:item:{item.start()}:klass_name',
             ))
         # 博物馆、图书馆等 are literal fiscal subjects, not publisher names.
         # Their hierarchy is already validated above; only the declaration
         # prefix can introduce a foreign owner or year for this item.
         error = error or _guard(doc, text, begin, item.start(), item.start())
+        if not claims:
+            # IR-02（Codex 独立核验 2026-11-10）：同条目唯一单位继承——
+            # 显式决算声明漏写单位（宜川 P29"支出决算为4.19。"，同条目首句
+            # 已有"4.19 万元"）时，裸声明金额与条目首句带单位金额一致即按该
+            # 单位归一继续核对；漏单位缺陷由 CMM-011 独立交付。依据只来自
+            # 同条目原文，不跨条目、不按表值凑平、不跨条目继承。
+            bare = re.compile(
+                rf'(?:支出决算(?:数)?|决算数)[，,]?(?:为|是)?(?P<amount>{_NUMBER})'
+                rf'(?!(?:亿元|万元|元))')
+            bare_claims = list(bare.finditer(text.compact, item.end(), stop))
+            first_stop = text.compact.find('。', item.end(), stop)
+            if first_stop == -1:
+                first_stop = stop
+            header = re.compile(
+                rf'(?P<amount>{_NUMBER})(?P<unit>{_UNIT})').search(
+                text.compact, item.end(), first_stop)
+            if len(bare_claims) == 1 and header is not None:
+                try:
+                    if _dec(bare_claims[0]['amount']) == _dec(header['amount']):
+                        claims = [_BareClaimWithUnit(
+                            bare_claims[0]['amount'], header['unit'],
+                            bare_claims[0].start(), bare_claims[0].end())]
+                except (ValueError, ArithmeticError):
+                    pass
         if len(claims) != 1:
             decision_error = f'{item["xiang"]}条目显式决算金额缺失或不唯一，不能用预算金额替代'
             error = error or decision_error
@@ -1409,7 +1524,19 @@ def check_performance_counts(rule, doc):
             #   （不等式校验），不再要求加总闭合，也不转人工复核（宜川部门
             #   决算 53 个自评/优 50 个实证：旧实现把合法部分列举整段阻断）。
             # - 已披露之和超过总数（无论完整与否）：矛盾，照常交付。
-            partial_enumeration = not complete and computed <= declared
+            # IR-05（Codex 独立核验 2026-11-10）：区分"部分列举"与"完整构成
+            # 声明"必须依据原文措辞，不能只看四档标签是否齐备。原文用
+            # "全部/所有…评级"或"评级结果如下"声明完整构成时，即使四档
+            # 没有逐项出现（如"其余评级均为0"），也必须按加总等式核对：
+            # "全部53个，优50个，其余评级均为0个"=50≠53 是确定矛盾，
+            # 不得因缺四档标签而当作部分列举放行。
+            scope_compact = text.compact[total.end():stop]
+            complete_declaration = bool(re.search(
+                r'(?:全部|所有)[^。；]{0,12}评级|评级(?:结果|情况)[^。；]{0,6}如下',
+                scope_compact))
+            partial_enumeration = (
+                not complete and not complete_declaration and computed <= declared
+            )
             if reason:
                 _unresolved(rule, doc, key, reason, unresolved,
                             formula='self_evaluation_count compared with sum(disclosed distinct rating counts)')
@@ -1434,12 +1561,16 @@ def check_performance_counts(rule, doc):
                                  computed_count=computed, difference_count=declared - computed,
                                  current_year=year, tolerance_count=0,
                                  rating_counts_complete=complete,
-                                 comparison_basis='complete_sum' if complete else 'disclosed_lower_bound',
+                                 comparison_basis=('complete_sum' if complete else
+                                                   'declared_complete_sum' if complete_declaration else
+                                                   'disclosed_lower_bound'),
                                  cancelled_project_count=cancelled_count)
             breakdown = '+'.join(f'{label}{count}' for label, count in parts.items())
             if cancelled:
                 breakdown += f'+年内取消{cancelled_count}'
-            comparison = '评级分项之和不一致' if complete else '已披露评级分项之和超过总数'
+            comparison = ('评级分项之和不一致'
+                           if complete or complete_declaration
+                           else '已披露评级分项之和超过总数')
             issues.append(rule._issue(
                 f'绩效自评项目数量与{comparison}：自评{declared}个，'
                 f'{breakdown}={computed}个，相差{abs(declared - computed)}个。', location, 'error',

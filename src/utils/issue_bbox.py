@@ -47,6 +47,24 @@ class PDFBBoxLocator:
     def _native_text(value: Any) -> str:
         return "".join(unicodedata.normalize("NFKC", str(value or "")).split())
 
+    @staticmethod
+    def _region_text(value: Any) -> str:
+        """区域比对归一：去空白 + 去数字周边千分位/分栏逗号。
+
+        两个 PDF 引擎对同一原件的字面读取可能只差逗号：pdfplumber 读成
+        16427.30 或把两栏分隔读成 ", ,"，PyMuPDF 读成 16,427.30。逗号不改变
+        数值身份（千分位/分栏产物），区域命中判定允许它；其余字符（数字、
+        小数点、单位）仍逐字比对。
+        """
+        text = unicodedata.normalize("NFKC", str(value or ""))
+        text = "".join(text.split())
+        # 千分位/分栏逗号在两套抽取里可能落在不同位置（含数字与汉字之间、
+        # 单位两字之间："万\n, ,\n元"）。区域命中只做标点无关比对：数字与
+        # 汉字仍逐字相同，逗号位置差异不影响。
+        text = re.sub(
+            r"(?<=[\d\u4e00-\u9fff])[,，]+|[,，]+(?=[\d\u4e00-\u9fff])", "", text)
+        return text
+
     def _native_span_bbox(self, evidence: Dict[str, Any], page: Optional[int]) -> Optional[List[float]]:
         """Locate only a binder-authenticated literal span using PDF characters.
 
@@ -76,9 +94,24 @@ class PDFBBoxLocator:
                 if page is None or page > len(self._native_document.pages):
                     return None
                 original = self._native_document.pages[page - 1]
-                text = original.extract_text() or ""
+                # 与绑定器同一文本基准：绑定器的 offset 来自
+                # ``extract_visible_text_from_page``（过滤不可见字符）。几何门
+                # 若用原始 extract_text() 的 offset，同一引文在两套文本里
+                # 位置不同，会把真实原文误判成"无法定位"（研究院 P17 实例）。
+                text, source_page = original.extract_text() or "", original
+                try:
+                    from src.services.pdf_page_extract import is_visible_char
+
+                    page_height = float(original.height)
+                    visible_page = original.filter(
+                        lambda obj, h=page_height: is_visible_char(obj, h))
+                    visible_text = visible_page.extract_text() or ""
+                    if visible_text.strip():
+                        text, source_page = visible_text, visible_page
+                except Exception:  # noqa: BLE001 - 过滤失败时沿用原始文本
+                    pass
                 normalized_chars, positions = [], []
-                for line in original.extract_text_lines(return_chars=True):
+                for line in source_page.extract_text_lines(return_chars=True):
                     for char in line["chars"]:
                         for normalized in self._native_text(char.get("text")):
                             normalized_chars.append(normalized)
@@ -369,12 +402,12 @@ class PDFBBoxLocator:
 
     def _page_text_matches(self, page_number: Optional[int], quote: Any) -> bool:
         """Authenticate a quoted source span on the physical page without requiring a bbox."""
-        needle = self._native_text(quote)
+        needle = self._region_text(quote)
         if not needle or not page_number or not self._valid_document_page(page_number):
             return False
         try:
             document, _fitz = self._load_document()
-            page_text = self._native_text(document.load_page(page_number - 1).get_text())
+            page_text = self._region_text(document.load_page(page_number - 1).get_text())
             return bool(page_text and needle in page_text)
         except Exception:
             return False
@@ -401,7 +434,7 @@ class PDFBBoxLocator:
 
         PDF 不可读/区域无文本/引文为空 → False（不可认证为精确）。
         """
-        needle = self._native_text(quote)
+        needle = self._region_text(quote)
         if not needle or not page_number or not bbox:
             return False
         if not self.pdf_path or not Path(self.pdf_path).exists():
@@ -418,8 +451,8 @@ class PDFBBoxLocator:
                 for word in words
                 if not (word[2] < x0 or word[0] > x1 or word[3] < y0 or word[1] > y1)
             ]
-            haystack = self._native_text("".join(region_tokens))
-            return bool(haystack) and needle in haystack
+            haystack = self._region_text("".join(region_tokens))
+            return bool(haystack) and self._region_text(quote) in haystack
         except Exception:
             return False
 

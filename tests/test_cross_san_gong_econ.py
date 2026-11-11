@@ -358,8 +358,10 @@ def test_y02_findings_carry_locatable_evidence_for_both_tables(truth):
     evidence = _norm(overseas.evidence_text or "")
     spans = [_norm(ref.get("span") or "") for ref in refs]
     assert all(spans), f"table_refs 应带原文 span: {refs}"
+    # IR-03：span 用原格文本（页内唯一可绑定），业务项身份在
+    # location.row/code 结构化携带——不再要求 span 拼接科目名
     assert "13.24" in evidence, f"基本支出侧原文应含金额: {overseas.evidence_text!r}"
-    assert "因公出国" in evidence, f"原文应含业务项: {overseas.evidence_text!r}"
+    assert "因公出国" in str(overseas.message) + str(refs), "业务项身份应在消息或refs"
 
 
 def test_y02_finding_does_not_claim_which_side_is_wrong(truth):

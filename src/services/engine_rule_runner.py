@@ -15,6 +15,8 @@ from src.engine.rule_registry import all_rule_ids, select_rules
 from src.engine.rule_outcome import (
     RuleOutcome,
     RuleOutcomeSignal,
+    STATUS_EXECUTION_ERROR,
+    STATUS_INSUFFICIENT_DATA,
     STATUS_PARSE_ERROR,
     STATUS_PRIORITY,
     resolve_rule_status,
@@ -78,62 +80,10 @@ class EngineRuleRunner:
         return parsed if parsed > 0 else None
 
     def _build_evidence_list(self, issue: Issue, page_number: Optional[int]) -> List[Dict[str, Any]]:
-        """构造证据列表：只携带真实原文引用，绝不用问题说明冒充原文。
+        """委托共享构造器（IR-03：双模式与 legacy 序列化同一证据口径）。"""
+        from src.engine.issue_evidence import build_issue_evidence_list
 
-        ZC-00（SYS-07）：此前 text 缺失时回退到 description/message——那把规则的
-        判定说明当成"原文摘录"输出，制造看似有据可查的问题项。现在没有
-        evidence_text（规则给出的命中原文）就保持证据文本为空，由证据门按
-        "缺原文"记录；页码未知时保持 None，不默认第 1 页。
-        """
-        text = str(getattr(issue, "evidence_text", None) or "").strip()
-        evidence_item: Dict[str, Any] = {"page": page_number}
-        if text:
-            evidence_item["text"] = text
-            evidence_item["text_snippet"] = text
-        location = getattr(issue, "location", {}) or {}
-        # 同一问题命中多处原文时（如“本表反映单位”共 6 处），逐处给出真实引用，
-        # 不只用第一处冒充全部出现点；证据门逐条按各自页码核验。
-        refs = [
-            ref for ref in (location.get("table_refs") or [])
-            if isinstance(ref, dict) and str(ref.get("span") or "").strip()
-            and type(ref.get("page")) is int and ref["page"] > 0
-        ]
-        if len(refs) >= 2:
-            items: List[Dict[str, Any]] = []
-            seen: set = set()
-            for ref in refs:
-                key = (ref["page"], str(ref["span"]))
-                if key in seen:
-                    continue
-                seen.add(key)
-                item = {
-                    "page": ref["page"],
-                    "text": str(ref["span"]),
-                    "text_snippet": str(ref["span"]),
-                    "location_level": "exact_span",
-                    "verification_status": "unverified",
-                }
-                if ref.get("role"):
-                    item["role"] = ref["role"]
-                items.append(item)
-            if len(items) >= 2:
-                return items
-        location_level = str(getattr(issue, "location_level", None) or "unresolved")
-        if location_level not in {"exact_cell", "exact_span"}:
-            location_level = str(location.get("location_level") or location_level)
-        verification_status = str(getattr(issue, "verification_status", None) or "unverified")
-        if verification_status != "verified":
-            verification_status = str(location.get("verification_status") or verification_status)
-        bbox = getattr(issue, "bbox", None) or location.get("bbox")
-        evidence_item["location_level"] = location_level
-        evidence_item["verification_status"] = verification_status
-        if (
-            bbox
-            and location_level in {"exact_cell", "exact_span"}
-            and verification_status == "verified"
-        ):
-            evidence_item["bbox"] = bbox
-        return [evidence_item]
+        return build_issue_evidence_list(issue, page_number)
 
     def _issue_to_finding(
         self,
@@ -306,6 +256,61 @@ class EngineRuleRunner:
         return findings, conversion_errors
 
     @staticmethod
+    def _escalate_from_relation_receipts(
+        document: Optional[Document],
+        rule_id: str,
+        receipt_start: int,
+        outcome: RuleOutcome,
+    ) -> None:
+        """关系回执未完成时，规则状态不得仍记 pass/fail（与 legacy 同一纪律）。
+
+        Codex IR-08 返工第 8 项：数量回执三项 insufficient_data、规则总状态
+        仍 pass，义务台账据此把检查记成完成。双模式入口与 pipeline 采用同一
+        优先级（execution_error > parse_error > insufficient_data），已有
+        findings 全部保留。
+        """
+        if document is None:
+            return
+        if outcome.status in {
+            STATUS_INSUFFICIENT_DATA, STATUS_PARSE_ERROR, STATUS_EXECUTION_ERROR,
+        }:
+            return
+        receipts = getattr(document, "fact_receipts", None)
+        if not isinstance(receipts, list):
+            return
+        pending = [
+            receipt for receipt in receipts[max(0, receipt_start):]
+            if isinstance(receipt, dict)
+            and str(receipt.get("rule_id") or "") == rule_id
+            and str(receipt.get("status") or "") in {
+                STATUS_INSUFFICIENT_DATA, STATUS_PARSE_ERROR, STATUS_EXECUTION_ERROR,
+            }
+        ]
+        if not pending:
+            return
+        statuses = {str(receipt.get("status") or "") for receipt in pending}
+        worst = STATUS_INSUFFICIENT_DATA
+        if STATUS_PARSE_ERROR in statuses:
+            worst = STATUS_PARSE_ERROR
+        if STATUS_EXECUTION_ERROR in statuses:
+            worst = STATUS_EXECUTION_ERROR
+        outcome.status = worst
+        sub_checks = [str(receipt.get("sub_check_id") or "") for receipt in pending]
+        sub_checks = [item for item in dict.fromkeys(sub_checks) if item]
+        reasons = [str(receipt.get("incomplete_reason") or "") for receipt in pending]
+        reasons = [item for item in dict.fromkeys(reasons) if item]
+        suffix = "关系级回执未完成：" + "、".join(sub_checks)
+        if reasons:
+            suffix += "（" + "；".join(reasons[:3]) + "）"
+        outcome.detail = "；".join(part for part in (outcome.detail, suffix) if part)
+        outcome.unresolved_reasons = list(dict.fromkeys(
+            [*outcome.unresolved_reasons, *reasons]))
+        for receipt in pending:
+            for diagnostic in receipt.get("diagnostics") or []:
+                if isinstance(diagnostic, dict):
+                    outcome.diagnostics.append(dict(diagnostic))
+
+    @staticmethod
     def _link_relation_receipts(
         document: Optional[Document],
         rule_id: str,
@@ -466,12 +471,13 @@ class EngineRuleRunner:
                         )
                     else:
                         self._stats["successful_rules"] += 1
-                        self._outcomes.append(
-                            RuleOutcome(
-                                rule_id=str(rule_id),
-                                status="fail" if findings else "pass",
-                            )
+                        outcome = RuleOutcome(
+                            rule_id=str(rule_id),
+                            status="fail" if findings else "pass",
                         )
+                        self._escalate_from_relation_receipts(
+                            document, str(rule_id), receipt_start, outcome)
+                        self._outcomes.append(outcome)
                     all_findings.extend(findings)
                     self._stats["total_findings"] += len(findings)
 
@@ -528,17 +534,18 @@ class EngineRuleRunner:
                     diagnostics = diagnostics_for_texts(
                         document, [detail_str, *unresolved], rule_id=str(rule_id)
                     )
-                    self._outcomes.append(
-                        RuleOutcome(
-                            rule_id=str(rule_id),
-                            status=outcome_status,
-                            detail=detail_str,
-                            partial_findings_count=len(findings),
-                            unresolved_reasons=unresolved,
-                            reason_codes=list(getattr(signal, "reason_codes", []) or []),
-                            diagnostics=diagnostics,
-                        )
+                    deferred_outcome = RuleOutcome(
+                        rule_id=str(rule_id),
+                        status=outcome_status,
+                        detail=detail_str,
+                        partial_findings_count=len(findings),
+                        unresolved_reasons=unresolved,
+                        reason_codes=list(getattr(signal, "reason_codes", []) or []),
+                        diagnostics=diagnostics,
                     )
+                    self._escalate_from_relation_receipts(
+                        document, str(rule_id), receipt_start, deferred_outcome)
+                    self._outcomes.append(deferred_outcome)
                     logger.info(
                         "Rule %s deferred: %s",
                         rule_id,
@@ -591,6 +598,9 @@ class EngineRuleRunner:
         all_findings = deduplicate_native_issues(all_findings, document)
         self._stats["total_findings"] = len(all_findings)
         self._stats["fact_receipts"] = list(getattr(document, "fact_receipts", None) or [])
+        # IR-01：交付抑制台账随统计收割（双模式路径可持久化对账）
+        self._stats["delivery_suppressions"] = list(
+            getattr(document, "delivery_suppression_ledger", None) or [])
         if getattr(document, "fact_context", None) is not None:
             try:
                 self._stats["fact_context_summary"] = document.fact_context.summary()

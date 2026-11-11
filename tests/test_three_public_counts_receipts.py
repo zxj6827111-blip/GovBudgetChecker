@@ -92,3 +92,79 @@ def test_multi_instance_table_records_gap():
     receipts = _receipts(doc)
     assert any(r["status"] == "insufficient_data"
                and "实例" in str(r.get("incomplete_reason")) for r in receipts)
+
+
+# ---------------------------------------------------------------------------
+# Codex 返工第 8 项：合法空白/空表说明/明确无三公支出 → 合法适用性结论
+# ---------------------------------------------------------------------------
+
+def test_empty_table_statement_yields_not_applicable_with_source_page():
+    doc = _doc(
+        [],
+        "说明：甲局本年度没有财政拨款“三公”经费支出，故本表无数据。",
+    )
+    doc.page_texts[0] = (
+        "财政拨款“三公”经费支出决算表\n"
+        "说明：甲局本年度没有财政拨款“三公”经费支出，故本表无数据。"
+    )
+    issues = _run(doc)
+    assert [i for i in issues if "保有量" not in str(i.message)] == []
+    receipts = {r["sub_check_id"]: r for r in _receipts(doc)}
+    for indicator in ("vehicle_purchase", "overseas", "reception"):
+        receipt = receipts[f"quantity:{indicator}"]
+        assert receipt["status"] == "not_applicable", receipt
+        assert "空表说明" in receipt["formula"]
+        refs = receipt.get("disclosure_sources") or []
+        assert refs and refs[0].get("page") == 1
+
+
+def test_scope_none_expenditure_statement_yields_not_applicable():
+    doc = _doc([], "甲局2025 年度无“三公”经费财政拨款支出。")
+    _run(doc)
+    receipts = {r["sub_check_id"]: r for r in _receipts(doc)}
+    for indicator in ("vehicle_purchase", "overseas", "reception"):
+        assert receipts[f"quantity:{indicator}"]["status"] == "not_applicable"
+        assert "无三公经费支出" in receipts[f"quantity:{indicator}"]["formula"]
+
+
+def test_empty_table_statement_does_not_override_nonzero_facts():
+    """说明写"本表无数据"但表内已有非零事实：仍按取数不足，不让说明掩盖数据。"""
+    doc = _doc(
+        [_fact("reception", "1.00")],
+        "说明：甲局本年度没有财政拨款“三公”经费支出，故本表无数据。",
+    )
+    doc.page_texts[0] = (
+        "财政拨款“三公”经费支出决算表\n"
+        "说明：甲局本年度没有财政拨款“三公”经费支出，故本表无数据。"
+    )
+    _run(doc)
+    receipts = {r["sub_check_id"]: r for r in _receipts(doc)}
+    assert receipts["quantity:vehicle_purchase"]["status"] == "insufficient_data"
+
+
+def test_rule_outcome_escalates_when_relation_receipt_unresolved():
+    """规则没有正式 finding，但关系回执未完成 → 规则聚合状态不得仍记 pass。"""
+    from src.engine.pipeline import run_rules_with_outcomes
+
+    class _ReceiptOnlyRule:
+        code = "TEST-RECEIPT-ONLY"
+
+        def apply(self, doc):
+            from src.engine.rules_v33 import _v33_relation_receipt
+
+            _v33_relation_receipt(
+                doc, self.code, "relation:1",
+                status="insufficient_data", incomplete_reason="取数不足：示例")
+            return []
+
+    doc = SimpleNamespace(
+        page_texts=["测试页"], report_kind="final", fact_receipts=[],
+        path="x.pdf", _rule_identity={}, dominant_unit="万元", units_per_page=[None],
+        years_per_page=[[]], anchors={}, dominant_year=2025,
+    )
+    _issues, outcomes = run_rules_with_outcomes(
+        doc, report_kind="final", rules=[_ReceiptOnlyRule()])
+    outcome = next(item for item in outcomes if item.rule_id == "TEST-RECEIPT-ONLY")
+    assert outcome.status == "insufficient_data", outcome
+    assert "关系级回执未完成" in outcome.detail
+    assert "relation:1" in outcome.detail

@@ -467,6 +467,7 @@ class DualModeAnalyzer:
                     "rule_execution_summary": rule_execution_summary,
                     # AC-04：关系级子检查回执与统一事实摘要随结果交付
                     "fact_receipts": (self.engine_runner.get_stats() or {}).get("fact_receipts", []) if self.engine_runner else [],
+                    "delivery_suppressions": (self.engine_runner.get_stats() or {}).get("delivery_suppressions", []) if self.engine_runner else [],
                     "structured_consumption": (self.engine_runner.get_stats() or {}).get("structured_consumption", []) if self.engine_runner else [],
                     "fact_context_summary": (self.engine_runner.get_stats() or {}).get("fact_context_summary") if self.engine_runner else None,
                     "config": config.dict()

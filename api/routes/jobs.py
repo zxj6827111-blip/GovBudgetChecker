@@ -831,12 +831,13 @@ async def confirm_material_dimensions(job_id:str,body:MaterialDimensionsRequest,
 
 @router.get("/api/jobs/{job_id}/report-confirmation")
 async def get_report_confirmation(job_id: str, request: Request):
-    """读取整份确认门禁与三类处理对象（确定材料问题/真实歧义/系统未完成）。
+    """读取整份确认门禁、三类处理对象与最近一次确认记录（IR-06/07）。
 
-    纯读取：从持久化的当前分析结果组装，不落盘、不触发重分析。
+    纯读取：从持久化的当前分析结果组装，不触发重分析；确认记录
+    （confirm_reports.jsonl）随读回，页面刷新/重开可对账。
     """
     _, _, user, payload = require_job_access(request, job_id)
-    from src.services.report_confirmation_gate import build_report_confirmation
+    from src.services.report_confirmation_gate import build_report_confirmation, read_confirm_records
 
     enabled = str(os.getenv("GOVBUDGET_CONFIRM_REPORT_ENABLED") or "").strip().lower() in {
         "1", "true", "yes", "on",
@@ -844,48 +845,92 @@ async def get_report_confirmation(job_id: str, request: Request):
     confirmation = await run_in_threadpool(
         lambda: build_report_confirmation(payload, confirm_report_enabled=enabled)
     )
+    records = await run_in_threadpool(lambda: read_confirm_records(job_id))
+    confirmation["confirm_records"] = records
+    confirmation["latest_confirm_record"] = records[-1] if records else None
     return confirmation
 
 
 class ConfirmReportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     acknowledged_categories: Literal["confirmed_material_issues"] = "confirmed_material_issues"
+    # IR-07：写侧携带用户读取到的版本与服务端当前版本对账，拒绝旧页面对
+    # 新版本发起的确认；幂等请求 ID 保证重复点击不产生多条业务记录。
+    expected_analysis_revision: str = Field(min_length=1, max_length=300)
+    idempotency_key: str = Field(min_length=8, max_length=128)
 
 
 @router.post("/api/jobs/{job_id}/confirm-report")
 async def confirm_report(job_id: str, body: ConfirmReportRequest, request: Request):
     """整份确认（默认关闭）：只签认当前分析版本中证据充分的确定性问题。
 
-    - 未开启 GOVBUDGET_CONFIRM_REPORT_ENABLED 时返回 403（默认关闭的兼容行为）。
-    - 系统未完成检查非空时返回 409：系统失败不能要求用户代替程序重新计算，
-      未计算的关系也不能因确认变成已完成。
-    - 确认记录绑定当前分析版本；不覆盖人工疑问、忽略决定和历史有效结论。
+    - 未开启 GOVBUDGET_CONFIRM_REPORT_ENABLED 时返回 403（默认关闭兼容行为）。
+    - 请求携带的 expected_analysis_revision 与服务端当前版本不一致 →
+      409 REVISION_CHANGED（旧页面不得对新版本确认）。
+    - 系统未完成检查非空时 409 SYSTEM_INCOMPLETE：系统失败不能要求用户
+      代替程序重新计算，未计算的关系不能因确认变成已完成。
+    - 确认成员使用结果内稳定问题 ID（finding.id），排除
+      ignored/questioned/needs_review/manual_review 等已有决定或疑问
+      （IR-06/07）；同一 idempotency_key 重复请求返回同一条记录。
+    - 记录原子落盘（confirm_reports.jsonl），读取接口/刷新可读回。
     """
     _, _, user, payload = require_job_access(request, job_id)
-    from src.services.report_confirmation_gate import build_report_confirmation, confirm_report_allowed
+    from src.services.report_confirmation_gate import (
+        append_confirm_record,
+        build_report_confirmation,
+        confirm_report_allowed,
+        read_confirm_records,
+    )
 
     enabled = str(os.getenv("GOVBUDGET_CONFIRM_REPORT_ENABLED") or "").strip().lower() in {
         "1", "true", "yes", "on",
     }
+    current_revision = str(payload.get("analysis_revision") or "")
+    if str(body.expected_analysis_revision) != current_revision:
+        raise HTTPException(status_code=409, detail={
+            "error": "REVISION_CHANGED",
+            "expected": body.expected_analysis_revision,
+            "current": current_revision,
+        })
+    # 幂等：同一 idempotency_key 已有记录 → 原样返回，不重复落盘/审计
+    existing = await run_in_threadpool(lambda: read_confirm_records(job_id))
+    prior = next((r for r in existing
+                  if r.get("idempotency_key") == body.idempotency_key
+                  and r.get("analysis_revision") == current_revision), None)
+    if prior is not None:
+        return {"result": "confirmed", "idempotent": True, "record": prior}
+
     confirmation = await run_in_threadpool(
         lambda: build_report_confirmation(payload, confirm_report_enabled=enabled)
     )
-    decision = confirm_report_allowed(confirmation, payload.get("analysis_revision"))
+    decision = confirm_report_allowed(confirmation, current_revision)
     if not decision["allowed"]:
         status_code = 403 if decision["code"] == "CONFIRM_REPORT_DISABLED" else 409
         raise HTTPException(status_code=status_code, detail=decision["code"])
-    # 版本绑定 + 当前确定性问题清单快照：只签认确定性对象
     snapshot = confirmation["categories"]["confirmed_material_issues"]
     record = {
         "job_id": job_id,
-        "analysis_revision": payload.get("analysis_revision"),
+        "analysis_revision": current_revision,
         "scope": "deterministic_findings_only",
+        # 稳定问题 ID：同规则同页的不同关系不再碰撞（IR-07）
+        "confirmed_issue_ids": [item["id"] for item in snapshot if item.get("id")],
         "confirmed_count": len(snapshot),
-        "confirmed_issue_ids": [
-            f"{item.get('rule_id')}@p{item.get('page')}" for item in snapshot
-        ],
+        "excluded": {
+            "genuine_ambiguities": confirmation["counts"]["genuine_ambiguities"],
+            "system_incomplete": confirmation["counts"]["system_incomplete"],
+        },
+        "idempotency_key": body.idempotency_key,
         "actor": str((user or {}).get("username") or "unknown"),
+        "ts": time.time(),
         "note": "不覆盖人工疑问/忽略决定/历史结论；未计算关系不因确认变已完成",
     }
+    saved = await run_in_threadpool(lambda: append_confirm_record(job_id, record))
+    if saved is None:
+        raise HTTPException(status_code=500, detail="confirm_record_persist_failed")
+    if saved is not record:
+        # 并发双击：锁内检查发现同 key+版本已由另一请求写入，返回先到者
+        # 的记录，不重复审计/落盘（IR-08 并发幂等）。
+        return {"result": "confirmed", "idempotent": True, "record": saved}
     append_audit_event(
         action="confirm_report",
         actor=record["actor"],
@@ -893,6 +938,7 @@ async def confirm_report(job_id: str, body: ConfirmReportRequest, request: Reque
         resource_type="analysis_job",
         resource_id=job_id,
         details={"confirmed_count": record["confirmed_count"],
-                 "analysis_revision": record["analysis_revision"]},
+                 "analysis_revision": record["analysis_revision"],
+                 "idempotency_key": record["idempotency_key"]},
     )
-    return {"result": "confirmed", "record": record}
+    return {"result": "confirmed", "idempotent": False, "record": saved}

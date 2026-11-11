@@ -191,6 +191,10 @@ EXPECTED_BUD_UNRESOLVED = {
 
 # 2026-10-27：不再跨“总额，其中分项”的金额猜配同比。
 # 冻结原文中这两份声明还缺唯一的操作数绑定，保留待补核，不能为旧数量门槛强行 pass。
+#: Codex IR-08 返工第 8 项：数量关系与三公叙述-表格关系回执未完成时，
+#: 规则状态按既有优先级契约如实升为 insufficient_data（不再用 pass 掩盖）。
+EXPECTED_RELATION_GUARDS = {"BUD-115", "CMM-001"}
+
 EXPECTED_CONTEXT_GUARDS = {
     "jianguanwei": {"CMM-006"},
     "chengguan": {"CMM-006"},
@@ -202,11 +206,18 @@ EXPECTED_CONTEXT_GUARDS = {
 def test_budget_unresolved_per_doc(budget_replays, alias):
     summary = budget_replays[alias]["summary"]
     unresolved = {item.get("rule_id") for item in summary["unresolved_rules"]}
-    assert unresolved == EXPECTED_BUD_UNRESOLVED[alias] | EXPECTED_CONTEXT_GUARDS[alias], (
-        f"{alias}: unresolved 集合 {unresolved} 与锁定不符"
-    )
-    # 历史修复不得回退；只允许新增这一条经原文证实的身份绑定缺口。
-    assert len(unresolved - EXPECTED_CONTEXT_GUARDS[alias]) <= 2
+    assert unresolved == (
+        EXPECTED_BUD_UNRESOLVED[alias]
+        | EXPECTED_CONTEXT_GUARDS[alias]
+        | EXPECTED_RELATION_GUARDS
+    ), f"{alias}: unresolved 集合 {unresolved} 与锁定不符"
+    # 历史修复不得回退；只允许新增经原文证实的身份绑定缺口。
+    assert len(unresolved - EXPECTED_CONTEXT_GUARDS[alias] - EXPECTED_RELATION_GUARDS) <= 2
+    for rule_id in EXPECTED_RELATION_GUARDS:
+        receipt = next(item for item in summary["unresolved_rules"]
+                       if item["rule_id"] == rule_id)
+        assert receipt["status"] == "insufficient_data"
+        assert "关系级回执未完成" in receipt["detail"]
     for rule_id in EXPECTED_CONTEXT_GUARDS[alias]:
         receipt = next(item for item in summary["unresolved_rules"] if item["rule_id"] == rule_id)
         assert receipt["status"] == "insufficient_data"
@@ -214,11 +225,12 @@ def test_budget_unresolved_per_doc(budget_replays, alias):
         assert "分项或其他金额" in receipt["detail"]
 
 
-def test_budget_unresolved_total_le_6(budget_replays):
+def test_budget_unresolved_total_le_11_after_relation_receipts(budget_replays):
+    """历史 ≤6 基线 + 每份 2 条计划内关系回执（BUD-115 数量、CMM-001 三公）。"""
     total = sum(
         r["summary"]["unresolved_total"] for r in budget_replays.values()
     )
-    assert total <= 6, f"预算 3 份 unresolved 合计 {total} > 6"
+    assert total <= 11, f"预算 3 份 unresolved 合计 {total} > 11"
 
 
 def test_wenlvju_structural_absence_documented(budget_replays):
@@ -515,6 +527,15 @@ def test_finals_unresolved_total_le_11(final_replays):
         assert wenlv_cross["status"] == "insufficient_data", wenlv_cross["detail"]
         assert "因公出国（境）费" in wenlv_cross["detail"], wenlv_cross["detail"]
         assert "不得以三公表该项反推" in wenlv_cross["detail"], wenlv_cross["detail"]
+        added += 1
+    # Codex IR-08 返工第 8 项：数量关系回执未完成 → 规则状态不得仍记 pass。
+    # 四份冻结 page-data 都缺统一财政事实，数量金额关系按 insufficient_data
+    # 记账（+4），finding 不丢；这与"放开阈值"无关，是既有优先级契约的落实。
+    for alias in ("golden", "yichuan", "wenlv", "shiquan"):
+        item = next((x for x in final_replays[alias]["summary"]["unresolved_rules"]
+                     if x["rule_id"] == "V33-SG-COMPLETION"), None)
+        assert item is not None and item["status"] == "insufficient_data", (alias, item)
+        assert "关系级回执未完成" in item["detail"] and "quantity:" in item["detail"]
         added += 1
     assert total - added <= 11, f"除已核实的原文缺操作数外仍有计划外回升: {total} - {added} > 11"
 

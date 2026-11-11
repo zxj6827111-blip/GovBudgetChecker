@@ -1,8 +1,12 @@
-"""D0 RC-5b 回归：交付前噪声过滤显式留痕。
+"""IR-01 回归（Codex 独立核验 RETURN_FOR_REWORK 2026-11-10）。
 
-控制试验（计划第二节）：同一检查结果仅改变提示措辞（消息含/不含模式词），
-交付数 0↔1——静默按消息关键词丢弃。修复后：被丢弃的问题逐条进入
-doc.delivery_noise_ledger（规则、命中模式、消息摘要），过滤可审计。
+控制试验：同一规则、同一数字、同一 fail 状态——
+- "金额100万元与分项之和90万元不一致" → 交付 1 条
+- 仅改为"金额格式错误：…" → 必须仍交付 1 条（旧实现 0 条）
+
+消息关键词不再是任何抑制依据；合法抑制的唯一入口是规则在
+location["delivery_suppressed"] 写入结构化决定（policy_id/relation_id/
+reason），被抑制条目进入 doc 级台账并随 payload 持久化可对账。
 """
 from __future__ import annotations
 
@@ -12,32 +16,55 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from src.engine.pipeline import build_issues_payload  # noqa: E402
 from src.engine.rules_v33 import order_and_number_issues  # noqa: E402
 
 
-def _issue(rule="V33-000", message="正常问题"):
+def _issue(rule="V33-000", message="正常问题", **location):
     return SimpleNamespace(rule=rule, message=message, desc=None,
-                           location={"page": 1, "pos": 0})
+                           location={"page": 1, "pos": 0, **location})
 
 
-def test_normal_issue_passes_without_ledger():
-    doc = SimpleNamespace()
-    out = order_and_number_issues(doc, [_issue()])
-    assert len(out) == 1
-    assert getattr(doc, "delivery_noise_ledger", []) == []
-
-
-def test_noise_drop_is_ledgered_and_logged():
-    doc = SimpleNamespace()
-    out = order_and_number_issues(
-        doc,
-        [_issue("V33-999", "表×格式错误示例"),
-         _issue("V33-998", "正常问题甲"),
-         _issue("V33-997", "正常问题乙")],
+def _doc():
+    return SimpleNamespace(
+        page_texts=["某局2025年度部门决算"], page_tables=[], pages=1,
+        anchors={}, years_per_page=[[]], units_per_page=[None],
     )
-    assert len(out) == 2
-    ledger = getattr(doc, "delivery_noise_ledger", [])
-    assert len(ledger) == 1
-    assert ledger[0]["rule"] == "V33-999"
-    assert ledger[0]["pattern"] == "格式错误"
-    assert "表×格式错误示例" in ledger[0]["message_excerpt"]
+
+
+def test_message_wording_never_suppresses_delivery():
+    """IR-01 控制试验：两种措辞必须交付相同业务结果。"""
+    doc = _doc()
+    plain = order_and_number_issues(doc, [_issue("V33-999", "金额100万元与分项之和90万元不一致")])
+    doc2 = _doc()
+    keyword = order_and_number_issues(doc2, [_issue("V33-999", "金额格式错误：金额100万元与分项之和90万元不一致")])
+    assert len(plain) == 1 and len(keyword) == 1, (
+        f"措辞不得改变交付：plain={len(plain)} keyword={len(keyword)}")
+    assert getattr(doc2, "delivery_suppression_ledger", []) == []
+
+
+def test_structured_suppression_is_ledgered_and_passes_policy():
+    doc = _doc()
+    suppressed = _issue(
+        "V33-998", "已由上游政策合并的重复项",
+        delivery_suppressed={"policy_id": "POLICY-MERGE-001",
+                             "relation_id": "rel-1", "reason": "同源合并，见关系回执"},
+    )
+    kept = _issue("V33-997", "正常问题")
+    out = order_and_number_issues(doc, [suppressed, kept])
+    assert len(out) == 1 and "正常问题" in str(out[0].message)
+    ledger = getattr(doc, "delivery_suppression_ledger", [])
+    assert ledger and ledger[0]["policy_id"] == "POLICY-MERGE-001"
+    assert ledger[0]["relation_id"] == "rel-1"
+
+
+def test_suppression_ledger_reaches_payload():
+    """抑制台账随 build_issues_payload 持久化返回（读取/导出可对账）。"""
+    from src.engine.pipeline import build_document
+
+    doc = build_document("supp.pdf", ["某局2025年度部门决算"], [], 0)
+    doc.delivery_suppression_ledger = [{
+        "rule": "V33-998", "policy_id": "POLICY-MERGE-001",
+        "relation_id": "rel-1", "reason": "同源合并"}]
+    payload = build_issues_payload(doc, use_ai_assist=False)
+    assert payload.get("delivery_suppressions") == doc.delivery_suppression_ledger

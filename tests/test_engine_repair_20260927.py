@@ -218,6 +218,15 @@ def test_unresolved_total_le_15(replays):
         assert "因公出国（境）费" in wenlv_cross["detail"], wenlv_cross["detail"]
         assert "不得以三公表该项反推" in wenlv_cross["detail"], wenlv_cross["detail"]
         planned_missing += 1
+    # Codex IR-08 返工第 8 项：规则没有正式 finding 时，数量关系回执
+    # 未完成也必须让规则状态离开 pass（冻结 page-data 无统一财政事实，
+    # 数量金额关系按 insufficient_data 记账；finding 不丢）。
+    for alias in ('golden','yichuan','wenlv','shiquan'):
+        item = replays[alias]['unresolved'].get('V33-SG-COMPLETION')
+        assert item is not None, f"{alias}: 数量关系未完成必须进入未决"
+        assert item['status'] == 'insufficient_data', (alias, item)
+        assert '关系级回执未完成' in item['detail'] and 'quantity:' in item['detail'], item
+        planned_missing += 1
     assert total - planned_missing <= 15, f"排除已核实缺分项预算后 unresolved {total} 超出验收线"
     # 2026-09-29 MR-B 批次计划内收敛：4 份决算 unresolved 14 → ≤10（实测 10），
     # 验收重走并固化于 tests/test_budget_intake_20260929.py（BUD-105/107/108/109

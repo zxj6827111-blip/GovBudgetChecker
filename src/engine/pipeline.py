@@ -24,6 +24,7 @@ from .rule_outcome import (
     STATUS_EXECUTION_ERROR,
     STATUS_FAIL,
     STATUS_INSUFFICIENT_DATA,
+    STATUS_PARSE_ERROR,
     STATUS_PASS,
     resolve_rule_status,
     summarize_rule_outcomes,
@@ -154,6 +155,7 @@ def run_rules_with_outcomes(
             )
         )
 
+    receipt_start = len(getattr(doc, "fact_receipts", None) or [])
     for rule_obj in selected_rules:
         code = getattr(rule_obj, "code", None) or getattr(
             getattr(rule_obj, "__class__", object), "code", "UNKNOWN"
@@ -225,6 +227,53 @@ def run_rules_with_outcomes(
                 status=STATUS_FAIL if produced_list else STATUS_PASS,
             )
         )
+
+    # 关系级回执对账（Codex IR-08 返工第 8 项）：规则可能"没有正式 finding"，
+    # 但 doc.fact_receipts 里仍有 insufficient_data / parse_error /
+    # execution_error 的关系回执（典型：三公数量回执三项取数不足、规则总状态
+    # 仍记 pass）。若聚合状态不升到未完成态，义务台账会按 pass 把整项检查记成
+    # 完成——"没检查"被"规则 pass"掩盖。这里按 RuleOutcomeSignal 同一优先级
+    # （execution_error > parse_error > insufficient_data）升级状态；已确认的
+    # finding 全部保留，不新增也不删除任何问题。
+    receipts = list(getattr(doc, "fact_receipts", None) or [])[receipt_start:]
+    unresolved_by_rule: Dict[str, List[Dict[str, Any]]] = {}
+    for receipt in receipts:
+        if not isinstance(receipt, dict):
+            continue
+        receipt_status = str(receipt.get("status") or "")
+        if receipt_status in {
+            STATUS_INSUFFICIENT_DATA, STATUS_PARSE_ERROR, STATUS_EXECUTION_ERROR,
+        }:
+            unresolved_by_rule.setdefault(
+                str(receipt.get("rule_id") or ""), []).append(receipt)
+    for outcome in outcomes:
+        pending = unresolved_by_rule.get(outcome.rule_id) or []
+        if not pending or outcome.status in {
+            STATUS_INSUFFICIENT_DATA, STATUS_PARSE_ERROR, STATUS_EXECUTION_ERROR,
+        }:
+            continue
+        worst = STATUS_INSUFFICIENT_DATA
+        statuses = {str(item.get("status") or "") for item in pending}
+        if STATUS_PARSE_ERROR in statuses:
+            worst = STATUS_PARSE_ERROR
+        if STATUS_EXECUTION_ERROR in statuses:
+            worst = STATUS_EXECUTION_ERROR
+        outcome.status = worst
+        sub_checks = [str(item.get("sub_check_id") or "") for item in pending]
+        sub_checks = [item for item in dict.fromkeys(sub_checks) if item]
+        reasons = [str(item.get("incomplete_reason") or "") for item in pending]
+        reasons = [item for item in dict.fromkeys(reasons) if item]
+        suffix = "关系级回执未完成：" + "、".join(sub_checks)
+        if reasons:
+            suffix += "（" + "；".join(reasons[:3]) + "）"
+        outcome.detail = "；".join(
+            part for part in (outcome.detail, suffix) if part)
+        outcome.unresolved_reasons = list(dict.fromkeys(
+            [*outcome.unresolved_reasons, *reasons]))
+        for receipt in pending:
+            for diagnostic in receipt.get("diagnostics") or []:
+                if isinstance(diagnostic, dict):
+                    outcome.diagnostics.append(dict(diagnostic))
 
     from .native_issue_dedup import deduplicate_native_issues
     issues = deduplicate_native_issues(issues, doc)
@@ -369,7 +418,13 @@ def _issue_to_dict(issue: Any, idx: int, doc: Any = None) -> Dict[str, Any]:
         check_relation_id = str(getattr(issue, "check_relation_id", "") or "").strip() or None
         fact_ids = [str(value) for value in (getattr(issue, "fact_ids", None) or []) if str(value)]
         evidence_ids = [str(value) for value in (getattr(issue, "evidence_ids", None) or []) if str(value)]
-        evidence_text = getattr(issue, "evidence_text", None)
+        # IR-03：legacy 序列化与双模式共用同一证据构造器——
+        # table_refs（含 span+page）逐条成为证据，跨表关系的另一侧原文
+        # 不再只落 evidence_text 单条而丢失（Codex 核验宜川 CROSS/TXT-FUND
+        # 双侧原文 failed 的根因）。
+        from src.engine.issue_evidence import build_issue_evidence_list as _build_ev
+
+        evidence_list = _build_ev(issue, _normalize_page(location) or location.get("page"))
         location_level = str(getattr(issue, "location_level", None) or "unresolved")
         if location_level not in {"exact_cell", "exact_span"}:
             location_level = str(location.get("location_level") or location_level)
@@ -381,19 +436,6 @@ def _issue_to_dict(issue: Any, idx: int, doc: Any = None) -> Dict[str, Any]:
             if location_level in {"exact_cell", "exact_span"} and verification_status == "verified"
             else None
         )
-        evidence_list = []
-        if evidence_text:
-            evidence_list.append(
-                {
-                    "page": _normalize_page(location),
-                    "text": str(evidence_text),
-                    "text_snippet": str(evidence_text),
-                    "bbox": bbox,
-                    "location_level": location_level,
-                    "verification_status": verification_status,
-                }
-            )
-
     if not rule_code:
         rule_code = "UNKNOWN"
 
@@ -533,6 +575,10 @@ def build_issues_payload(
     fact_receipts = list(getattr(doc, "fact_receipts", None) or [])
     if fact_receipts:
         payload["fact_receipts"] = fact_receipts
+    # IR-01：交付抑制台账随 payload 返回（规则→问题/合法处理决定可对账）
+    suppressions = list(getattr(doc, "delivery_suppression_ledger", None) or [])
+    if suppressions:
+        payload["delivery_suppressions"] = suppressions
     fact_context = getattr(doc, "fact_context", None)
     payload["structured_consumption"] = list(getattr(doc, "structured_consumption", []) or [])
     if fact_context is not None:
