@@ -151,6 +151,63 @@ def test_numeric_only_rows_do_not_swallow_codes():
 
 
 # ---------------------------------------------------------------------------
+# R4-02：整数金额不得凭形态被当成编码，金额逐位核对不得漏
+# ---------------------------------------------------------------------------
+
+def test_integer_amount_is_verified_not_eaten_as_code():
+    """原件"合计 100"与合并"合计 200"必须 GAP；一致时 PASS。"""
+    page = "支出决算表\n单位：万元\n项目 决算数\n合计 100"
+    normal = _reconcile_row_alignment(
+        [{"page": 1, "cells": ["合计", "100"]}], [page], [1])
+    assert normal["row_mismatches"] == []
+    assert normal["merged_row_identities"] == ["合计"]
+    corrupted = _reconcile_row_alignment(
+        [{"page": 1, "cells": ["合计", "200"]}], [page], [1])
+    kinds = {item["kind"] for item in corrupted["row_mismatches"]}
+    assert "row_number_sequence_mismatch" in kinds
+
+
+def test_coded_row_integer_amount_is_verified():
+    """带明确 201 科目的整数金额不得整行消失。"""
+    page = "支出决算表\n201 一般公共服务支出 100"
+    normal = _reconcile_row_alignment(
+        [{"page": 1, "cells": ["201", "一般公共服务支出", "100"]}], [page], [1])
+    assert normal["row_mismatches"] == []
+    assert normal["merged_row_identities"] == ["201"]
+    corrupted = _reconcile_row_alignment(
+        [{"page": 1, "cells": ["201", "一般公共服务支出", "200"]}], [page], [1])
+    assert corrupted["row_mismatches"]
+
+
+def test_pure_integer_numeric_row_keeps_amounts():
+    """无编码无标签的纯整数金额行按 #numeric 逐位核对。"""
+    page = "31.47 19.86\n100 200\n"
+    normal = _reconcile_row_alignment(
+        [{"page": 1, "cells": ["31.47", "19.86"]},
+         {"page": 1, "cells": ["100", "200"]}], [page], [1])
+    assert normal["row_mismatches"] == []
+    corrupted = _reconcile_row_alignment(
+        [{"page": 1, "cells": ["31.47", "19.86"]},
+         {"page": 1, "cells": ["100", "201"]}], [page], [1])
+    assert corrupted["row_mismatches"]
+
+
+def test_negative_and_zero_amounts_are_still_compared():
+    """负数、零与两位小数金额同机制逐位核对，不因格式豁免。"""
+    page = "合计 0.00\n201 教育支出 -5.00\n202 科技支出 100"
+    normal = _reconcile_row_alignment(
+        [{"page": 1, "cells": ["合计", "0.00"]},
+         {"page": 1, "cells": ["201", "教育支出", "-5.00"]},
+         {"page": 1, "cells": ["202", "科技支出", "100"]}], [page], [1])
+    assert normal["row_mismatches"] == []
+    corrupted = _reconcile_row_alignment(
+        [{"page": 1, "cells": ["合计", "0.00"]},
+         {"page": 1, "cells": ["201", "教育支出", "5.00"]},
+         {"page": 1, "cells": ["202", "科技支出", "100"]}], [page], [1])
+    assert corrupted["row_mismatches"]
+
+
+# ---------------------------------------------------------------------------
 # R2-02：验收对象是实际逻辑合并视图；逻辑/物理任一侧损坏都必须拒绝
 # ---------------------------------------------------------------------------
 

@@ -238,3 +238,47 @@ def test_docx_missing_issue_block_is_rejected(exported) -> None:
     result = verify_export_formats(contents, ISSUES, REVISION)
     assert result["ok"] is False
     assert "relation-B" in result["formats"]["docx"]["missing_members"]
+
+
+# ---------------------------------------------------------------------------
+# R4-03：页码/分析版本按字段值等值比较，不是子串
+# ---------------------------------------------------------------------------
+
+REVISION_R4 = "rev-20261111T010000-12345678"
+MEMBER_R4 = {"id": "A", "page": 2,
+             "evidence": [{"page": 2, "quote": "13.24"}],
+             "label": "原文摘录"}
+
+
+def _r4_block(page_value: str, revision_value: str, evidence_page: int = 2) -> str:
+    return (f"ISSUE_ID|A|\n页码：{page_value}\n分析版本：{revision_value}\n"
+            f"原文摘录（第{evidence_page}页）：13.24")
+
+
+@pytest.mark.parametrize("block", [
+    _r4_block("2", REVISION_R4),
+    # DOCX 风格（无冒号、字段相连）同样按值等值比较。
+    "ISSUE_ID|A|证据页码2定位等级/坐标exact_cell分析版本"
+    f"{REVISION_R4}建议处理方式请复核。原文摘录（第2页）13.24",
+])
+def test_field_exact_match_passes(block) -> None:
+    from scripts.d4_real_link_acceptance import _verify_text_issue_block
+
+    assert _verify_text_issue_block(block, MEMBER_R4, REVISION_R4)["ok"] is True
+
+
+@pytest.mark.parametrize("block", [
+    _r4_block("22", REVISION_R4),          # 页码 2→22
+    _r4_block("222", REVISION_R4),         # 页码 22→222（真实导出控制）
+    _r4_block("2", REVISION_R4 + "-old"),  # 版本追加 -old
+    _r4_block("2", REVISION_R4[:-2]),      # 版本被截断
+    # 预期值出现在其他字段/说明里不能补偿字段本身的错值。
+    _r4_block("22", REVISION_R4).replace(
+        "13.24", "页码2 " + REVISION_R4 + " 13.24"),
+])
+def test_field_substring_or_stray_reference_is_rejected(block) -> None:
+    from scripts.d4_real_link_acceptance import _verify_text_issue_block
+
+    check = _verify_text_issue_block(block, MEMBER_R4, REVISION_R4)
+    assert check["ok"] is False
+    assert {"page_not_bound", "revision_not_bound"} & set(check["failures"])

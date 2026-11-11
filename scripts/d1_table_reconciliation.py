@@ -234,13 +234,39 @@ def _is_table_header_text(text: str) -> bool:
     ))
 
 
-def _parse_lanes(tokens: List[str]) -> List[Dict[str, Any]]:
+def _codes_from_rows(merged_rows: List[Dict[str, Any]]) -> set:
+    """从合并表学习科目编码集合（R4-02）。
+
+    只有"3~7 位整数 + 后随名称或两位款/项码"的格才算编码：金额格后面
+    是另一个金额或没有后续格，不会被学习。整数金额表（如"合计 100"）
+    由此不会把金额误学成编码。
+    """
+    codes: set = set()
+    for row in merged_rows:
+        cells = [_norm(cell) for cell in row["cells"] if _norm(cell)]
+        for index, token in enumerate(cells):
+            if not _is_code_token(token):
+                continue
+            following = cells[index + 1] if index + 1 < len(cells) else ""
+            if not following:
+                continue
+            if _is_number_token(following) and not _is_two_digit_token(following):
+                continue
+            codes.add(token)
+    return codes
+
+
+def _parse_lanes(tokens: List[str], known_codes: Optional[set] = None) -> List[Dict[str, Any]]:
     """一行 → 语义车道序列：每条车道含 (类码, 款/项码, 名称, 金额序列)。
 
     R3-03：完整科目身份必须包含拆开的款/项码（301 01 ≠ 301 02），
     编码不得进入金额统计；多车道（基本/项目、人员/公用、收入/支出）
     按出现顺序保留，列位置本身不参与身份。
+    R4-02：3~7 位整数只有位于**车道起点**、且后随名称/两位款/项码或在
+    已学习的编码集合中，才是类码；"合计 100"的 100、"201 教育支出 100"
+    的 100 都是金额，不得凭形态吃成编码。
     """
+    known_codes = known_codes or set()
     lanes: List[Dict[str, Any]] = []
     current: Dict[str, Any] = {"cls": None, "item": None,
                                "label": [], "numbers": []}
@@ -260,11 +286,26 @@ def _parse_lanes(tokens: List[str]) -> List[Dict[str, Any]]:
             index += 1
             continue
         if _is_code_token(cleaned):
-            if current["cls"] or current["label"] or current["numbers"]:
+            # 已学习的编码总是编码（含换行名称后紧跟金额的行）；
+            # 未学习的 3~7 位整数只有在车道起点且后随名称/两位款/项码时
+            # 才当编码，否则一律是金额（"合计 100" 的 100）。
+            if cleaned in known_codes:
                 flush()
-            current["cls"] = cleaned
-            index += 1
-            continue
+                current["cls"] = cleaned
+                index += 1
+                continue
+            at_lane_start = not (current["cls"] or current["label"]
+                                 or current["numbers"])
+            following = ""
+            if index + 1 < len(tokens):
+                following = _clean_number_token(tokens[index + 1])
+            followed_by_label = bool(following) and not _NUM_TOKEN_RE.fullmatch(following)
+            followed_by_subcode = bool(following) and _is_two_digit_token(following)
+            if at_lane_start and (followed_by_label or followed_by_subcode):
+                flush()
+                current["cls"] = cleaned
+                index += 1
+                continue
         if (_is_two_digit_token(cleaned) and current["cls"]
                 and current["item"] is None and not current["numbers"]
                 and not current["label"]):
@@ -333,12 +374,13 @@ def _row_identity_and_numbers(cells: List[str],
     tokens = [_norm(cell) for cell in cells if _norm(cell)]
     if not tokens:
         return "", []
-    lanes = _parse_lanes(tokens)
+    lanes = _parse_lanes(tokens, known_codes)
     identity, numbers, _label = _lanes_identity_and_numbers(lanes)
     return identity, numbers
 
 
-def _parse_original_page(page_text: str, page_number: int) -> List[Dict[str, Any]]:
+def _parse_original_page(page_text: str, page_number: int,
+                         known_codes: Optional[set] = None) -> List[Dict[str, Any]]:
     """原件单页文本 → 行记录（身份、金额序列、名称）。
 
     处理真实版式的三类跨行：
@@ -348,6 +390,7 @@ def _parse_original_page(page_text: str, page_number: int) -> List[Dict[str, Any
        前缀只作车道名称，身份仍按编码；
     3. 纯金额行（三公表、总表）没有标签时身份为 ``#numeric``。
     """
+    known_codes = known_codes or set()
     rows: List[Dict[str, Any]] = []
     pending: List[str] = []
 
@@ -400,7 +443,7 @@ def _parse_original_page(page_text: str, page_number: int) -> List[Dict[str, Any
                 rows.append({"identity": "#numeric", "label": "",
                              "numbers": numbers, "basis": "numeric"})
             continue
-        lanes = _parse_lanes(tokens)
+        lanes = _parse_lanes(tokens, known_codes)
         numbers = [number for lane in lanes for number in lane.get("numbers") or []]
         if numbers:
             identity, sequence, label = _lanes_identity_and_numbers(lanes)
@@ -441,10 +484,13 @@ def _reconcile_row_alignment(
     R2-02 的严格性保留：错列/错行/合并视图损坏都会改变该身份下的金额
     顺序；R3-03 修正身份归一：拆码（301 01/301 02）是不同身份，编码与
     两位款/项码不再当作金额，换行名称与续页行按原件阅读顺序归并。
+    R4-02：两侧共用同一编码集合（由合并表学习），整数金额不再凭形态
+    被当成编码，"合计 100"→"合计 200" 必须按金额逐位比较。
     """
+    known_codes = _codes_from_rows(merged_rows)
     merged_by_page: Dict[int, Dict[str, List[List[str]]]] = {}
     for row in merged_rows:
-        identity, numbers = _row_identity_and_numbers(row["cells"])
+        identity, numbers = _row_identity_and_numbers(row["cells"], known_codes)
         if not identity or not numbers:
             # 纯表头/空行不参与数值对齐（没有金额可逐格核对）。
             continue
@@ -455,7 +501,7 @@ def _reconcile_row_alignment(
     for page in pages:
         if not (1 <= page <= len(page_texts)):
             continue
-        for record in _parse_original_page(page_texts[page - 1], page):
+        for record in _parse_original_page(page_texts[page - 1], page, known_codes):
             original_by_page.setdefault(page, {}).setdefault(
                 record["identity"], []).append(record["numbers"])
 
@@ -532,10 +578,11 @@ def reconcile(pdf: str, anchor: str, page_spec: str) -> Dict[str, Any]:
     merged_rows = [row for row in merged_rows if row["page"] in set(pages)]
 
     # 原件侧数字清单：只取解析出的表格行（排除表头、页码、年份、编码）
+    known_codes = _codes_from_rows(merged_rows)
     original_numbers: Dict[str, List[int]] = {}
     original_codes: Dict[str, List[int]] = {}
     for page in pages:
-        for record in _parse_original_page(page_texts[page - 1], page):
+        for record in _parse_original_page(page_texts[page - 1], page, known_codes):
             for number in record["numbers"]:
                 original_numbers.setdefault(number, []).append(page)
             for code in _codes_in_identity(record["identity"]):
@@ -626,11 +673,7 @@ def self_test(pdf: str) -> Dict[str, Any]:
     merged_rows = [
         row for row in _merged_cells_text(doc, [instance]) if row["page"] in pages_set
     ]
-    known_codes: set = set()
-    for row in merged_rows:
-        for cell in row["cells"]:
-            if _is_code_token(cell):
-                known_codes.add(_clean_number_token(cell).lstrip("0"))
+    known_codes: set = _codes_from_rows(merged_rows)
     normal = _reconcile_row_alignment(merged_rows, page_texts, sorted(pages_set))
 
     by_page: Dict[Any, List[Tuple[str, List[str], Dict[str, Any]]]] = {}
@@ -722,19 +765,21 @@ def reconcile_auto(pdf: str) -> Dict[str, Any]:
             continue
         merged_rows, view_errors = _logical_view_with_provenance(doc, [instance])
         merged_rows = [row for row in merged_rows if row["page"] in pages_set]
+        known_codes = _codes_from_rows(merged_rows)
         original_numbers: Dict[str, int] = {}
         original_codes: set = set()
         for page in sorted(pages_set):
             if not (1 <= page <= len(page_texts)):
                 continue
-            for record in _parse_original_page(page_texts[page - 1], page):
+            for record in _parse_original_page(page_texts[page - 1], page,
+                                               known_codes):
                 for number in record["numbers"]:
                     original_numbers[number] = original_numbers.get(number, 0) + 1
                 original_codes.update(_codes_in_identity(record["identity"]))
         merged_numbers: Dict[str, int] = {}
         merged_codes: set = set()
         for row in merged_rows:
-            identity, numbers = _row_identity_and_numbers(row["cells"])
+            identity, numbers = _row_identity_and_numbers(row["cells"], known_codes)
             if not identity or not numbers:
                 continue
             for number in numbers:

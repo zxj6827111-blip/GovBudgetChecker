@@ -454,6 +454,38 @@ def _export_norm_loose(value: object) -> str:
     return _export_norm(value).replace("：", "").replace(":", "")
 
 
+def _export_field_int_value(block: str, *labels: str) -> str | None:
+    """解析成员块中的整数字段值（页码），按值精确比较（R4-03）。
+
+    ``页码2`` 不是 ``页码22``：子串匹配会把 2→22 放行，这里提取标签后
+    的连续数字串做等值比较。换行只做无损空白归一。
+    """
+    compact = _export_norm(block)
+    for label in labels:
+        for match in re.finditer(re.escape(label) + r"[：:]?(\d+)", compact):
+            return match.group(1)
+    return None
+
+
+def _export_field_text_value(block: str, label: str, stop_labels: tuple) -> str | None:
+    """解析成员块中的文本字段值（如“分析版本”），取标签后到下一字段止。"""
+    compact = _export_norm(block)
+    for match in re.finditer(re.escape(label) + r"[：:]?", compact):
+        pos = match.end()
+        stops = [compact.find(stop, pos) for stop in stop_labels
+                 if stop != label]
+        stops = [stop for stop in stops if stop >= pos]
+        marker = re.search(r"(?:ISSUE_ID|TIP_ID|DECISION_ID|MANUAL_ID|CHECK_ID)\|",
+                           compact[pos:])
+        if marker:
+            stops.append(pos + marker.start())
+        end = min(stops) if stops else len(compact)
+        value = compact[pos:end].strip("；;，, ：:")
+        if value:
+            return value
+    return None
+
+
 def _verify_text_issue_block(
     block: str,
     member: dict,
@@ -463,10 +495,19 @@ def _verify_text_issue_block(
     failures: list[str] = []
     page = member.get("page")
     if page not in (None, ""):
-        if f"证据页码{page}" not in loose and f"页码{page}" not in loose:
+        # R4-03：页码按字段值等值比较，"页码2"≠"页码22"。
+        page_value = _export_field_int_value(block, "证据页码", "页码")
+        if page_value != str(page):
             failures.append("page_not_bound")
-    if revision and _export_norm(revision) not in _export_norm(block):
-        failures.append("revision_not_bound")
+    if revision:
+        # R4-03：分析版本按字段值等值比较，"rev"≠"rev-old"。
+        revision_value = _export_field_text_value(
+            block, "分析版本",
+            ("建议处理方式", "人工处理决定", "人工处理状态", "原文摘录",
+             "候选证据/计算说明（原文绑定未完成）", "系统生成附录",
+             "ISSUE_ID|", "TIP_ID|", "DECISION_ID|", "MANUAL_ID|", "CHECK_ID|"))
+        if revision_value != _export_norm(revision):
+            failures.append("revision_not_bound")
     missing_quotes: list[str] = []
     for excerpt in member.get("evidence") or []:
         quote = _export_norm_loose(excerpt.get("quote"))
@@ -575,6 +616,10 @@ def verify_export_formats(
             result = _verify_csv_members(content, members, revision)
         else:
             text = _export_plain_text(suffix, content)
+            if suffix == "pdf":
+                # 附录每页页眉会插进跨页成员块；对字段/证据而言是纯噪声，
+                # 先剥离再做块切分与等值比较（无损归一）。
+                text = re.sub(r"系统生成附录\s*·\s*审校清单", "", text)
             blocks = _export_text_blocks(text)
             block_ids = [issue_id for issue_id, _block in blocks]
             missing_members = [issue_id for issue_id in expected_ids

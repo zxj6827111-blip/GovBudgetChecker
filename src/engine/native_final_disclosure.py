@@ -95,6 +95,9 @@ _RATING_DECLARATION = re.compile(
     r'(?:绩效)?评级为[“"「]?(?P<rating>[^“”"「」\d，,。；;()]{1,12}?)[”"」]?'
     r'(?:的)?项目(?P<count>\d+)个')
 _CANCELLED_PROJECTS = re.compile(r'(?:年内调整取消|年内取消|调整取消)(?:的)?项目(?P<count>\d+)个')
+# 评级数量披露谓词：限定词必须与该谓词同子句才算声明范围（R4-01）。
+_RATING_DISCLOSURE_PREDICATE = re.compile(
+    r'(?:评级|评价)(?:结果|情况|等级)?(?:如下|见下)|(?:评级|评价)为')
 
 
 def _name(value):
@@ -1530,39 +1533,40 @@ def check_performance_counts(rule, doc):
             # 没有逐项出现（如"其余评级均为0"），也必须按加总等式核对：
             # "全部53个，优50个，其余评级均为0个"=50≠53 是确定矛盾，
             # 不得因缺四档标签而当作部分列举放行。
-            # R2-04/R3-01：先识别声明的**范围**，再决定用等式还是不等式。
-            # 范围限定必须绑定到实际评级数字所在的局部声明，不能拿章节内
-            # 任意位置的"部分"（如"部分项目评级资料已归档"）覆盖本次完整
-            # 构成声明。定位方式：
-            #   1) 从第一个实际评级数字往前找最近的句末（。；），
-            #   2) 若同一句内有"全部/所有/部分…评级（结果）如下"声明短语，
-            #      以该短语起点为范围起点（归档句等前置句被排除）。
-            first_rating = ratings[0]
-            local_start = total.end()
-            for boundary in '。；;':
-                found = text.compact.rfind(boundary, total.end(), first_rating.start())
-                if found >= 0:
-                    local_start = max(local_start, found + 1)
-            declaration_matches = list(re.finditer(
-                r'(?:其中)?(?:全部|所有|整体|全量|部分)(?:项目|单位|自评项目)?'
-                r'[^。；;，,]{0,12}(?:评级|评价)',
-                text.compact[total.end():first_rating.start()]))
-            if declaration_matches:
-                # 取最靠近实际评级数字的范围声明：前面的归档/资料句
-                # （即使只用逗号分隔）不能覆盖本次评级声明。
-                declaration = declaration_matches[-1]
-                local_start = max(local_start, total.end() + declaration.start())
-            scope_compact = text.compact[local_start:ratings[-1].end()]
-            # 局部范围内同时出现完整构成与部分列举：范围不能唯一确定，
-            # 按明确歧义处理（不默认"部分优先"放行，也不默认完整而误报）。
-            partial_declared = bool(re.search(
-                r'(?:其中)?部分(?:项目|单位|自评项目)?[^。；;]{0,12}(?:评级|评价)'
-                r'|部分(?:项目)?评级(?:结果|情况)',
-                scope_compact))
-            complete_declared = bool(re.search(
-                r'(?:全部|所有|整体|全量)(?:项目|自评项目|单位)?[^。；;]{0,12}(?:评级|评价)'
-                r'|(?:全部|所有)项目评级',
-                scope_compact))
+            # R2-04/R3-01/R4-01：范围限定必须附着于**实际评级数量的披露谓词**，
+            # 不能按"全部/部分…评级"词串就近取舍：
+            #   - "部分项目评级资料已归档"的谓词是归档而非评级数量披露，
+            #     插在完整声明的前后（句号/逗号/括号/断行）都不改变本次
+            #     完整构成关系；
+            #   - "全部项目评级结果如下"在对象/任务未变时始终约束本组数量，
+            #     不因句号把声明与评级数字分开而失效；
+            #   - 只有同一范围内同时出现带披露谓词的完整与部分声明（真实
+            #     冲突）才进入明确歧义，不默认部分优先。
+            scope_compact = text.compact[total.end():stop]
+
+            def _qualifier_governs_ratings(match: 're.Match[str]') -> bool:
+                """限定词所在子句必须含评级数量披露谓词（如下/见下/评级为）。"""
+                clause_start = 0
+                for boundary in '。；;，,（(':
+                    found = scope_compact.rfind(boundary, 0, match.start())
+                    if found >= 0:
+                        clause_start = max(clause_start, found + 1)
+                clause_end = len(scope_compact)
+                for boundary in '。；;，,）)：:':
+                    found = scope_compact.find(boundary, match.end())
+                    if found >= 0:
+                        clause_end = min(clause_end, found)
+                clause = scope_compact[clause_start:clause_end]
+                return bool(_RATING_DISCLOSURE_PREDICATE.search(clause))
+
+            partial_declared = any(
+                _qualifier_governs_ratings(match) for match in re.finditer(
+                    r'(?:其中)?部分(?:项目|单位|自评项目)?'
+                    r'[^。；;，,（）()]{0,12}(?:评级|评价)', scope_compact))
+            complete_declared = any(
+                _qualifier_governs_ratings(match) for match in re.finditer(
+                    r'(?:全部|所有|整体|全量)(?:项目|自评项目|单位)?'
+                    r'[^。；;，,（）()]{0,12}(?:评级|评价)', scope_compact))
             declares_ratings = bool(re.search(
                 r'评级(?:结果|情况|等级)?[^。；;]{0,6}(?:如下|见下)',
                 scope_compact))

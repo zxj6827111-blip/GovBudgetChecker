@@ -447,6 +447,35 @@ def test_unrelated_partial_archive_sentence_does_not_cancel_complete_declaration
     assert issue.location['computed_count'] == 50
 
 
+# R4-01：归档句插在完整声明与评级数字之间（逗号/括号）、或完整声明与
+# 评级数字被句号分隔时，限定词必须仍附着于评级数量披露谓词。
+@pytest.mark.parametrize('variant', [
+    'comma_between',
+    'parentheses_between',
+    'sentence_between',
+])
+def test_inserted_archive_sentence_between_declaration_and_counts_keeps_complete(
+        variant):
+    body = '绩效自评的2025年度项目53个，全部项目评级结果如下{join}绩效评级为“优”的项目50个，其余评级均为0个。'
+    if variant == 'comma_between':
+        body = body.format(join='，部分项目评级资料已归档，')
+    elif variant == 'parentheses_between':
+        body = body.format(join='（部分项目评级资料已归档）：')
+    else:
+        body = body.format(join='。')
+    issue, = check_performance_counts(DisclosureRule(), performance(body))
+    assert issue.location['comparison_basis'] == 'declared_complete_sum'
+    assert issue.location['declared_count'] == 53
+    assert issue.location['computed_count'] == 50
+
+
+def test_archive_qualifier_without_rating_predicate_is_not_a_scope_limit():
+    """“全部项目评级资料已归档”不是评级数量披露，不得当完整/部分声明。"""
+    body = ('绩效自评的2025年度项目53个，全部项目评级资料已归档。'
+            '其中，绩效评级为“优”的项目50个。')
+    assert check_performance_counts(DisclosureRule(), performance(body)) == []
+
+
 def test_complete_declaration_fail_receipt_uses_equality_formula():
     """R3-01：完整构成 53≠50 的 fail 回执不能仍写 53>=50。"""
     doc = performance(COMPLETE_BODY.format(year=2025, total=53, count=50))
