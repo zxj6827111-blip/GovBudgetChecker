@@ -41,28 +41,25 @@ def to_cn_num(n: int) -> str:
         return str(n)
     return _CN_NUM[t] + "十" + (_CN_NUM[o] if o else "")
 
-def order_and_number_issues(doc, issues):
-    """按 (page, pos) 排序，并把 message 前面加上 "一、二、三…"
+def apply_delivery_suppressions(doc, issues):
+    """结构化交付抑制的唯一实现：legacy 与双模式共用。
 
-    IR-01（Codex 独立核验 2026-11-10，RETURN_FOR_REWORK）：**移除以消息
-    关键词为唯一依据的丢弃机制**。控制试验证明同一 fail 结果仅在消息中
-    加入"格式错误"四字，交付数就从 1 变 0——按措辞删除真实结果属于
-    非法抑制，任何合法抑制都必须基于结构化类型/政策。
-
-    合法抑制的唯一入口：规则在 issue.location["delivery_suppressed"] 上
-    显式写入 {policy_id, relation_id, reason} 的结构化决定（当前仓库没有
-    任何规则使用它）。被抑制的条目逐条记入 doc 的抑制台账
-    （delivery_suppression_ledger：规则、政策ID、关系ID、理由），由
-    build_issues_payload / engine_rule_runner 收割进返回 payload，
-    读取与导出可对账——"每个失败关系必须能追到交付问题，或有明确、
-    合法的处理依据"。
+    IR-01/R2-06：只有 ``location["delivery_suppressed"]`` 同时给出
+    policy_id、relation_id、reason 三个非空字段才允许抑制；任一缺失都
+    照常交付。被抑制条目逐条进入 doc 级台账，随 payload/读回/导出一致。
     """
-    filtered_issues: List[Any] = []
-    for issue in issues:
+    kept: List[Any] = []
+    for issue in issues or []:
         decision = ((getattr(issue, "location", None) or {}).get("delivery_suppressed")
                    if isinstance(getattr(issue, "location", None), dict) else None)
-        if not isinstance(decision, dict) or not str(decision.get("policy_id") or "").strip():
-            filtered_issues.append(issue)
+        suppression_complete = (
+            isinstance(decision, dict)
+            and bool(str(decision.get("policy_id") or "").strip())
+            and bool(str(decision.get("relation_id") or "").strip())
+            and bool(str(decision.get("reason") or "").strip())
+        )
+        if not suppression_complete:
+            kept.append(issue)
             continue
         entry = {
             "rule": str(getattr(issue, "rule", "") or ""),
@@ -83,6 +80,21 @@ def order_and_number_issues(doc, issues):
             entry["rule"], entry["policy_id"], entry["relation_id"],
             len(entry["reason"]),
         )
+    return kept
+
+
+def order_and_number_issues(doc, issues):
+    """按 (page, pos) 排序，并把 message 前面加上 "一、二、三…"
+
+    IR-01（Codex 独立核验 2026-11-10，RETURN_FOR_REWORK）：**移除以消息
+    关键词为唯一依据的丢弃机制**。控制试验证明同一 fail 结果仅在消息中
+    加入"格式错误"四字，交付数就从 1 变 0——按措辞删除真实结果属于
+    非法抑制，任何合法抑制都必须基于结构化类型/政策。
+
+    R2-06：抑制判定收敛到 ``apply_delivery_suppressions``，双模式入口
+    使用同一函数；依据不完整一律交付。
+    """
+    filtered_issues = apply_delivery_suppressions(doc, issues)
 
     def sort_key(it):
         p = it.location.get("page", 10**9)   # 没页码的排在最后
@@ -10957,18 +10969,52 @@ _SAN_GONG_ECON_CODES_2025 = {"overseas": "30211", "vehicle_operation": "30229", 
 
 
 def _econ_table_uses_2025_codes(table6: Any) -> bool:
-    """本表差旅费的编码（名称前连续的整数格拼接，单格或类款拆格）是否为 30209。"""
+    """本表差旅费的编码（名称前连续的整数格拼接，单格或类款拆格）是否为 30209。
+
+    R2-05：只在**同一语义车道**内读编码。旧实现扫描整行整数，左栏金额
+    0.00 会被当成编码片段与右栏 30209 拼接，使版本判断受无关金额影响。
+    车道由 ``_econ_lanes``（决算数列之间的列区间）界定，金额列不参与编码。
+    """
+    semantic = getattr(table6, "semantic_columns", None) or {}
+    amount_cols = sorted({int(col) for col in (semantic.get("final") or [])}) if isinstance(semantic, dict) else []
+    if amount_cols:
+        lanes, _error = _econ_lanes(table6)
+        for row in table6.rows:
+            cells = list(row.cells)
+            for start, amount_col in lanes:
+                parts: List[str] = []
+                for cell in cells[start:amount_col]:
+                    if cell.text:
+                        # 拆格的款编码按数值读成 9，须补回两位（"302" + "09"）。
+                        code = (parts[0] + "".join(part.zfill(2) for part in parts[1:])
+                                if parts else "")
+                        if _normalize_item_label(cell.text) == "差旅费" and code == "30209":
+                            return True
+                        parts = []
+                    elif (cell.number is not None
+                          and cell.number == cell.number.to_integral_value()):
+                        parts.append(str(int(cell.number)))
+        return False
+    # 无 semantic_columns 的合成/旧表：只取名称前**连续**的整数格作为编码，
+    # 编码长度到 5 即停，避免把更左侧的金额（如 0.00）拼进编码。
     for row in table6.rows:
-        parts: List[str] = []
-        for cell in row.cells:
-            if cell.text:
-                # 拆格的款编码按数值读成 9，须补回两位（"302" + "09"）。
-                code = parts[0] + "".join(part.zfill(2) for part in parts[1:]) if parts else ""
-                if _normalize_item_label(cell.text) == "差旅费" and code == "30209":
+        cells = list(row.cells)
+        for index, cell in enumerate(cells):
+            if not cell.text or _normalize_item_label(cell.text) != "差旅费":
+                continue
+            parts: List[str] = []
+            for prior in reversed(cells[max(0, index - 2):index]):
+                if (prior.text or prior.number is None
+                        or prior.number != prior.number.to_integral_value()):
+                    break
+                parts.insert(0, str(int(prior.number)))
+                joined = parts[0] + "".join(part.zfill(2) for part in parts[1:])
+                if len(joined) >= 5:
+                    break
+            if len(parts) >= 1:
+                code = parts[0] + "".join(part.zfill(2) for part in parts[1:])
+                if code == "30209":
                     return True
-                parts = []
-            elif cell.number is not None and cell.number == cell.number.to_integral_value():
-                parts.append(str(int(cell.number)))
     return False
 
 
@@ -11158,7 +11204,22 @@ def _econ_item_amount_from_lane(
     label = _normalize_item_label(
         "".join(cell.text or "" for cell in cells[start:amount_col] if cell.text)
     )
-    if not label or label not in names:
+    if not label:
+        return None
+    matched_name = label if label in names else ""
+    suffix_missing = False
+    if not matched_name:
+        # R2-05：真实原件存在"公务用车运行维护"漏写末尾"费"的名称缺陷。
+        # 只在**精确经济分类编码**同时成立时容忍固定后缀缺字，并把缺字
+        # 作为 hit 的独立标记交给调用方呈现；不做模糊匹配或同义词替换。
+        for name in names:
+            for suffix in ("费用", "费"):
+                if name.endswith(suffix) and label == name[: -len(suffix)]:
+                    matched_name, suffix_missing = name, True
+                    break
+            if matched_name:
+                break
+    if not matched_name:
         return None
     # 编码在车道内有两种真实版式：单格（"30212"）与拆格（"302" + "12" 类款两列）。
     # 顺序拼接**名称文本出现之前**的整数字段得到完整编码；拼接结果长度不在
@@ -11192,6 +11253,7 @@ def _econ_item_amount_from_lane(
                 cells[amount_col].text
                 or (cells[amount_col].number if cells[amount_col].number is not None else "")
             ).strip(),
+            "name_suffix_missing": suffix_missing,
         }
     if not _econ_item_code_matches(code, expected_code):
         # 名称命中，但同行编码指向**另一个**业务项：两栏身份不一致，
@@ -11212,6 +11274,7 @@ def _econ_item_amount_from_lane(
             cells[amount_col].text
             or (cells[amount_col].number if cells[amount_col].number is not None else "")
         ).strip(),
+        "name_suffix_missing": suffix_missing,
     }
 
 
@@ -11266,6 +11329,55 @@ def _three_public_cell_value(cells: List[Any], column: int) -> Tuple[Optional[De
         # 空白/破折号在官方表里表示"无此项"，但**必须**由本表勾稽确认后才能当 0 用
         return None, "blank"
     return None, "unreadable"
+
+
+def _cross_context_fact(doc: Any, table_code: str, indicator: str,
+                       subject_code: str, value: Decimal) -> Any:
+    """按表/指标/科目/阶段/金额唯一取当前事实；取不到或冲突返回 None。"""
+    from .fact_context import _canonical_budget_stage, operand_rejection_reason
+
+    context = getattr(doc, "fact_context", None)
+    if context is None:
+        return None
+    org_name = getattr(context, "org_name", None)
+    matches = []
+    for fact in getattr(context, "facts", []) or []:
+        if getattr(fact, "table_code", None) != table_code:
+            continue
+        if str(getattr(fact, "indicator", "") or "") != indicator:
+            continue
+        if str(getattr(fact, "subject_code", "") or "") != subject_code:
+            continue
+        if _canonical_budget_stage(getattr(fact, "budget_stage", None)) != "决算":
+            continue
+        if getattr(fact, "normalized_value", None) != value:
+            continue
+        if operand_rejection_reason(fact, org_name):
+            continue
+        matches.append(fact)
+    return matches[0] if len(matches) == 1 else None
+
+
+def _fact_operand(fact: Any, *, side: str, role: str, unit: str) -> Dict[str, Any]:
+    """把当前事实转成交付/验收共用的操作数记录（含原格身份）。"""
+    refs = [item for item in ((getattr(fact, "extra_dims", {}) or {}).get("evidence_refs") or [])
+            if isinstance(item, dict)]
+    ref = refs[0] if len(refs) == 1 else {}
+    return {
+        "side": side,
+        "role": role,
+        "kind": "amount",
+        "table_code": getattr(fact, "table_code", None),
+        "indicator": getattr(fact, "indicator", None),
+        "subject_code": getattr(fact, "subject_code", None),
+        "fact_uid": getattr(fact, "fact_uid", None),
+        "value": str(getattr(fact, "normalized_value", "")),
+        "unit": unit,
+        "page": ref.get("physical_page"),
+        "source_cell_id": ref.get("source_cell_id"),
+        "bbox": ref.get("bbox"),
+        "quote": ref.get("quote"),
+    }
 
 
 class R33CrossSanGongEcon(Rule):
@@ -11697,9 +11809,13 @@ class R33CrossSanGongEcon(Rule):
                     self._issue(
                         f"三公经费「{subject}」基本支出分项与本表决算数相差 {excess.normalize()} "
                         f"{unit}，在显示舍入包络（{envelope.normalize()} {unit}）内，可能为取整误差。",
-                        self._location(hit, subject, key, total, component, excess, unit, year,
-                                       basic_page, three_page, key in blank_keys,
-                                       basic_span=basic_span, three_public_span=three_span),
+                        self._location(
+                            doc, hit, subject, key, total, component, excess, unit, year,
+                            basic_page, three_page, key in blank_keys,
+                            basic_span=basic_span, three_public_span=three_span,
+                            three_blank_observation=native_zero_observations.get(key),
+                            zero_disclosure=zero_disclosure,
+                            relation_id=relation_id),
                         severity="info",
                         evidence_text=basic_span,
                     )
@@ -11727,9 +11843,13 @@ class R33CrossSanGongEcon(Rule):
                     f"第{three_page}页同一业务项的决算数 {total} {unit}，差额 {excess.normalize()} {unit}"
                     f"（{year} 年度）。基本支出是三公经费的组成部分，部分大于整体时两表不能同时成立；"
                     "现有材料无法判定哪一侧有误，需人工复核两表底稿。",
-                    self._location(hit, subject, key, total, component, excess, unit, year,
-                                   basic_page, three_page, key in blank_keys,
-                                   basic_span=basic_span, three_public_span=three_span),
+                    self._location(
+                        doc, hit, subject, key, total, component, excess, unit, year,
+                        basic_page, three_page, key in blank_keys,
+                        basic_span=basic_span, three_public_span=three_span,
+                        three_blank_observation=native_zero_observations.get(key),
+                        zero_disclosure=zero_disclosure,
+                        relation_id=relation_id),
                     severity="error",
                     evidence_text=basic_span,
                 )
@@ -11798,6 +11918,7 @@ class R33CrossSanGongEcon(Rule):
 
     def _location(
         self,
+        doc: Document,
         hit: Dict[str, Any],
         subject: str,
         key: str,
@@ -11811,9 +11932,80 @@ class R33CrossSanGongEcon(Rule):
         from_blank: bool,
         basic_span: str = "",
         three_public_span: str = "",
+        three_blank_observation: Optional[Dict[str, Any]] = None,
+        zero_disclosure: Sequence[Dict[str, Any]] = (),
+        relation_id: str = "",
     ) -> Dict[str, Any]:
         code = str(hit.get("code") or "")
-        return {
+        context = getattr(doc, "fact_context", None)
+        version_token = str(getattr(context, "version_token", "") or "")
+        operand_refs: List[Dict[str, Any]] = []
+        relation_operands: List[Dict[str, Any]] = []
+
+        amount_fact = _cross_context_fact(
+            doc, "FIN_06_basic_expenditure", "total_actual", code, Decimal(str(component)))
+        if amount_fact is not None:
+            operand_refs.append({
+                "table_code": "FIN_06_basic_expenditure",
+                "indicator": "total_actual",
+                "subject_code": code,
+                "budget_stage": "决算",
+                "fact_uid": amount_fact.fact_uid,
+                "value": str(component),
+                "value_unit": unit,
+                "role": "component",
+                "operand_id": f"FIN_06:{code}",
+                "relation_id": relation_id,
+            })
+            relation_operands.append(
+                _fact_operand(amount_fact, side="basic", role="component", unit=unit))
+        else:
+            relation_operands.append({
+                "side": "basic", "role": "component", "kind": "missing",
+                "value": str(component), "unit": unit,
+            })
+
+        total_fact = _cross_context_fact(
+            doc, "FIN_07_three_public", key, "total", Decimal(str(total)))
+        if total_fact is not None:
+            operand_refs.append({
+                "table_code": "FIN_07_three_public",
+                "indicator": key,
+                "subject_code": "total",
+                "budget_stage": "决算",
+                "fact_uid": total_fact.fact_uid,
+                "value": str(total),
+                "value_unit": unit,
+                "role": "total",
+                "operand_id": f"FIN_07:{key}",
+                "relation_id": relation_id,
+            })
+            relation_operands.append(
+                _fact_operand(total_fact, side="three_public", role="total", unit=unit))
+        elif three_blank_observation:
+            convention = (three_blank_observation.get("convention") or {})
+            relation_operands.append({
+                "side": "three_public", "role": "total", "kind": "blank_zero",
+                "value": "0.00", "unit": unit,
+                "page": three_blank_observation.get("physical_page"),
+                "source_cell_id": three_blank_observation.get("source_cell_id"),
+                "bbox": three_blank_observation.get("bbox"),
+                "convention": dict(convention) if isinstance(convention, dict) else convention,
+                "narrative_sources": list(three_blank_observation.get("narrative_sources") or []),
+            })
+        elif zero_disclosure:
+            relation_operands.append({
+                "side": "three_public", "role": "total", "kind": "zero_statement",
+                "value": "0.00", "unit": unit,
+                "refs": [dict(ref) for ref in zero_disclosure if isinstance(ref, dict)],
+            })
+        else:
+            relation_operands.append({
+                "side": "three_public", "role": "total", "kind": "missing",
+                "value": str(total), "unit": unit,
+            })
+
+        location: Dict[str, Any] = {
             "table": _FIN_06_TABLE_TITLE,
             "page": basic_page,
             "pages": sorted({basic_page, three_public_page}),
@@ -11828,6 +12020,7 @@ class R33CrossSanGongEcon(Rule):
             "unit": unit,
             "fiscal_year": year,
             "three_public_amount_from_blank": from_blank,
+            "relation_id": relation_id,
             # D0 RC-1b：每侧引用各自页面的原文 span（金额原格文本；空白格
             # 引用该业务项标签原文）。证据门按各自页码逐条核验，计算解释
             # 只留在 message，不再充当"原文摘录"。
@@ -11850,7 +12043,51 @@ class R33CrossSanGongEcon(Rule):
                     "span": three_public_span,
                 },
             ],
+            # R2-01：金额关系证据必须逐侧落到当前事实的原格/字符/值，
+            # 标题只能作上下文。relation_operands 是交付与验收共用的
+            # 逐侧操作数记录；operand_refs 供当前事实绑定器生成原格证据。
+            "relation_operands": relation_operands,
         }
+        if operand_refs:
+            # 有真实操作数时，标题/标签 span 不再进入交付证据——金额关系
+            # 证据由原格绑定生成，标题只能作上下文（R2-01）。
+            for ref in location["table_refs"]:
+                ref["span"] = ""
+            location["operand_refs"] = operand_refs
+            location["fact_context_version_token"] = version_token
+            if three_blank_observation:
+                observation = dict(three_blank_observation)
+                location["native_blank_sources"] = [observation]
+                location["native_blank_operands"] = [{
+                    "role": "parent",
+                    "relation_id": relation_id,
+                    "operand_id": f"FIN_07:{key}",
+                    "observation": observation,
+                }]
+                relation_operands[-1]["page"] = observation.get("physical_page")
+                relation_operands[-1]["source_cell_id"] = observation.get("source_cell_id")
+                relation_operands[-1]["bbox"] = observation.get("bbox")
+            journal = getattr(doc, "structured_consumption", None)
+            if journal is None:
+                journal = doc.structured_consumption = []
+            uids = sorted(str(ref.get("fact_uid")) for ref in operand_refs
+                          if ref.get("fact_uid"))
+            entry = {
+                "rule_id": self.code,
+                "table_code": "FIN_06_basic_expenditure",
+                "instance_uid": getattr(amount_fact, "instance_uid", None),
+                "fact_uids": uids,
+                "fact_version": version_token,
+                "normalized_unit": "万元",
+                "source_units": sorted({unit}),
+                "native_blank_observations": [dict(three_blank_observation)]
+                if three_blank_observation else [],
+            }
+            key_tuple = (tuple(uids), version_token)
+            if not any((tuple(sorted(entry.get("fact_uids") or [])),
+                        entry.get("fact_version")) == key_tuple for entry in journal):
+                journal.append(entry)
+        return location
 
     def _evidence(
         self,

@@ -387,6 +387,23 @@ def test_partial_ratings_below_total_complete_by_inequality_without_fabricated_z
     assert '>= sum' in receipts[-1]['formula']
 
 
+def test_partial_qualifier_overrides_following_rating_declaration():
+    """R2-04：明确“部分项目评级结果如下”不得被当成完整构成要求加总。"""
+    body = ('绩效自评的2025年度项目53个，平均得分98.05分（其中部分项目评级结果如下：'
+            '绩效评级为“优”的项目50个）。')
+    doc = performance(body)
+    assert check_performance_counts(DisclosureRule(), doc) == []
+    assert doc.fact_receipts[-1]['status'] == 'pass'
+
+
+def test_complete_declaration_with_remainder_zero_is_a_confirmed_error():
+    """R2-04：全部项目评级结果如下 + 其余为0 = 完整构成，50≠53 必须报告。"""
+    body = ('绩效自评的2025年度项目53个，平均得分98.05分（全部项目评级结果如下：'
+            '绩效评级为“优”的项目50个，其余评级均为0个）。')
+    issue, = check_performance_counts(DisclosureRule(), performance(body))
+    assert issue.location['comparison_basis'] == 'declared_complete_sum'
+
+
 def test_partial_ratings_above_total_are_a_provable_lower_bound_error():
     doc = performance(rating_body(78, [('优', 77), ('良', 2)]))
     issue, = check_performance_counts(DisclosureRule(), doc)

@@ -72,3 +72,57 @@ def test_right_lane_subject_code_is_not_an_amount():
     identity, numbers = _row_identity_and_numbers(cells, known)
     assert identity == "301"
     assert numbers == ["11860.23", "1844.57"]
+
+
+# ---------------------------------------------------------------------------
+# R2-02：验收对象是实际逻辑合并视图；逻辑/物理任一侧损坏都必须拒绝
+# ---------------------------------------------------------------------------
+
+def _fragment(uid, page, rows, children=None):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        fragment_uid=uid, page_number=page, rows=rows,
+        source_fragment_uids=list(children or []),
+    )
+
+
+def _fake_doc(logical_rows, physical_rows):
+    from types import SimpleNamespace
+
+    physical = _fragment("p1", 7, physical_rows)
+    logical = _fragment("L", 7, logical_rows, ["p1"])
+    instance = SimpleNamespace(table_code="FIN_02_income", fragment_uids=["L"])
+    return SimpleNamespace(parse_artifact=SimpleNamespace(
+        table_fragments=[logical], physical_fragments=[physical])), [instance]
+
+
+def test_logical_view_matches_its_source_fragments():
+    from d1_table_reconciliation import _logical_view_with_provenance
+
+    rows = [["合计", "100.00", "100.00"], ["201", "一般公共服务支出", "60.00", "60.00"]]
+    doc, instances = _fake_doc(rows, [list(row) for row in rows])
+    view, errors = _logical_view_with_provenance(doc, instances)
+    assert errors == []
+    assert [row["page"] for row in view] == [7, 7]
+    assert view[0]["cells"][:2] == ["合计", "100.00"]
+
+
+def test_damaged_logical_merged_view_is_rejected():
+    from d1_table_reconciliation import _logical_view_with_provenance
+
+    physical = [["合计", "100.00", "100.00"], ["201", "一般公共服务支出", "60.00", "60.00"]]
+    logical = [["合计", "60.00", "60.00"], ["201", "一般公共服务支出", "100.00", "100.00"]]
+    doc, instances = _fake_doc(logical, physical)
+    _view, errors = _logical_view_with_provenance(doc, instances)
+    assert any(item["kind"] == "merged_view_source_mismatch" for item in errors)
+
+
+def test_damaged_physical_source_fragment_is_rejected():
+    from d1_table_reconciliation import _logical_view_with_provenance
+
+    logical = [["合计", "100.00", "100.00"], ["201", "一般公共服务支出", "60.00", "60.00"]]
+    physical = [["合计", "60.00", "60.00"], ["201", "一般公共服务支出", "100.00", "100.00"]]
+    doc, instances = _fake_doc(logical, physical)
+    _view, errors = _logical_view_with_provenance(doc, instances)
+    assert any(item["kind"] == "merged_view_source_mismatch" for item in errors)

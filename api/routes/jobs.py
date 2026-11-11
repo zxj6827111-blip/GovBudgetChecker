@@ -831,24 +831,35 @@ async def confirm_material_dimensions(job_id:str,body:MaterialDimensionsRequest,
 
 @router.get("/api/jobs/{job_id}/report-confirmation")
 async def get_report_confirmation(job_id: str, request: Request):
-    """读取整份确认门禁、三类处理对象与最近一次确认记录（IR-06/07）。
+    """读取整份确认门禁、三类处理对象与当前版本/历史确认记录（IR-06/07、R2-03）。
 
-    纯读取：从持久化的当前分析结果组装，不触发重分析；确认记录
-    （confirm_reports.jsonl）随读回，页面刷新/重开可对账。
+    读回在同一作业状态锁内重新读取权威 status 与确认记录，明确区分：
+    - ``current_confirm_record``：当前分析版本有效确认（或 None）；
+    - ``historical_confirm_records``：旧版本记录，不得当作当前有效签认；
+    - ``current_confirm_decision_changed``：确认后人工决定是否已变化。
     """
     _, _, user, payload = require_job_access(request, job_id)
-    from src.services.report_confirmation_gate import build_report_confirmation, read_confirm_records
+    from src.services.report_confirmation_gate import (
+        build_report_confirmation,
+        confirm_readback,
+        read_confirm_records,
+    )
+    from api import runtime
 
     enabled = str(os.getenv("GOVBUDGET_CONFIRM_REPORT_ENABLED") or "").strip().lower() in {
         "1", "true", "yes", "on",
     }
-    confirmation = await run_in_threadpool(
-        lambda: build_report_confirmation(payload, confirm_report_enabled=enabled)
-    )
-    records = await run_in_threadpool(lambda: read_confirm_records(job_id))
-    confirmation["confirm_records"] = records
-    confirmation["latest_confirm_record"] = records[-1] if records else None
-    return confirmation
+    job_dir = runtime.UPLOAD_ROOT / str(job_id)
+
+    def _read():
+        with runtime.job_state_lock(job_dir):
+            fresh = runtime.get_job_status_payload(str(job_id), apply_issue_filters=False)
+            confirmation = build_report_confirmation(
+                fresh, confirm_report_enabled=enabled)
+            records = read_confirm_records(str(job_id))
+            return confirm_readback(confirmation, records, fresh)
+
+    return await run_in_threadpool(_read)
 
 
 class ConfirmReportRequest(BaseModel):
@@ -864,81 +875,42 @@ class ConfirmReportRequest(BaseModel):
 async def confirm_report(job_id: str, body: ConfirmReportRequest, request: Request):
     """整份确认（默认关闭）：只签认当前分析版本中证据充分的确定性问题。
 
-    - 未开启 GOVBUDGET_CONFIRM_REPORT_ENABLED 时返回 403（默认关闭兼容行为）。
-    - 请求携带的 expected_analysis_revision 与服务端当前版本不一致 →
-      409 REVISION_CHANGED（旧页面不得对新版本确认）。
-    - 系统未完成检查非空时 409 SYSTEM_INCOMPLETE：系统失败不能要求用户
-      代替程序重新计算，未计算的关系不能因确认变成已完成。
-    - 确认成员使用结果内稳定问题 ID（finding.id），排除
-      ignored/questioned/needs_review/manual_review 等已有决定或疑问
-      （IR-06/07）；同一 idempotency_key 重复请求返回同一条记录。
-    - 记录原子落盘（confirm_reports.jsonl），读取接口/刷新可读回。
+    R2-03：版本核对、门禁与记录落盘在 ``runtime.job_state_lock`` 内完成，
+    与分析版本发布共用同一同步边界——不存在"核对 R1 → 发布 R2 → 落盘 R1"
+    的中间窗口。请求中的 expected_analysis_revision 只代表用户读到的版本；
+    服务端在锁内重新读取当前版本并比对。
     """
-    _, _, user, payload = require_job_access(request, job_id)
-    from src.services.report_confirmation_gate import (
-        append_confirm_record,
-        build_report_confirmation,
-        confirm_report_allowed,
-        read_confirm_records,
-    )
+    _, _, user, _initial_payload = require_job_access(request, job_id)
+    from src.services.report_confirmation_gate import confirm_report_atomic
 
     enabled = str(os.getenv("GOVBUDGET_CONFIRM_REPORT_ENABLED") or "").strip().lower() in {
         "1", "true", "yes", "on",
     }
-    current_revision = str(payload.get("analysis_revision") or "")
-    if str(body.expected_analysis_revision) != current_revision:
-        raise HTTPException(status_code=409, detail={
-            "error": "REVISION_CHANGED",
-            "expected": body.expected_analysis_revision,
-            "current": current_revision,
-        })
-    # 幂等：同一 idempotency_key 已有记录 → 原样返回，不重复落盘/审计
-    existing = await run_in_threadpool(lambda: read_confirm_records(job_id))
-    prior = next((r for r in existing
-                  if r.get("idempotency_key") == body.idempotency_key
-                  and r.get("analysis_revision") == current_revision), None)
-    if prior is not None:
-        return {"result": "confirmed", "idempotent": True, "record": prior}
+    result = await run_in_threadpool(
+        lambda: confirm_report_atomic(
+            job_id,
+            expected_analysis_revision=body.expected_analysis_revision,
+            idempotency_key=body.idempotency_key,
+            confirm_report_enabled=enabled,
+            actor=str((user or {}).get("username") or "unknown"),
+        )
+    )
+    if result["http"] != 200:
+        raise HTTPException(status_code=result["http"], detail=result.get("detail"))
+    body_out = result["body"]
+    record = body_out.get("record") or {}
+    if not body_out.get("idempotent"):
+        append_audit_event(
+            action="confirm_report",
+            actor=record.get("actor") or "unknown",
+            result="ok",
+            resource_type="analysis_job",
+            resource_id=job_id,
+            details={"confirmed_count": record.get("confirmed_count"),
+                     "analysis_revision": record.get("analysis_revision"),
+                     "idempotency_key": record.get("idempotency_key")},
+        )
+    return body_out
 
-    confirmation = await run_in_threadpool(
-        lambda: build_report_confirmation(payload, confirm_report_enabled=enabled)
-    )
-    decision = confirm_report_allowed(confirmation, current_revision)
-    if not decision["allowed"]:
-        status_code = 403 if decision["code"] == "CONFIRM_REPORT_DISABLED" else 409
-        raise HTTPException(status_code=status_code, detail=decision["code"])
-    snapshot = confirmation["categories"]["confirmed_material_issues"]
-    record = {
-        "job_id": job_id,
-        "analysis_revision": current_revision,
-        "scope": "deterministic_findings_only",
-        # 稳定问题 ID：同规则同页的不同关系不再碰撞（IR-07）
-        "confirmed_issue_ids": [item["id"] for item in snapshot if item.get("id")],
-        "confirmed_count": len(snapshot),
-        "excluded": {
-            "genuine_ambiguities": confirmation["counts"]["genuine_ambiguities"],
-            "system_incomplete": confirmation["counts"]["system_incomplete"],
-        },
-        "idempotency_key": body.idempotency_key,
-        "actor": str((user or {}).get("username") or "unknown"),
-        "ts": time.time(),
-        "note": "不覆盖人工疑问/忽略决定/历史结论；未计算关系不因确认变已完成",
-    }
-    saved = await run_in_threadpool(lambda: append_confirm_record(job_id, record))
-    if saved is None:
-        raise HTTPException(status_code=500, detail="confirm_record_persist_failed")
-    if saved is not record:
-        # 并发双击：锁内检查发现同 key+版本已由另一请求写入，返回先到者
-        # 的记录，不重复审计/落盘（IR-08 并发幂等）。
-        return {"result": "confirmed", "idempotent": True, "record": saved}
-    append_audit_event(
-        action="confirm_report",
-        actor=record["actor"],
-        result="ok",
-        resource_type="analysis_job",
-        resource_id=job_id,
-        details={"confirmed_count": record["confirmed_count"],
-                 "analysis_revision": record["analysis_revision"],
-                 "idempotency_key": record["idempotency_key"]},
-    )
-    return {"result": "confirmed", "idempotent": False, "record": saved}
+
+

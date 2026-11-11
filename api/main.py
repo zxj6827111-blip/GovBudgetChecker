@@ -339,10 +339,16 @@ def _safe_write(job_dir: Path, payload: Dict[str, Any]) -> None:
                     resolve_stage_progress(str(last_known_stage))
                 )
 
-        runtime.write_json_file(status_file, merged_payload)
-        # ZC-01：终态结果额外写入版本化快照 + 原子当前指针；
-        # 重分析追加新版本目录，不删除旧快照。失败不影响主链路。
-        runtime.write_analysis_revision_snapshot(job_dir, merged_payload)
+        # R2-03：分析版本发布与整份确认的读-验-写共用同一任务状态锁。
+        # 确认接口在持锁期间完成"当前版本核对 → 门禁 → 记录落盘"；发布
+        # 要么发生在核对之前（确认读到新版本并 409），要么发生在确认完成
+        # 之后（记录绑定当时的当前版本），不存在"核对 R1 → 发布 R2 →
+        # 落盘 R1"的中间窗口。
+        with runtime.job_state_lock(job_dir):
+            runtime.write_json_file(status_file, merged_payload)
+            # ZC-01：终态结果额外写入版本化快照 + 原子当前指针；
+            # 重分析追加新版本目录，不删除旧快照。失败不影响主链路。
+            runtime.write_analysis_revision_snapshot(job_dir, merged_payload)
     except Exception as e:
         (job_dir / "status_error.log").write_text(str(e), encoding="utf-8")
         if payload.get("status") in runtime.TERMINAL_ANALYSIS_STATUSES:
@@ -1988,7 +1994,12 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                 "ai_findings": dual_ai_findings,
                 "rule_findings": dual_rule_findings,
                 "merged": dual_result.merged.dict(),
+                # R2-06：结构化抑制台账随结果持久化/读回/导出
+                "delivery_suppressions": list(
+                    (dual_result.meta or {}).get("delivery_suppressions") or []),
                 "meta": {
+                    "delivery_suppressions": list(
+                        (dual_result.meta or {}).get("delivery_suppressions") or []),
                     "pages": len(page_texts),
                     "filesize": filesize,
                     "job_id": job_dir.name,
@@ -2204,7 +2215,12 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             result = {
                 "summary": "",  # 现在没有汇总，可后续填充
                 "issues": payload_issues["issues"],  # 统一分桶结构
+                # R2-06：结构化抑制台账随结果持久化/读回/导出
+                "delivery_suppressions": list(
+                    payload_issues.get("delivery_suppressions") or []),
                 "meta": {
+                    "delivery_suppressions": list(
+                        payload_issues.get("delivery_suppressions") or []),
                     "pages": len(page_texts),
                     "filesize": filesize,
                     "job_id": job_dir.name,

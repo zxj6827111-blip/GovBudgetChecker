@@ -1531,9 +1531,24 @@ def check_performance_counts(rule, doc):
             # "全部53个，优50个，其余评级均为0个"=50≠53 是确定矛盾，
             # 不得因缺四档标签而当作部分列举放行。
             scope_compact = text.compact[total.end():stop]
-            complete_declaration = bool(re.search(
-                r'(?:全部|所有)[^。；]{0,12}评级|评级(?:结果|情况)[^。；]{0,6}如下',
+            # R2-04：先识别声明的**范围**，再决定用等式还是不等式。
+            # "其中部分项目评级结果如下"是明确的部分限定：即使出现
+            # "评级结果如下"也不能当成完整构成；"全部/所有…评级"才是
+            # 完整声明。两者同时出现时，部分限定优先（不能用完整提示
+            # 覆盖同一范围内明确的部分限定）。
+            partial_declared = bool(re.search(
+                r'(?:其中)?部分(?:项目|单位|自评项目)?[^。；]{0,12}(?:评级|评价)'
+                r'|部分(?:项目)?评级(?:结果|情况)',
                 scope_compact))
+            complete_declared = bool(re.search(
+                r'(?:全部|所有|整体|全量)(?:项目|自评项目|单位)?[^。；]{0,12}(?:评级|评价)'
+                r'|(?:全部|所有)项目评级',
+                scope_compact))
+            declares_ratings = bool(re.search(
+                r'评级(?:结果|情况|等级)?[^。；]{0,6}(?:如下|见下)',
+                scope_compact))
+            complete_declaration = (not partial_declared
+                                    and (complete_declared or declares_ratings))
             partial_enumeration = (
                 not complete and not complete_declaration and computed <= declared
             )

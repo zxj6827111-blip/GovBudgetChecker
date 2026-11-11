@@ -286,6 +286,137 @@ def read_confirm_records(job_id: str) -> List[Dict[str, Any]]:
     return records
 
 
+def human_decision_fingerprint(payload: Dict[str, Any]) -> str:
+    """人工决定快照指纹：签认记录据此说明决定是否在该版本内发生变化。"""
+    import hashlib
+
+    decisions = sorted(
+        (str(item.get("issue_id") or ""), str(item.get("status") or ""))
+        for item in (payload.get("human_decisions") or [])
+        if isinstance(item, dict)
+    )
+    return hashlib.sha256(
+        json.dumps(decisions, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:16]
+
+
+def confirm_report_atomic(
+    job_id: str,
+    *,
+    expected_analysis_revision: str,
+    idempotency_key: str,
+    confirm_report_enabled: bool,
+    actor: str,
+) -> Dict[str, Any]:
+    """版本核对 → 门禁 → 记录落盘 的单一同步临界区（R2-03）。
+
+    与分析版本发布共用 ``runtime.job_state_lock``：持锁期间重新读取权威
+    status（不是请求入口处的旧 payload），核对 expected revision、现有幂等
+    记录、当前三分类门禁与人工决定指纹，然后追加记录。返回纯数据，
+    不抛 HTTPException，便于路由与测试共用同一路径。
+    """
+    import time
+
+    from api import runtime
+
+    job_dir = runtime.UPLOAD_ROOT / str(job_id)
+    with runtime.job_state_lock(job_dir):
+        payload = runtime.get_job_status_payload(str(job_id), apply_issue_filters=False)
+        current_revision = str(payload.get("analysis_revision") or "")
+        if str(expected_analysis_revision) != current_revision:
+            return {
+                "http": 409,
+                "detail": {
+                    "error": "REVISION_CHANGED",
+                    "expected": expected_analysis_revision,
+                    "current": current_revision,
+                },
+            }
+        existing = read_confirm_records(str(job_id))
+        prior = next((item for item in existing
+                      if item.get("idempotency_key") == idempotency_key
+                      and item.get("analysis_revision") == current_revision), None)
+        if prior is not None:
+            return {"http": 200,
+                    "body": {"result": "confirmed", "idempotent": True, "record": prior}}
+        confirmation = build_report_confirmation(
+            payload, confirm_report_enabled=confirm_report_enabled)
+        decision = confirm_report_allowed(confirmation, current_revision)
+        if not decision["allowed"]:
+            status_code = 403 if decision["code"] == "CONFIRM_REPORT_DISABLED" else 409
+            return {"http": status_code, "detail": decision["code"]}
+        snapshot = confirmation["categories"]["confirmed_material_issues"]
+        record = {
+            "job_id": job_id,
+            "analysis_revision": current_revision,
+            "scope": "deterministic_findings_only",
+            "confirmed_issue_ids": [item["id"] for item in snapshot if item.get("id")],
+            "confirmed_count": len(snapshot),
+            "excluded": {
+                "genuine_ambiguities": confirmation["counts"]["genuine_ambiguities"],
+                "system_incomplete": confirmation["counts"]["system_incomplete"],
+            },
+            "idempotency_key": idempotency_key,
+            "human_decision_fingerprint": human_decision_fingerprint(payload),
+            "actor": actor,
+            "ts": time.time(),
+            "note": "不覆盖人工疑问/忽略决定/历史结论；未计算关系不因确认变已完成",
+        }
+        saved = append_confirm_record(str(job_id), record)
+        if saved is None:
+            return {"http": 500, "detail": "confirm_record_persist_failed"}
+        if saved is not record:
+            return {"http": 200,
+                    "body": {"result": "confirmed", "idempotent": True, "record": saved}}
+        # 乐观提交后的版本复核：即使发布方绕过文件锁（如独立交错试验直接
+        # 写 status.json），落盘后仍要再读一次权威版本；版本已变化则撤销
+        # 本次记录并 409，不允许旧版本签认静默生效。
+        try:
+            latest = runtime.get_job_status_payload(
+                str(job_id), apply_issue_filters=False)
+        except Exception:  # noqa: BLE001 - 读不到按提交失败处理，不虚构成功
+            remove_confirm_record(
+                str(job_id), idempotency_key=idempotency_key,
+                analysis_revision=current_revision)
+            return {"http": 500, "detail": "confirm_record_persist_unverified"}
+        latest_revision = str(latest.get("analysis_revision") or "")
+        if latest_revision != current_revision:
+            remove_confirm_record(
+                str(job_id), idempotency_key=idempotency_key,
+                analysis_revision=current_revision)
+            return {"http": 409,
+                    "detail": {"error": "REVISION_CHANGED",
+                               "expected": expected_analysis_revision,
+                               "current": latest_revision}}
+        return {"http": 200,
+                "body": {"result": "confirmed", "idempotent": False, "record": saved}}
+
+
+def confirm_readback(confirmation: Dict[str, Any], records: List[Dict[str, Any]],
+                     payload: Dict[str, Any]) -> Dict[str, Any]:
+    """读回：区分当前版本有效确认与历史记录，并标记决定是否已变化。"""
+    current_revision = str(confirmation.get("analysis_revision") or "")
+    current_records = [item for item in records
+                       if item.get("analysis_revision") == current_revision]
+    historical = [item for item in records
+                  if item.get("analysis_revision") != current_revision]
+    latest = records[-1] if records else None
+    current_record = current_records[-1] if current_records else None
+    current_fingerprint = human_decision_fingerprint(payload)
+    result = dict(confirmation)
+    result["confirm_records"] = records
+    result["latest_confirm_record"] = latest
+    result["latest_confirm_record_is_current"] = bool(
+        latest is not None and latest.get("analysis_revision") == current_revision)
+    result["current_confirm_record"] = current_record
+    result["historical_confirm_records"] = historical
+    result["human_decision_fingerprint"] = current_fingerprint
+    result["current_confirm_decision_changed"] = bool(
+        current_record is not None
+        and current_record.get("human_decision_fingerprint") != current_fingerprint)
+    return result
+
+
 def append_confirm_record(job_id: str, record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """原子追加一条确认记录；写失败返回 None（无半状态）。
 
@@ -335,6 +466,54 @@ def append_confirm_record(job_id: str, record: Dict[str, Any]) -> Optional[Dict[
                 _release_file_lock(lock_handle)
     except Exception:
         return None
+
+
+def remove_confirm_record(
+    job_id: str,
+    *,
+    idempotency_key: str,
+    analysis_revision: str,
+) -> bool:
+    """撤销一条刚写入的确认记录（乐观提交后的版本复核失败时使用）。
+
+    与 append 共用同一文件锁；只删除同 key 同版本的记录，不触碰历史记录。
+    返回 True 表示记录已不存在（删除成功或本来就无）。
+    """
+    import os
+    import tempfile
+
+    job_dir, path = _confirm_records_path(str(job_id))
+    lock_path = job_dir / ".confirm_reports.lock"
+    try:
+        with open(lock_path, "a+", encoding="utf-8") as lock_handle:
+            _acquire_file_lock(lock_handle)
+            try:
+                records = read_confirm_records(str(job_id))
+                kept = [item for item in records
+                        if not (item.get("idempotency_key") == idempotency_key
+                                and item.get("analysis_revision") == analysis_revision)]
+                if len(kept) == len(records):
+                    return True
+                fd, tmp = tempfile.mkstemp(
+                    dir=str(job_dir), prefix=".confirm_reports.", suffix=".tmp")
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                        for item in kept:
+                            handle.write(json.dumps(item, ensure_ascii=False) + "\n")
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                    os.replace(tmp, path)
+                except BaseException:
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        pass
+                    raise
+                return True
+            finally:
+                _release_file_lock(lock_handle)
+    except Exception:
+        return False
 
 
 def _acquire_file_lock(handle) -> None:

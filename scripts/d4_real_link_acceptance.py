@@ -156,6 +156,298 @@ def _is_document_level(finding: dict) -> bool:
     return is_document_level_finding(finding)
 
 
+def _decimal_or_none(value):
+    from decimal import Decimal, InvalidOperation
+
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    return parsed if parsed.is_finite() else None
+
+
+def _cell_numeric(cell) -> "object":
+    from decimal import Decimal, InvalidOperation
+
+    if getattr(cell, "numeric_value", None) is not None:
+        return Decimal(str(cell.numeric_value))
+    text = "".join(str(getattr(cell, "raw_text", "") or "").split()).replace(",", "")
+    if not text:
+        return None
+    try:
+        return Decimal(text)
+    except InvalidOperation:
+        return None
+
+
+def verify_relation_operands(
+    findings: list[dict],
+    cells: dict,
+    page_texts: list[str],
+    page_count: int,
+) -> dict:
+    """R2-01：逐侧核对金额关系操作数 → 当前原件原格/字符/值/单位。
+
+    每个带 ``location.relation_operands`` 的关系必须给出 basic/three_public
+    两侧；金额侧要有 source_cell_id 且解析到原格、值一致、进入交付证据；
+    空白零侧要有原格空白 + 授权约定（U-5 或说明零依据），并进入
+    native_blank_calculation_refs；零声明侧要能回原件页命中。表名/标题
+    不能替代任一侧操作数。
+    """
+    total = ok_count = 0
+    failures: list[dict] = []
+    for finding in findings:
+        location = finding.get("location") or {}
+        operands = location.get("relation_operands")
+        if not operands:
+            if location.get("san_gong_item"):
+                failures.append({"finding": finding.get("id"),
+                                 "reason": "cross_relation_without_operands"})
+            continue
+        total += 1
+        finding_ok = True
+        failure_start = len(failures)
+        sides = {}
+        for operand in operands:
+            if isinstance(operand, dict) and operand.get("side"):
+                sides[operand["side"]] = operand
+        if set(sides) != {"basic", "three_public"}:
+            failures.append({"finding": finding.get("id"),
+                             "reason": "operand_sides_incomplete",
+                             "sides": sorted(sides)})
+            finding_ok = False
+        evidence_cells = {item.get("source_cell_id")
+                          for item in finding.get("evidence") or []
+                          if isinstance(item, dict) and item.get("source_cell_id")}
+        blank_cells = {item.get("source_cell_id")
+                       for item in location.get("native_blank_calculation_refs") or []
+                       if isinstance(item, dict) and item.get("source_cell_id")}
+        for side in ("basic", "three_public"):
+            operand = sides.get(side) or {}
+            kind = str(operand.get("kind") or "")
+            cell_id = str(operand.get("source_cell_id") or "")
+            page = operand.get("page")
+            if kind == "amount":
+                cell = cells.get(cell_id)
+                if cell is None:
+                    failures.append({"finding": finding.get("id"), "side": side,
+                                     "reason": "amount_cell_missing", "cell": cell_id})
+                    finding_ok = False
+                    continue
+                if not isinstance(page, int) or page != getattr(cell, "page_number", None):
+                    failures.append({"finding": finding.get("id"), "side": side,
+                                     "reason": "amount_cell_page_mismatch",
+                                     "operand_page": page,
+                                     "cell_page": getattr(cell, "page_number", None)})
+                    finding_ok = False
+                operand_value = _decimal_or_none(operand.get("value"))
+                cell_value = _cell_numeric(cell)
+                if operand_value is None or cell_value is None or operand_value != cell_value:
+                    failures.append({"finding": finding.get("id"), "side": side,
+                                     "reason": "amount_cell_value_mismatch",
+                                     "operand_value": str(operand.get("value")),
+                                     "cell_text": getattr(cell, "raw_text", None),
+                                     "cell_value": str(cell_value)})
+                    finding_ok = False
+                if str(operand.get("unit") or "") != "万元":
+                    failures.append({"finding": finding.get("id"), "side": side,
+                                     "reason": "amount_unit_not_wan",
+                                     "unit": operand.get("unit")})
+                    finding_ok = False
+                if cell_id not in evidence_cells:
+                    failures.append({"finding": finding.get("id"), "side": side,
+                                     "reason": "amount_cell_not_in_delivered_evidence",
+                                     "cell": cell_id})
+                    finding_ok = False
+            elif kind == "blank_zero":
+                cell = cells.get(cell_id)
+                if cell is None or str(getattr(cell, "raw_text", "") or "").strip():
+                    failures.append({"finding": finding.get("id"), "side": side,
+                                     "reason": "blank_zero_cell_not_blank",
+                                     "cell": cell_id})
+                    finding_ok = False
+                    continue
+                if not isinstance(page, int) or page != getattr(cell, "page_number", None):
+                    failures.append({"finding": finding.get("id"), "side": side,
+                                     "reason": "blank_zero_page_mismatch",
+                                     "operand_page": page,
+                                     "cell_page": getattr(cell, "page_number", None)})
+                    finding_ok = False
+                convention = operand.get("convention") or {}
+                authorized = bool(
+                    isinstance(convention, dict)
+                    and convention.get("id")
+                    and (convention.get("approved") is True
+                         or str(convention.get("source_kind") or "") == "user_confirmed")
+                ) or bool(operand.get("narrative_sources"))
+                if not authorized:
+                    failures.append({"finding": finding.get("id"), "side": side,
+                                     "reason": "blank_zero_without_authorized_basis",
+                                     "convention": convention})
+                    finding_ok = False
+                if cell_id not in blank_cells:
+                    failures.append({"finding": finding.get("id"), "side": side,
+                                     "reason": "blank_zero_not_in_blank_evidence",
+                                     "cell": cell_id})
+                    finding_ok = False
+            elif kind == "zero_statement":
+                refs = [item for item in operand.get("refs") or [] if isinstance(item, dict)]
+                if not refs:
+                    failures.append({"finding": finding.get("id"), "side": side,
+                                     "reason": "zero_statement_without_refs"})
+                    finding_ok = False
+                for ref in refs:
+                    ref_page = ref.get("page")
+                    text = str(ref.get("text") or ref.get("quote") or "")
+                    if (not isinstance(ref_page, int) or not 1 <= ref_page <= page_count
+                            or not _quote_on_page(text, ref_page, page_texts)):
+                        failures.append({"finding": finding.get("id"), "side": side,
+                                         "reason": "zero_statement_ref_not_grounded",
+                                         "page": ref_page, "text": text[:60]})
+                        finding_ok = False
+            else:
+                failures.append({"finding": finding.get("id"), "side": side,
+                                 "reason": "operand_kind_missing",
+                                 "kind": kind})
+                finding_ok = False
+        if finding_ok and len(failures) == failure_start:
+            ok_count += 1
+    return {
+        "ok": not failures,
+        "relations_total": total,
+        "relations_ok": ok_count,
+        "failures": failures[:40],
+        "failure_count": len(failures),
+    }
+
+
+def operand_adversarial_control(
+    findings: list[dict],
+    cells: dict,
+    page_texts: list[str],
+    page_count: int,
+) -> dict:
+    """R2-01 负控：把跨表关系的金额证据换成正确页上的标题，验收必须失败。"""
+    import copy
+
+    cross = next((item for item in findings
+                  if (item.get("location") or {}).get("relation_operands")), None)
+    if cross is None:
+        return {"ok": False, "reason": "no_cross_relation_to_mutate"}
+    mutated = copy.deepcopy(cross)
+    location = mutated.get("location") or {}
+    location.pop("relation_operands", None)
+    location.pop("operand_refs", None)
+    location.pop("native_blank_calculation_refs", None)
+    location["table_refs"] = [
+        {"page": 1, "span": "政府性基金表", "role": "表格"},
+        {"page": min(2, page_count), "span": "情况说明", "role": "说明"},
+    ]
+    mutated["evidence"] = [
+        {"evidence_id": "title-control-1", "page": 1, "quote": "政府性基金表"},
+        {"evidence_id": "title-control-2", "page": min(2, page_count),
+         "quote": "情况说明"},
+    ]
+    control = verify_relation_operands([mutated], cells, page_texts, page_count)
+    return {
+        "ok": (not control["ok"]) and bool(control["failure_count"]),
+        "expected": "title_only_operands_must_fail",
+        "control_failures": control["failures"][:5],
+    }
+
+
+def _export_plain_text(suffix: str, content: bytes) -> str:
+    import html
+    import io
+    import re
+    import zipfile
+
+    if suffix == "docx":
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            xml = archive.read("word/document.xml").decode("utf-8", "replace")
+        return html.unescape(re.sub(r"<[^>]+>", " ", xml))
+    if suffix == "pdf":
+        import pymupdf as fitz
+
+        document = fitz.open(stream=content, filetype="pdf")
+        try:
+            return "\n".join(page.get_text() for page in document)
+        finally:
+            document.close()
+    return content.decode("utf-8-sig", errors="replace")
+
+
+def verify_export_formats(
+    contents: dict,
+    issues: list[dict],
+    revision: str,
+) -> dict:
+    """R2-07：CSV/DOCX/PDF 的问题成员、必要证据与当前版本逐项核对。
+
+    只验非空/字节重复不足以证明内容正确：每个导出格式都必须包含
+    （1）导出 JSON 的每条问题身份（rule_id + 可定位页）；
+    （2）该问题第一条证据引文（去空白后至少 8 字符）；
+    （3）当前 analysis_revision。
+    """
+    def _norm(value) -> str:
+        return "".join(str(value or "").split())
+
+    expected = []
+    for issue in issues:
+        rule_id = str(issue.get("rule_id") or issue.get("rule") or "").strip()
+        page = ((issue.get("location") or {}).get("page") or issue.get("page"))
+        evidence = [item for item in issue.get("evidence") or [] if isinstance(item, dict)]
+        snippet = ""
+        for item in evidence:
+            text = _norm(item.get("quote") or item.get("text") or item.get("text_snippet"))
+            if len(text) >= 8:
+                snippet = text[:24]
+                break
+        expected.append({"rule_id": rule_id, "page": page, "snippet": snippet})
+    details = {}
+    ok = True
+    for suffix in ("csv", "docx", "pdf"):
+        content = contents.get(suffix)
+        if not content:
+            details[suffix] = {"ok": False, "reason": "empty"}
+            ok = False
+            continue
+        text = _norm(_export_plain_text(suffix, content))
+        missing_members = [item["rule_id"] for item in expected
+                           if item["rule_id"] and item["rule_id"] not in text]
+        missing_evidence = [item["rule_id"] for item in expected
+                            if item["snippet"] and item["snippet"] not in text]
+        revision_ok = bool(revision) and _norm(revision) in text
+        format_ok = not missing_members and not missing_evidence and revision_ok
+        details[suffix] = {
+            "ok": format_ok,
+            "missing_members": missing_members[:10],
+            "missing_evidence": missing_evidence[:10],
+            "revision_present": revision_ok,
+        }
+        ok = ok and format_ok
+    return {"ok": ok, "issues": len(expected), "formats": details}
+
+
+_SPAN_UNIT_AMOUNT_RE = re.compile(
+    r"(?<![\d.])(\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?=\s*(?:万元|亿元|元))")
+_SPAN_DECIMAL_RE = re.compile(r"(?<![\d.])\d+(?:,\d{3})*\.\d+")
+
+
+def _span_amounts(span: str) -> list[str]:
+    """引文里的"金额身份"：带单位的数字或带小数的数字。
+
+    页码（第22页）、年度（2025年度）、科目编码（30212）都不带金额单位也
+    不带小数，不参与该检查；金额必须能在交付证据里找到同一写法。
+    """
+    text = str(span or "").replace("，", ",")
+    amounts = [match.group(0) for match in _SPAN_UNIT_AMOUNT_RE.finditer(text)]
+    for match in _SPAN_DECIMAL_RE.finditer(text):
+        if match.group(0) not in amounts:
+            amounts.append(match.group(0))
+    return amounts
+
+
 def verify_all_evidence(
     client: httpx.Client,
     job_id: str,
@@ -163,8 +455,9 @@ def verify_all_evidence(
     page_texts: list[str],
     original_hash: str,
     page_count: int,
+    cells: dict | None = None,
 ) -> dict:
-    """逐条核对全部交付证据 + 每一侧 table_refs + page=None 判定。
+    """逐条核对全部交付证据 + 每一侧 table_refs + page=None 判定 + 操作数原格。
 
     返回可 JSON 化的核对结果；``ok`` 为 False 时携带前若干失败明细。
     """
@@ -185,6 +478,7 @@ def verify_all_evidence(
         items = _evidence_items(finding)
         finding_ok = True
         evidence_pages: set[int] = set()
+        evidence_texts_by_page: dict[int, list[str]] = {}
         if not items and not _is_document_level(finding):
             failures.append({"finding": finding_id, "reason": "no_evidence_items"})
             finding_ok = False
@@ -246,6 +540,8 @@ def verify_all_evidence(
                                  "file_hash": body_hash[:16]})
                 finding_ok = False
             evidence_pages.add(page)
+            if quote:
+                evidence_texts_by_page.setdefault(page, []).append(quote)
 
         # 每一侧 table_refs：span 必须在自己声明的页上逐字命中；
         # 跨页关系要求每一侧的页都出现在该 finding 的交付证据里。
@@ -262,12 +558,31 @@ def verify_all_evidence(
                 finding_ok = False
                 continue
             ref_pages.add(ref_page)
-            if _quote_on_page(str(ref.get("span")), ref_page, page_texts):
+            span = str(ref.get("span"))
+            if _quote_on_page(span, ref_page, page_texts):
                 refs_grounded += 1
             else:
                 failures.append({"finding": finding_id, "reason": "table_ref_span_not_on_page",
-                                 "page": ref_page, "span": str(ref.get("span"))[:80]})
+                                 "page": ref_page, "span": span[:80]})
                 finding_ok = False
+            # R2-01：table_ref 声明了金额（带小数的数字）时，该页交付证据
+            # 必须包含同一金额。仅把正确页上的表名/标题当证据不成立。
+            span_amounts = _span_amounts(span)
+            if span_amounts:
+                delivered = _normalise(" ".join(
+                    evidence_texts_by_page.get(ref_page, []))).replace(",", "")
+                missing_amounts = [amount for amount in span_amounts
+                                   if _normalise(amount).replace(",", "") not in delivered]
+                if missing_amounts:
+                    failures.append({
+                        "finding": finding_id,
+                        "reason": "table_ref_amount_not_in_delivered_evidence",
+                        "page": ref_page, "amounts": missing_amounts,
+                        "span": span[:80],
+                        "delivered_texts": [text[:40] for text in
+                                            evidence_texts_by_page.get(ref_page, [])][:4],
+                    })
+                    finding_ok = False
         if len(ref_pages) >= 2:
             multi_side_total += 1
             missing_side = ref_pages - evidence_pages
@@ -297,8 +612,10 @@ def verify_all_evidence(
         if finding_ok:
             verified_findings += 1
 
+    operand_check = verify_relation_operands(
+        findings, cells or {}, page_texts, page_count)
     return {
-        "ok": not failures,
+        "ok": (not failures) and operand_check["ok"],
         "findings_total": len(findings),
         "findings_grounded": verified_findings,
         "evidence_total": evidence_total,
@@ -310,6 +627,10 @@ def verify_all_evidence(
         "failures": failures[:40],
         "failure_count": len(failures),
         "documents_without_page": documents_without_page,
+        "operand_relations_total": operand_check["relations_total"],
+        "operand_relations_ok": operand_check["relations_ok"],
+        "operand_failures": operand_check["failures"],
+        "operand_failure_count": operand_check["failure_count"],
     }
 
 
@@ -421,6 +742,13 @@ def main() -> None:
     with pdfplumber.open(str(pdf_path)) as doc_pdf:
         page_texts = [extract_visible_text_from_page(page) for page in doc_pdf.pages]
     page_count = len(page_texts)
+    # R2-01：金额操作数逐侧回"当前原件原格"核对，需要原始 ParseArtifact
+    # 的 source_cell_id → 单元格目录；标题/引文命中不能替代原格身份。
+    from src.services.pdf_parser import PDFParser
+    from src.services.rule_source_binding import _current_cell_catalog
+
+    artifact = PDFParser(None).build_parse_artifact(str(pdf_path))
+    cell_catalog, _cell_conflicts = _current_cell_catalog(artifact)
 
     head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT,
                           capture_output=True, text=True).stdout.strip()
@@ -634,7 +962,7 @@ def main() -> None:
 
                 # ---- S3 全量证据核对（第 1 版；口径确认后还会再核对一次）----
                 check_r1 = verify_all_evidence(client, job_id, result, page_texts,
-                                               original_hash, page_count)
+                                               original_hash, page_count, cell_catalog)
                 steps.step("S3_all_evidence_grounded", check_r1["ok"],
                            {k: v for k, v in check_r1.items() if k != "ok"})
 
@@ -738,10 +1066,17 @@ def main() -> None:
 
                 # ---- S3b 新版本全量证据复核 ----
                 check_r2 = verify_all_evidence(client, job_id, result_r2, page_texts,
-                                               original_hash, page_count)
+                                               original_hash, page_count, cell_catalog)
                 steps.step("S3b_all_evidence_grounded_after_scope",
                            check_r2["ok"],
                            {k: v for k, v in check_r2.items() if k != "ok"})
+
+                # R2-01 负控：金额证据换成正确页上的标题必须失败。
+                operand_control = operand_adversarial_control(
+                    _dedupe_findings(_iter_findings(result_r2)), cell_catalog,
+                    page_texts, page_count)
+                steps.step("S3c_operand_identity_adversarial_control",
+                           operand_control["ok"], operand_control)
 
                 # ---- S4b 持久化失败（事务失败）：目录只读时写侧必须 500，
                 #      且读取接口看不到任何半状态记录 ----
@@ -828,6 +1163,85 @@ def main() -> None:
                             "records_for_key": len(key_records),
                             "latest_matches": readback_body.get("latest_confirm_record") == record,
                             "excluded": record.get("excluded")})
+
+                # ---- S4e 人工决定变化 + 全新 key 并发首写（R2-03） ----
+                # 先确认，再对一条 info 问题作"忽略"决定：读回必须标记
+                # 当前确认的决定指纹已变化；新 key 再确认时该条必须被排除。
+                info_finding = next(
+                    (item for item in _dedupe_findings(_iter_findings(result_r2))
+                     if str(item.get("severity") or "").lower() == "info"
+                     and item.get("id")), None)
+                decision_ok = False
+                decision_detail = {}
+                if info_finding is not None:
+                    ignore = client.post("/api/workflow", json={
+                        "action": "update_issue", "job_id": job_id,
+                        "issue_id": info_finding["id"], "status": "needs_review",
+                        "note": "D4 R2-03：人工标记需复核，验证决定变化后的签认范围"})
+                    changed_gate = client.get(
+                        f"/api/jobs/{job_id}/report-confirmation")
+                    changed_gate.raise_for_status()
+                    changed_body = changed_gate.json()
+                    new_key = f"after-decision-{secrets.token_hex(4)}"
+                    second_confirm = client.post(
+                        f"/api/jobs/{job_id}/confirm-report",
+                        json={"expected_analysis_revision": revision_r2,
+                              "idempotency_key": new_key})
+                    second_record = (second_confirm.json().get("record") or {}
+                                     if second_confirm.status_code == 200 else {})
+                    decision_ok = (
+                        ignore.status_code == 200
+                        and changed_body.get("current_confirm_decision_changed") is True
+                        and changed_body.get("latest_confirm_record_is_current") is True
+                        and second_confirm.status_code == 200
+                        and info_finding["id"] not in (
+                            second_record.get("confirmed_issue_ids") or [])
+                        and second_record.get("confirmed_count")
+                        == record.get("confirmed_count", 0) - 1
+                    )
+                    decision_detail = {
+                        "ignored_id": info_finding["id"],
+                        "ignore_http": ignore.status_code,
+                        "decision_changed": changed_body.get(
+                            "current_confirm_decision_changed"),
+                        "second_confirm_http": second_confirm.status_code,
+                        "second_count": second_record.get("confirmed_count"),
+                        "first_count": record.get("confirmed_count")}
+                    if second_confirm.status_code == 200:
+                        record = second_record
+                # 全新幂等 key 并发首写：两个都成功，各留一条记录。
+                fresh_keys = [f"fresh-{secrets.token_hex(4)}" for _ in range(2)]
+                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                    fresh_results = list(pool.map(
+                        lambda key: client.post(
+                            f"/api/jobs/{job_id}/confirm-report",
+                            json={"expected_analysis_revision": revision_r2,
+                                  "idempotency_key": key}),
+                        fresh_keys))
+                fresh_records = {}
+                for key, answer in zip(fresh_keys, fresh_results):
+                    if answer.status_code == 200:
+                        fresh_records[key] = answer.json().get("record") or {}
+                final_readback = client.get(f"/api/jobs/{job_id}/report-confirmation")
+                final_readback.raise_for_status()
+                final_body = final_readback.json()
+                fresh_ok = (
+                    all(answer.status_code == 200 for answer in fresh_results)
+                    and all(not answer.json().get("idempotent")
+                            for answer in fresh_results)
+                    and len(fresh_records) == 2
+                    and final_body.get("latest_confirm_record_is_current") is True
+                    and final_body.get("current_confirm_decision_changed") is False
+                )
+                steps.step("S4e_decision_change_and_fresh_key_concurrency",
+                           decision_ok and fresh_ok,
+                           {"decision": decision_detail,
+                            "fresh_http": [a.status_code for a in fresh_results],
+                            "fresh_records": len(fresh_records),
+                            "latest_is_current": final_body.get(
+                                "latest_confirm_record_is_current"),
+                            "decision_changed_after": final_body.get(
+                                "current_confirm_decision_changed")})
 
                 # ---- S4d 版本变化：旧页面（旧 revision）确认必须 409 ----
                 stale = client.post(
@@ -1002,6 +1416,7 @@ def main() -> None:
                 # ---- S6 导出：四格式非空、重复一致、成员与当前分析一致、
                 #      绑定当前版本 ----
                 export_sizes, export_ok, repeat_identical = {}, True, True
+                export_contents = {}
                 exported_json = None
                 for suffix in ("json", "csv", "docx", "pdf"):
                     first_export = get_report_with_backoff(
@@ -1013,6 +1428,7 @@ def main() -> None:
                     if first_export.content != again.content:
                         repeat_identical = False
                     export_sizes[suffix] = len(first_export.content)
+                    export_contents[suffix] = first_export.content
                     if not first_export.content:
                         export_ok = False
                     if suffix == "json":
@@ -1042,9 +1458,12 @@ def main() -> None:
                     for item in exported_issues)
                 revision_binding = bool(exported_json) and (
                     exported_json.get("analysis_revision") == current_revision)
+                format_check = verify_export_formats(
+                    export_contents, exported_issues, current_revision)
                 steps.step("S6_export_membership",
                            export_ok and repeat_identical and membership_ok
-                           and export_pages_ok and revision_binding,
+                           and export_pages_ok and revision_binding
+                           and format_check["ok"],
                            {"sizes": export_sizes,
                             "repeat_identical": repeat_identical,
                             "exported_issues": len(exported_issues),
@@ -1052,6 +1471,7 @@ def main() -> None:
                             "membership_ok": membership_ok,
                             "export_pages_ok": export_pages_ok,
                             "revision_binding": revision_binding,
+                            "format_content": format_check,
                             "missing_from_export": sorted(expected_export_ids - exported_ids)[:10],
                             "extra_in_export": sorted(exported_ids - expected_export_ids)[:10]})
 
@@ -1153,6 +1573,24 @@ def main() -> None:
         receipt["failure"] = str(exc)
         raise
     finally:
+        # R2-07：不论成功/失败都清理本次创建的容器（只按本次 name，不碰他人容器），
+        # 并把清理结果写进回执。
+        cleanup = {"container": name, "attempted": False, "removed": False}
+        try:
+            cleanup["attempted"] = True
+            docker("rm", "-f", name)
+            cleanup["rm_ok"] = True
+        except Exception as exc:  # noqa: BLE001 - 容器未创建/已退出也要留痕
+            cleanup["rm_ok"] = False
+            cleanup["rm_error"] = f"{type(exc).__name__}: {exc}"
+        try:
+            remaining = docker("ps", "-q", "-f", f"name={name}").strip()
+            cleanup["still_running"] = bool(remaining)
+            cleanup["removed"] = not cleanup["still_running"] and (
+                cleanup.get("rm_ok") or "No such container" in str(cleanup.get("rm_error", "")))
+        except Exception as exc:  # noqa: BLE001
+            cleanup["verify_error"] = f"{type(exc).__name__}: {exc}"
+        receipt["cleanup"] = cleanup
         receipt["steps"] = steps.records
         (out / "d4_receipt.json").write_text(
             json.dumps(receipt, ensure_ascii=False, indent=1, default=str), encoding="utf-8")

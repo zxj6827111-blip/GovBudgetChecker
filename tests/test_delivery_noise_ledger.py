@@ -68,3 +68,28 @@ def test_suppression_ledger_reaches_payload():
         "relation_id": "rel-1", "reason": "同源合并"}]
     payload = build_issues_payload(doc, use_ai_assist=False)
     assert payload.get("delivery_suppressions") == doc.delivery_suppression_ledger
+
+
+def test_incomplete_suppression_basis_never_deletes_failure():
+    """R2-06：只有 policy_id（缺 relation_id/reason）不是合法处理依据。"""
+    doc = _doc()
+    out = order_and_number_issues(doc, [_issue(
+        "V33-996", "仍然失败的金额不一致",
+        delivery_suppressed={"policy_id": "POLICY-ONLY"})])
+    assert len(out) == 1, "依据不完整时不得删除失败结果"
+    assert getattr(doc, "delivery_suppression_ledger", []) == []
+
+
+def test_suppression_ledger_reaches_canonical_report_export():
+    """R2-06：抑制台账进入标准报告导出（JSON 读回可对账）。"""
+    from src.schemas.review_report import build_review_report
+
+    ledger = [{"rule": "V33-998", "policy_id": "POLICY-MERGE-001",
+               "relation_id": "rel-1", "reason": "同源合并"}]
+    report = build_review_report({
+        "job_id": "job-1",
+        "analysis_revision": "rev-1",
+        "result": {"rule_findings": [], "ai_findings": [], "merged": {},
+                   "delivery_suppressions": ledger},
+    })
+    assert report["delivery_suppressions"] == ledger

@@ -809,7 +809,7 @@ def _manual_finding_details(item: Dict[str, Any]) -> List[tuple[str, str]]:
     ]
 
 
-def _build_csv_row(issue: Dict[str, Any]) -> Dict[str, Any]:
+def _build_csv_row(issue: Dict[str, Any], analysis_revision: str = "") -> Dict[str, Any]:
     enriched = _enrich_issue(issue)
     display = enriched.get("display") if isinstance(enriched.get("display"), dict) else {}
     export_location = (
@@ -917,7 +917,9 @@ def _build_csv_row(issue: Dict[str, Any]) -> Dict[str, Any]:
         # "这条问题属于哪一项检查"，而不必让接收方按规则编号反查。
         "关联检查项": _format_obligation_ids(enriched),
         "obligation_ids": _format_obligation_ids(enriched),
-        "analysis_revision": human_decision.get("analysis_revision") or enriched.get("analysis_revision") or "",
+        "analysis_revision": (human_decision.get("analysis_revision")
+                              or enriched.get("analysis_revision")
+                              or analysis_revision or ""),
         "check_relation_id": enriched.get("check_relation_id") or "",
         "problem_group_id": str(location.get("problem_group_id") or ""),
         "defect_type": str(location.get("defect_type") or ""),
@@ -2176,8 +2178,9 @@ async def download_report(
             for item in review_report.get("tips", [])
             if isinstance(item, dict)
         }
+        csv_revision = str(status_payload.get("analysis_revision") or "")
         for item in issues:
-            row = _build_csv_row(item)
+            row = _build_csv_row(item, csv_revision)
             if str(item.get("id") or "") in tip_ids:
                 row["record_type"] = "tip"
             writer.writerow(row)
@@ -2220,7 +2223,7 @@ async def download_report(
             manual_title = normalize_manual_review(item)["title"]
             manual_detail = item.get("message") or item.get("detail") or item.get("reason") or ""
             finding = item.get("finding")
-            row = (_build_csv_row(_enrich_issue(finding)) if isinstance(finding, dict)
+            row = (_build_csv_row(_enrich_issue(finding), csv_revision) if isinstance(finding, dict)
                    else {key: "" for key in _CSV_FIELDNAMES})
             row.update(
                 {

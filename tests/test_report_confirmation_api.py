@@ -56,6 +56,14 @@ def _clean_payload():
     return payload
 
 
+def _write_status(tmp_path: Path, payload: dict) -> None:
+    """写权威 status.json：R2-03 后写侧在锁内重新读取它，而不是请求入口快照。"""
+    job_dir = tmp_path / JOB
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "status.json").write_text(
+        json.dumps({"job_id": JOB, **payload}, ensure_ascii=False), encoding="utf-8")
+
+
 @pytest.fixture()
 def client(monkeypatch, tmp_path):
     monkeypatch.setattr(
@@ -64,6 +72,7 @@ def client(monkeypatch, tmp_path):
     )
     monkeypatch.delenv("GOVBUDGET_CONFIRM_REPORT_ENABLED", raising=False)
     monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path, raising=False)
+    _write_status(tmp_path, _clean_payload())
     with TestClient(app) as test_client:
         yield test_client
 
@@ -130,6 +139,7 @@ def test_manual_review_and_failed_evidence_excluded_from_scope(client, monkeypat
         return (None, None, {"username": "tester"}, _payload())
 
     monkeypatch.setattr(jobs_mod, "require_job_access", _with_dirty)
+    _write_status(runtime.UPLOAD_ROOT, _payload())
     response = client.post(
         f"/api/jobs/{JOB}/confirm-report",
         json={"expected_analysis_revision": "rev-current",
@@ -141,3 +151,158 @@ def test_manual_review_and_failed_evidence_excluded_from_scope(client, monkeypat
     counts = gate.json()["counts"]
     assert counts["genuine_ambiguities"] >= 1  # manual_review 归歧义
     assert counts["system_incomplete"] >= 1    # failed 证据 + ai_not_run
+
+
+# ---------------------------------------------------------------------------
+# R2-03：签认与权威版本发布共享同步边界
+# ---------------------------------------------------------------------------
+
+def test_confirm_waits_for_job_state_lock_and_records_after_release(monkeypatch, tmp_path):
+    """持锁（模拟分析发布临界区）期间不得落盘；释放后按当前版本落盘。"""
+    import threading
+    import time
+
+    from src.services.report_confirmation_gate import (
+        confirm_report_atomic,
+        read_confirm_records,
+    )
+
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path, raising=False)
+    _write_status(tmp_path, _clean_payload())
+    job_dir = tmp_path / JOB
+    entered, release = threading.Event(), threading.Event()
+
+    def holder():
+        with runtime.job_state_lock(job_dir):
+            entered.set()
+            release.wait(5)
+
+    thread = threading.Thread(target=holder)
+    thread.start()
+    assert entered.wait(2)
+    results = {}
+
+    def confirmer():
+        results["value"] = confirm_report_atomic(
+            JOB, expected_analysis_revision="rev-current",
+            idempotency_key="key-atomic-1", confirm_report_enabled=True,
+            actor="tester")
+
+    worker = threading.Thread(target=confirmer)
+    worker.start()
+    time.sleep(0.2)
+    assert read_confirm_records(JOB) == [], "持锁期间不得写入确认记录"
+    release.set()
+    worker.join(5)
+    thread.join(5)
+    assert results["value"]["http"] == 200
+    assert len(read_confirm_records(JOB)) == 1
+
+
+def test_confirm_then_publish_leaves_current_record_historical(monkeypatch, tmp_path):
+    """先签认 R1、后发布 R2：R1 记录只能作为历史，不得当 R2 有效签认。"""
+    from src.services.report_confirmation_gate import (
+        build_report_confirmation,
+        confirm_readback,
+        confirm_report_atomic,
+        read_confirm_records,
+    )
+
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path, raising=False)
+    _write_status(tmp_path, _clean_payload())
+    result = confirm_report_atomic(
+        JOB, expected_analysis_revision="rev-current",
+        idempotency_key="key-history-1", confirm_report_enabled=True, actor="tester")
+    assert result["http"] == 200
+    runtime.merge_job_status(tmp_path / JOB, {"analysis_revision": "rev-next"})
+    payload = runtime.get_job_status_payload(JOB, apply_issue_filters=False)
+    readback = confirm_readback(
+        build_report_confirmation(payload, confirm_report_enabled=True),
+        read_confirm_records(JOB), payload)
+    assert readback["latest_confirm_record"]["analysis_revision"] == "rev-current"
+    assert readback["latest_confirm_record_is_current"] is False
+    assert readback["current_confirm_record"] is None
+    assert len(readback["historical_confirm_records"]) == 1
+    stale = confirm_report_atomic(
+        JOB, expected_analysis_revision="rev-current",
+        idempotency_key="key-history-2", confirm_report_enabled=True, actor="tester")
+    assert stale["http"] == 409 and stale["detail"]["current"] == "rev-next"
+
+
+def test_decision_change_marks_current_confirm_stale_and_new_key_excludes_ignored(
+        monkeypatch, tmp_path):
+    from src.services.report_confirmation_gate import (
+        build_report_confirmation,
+        confirm_readback,
+        confirm_report_atomic,
+        read_confirm_records,
+    )
+
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path, raising=False)
+    _write_status(tmp_path, _clean_payload())
+    assert confirm_report_atomic(
+        JOB, expected_analysis_revision="rev-current",
+        idempotency_key="key-decision-1", confirm_report_enabled=True,
+        actor="tester")["http"] == 200
+    changed = _clean_payload()
+    changed["human_decisions"] = [{"issue_id": "issue-1", "status": "ignored"}]
+    _write_status(tmp_path, changed)
+    payload = runtime.get_job_status_payload(JOB, apply_issue_filters=False)
+    readback = confirm_readback(
+        build_report_confirmation(payload, confirm_report_enabled=True),
+        read_confirm_records(JOB), payload)
+    assert readback["current_confirm_decision_changed"] is True
+    second = confirm_report_atomic(
+        JOB, expected_analysis_revision="rev-current",
+        idempotency_key="key-decision-2", confirm_report_enabled=True,
+        actor="tester")
+    assert second["http"] == 200
+    assert second["body"]["record"]["confirmed_issue_ids"] == ["issue-1b"]
+
+
+def test_concurrent_fresh_keys_both_write_distinct_records(monkeypatch, tmp_path):
+    """全新幂等键并发首写：两个都成功，各留一条记录（不是重复点击）。"""
+    import concurrent.futures
+
+    from src.services.report_confirmation_gate import (
+        confirm_report_atomic,
+        read_confirm_records,
+    )
+
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path, raising=False)
+    _write_status(tmp_path, _clean_payload())
+
+    def submit(index):
+        return confirm_report_atomic(
+            JOB, expected_analysis_revision="rev-current",
+            idempotency_key=f"key-fresh-{index}",
+            confirm_report_enabled=True, actor="tester")
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(submit, range(2)))
+    assert all(item["http"] == 200 for item in results)
+    assert all(item["body"]["idempotent"] is False for item in results)
+    assert len(read_confirm_records(JOB)) == 2
+
+
+def test_publication_during_append_rolls_back_and_rejects(monkeypatch, tmp_path):
+    """受控交错：核对 R1 → 发布 R2 → 落盘前/后复核 → 必须撤销并 409。"""
+    from src.services import report_confirmation_gate as gate
+
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path, raising=False)
+    _write_status(tmp_path, _clean_payload())
+    original_append = gate.append_confirm_record
+
+    def append_after_publication(job_id, record):
+        runtime.write_json_file(
+            tmp_path / JOB / "status.json",
+            {"job_id": JOB, **{**_clean_payload(), "analysis_revision": "rev-next"}})
+        return original_append(job_id, record)
+
+    monkeypatch.setattr(gate, "append_confirm_record", append_after_publication)
+    result = gate.confirm_report_atomic(
+        JOB, expected_analysis_revision="rev-current",
+        idempotency_key="key-race-1", confirm_report_enabled=True, actor="tester")
+    assert result["http"] == 409
+    assert result["detail"]["current"] == "rev-next"
+    assert gate.read_confirm_records(JOB) == [], "旧版本记录必须撤销"

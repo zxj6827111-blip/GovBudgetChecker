@@ -441,7 +441,9 @@ class EngineRuleRunner:
                         issues = rule_obj.apply(document)
 
                     int((time.time() - start_time) * 1000)
+                    from src.engine.rules_v33 import apply_delivery_suppressions
 
+                    issues = apply_delivery_suppressions(document, list(issues or []))
                     findings, conversion_errors = self._convert_and_locate_issues(
                         issues=issues,
                         rule_id=rule_id,
@@ -487,6 +489,9 @@ class EngineRuleRunner:
                     # 非 fail 结局（insufficient_data/not_applicable 等）：
                     # 保留已确认的 partial_issues，原因双保留
                     partial_list = list(getattr(signal, "partial_issues", []) or [])
+                    from src.engine.rules_v33 import apply_delivery_suppressions
+
+                    partial_list = apply_delivery_suppressions(document, partial_list)
                     findings, conversion_errors = self._convert_and_locate_issues(
                         issues=partial_list,
                         rule_id=rule_id,

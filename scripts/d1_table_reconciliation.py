@@ -71,13 +71,21 @@ def _logical_tables_for_anchor(artifact: Any, anchor: str) -> List[Any]:
     return result
 
 
-def _merged_cells_text(doc: Any, instances: List[Any]) -> List[Dict[str, Any]]:
-    """合并逻辑表的行文本（含**逐行真实页**），供逐格对账。
+def _normalized_row(cells: List[str]) -> List[str]:
+    return [_norm(cell) for cell in cells]
 
-    IR-04 补强：逻辑合并片段（table_fragments 里 page_number=起始页、rows 为
-    全表 74 行的那一条）不携带逐行页归属——按它取页会把第 8 页的行都记成
-    第 7 页，制造错页。这里展开合并片段登记的 physical_fragment_uids，
-    逐物理片段取行与其真实 page_number；无子片段的逻辑片段按自身页处理。
+
+def _logical_view_with_provenance(
+    doc: Any,
+    instances: List[Any],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """读取**实际交给规则/持久化的逻辑合并行**，并对照来源物理片段。
+
+    R2-02：物理片段只作来源依据。验收对象是逻辑合并片段
+    （``table_fragments`` 中登记了 ``source_fragment_uids`` 的那一条）的
+    rows/cells；逐行与来源物理片段的行做一致性核对（逻辑合并损坏 → 
+    merged_view_source_mismatch），再由调用方与原件页逐行对齐。没有逻辑
+    合并片段的实例，物理片段本身即有效视图。
     """
     table_fragments = {
         f.fragment_uid: f for f in getattr(doc.parse_artifact, "table_fragments", []) or []
@@ -86,27 +94,80 @@ def _merged_cells_text(doc: Any, instances: List[Any]) -> List[Dict[str, Any]]:
         f.fragment_uid: f for f in getattr(doc.parse_artifact, "physical_fragments", []) or []
     }
     rows: List[Dict[str, Any]] = []
+    view_errors: List[Dict[str, Any]] = []
     for instance in instances:
-        physical_uids: List[str] = []
+        logical_fragments = []
         for fragment_uid in getattr(instance, "fragment_uids", None) or []:
             frag = table_fragments.get(fragment_uid)
             if frag is None:
                 continue
-            children = list(
-                getattr(frag, "source_fragment_uids", None)
-                or getattr(frag, "physical_fragment_uids", None)
-                or []
-            )
-            physical_uids.extend(children or [fragment_uid])
-        for fragment_uid in dict.fromkeys(physical_uids):
+            children = list(getattr(frag, "source_fragment_uids", None) or [])
+            if children:
+                logical_fragments.append((frag, children))
+        if logical_fragments:
+            for frag, children in logical_fragments:
+                provenance: List[Tuple[Any, List[str]]] = []
+                # source_fragment_uids 的登记顺序不保证页序（实测按后页在前）；
+                # 逻辑合并行按物理页升序拼接，来源核对必须先按 page_number 排序。
+                ordered_children = sorted(
+                    children,
+                    key=lambda uid: (
+                        getattr(physical_fragments.get(uid), "page_number", None) or 0,
+                        str(uid),
+                    ),
+                )
+                for child_uid in ordered_children:
+                    child = physical_fragments.get(child_uid)
+                    if child is None:
+                        view_errors.append({
+                            "kind": "merged_view_source_missing",
+                            "fragment_uid": getattr(frag, "fragment_uid", None),
+                            "source_fragment_uid": child_uid,
+                        })
+                        continue
+                    for source_row in getattr(child, "rows", []) or []:
+                        provenance.append((
+                            getattr(child, "page_number", None),
+                            [str(cell or "") for cell in source_row],
+                        ))
+                logical_rows = [[str(cell or "") for cell in row]
+                                for row in getattr(frag, "rows", []) or []]
+                if len(logical_rows) != len(provenance):
+                    view_errors.append({
+                        "kind": "merged_view_row_count_mismatch",
+                        "table_code": getattr(instance, "table_code", None),
+                        "logical_rows": len(logical_rows),
+                        "source_rows": len(provenance),
+                    })
+                for index in range(min(len(logical_rows), len(provenance))):
+                    page, source_cells = provenance[index]
+                    logical_cells = logical_rows[index]
+                    if _normalized_row(logical_cells) != _normalized_row(source_cells):
+                        view_errors.append({
+                            "kind": "merged_view_source_mismatch",
+                            "table_code": getattr(instance, "table_code", None),
+                            "page": page,
+                            "row_index": index,
+                            "logical": logical_cells[:6],
+                            "source": source_cells[:6],
+                        })
+                    rows.append({"page": page, "cells": logical_cells})
+            continue
+        for fragment_uid in getattr(instance, "fragment_uids", None) or []:
             frag = physical_fragments.get(fragment_uid) or table_fragments.get(fragment_uid)
             if frag is None:
                 continue
             for row in getattr(frag, "rows", []) or []:
                 rows.append({
                     "page": getattr(frag, "page_number", None),
-                    "cells": [str(c or "") for c in row],
+                    "cells": [str(cell or "") for cell in row],
                 })
+    return rows, view_errors
+
+
+def _merged_cells_text(doc: Any, instances: List[Any]) -> List[Dict[str, Any]]:
+    """兼容入口：只返回逻辑合并行（供自测注入使用），不暴露来源错误。"""
+    rows, _errors = _logical_view_with_provenance(doc, instances)
     return rows
 
 
@@ -258,8 +319,7 @@ def _reconcile_row_alignment(
                         "merged": entry["numbers"][:8], "original": original_seq[:8],
                     })
                 continue
-            if entry["numbers"] != original_seq[:len(entry["numbers"])] and \
-                    sorted(entry["numbers"]) != sorted(original_seq[:len(entry["numbers"])]):
+            if entry["numbers"] != original_seq[:len(entry["numbers"])]:
                 row_mismatches.append({
                     "identity": identity, "page": page,
                     "kind": "row_number_sequence_mismatch",
@@ -287,7 +347,7 @@ def reconcile(pdf: str, anchor: str, page_spec: str) -> Dict[str, Any]:
         if _instance_pages(doc_for_artifact(artifact, pdf, page_texts), inst) & set(pages)
     ]
     doc = doc_for_artifact(artifact, pdf, page_texts)
-    merged_rows = _merged_cells_text(doc, instances)
+    merged_rows, view_errors = _logical_view_with_provenance(doc, instances)
     merged_row_pages = {row["page"] for row in merged_rows}
     # 行归属页过滤：只对账落在所查页范围内的合并行
     merged_rows = [row for row in merged_rows if row["page"] in set(pages)]
@@ -322,6 +382,7 @@ def reconcile(pdf: str, anchor: str, page_spec: str) -> Dict[str, Any]:
         "merged_rows": len(merged_rows),
         "original_number_kinds": len(original_numbers),
         "row_mismatches": alignment["row_mismatches"],
+        "merged_view_errors": view_errors[:50],
         "missing_numbers": {},
         "extra_numbers": {},
         "missing_codes": missing_codes,
@@ -488,10 +549,8 @@ def reconcile_auto(pdf: str) -> Dict[str, Any]:
         if code.startswith("UNKNOWN"):
             # 未识别版式的目录/杂表页不参与数值对账（无表义）
             continue
-        merged_rows = [
-            row for row in _merged_cells_text(doc, [instance])
-            if row["page"] in pages_set
-        ]
+        merged_rows, view_errors = _logical_view_with_provenance(doc, [instance])
+        merged_rows = [row for row in merged_rows if row["page"] in pages_set]
         original_numbers: Dict[str, int] = {}
         original_codes: set = set()
         for page in sorted(pages_set):
@@ -543,8 +602,10 @@ def reconcile_auto(pdf: str) -> Dict[str, Any]:
             "extra_numbers": extra,
             "missing_codes": sorted(original_codes - merged_codes),
             "row_mismatches": row_mismatches[:20],
+            "merged_view_errors": view_errors[:50],
             "verdict": "PASS" if not (
-                missing or extra or (original_codes - merged_codes) or row_mismatches
+                missing or extra or (original_codes - merged_codes)
+                or row_mismatches or view_errors
             ) else "GAP",
         })
     failed = [r for r in results if r["verdict"] == "GAP"]

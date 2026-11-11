@@ -22,6 +22,8 @@ class ReviewReport:
     human_decisions: List[Dict[str, Any]] = field(default_factory=list)
     merge_conflicts: List[Dict[str, Any]] = field(default_factory=list)
     candidate_findings: List[Dict[str, Any]] = field(default_factory=list)
+    #: R2-06：结构化交付抑制台账（规则→政策/关系/理由），读取与导出可对账。
+    delivery_suppressions: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return dataclasses.asdict(self)
@@ -42,6 +44,7 @@ class ReviewReport:
             human_decisions=_mapping_list(payload.get("human_decisions")),
             merge_conflicts=_mapping_list(payload.get("merge_conflicts")),
             candidate_findings=_mapping_list(payload.get("candidate_findings")),
+            delivery_suppressions=_mapping_list(payload.get("delivery_suppressions")),
         )
 
 
@@ -446,6 +449,8 @@ def build_review_report(payload: Mapping[str, Any]) -> Dict[str, Any]:
         human_decisions=human_decisions,
         merge_conflicts=merge_conflicts,
         candidate_findings=candidate_findings,
+        delivery_suppressions=_mapping_list(
+            result.get("delivery_suppressions") or meta.get("delivery_suppressions")),
     )
     output = report.to_dict()
     output["conclusion"].update(review_report_counts(output, payload.get("ignored_issue_ids") or []))

@@ -6,6 +6,8 @@ depend on a stable API surface instead of importing `api.main` directly.
 
 from __future__ import annotations
 
+import contextlib
+
 import asyncio
 import copy
 import hashlib
@@ -576,12 +578,49 @@ def extract_job_status_context(payload: Optional[Dict[str, Any]]) -> Dict[str, A
     }
 
 
+@contextlib.contextmanager
+def job_state_lock(job_dir: Path):
+    """任务状态互斥锁：分析版本发布与签认读-验-写共用同一同步边界。
+
+    R2-03：确认接口原先在多个 await 之后追加记录，版本检查与落盘之间可被
+    新分析发布插入。锁文件在任务目录内（不跨任务）；POSIX 用 flock 跨进程，
+    不可用时退化为进程内互斥。锁只保护"状态读-校验-写"临界区，不保护
+    PDF/证据文件本身。
+    """
+    import threading
+
+    lock_path = Path(job_dir) / ".job_state.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with _JOB_STATE_THREAD_LOCKS.setdefault(str(lock_path), threading.Lock()):
+        handle = open(lock_path, "a+", encoding="utf-8")
+        try:
+            try:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            except ImportError:  # pragma: no cover - Windows 分支
+                pass
+            yield
+        finally:
+            try:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except Exception:  # noqa: BLE001
+                pass
+            handle.close()
+
+
+_JOB_STATE_THREAD_LOCKS: Dict[str, Any] = {}
+
+
 def merge_job_status(job_dir: Path, patch: Dict[str, Any]) -> Dict[str, Any]:
-    """Merge patch into job status and persist it."""
+    """Merge patch into job status and persist it (under the job state lock)."""
     status_file = job_dir / "status.json"
-    current = read_json_file(status_file, default={})
-    current.update(patch)
-    write_json_file(status_file, current)
+    with job_state_lock(Path(job_dir)):
+        current = read_json_file(status_file, default={})
+        current.update(patch)
+        write_json_file(status_file, current)
     update_job_meta(job_dir, patch)
     return current
 
