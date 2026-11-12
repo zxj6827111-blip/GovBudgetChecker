@@ -33,6 +33,7 @@ if str(_REPO_ROOT) not in sys.path:
 import pdfplumber  # noqa: E402
 
 from src.services.pdf_parser import PDFParser  # noqa: E402
+from src.services.pdf_page_extract import extract_tables_from_page  # noqa: E402
 
 _NUM_RE = re.compile(r"(?<![\d.,-])-?\d{1,3}(?:,\d{3})+(?:\.\d+)?|-?\d+(?:\.\d+)?")
 _CODE_RE = re.compile(r"(?<!\d)([1-9]\d{2}(?:\d{2}){0,2})(?!\d)")
@@ -305,20 +306,70 @@ def _header_fragment_for_instance(doc: Any, instance: Any) -> Any:
                                           str(getattr(f, "fragment_uid", ""))))
 
 
+def _original_header_rows(page_tables: List[Any], pages: List[int], rule: Any) -> List[List[Tuple[int, str]]]:
+    """原件表头行（独立 pdfplumber 表格通道，R9-02 V4 用，保留列位）。
+
+    按页序取**首个**含本表栏目词的页：该页选含必备栏目/指标别名最多的
+    一张表，取首个数据行（含数值格）之前的表头行；每行展开为
+    ``(列位, 归一文本)``，保留父子栏目的列几何。换行格在表格通道里仍是
+    完整一格。只用于栏目身份对回，不参与金额解析，不使用合并侧角色。
+    """
+    words = [_norm(unicodedata.normalize("NFKC", header))
+             for header in rule.required_headers]
+    words += [_norm(unicodedata.normalize("NFKC", alias))
+              for aliases in rule.measure_aliases.values() for alias in aliases]
+    words = [word for word in words if word]
+    for page in pages:
+        if not (1 <= page <= len(page_tables)):
+            continue
+        best_rows: List[List[Tuple[int, str]]] = []
+        best_score = 0
+        for table in page_tables[page - 1] or []:
+            rows: List[List[Tuple[int, str]]] = []
+            for row in table:
+                cells = [(col, _norm(unicodedata.normalize("NFKC", cell)))
+                         for col, cell in enumerate(row)]
+                if any(_is_number_token(_clean_number_token(text))
+                       for _col, text in cells if text):
+                    break
+                rows.append([(col, text) for col, text in cells if text])
+            flat = [text for row in rows for _col, text in row]
+            score = sum(1 for word in words
+                        if any(word in cell or (len(cell) >= 2 and cell in word)
+                               for cell in flat))
+            if score > best_score:
+                best_score, best_rows = score, rows
+        if best_rows:
+            return best_rows
+    return []
+
+
+def _header_cell_hits(flat: List[Tuple[int, int, str]], name: str) -> List[Tuple[int, int, str]]:
+    hits = [cell for cell in flat if cell[2] == name]
+    if not hits and name:
+        hits = [cell for cell in flat if name in cell[2]]
+    return hits
+
+
 def _semantic_amount_roles(
     doc: Any,
     instance: Any,
     merged_rows: List[Dict[str, Any]],
     page_texts: List[str],
     pages: List[int],
+    page_tables: Optional[List[Any]] = None,
 ) -> Tuple[Optional[Dict[int, str]], Dict[str, Any]]:
-    """R8-02：已知九表复用生产语义列映射确定金额列（候选侧假设）。
+    """R8-02/R9-02：已知九表复用生产语义列映射确定金额列（候选侧假设）。
 
     采纳前必须通过独立核对门（原页文本来自 pdfplumber 独立通道）：
     V1 实例标题归一后出现在原页文本；
     V2 该表 required_headers 归一后都出现在原页文本；
     V3 映射非空、每个映射列位在行宽内、映射列数据格（跳过表头）为数值
-    或空白。任一不成立 → 不采纳语义角色，退回表头关键词+统计逻辑，并
+    或空白；
+    V4 每个指标的来源列名在原件表头文本中唯一出现，且出现顺序与来源
+    列位一致——表头互换等确定性身份矛盾留 header_mismatches（GAP），
+    表头不可判定则退回。
+    V1-V3 任一不成立 → 不采纳语义角色，退回表头关键词+统计逻辑，并
     把原因写入 semantic_evidence；不因此把 GAP 改判 PASS。原件侧身份
     不使用这里的角色——候选提供假设，真值由原页 token 序列逐行裁定。
     """
@@ -391,6 +442,90 @@ def _semantic_amount_roles(
                 evidence.update(reason="mapping_col_non_numeric_data", gate="V3",
                                 col=col, page=row.get("page"))
                 return None, evidence
+    # V4（R9-02）：语义指标列身份对回原件表头格/列位。候选映射是语义
+    # 解释，不能自证原件：
+    # - 叶栏目名在原件表头格中的命中数须与同名候选列数一致，按列序逐个
+    #   配对（双栏同名逐一核对；数量不符 → 不可判定，退回）；
+    # - 父栏目须是叶格上方列位不超过叶格的最近表头格（列优先、同列取
+    #   最近行），最近格不匹配而父词存在于原件表头 → 确定性身份矛盾，
+    #   留 GAP；
+    # - 各列叶格按行序的顺序须与来源列位顺序一致，顺序矛盾 → GAP。
+    # 表头不可判定（无表头格/缺失/重名数不符）→ 不采纳语义、退回现有
+    # 逻辑，不判 GAP。金额序列相同不能替代栏目身份核验。
+    header_rows = _original_header_rows(page_tables or [], pages, rule)
+    flat = [(ri, col, text) for ri, row in enumerate(header_rows)
+            for col, text in row]
+    names: List[Tuple[int, List[str]]] = []
+    for item in sorted(mappings, key=lambda m: int(m.get("source_col_idx") or 0)):
+        col = int(item.get("source_col_idx"))
+        if col not in amount_cols:
+            continue
+        full = nfkc(item.get("source_col_name"))
+        names.append((col, [part for part in full.split("/") if part]))
+    leaf_counts: Dict[str, int] = {}
+    for _col, parts in names:
+        leaf = parts[-1] if parts else ""
+        leaf_counts[leaf] = leaf_counts.get(leaf, 0) + 1
+    leaf_hits: Dict[str, List[Tuple[int, int, str]]] = {}
+    for leaf, count in leaf_counts.items():
+        hits = _header_cell_hits(flat, leaf)
+        if not leaf or len(hits) != count:
+            evidence.update(reason="header_identity_inconclusive", gate="V4",
+                            header_cells_found=bool(flat))
+            return None, evidence
+        leaf_hits[leaf] = hits
+    used: Dict[str, int] = {}
+    positions: List[Tuple[int, Tuple[int, int, str]]] = []
+    identity_errors: List[Dict[str, Any]] = []
+    for col, parts in names:
+        leaf = parts[-1]
+        index = used.get(leaf, 0)
+        used[leaf] = index + 1
+        leaf_cell = leaf_hits[leaf][index]
+        positions.append((col, leaf_cell))
+        anchor = leaf_cell
+        for parent in reversed(parts[:-1]):
+            # 父格归属：叶格上方、列位不超过叶格的表头格中取列位最大者
+            # （同列取最近行）。九表版式中维度列连续居左、父栏目与叶格
+            # 同列或自左跨列，列优先可避开下一行维度格（如"科目名称"）。
+            candidates = [cell for cell in flat
+                          if cell[0] < anchor[0] and cell[1] <= anchor[1]]
+            if not candidates:
+                evidence.update(reason="header_identity_inconclusive", gate="V4",
+                                header_cells_found=bool(flat))
+                return None, evidence
+            nearest = max(candidates, key=lambda cell: (cell[1], cell[0]))
+            if parent not in nearest[2] and nearest[2] not in parent:
+                if _header_cell_hits(flat, parent):
+                    identity_errors.append({
+                        "col": col, "parent": parent,
+                        "nearest_original_header": nearest[2],
+                    })
+                else:
+                    evidence.update(reason="header_identity_inconclusive", gate="V4",
+                                    header_cells_found=bool(flat))
+                    return None, evidence
+            anchor = nearest
+    order_errors = [
+        {"col_a": left[0], "col_b": right[0],
+         "name_a": left[1][2], "name_b": right[1][2]}
+        for left, right in zip(positions, positions[1:], strict=False)
+        if (left[1][0], left[1][1]) > (right[1][0], right[1][1])
+    ]
+    if identity_errors or order_errors:
+        evidence.update(
+            adopted=False, reason="header_semantic_identity_mismatch", gate="V4",
+            header_mismatches=[{
+                "kind": "header_semantic_identity_mismatch",
+                "table_code": getattr(instance, "table_code", None),
+                "candidate_order": [{"col": col, "name": parts[-1]}
+                                    for col, parts in names],
+                "original_order": [cell[2] for _col, cell in
+                                   sorted(positions, key=lambda item: (item[1][0], item[1][1]))],
+                "parent_errors": identity_errors,
+                "order_errors": order_errors,
+            }])
+        return None, evidence
     evidence.update(
         adopted=True,
         amount_cols=sorted(amount_cols),
@@ -405,6 +540,7 @@ def _combined_semantic_roles(
     merged_rows: List[Dict[str, Any]],
     page_texts: List[str],
     pages: List[int],
+    page_tables: Optional[List[Any]] = None,
 ) -> Tuple[Optional[Dict[int, str]], Dict[str, Any]]:
     """多实例锚点：每实例单独算语义角色；全部采纳且一致才共用，冲突退回。"""
     if not instances:
@@ -413,16 +549,21 @@ def _combined_semantic_roles(
     for instance in instances:
         instance_pages = sorted(_instance_pages(doc, instance) & set(pages))
         per_instance.append(_semantic_amount_roles(
-            doc, instance, merged_rows, page_texts, instance_pages or pages))
+            doc, instance, merged_rows, page_texts, instance_pages or pages,
+            page_tables))
+    header_mismatches = [item for _roles, evidence in per_instance
+                         for item in evidence.get("header_mismatches") or []]
     if len(per_instance) == 1:
         return per_instance[0]
     first_roles, _first_evidence = per_instance[0]
     if first_roles is not None and all(
             roles == first_roles for roles, _evidence in per_instance[1:]):
         return first_roles, {"adopted": True, "instances": len(per_instance),
-                             "amount_cols": sorted(first_roles)}
+                             "amount_cols": sorted(first_roles),
+                             "header_mismatches": header_mismatches}
     return None, {"adopted": False, "reason": "multi_instance_conflict",
-                  "instances": [evidence for _roles, evidence in per_instance]}
+                  "instances": [evidence for _roles, evidence in per_instance],
+                  "header_mismatches": header_mismatches}
 
 
 def _learn_column_roles(
@@ -913,6 +1054,7 @@ def reconcile(pdf: str, anchor: str, page_spec: str) -> Dict[str, Any]:
 
     with pdfplumber.open(pdf) as pdf_doc:
         page_texts = [(p.extract_text() or "") for p in pdf_doc.pages]
+        page_tables = [extract_tables_from_page(p) for p in pdf_doc.pages]
         total_pages = len(page_texts)
     pages = _parse_pages(page_spec, total_pages)
 
@@ -930,7 +1072,7 @@ def reconcile(pdf: str, anchor: str, page_spec: str) -> Dict[str, Any]:
 
     # 原件侧数字清单：只取解析出的表格行（排除表头、页码、年份、编码）
     semantic_roles, semantic_evidence = _combined_semantic_roles(
-        doc, instances, merged_rows, page_texts, pages)
+        doc, instances, merged_rows, page_texts, pages, page_tables)
     roles, known_codes = _learn_column_roles(merged_rows, semantic_roles)
     original_numbers: Dict[str, List[int]] = {}
     original_codes: Dict[str, List[int]] = {}
@@ -959,6 +1101,7 @@ def reconcile(pdf: str, anchor: str, page_spec: str) -> Dict[str, Any]:
         "missing_codes": missing_codes,
         "code_pages_in_merged": merged_pages_by_code,
         "semantic_evidence": semantic_evidence,
+        "header_mismatches": list(semantic_evidence.get("header_mismatches") or []),
     }
 
 
@@ -1013,6 +1156,7 @@ def self_test(pdf: str) -> Dict[str, Any]:
     artifact = parser.build_parse_artifact(pdf)
     with pdfplumber.open(pdf) as pdf_doc:
         page_texts = [(p.extract_text() or "") for p in pdf_doc.pages]
+        page_tables = [extract_tables_from_page(p) for p in pdf_doc.pages]
     doc = doc_for_artifact(artifact, pdf, page_texts)
     instance = next(
         (item for item in getattr(artifact, "logical_tables", []) or []
@@ -1032,7 +1176,7 @@ def self_test(pdf: str) -> Dict[str, Any]:
         row for row in _merged_cells_text(doc, [instance]) if row["page"] in pages_set
     ]
     semantic_roles, semantic_evidence = _semantic_amount_roles(
-        doc, instance, merged_rows, page_texts, sorted(pages_set))
+        doc, instance, merged_rows, page_texts, sorted(pages_set), page_tables)
     roles, _codes = _learn_column_roles(merged_rows, semantic_roles)
     normal = _reconcile_row_alignment(merged_rows, page_texts, sorted(pages_set),
                                       semantic_roles)
@@ -1115,6 +1259,7 @@ def reconcile_auto(pdf: str) -> Dict[str, Any]:
     artifact = parser.build_parse_artifact(pdf)
     with pdfplumber.open(pdf) as pdf_doc:
         page_texts = [(p.extract_text() or "") for p in pdf_doc.pages]
+        page_tables = [extract_tables_from_page(p) for p in pdf_doc.pages]
     doc = doc_for_artifact(artifact, pdf, page_texts)
     fragments = {f.fragment_uid: f for f in getattr(artifact, "table_fragments", []) or []}
     results = []
@@ -1129,7 +1274,8 @@ def reconcile_auto(pdf: str) -> Dict[str, Any]:
         merged_rows, view_errors = _logical_view_with_provenance(doc, [instance])
         merged_rows = [row for row in merged_rows if row["page"] in pages_set]
         semantic_roles, semantic_evidence = _semantic_amount_roles(
-            doc, instance, merged_rows, page_texts, sorted(pages_set))
+            doc, instance, merged_rows, page_texts, sorted(pages_set), page_tables)
+        header_mismatches = list(semantic_evidence.get("header_mismatches") or [])
         roles, known_codes = _learn_column_roles(merged_rows, semantic_roles)
         original_numbers: Dict[str, int] = {}
         original_codes: set = set()
@@ -1173,10 +1319,11 @@ def reconcile_auto(pdf: str) -> Dict[str, Any]:
             "extra_numbers": extra,
             "missing_codes": sorted(original_codes - merged_codes),
             "row_mismatches": row_mismatches[:20],
+            "header_mismatches": header_mismatches,
             "merged_view_errors": view_errors[:50],
             "verdict": "PASS" if not (
                 missing or extra or (original_codes - merged_codes)
-                or row_mismatches or view_errors
+                or row_mismatches or view_errors or header_mismatches
             ) else "GAP",
         })
     failed = [r for r in results if r["verdict"] == "GAP"]

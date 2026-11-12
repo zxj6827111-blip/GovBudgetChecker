@@ -138,6 +138,22 @@ def _material_group_boundary(compact: str, start: int, stop: int) -> int | None:
     return earliest
 
 
+def _rating_material_title(compact: str, start: int, title_start: int) -> bool:
+    """窄义评级材料清单：材料锚点紧前带评级/评价修饰语（同子句内）。
+
+    "相关评级材料如下/评级资料如下"是评级披露的材料应答；"归档材料如下/
+    相关材料如下/材料清单如下"不是——它们不能应答评级数量声明。
+    """
+    material = _MATERIAL_OBJECT.match(compact, title_start)
+    if material is None:
+        return False
+    clause_start = max(
+        [start - 1] + [compact.rfind(ch, start, title_start) for ch in _SENTENCE_STOP]
+    ) + 1
+    prefix = compact[clause_start:title_start]
+    return bool(re.search(r'(?:绩效)?(?:评级|评价)$', prefix))
+
+
 def _name(value):
     # Only the optional terminal 支出 is a documented naming variation. Do not
     # shorten subject stems: names such as 其他支出 are distinct identities.
@@ -1516,20 +1532,40 @@ def check_performance_counts(rule, doc):
                 _unresolved(rule, doc, key, '评级类别未识别或不是互斥的标准评级，不能据此认定数量闭合',
                             unresolved, formula='self_evaluation_count = sum(distinct standard rating counts)')
                 continue
+            # R9-01：逐声明应答记账——枚举范围内全部评级披露谓词
+            # （评级/评价…如下/见下），逐个判定应答：应答窗口（到下一
+            # 声明、材料清单标题或范围末尾）内有评级数量，或由窄义评级
+            # 材料清单（评级/评价+材料/资料/清单）应答。无关材料标题不能
+            # 豁免独立未完成的声明；材料标题之后新出现的声明同样逐个记账。
+            # 未应答 → 显式未完成回执；0 条材料问题与检查未完成是两个维度。
+            list_predicates = list(_RATING_LIST_PREDICATE.finditer(
+                text.compact, total.end(), stop))
+            unfulfilled = False
+            for position, predicate in enumerate(list_predicates):
+                answer_start = predicate.end()
+                answer_end = stop
+                if position + 1 < len(list_predicates):
+                    answer_end = min(answer_end, list_predicates[position + 1].start())
+                title = _material_group_boundary(text.compact, answer_start, answer_end)
+                if title is not None:
+                    answer_end = title
+                if _RATING.search(text.compact, answer_start, answer_end):
+                    continue
+                if title is not None and _rating_material_title(
+                        text.compact, answer_start, title):
+                    continue
+                unfulfilled = True
+                break
+            if unfulfilled:
+                _unresolved(rule, doc, key,
+                            '评级声明存在但未提取到同组评级数量，不能确认数量关系',
+                            unresolved,
+                            formula='self_evaluation_count = sum(distinct standard rating counts)')
+                continue
             if not ratings:
-                # R8-01 零回执守卫：有评级披露谓词（评级/评价…如下/见下）
-                # 但组内提取不到任何评级数量，且**没有材料清单标题应答该
-                # 声明** → 显式未完成，不允许"零问题零回执"静默 pass。
-                # 材料标题合法闭合本组时（boundary 存在），声明指向材料
-                # 清单、其后数字属于其他材料，沿用 R7 裁定不建关系、不产
-                # 回执（R6 materials_title_terminates_group 冻结预期）。
-                # 全文无披露谓词时是合法无关系场景，不新增问题。
-                if boundary is None and _RATING_LIST_PREDICATE.search(
-                        text.compact, total.end(), stop):
-                    _unresolved(rule, doc, key,
-                                '评级声明存在但未提取到同组评级数量，不能确认数量关系',
-                                unresolved,
-                                formula='self_evaluation_count = sum(distinct standard rating counts)')
+                # 无披露谓词且无数量：合法无关系场景，不建加总关系。
+                # 窄义评级材料清单应答的声明（R6 冻结例）同样不建关系、
+                # 不产回执，材料示例不吸入本组。
                 continue
             prefix_start = max((text.compact.rfind(ch, begin, total.start()) for ch in '。；;'), default=begin - 1) + 1
             proof = text.compact[max(begin, prefix_start):total.end()]
