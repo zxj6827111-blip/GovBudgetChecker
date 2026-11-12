@@ -1,0 +1,179 @@
+{
+ "git_head": "afa17ae6119743e455ef65e64516996bf095d043",
+ "checks": {
+  "performance_group_operands": {
+   "ok": true,
+   "cases": [
+    {
+     "case": "complete",
+     "expected": {
+      "issues": 1,
+      "status": "fail",
+      "operator": "=",
+      "parts": {
+       "优": 50
+      }
+     },
+     "actual": {
+      "issues": 1,
+      "status": "fail",
+      "formula": "self_evaluation_count = sum(disclosed distinct rating counts)",
+      "spans": [
+       "绩效自评的2025年度项目53个，评级结果如下。绩效评级为“优”的项目50个"
+      ],
+      "operands_exclude_material_example": true
+     },
+     "pass": true
+    },
+    {
+     "case": "complete_with_other_material_example",
+     "expected": {
+      "issues": 1,
+      "status": "fail",
+      "operator": "=",
+      "parts": {
+       "优": 50
+      }
+     },
+     "actual": {
+      "issues": 1,
+      "status": "fail",
+      "formula": "self_evaluation_count = sum(disclosed distinct rating counts)",
+      "spans": [
+       "绩效自评的2025年度项目53个，评级结果如下。绩效评级为“优”的项目50个"
+      ],
+      "operands_exclude_material_example": true
+     },
+     "pass": true
+    },
+    {
+     "case": "partial",
+     "expected": {
+      "issues": 0,
+      "status": "pass",
+      "operator": ">=",
+      "parts": {
+       "优": 50
+      }
+     },
+     "actual": {
+      "issues": 0,
+      "status": "pass",
+      "formula": "self_evaluation_count >= sum(disclosed distinct rating counts)",
+      "spans": [
+       "绩效自评的2025年度项目53个，其中，绩效评级为“优”的项目50个"
+      ],
+      "operands_exclude_material_example": true
+     },
+     "pass": true
+    },
+    {
+     "case": "partial_with_other_material_example",
+     "expected": {
+      "issues": 0,
+      "status": "pass",
+      "operator": ">=",
+      "parts": {
+       "优": 50
+      }
+     },
+     "actual": {
+      "issues": 0,
+      "status": "pass",
+      "formula": "self_evaluation_count >= sum(disclosed distinct rating counts)",
+      "spans": [
+       "绩效自评的2025年度项目53个，其中，绩效评级为“优”的项目50个"
+      ],
+      "operands_exclude_material_example": true
+     },
+     "pass": true
+    }
+   ]
+  },
+  "mixed_amount_columns": {
+   "ok": true,
+   "cases": {
+    "decimal": {
+     "ok": true,
+     "normal": {
+      "pass": 1,
+      "gap": 0
+     },
+     "mutated": {
+      "pass": 0,
+      "gap": 1
+     },
+     "changes": [
+      {
+       "fragment": "6485148370de5b3e",
+       "row": 1,
+       "before": "100.00",
+       "after": "101.00"
+      }
+     ],
+     "original_unchanged": true
+    },
+    "mixed": {
+     "ok": true,
+     "normal": {
+      "pass": 1,
+      "gap": 0
+     },
+     "mutated": {
+      "pass": 0,
+      "gap": 1
+     },
+     "changes": [
+      {
+       "fragment": "cbe6073a5af9de01",
+       "row": 1,
+       "before": "100",
+       "after": "101"
+      }
+     ],
+     "original_unchanged": true
+    }
+   }
+  },
+  "row_identity_constraint": {
+   "ok": true,
+   "value_elsewhere": [
+    {
+     "identity": "本年收入合计|本年支出合计",
+     "page": 1,
+     "kind": "row_number_sequence_mismatch",
+     "merged": [
+      "3E+3",
+      "9999"
+     ],
+     "original": [
+      "3E+3",
+      "2.8E+3"
+     ]
+    },
+    {
+     "identity": "合计|合计",
+     "page": 1,
+     "kind": "row_missing_in_merged",
+     "original": [
+      "3E+3",
+      "2.8E+3"
+     ]
+    }
+   ],
+   "reverse_coverage": [
+    {
+     "identity": "本年收入合计|本年支出合计",
+     "page": 1,
+     "kind": "row_missing_in_merged",
+     "original": [
+      "3E+3",
+      "2.8E+3"
+     ]
+    }
+   ]
+  }
+ },
+ "ok": true,
+ "note": "R7 独立反例复现：预期来自 Codex 第七轮核验包；ok=None 仅表示本机缺少该输入，不计通过。"
+}

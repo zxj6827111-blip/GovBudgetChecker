@@ -1,0 +1,208 @@
+{
+ "git_head": "afa17ae6119743e455ef65e64516996bf095d043",
+ "checks": {
+  "performance_scope": {
+   "ok": true,
+   "cases": [
+    {
+     "case": "base",
+     "expected_issues": 1,
+     "actual_issues": 1,
+     "receipt_status": "fail",
+     "formula": "self_evaluation_count = sum(disclosed distinct rating counts)",
+     "pass": true
+    },
+    {
+     "case": "archive_after",
+     "expected_issues": 1,
+     "actual_issues": 1,
+     "receipt_status": "fail",
+     "formula": "self_evaluation_count = sum(disclosed distinct rating counts)",
+     "pass": true
+    },
+    {
+     "case": "archive_between_comma",
+     "expected_issues": 1,
+     "actual_issues": 1,
+     "receipt_status": "fail",
+     "formula": "self_evaluation_count = sum(disclosed distinct rating counts)",
+     "pass": true
+    },
+    {
+     "case": "archive_between_parentheses",
+     "expected_issues": 1,
+     "actual_issues": 1,
+     "receipt_status": "fail",
+     "formula": "self_evaluation_count = sum(disclosed distinct rating counts)",
+     "pass": true
+    },
+    {
+     "case": "complete_declaration_sentence",
+     "expected_issues": 1,
+     "actual_issues": 1,
+     "receipt_status": "fail",
+     "formula": "self_evaluation_count = sum(disclosed distinct rating counts)",
+     "pass": true
+    },
+    {
+     "case": "partial",
+     "expected_issues": 0,
+     "actual_issues": 0,
+     "receipt_status": "pass",
+     "formula": "self_evaluation_count >= sum(disclosed distinct rating counts)",
+     "pass": true
+    }
+   ]
+  },
+  "d1_integer_controls": {
+   "ok": true,
+   "controls": {
+    "decimal": {
+     "original": "合计 100.00",
+     "merged": [
+      "合计",
+      "200.00"
+     ],
+     "rejected": true,
+     "identities": [
+      "合计"
+     ],
+     "mismatches": [
+      {
+       "identity": "合计",
+       "page": 1,
+       "kind": "row_number_sequence_mismatch",
+       "merged": [
+        "2E+2"
+       ],
+       "original": [
+        "1E+2"
+       ]
+      }
+     ]
+    },
+    "integer": {
+     "original": "合计 100",
+     "merged": [
+      "合计",
+      "200"
+     ],
+     "rejected": true,
+     "identities": [
+      "合计"
+     ],
+     "mismatches": [
+      {
+       "identity": "合计",
+       "page": 1,
+       "kind": "row_number_sequence_mismatch",
+       "merged": [
+        "2E+2"
+       ],
+       "original": [
+        "1E+2"
+       ]
+      }
+     ]
+    },
+    "coded_integer": {
+     "original": "201 一般公共服务支出 100",
+     "merged": [
+      "201",
+      "一般公共服务支出",
+      "200"
+     ],
+     "rejected": true,
+     "identities": [
+      "201"
+     ],
+     "mismatches": [
+      {
+       "identity": "201",
+       "page": 1,
+       "kind": "row_number_sequence_mismatch",
+       "merged": [
+        "2E+2"
+       ],
+       "original": [
+        "1E+2"
+       ]
+      }
+     ]
+    },
+    "normal_integer": {
+     "ok": true,
+     "identities": [
+      "合计"
+     ]
+    }
+   }
+  },
+  "d1_real_pdf_control": {
+   "ok": true,
+   "normal": {
+    "pass": 1,
+    "gap": 0
+   },
+   "corrupted": {
+    "pass": 0,
+    "gap": 1
+   },
+   "corrupted_detail": [
+    {
+     "table_code": "FIN_03_expenditure",
+     "title": "支出决算表",
+     "pages": [
+      1
+     ],
+     "rows": 1,
+     "missing_numbers": {
+      "1E+2": 1
+     },
+     "extra_numbers": {
+      "2E+2": 1
+     },
+     "missing_codes": [],
+     "row_mismatches": [
+      {
+       "identity": "合计",
+       "page": 1,
+       "kind": "row_number_sequence_mismatch",
+       "merged": [
+        "2E+2"
+       ],
+       "original": [
+        "1E+2"
+       ]
+      }
+     ],
+     "merged_view_errors": [],
+     "verdict": "GAP"
+    }
+   ]
+  },
+  "export_field_exactness": {
+   "ok": true,
+   "block_controls": {
+    "normal": true,
+    "wrong_page_2_to_22": true,
+    "wrong_revision_old": true,
+    "wrong_revision_truncated": true,
+    "stray_reference_no_compensation": true
+   },
+   "real_export": {
+    "ok": true,
+    "normal": {
+     "ok": true,
+     "member_counts": {
+      "csv": 14,
+      "docx": 14,
+      "pdf": 14
+     }
+    }
+   }
+  }
+ },
+ "ok": true,
+ "note": "R4 独立反例复现：预期来自 Codex 第四轮核验包；ok=None 仅表示本机缺少该输入，不计通过。"
+}

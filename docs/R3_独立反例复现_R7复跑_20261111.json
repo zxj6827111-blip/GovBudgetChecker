@@ -1,0 +1,203 @@
+{
+ "git_head": "afa17ae6119743e455ef65e64516996bf095d043",
+ "checks": {
+  "performance_scope": {
+   "ok": true,
+   "cases": [
+    {
+     "case": "partial",
+     "expected_issues": 0,
+     "actual_issues": 0,
+     "receipt_status": "pass",
+     "formula": "self_evaluation_count >= sum(disclosed distinct rating counts)",
+     "pass": true
+    },
+    {
+     "case": "complete",
+     "expected_issues": 1,
+     "actual_issues": 1,
+     "receipt_status": "fail",
+     "formula": "self_evaluation_count = sum(disclosed distinct rating counts)",
+     "pass": true
+    },
+    {
+     "case": "complete_plus_archive_after",
+     "expected_issues": 1,
+     "actual_issues": 1,
+     "receipt_status": "fail",
+     "formula": "self_evaluation_count = sum(disclosed distinct rating counts)",
+     "pass": true
+    },
+    {
+     "case": "complete_plus_archive_before",
+     "expected_issues": 1,
+     "actual_issues": 1,
+     "receipt_status": "fail",
+     "formula": "self_evaluation_count = sum(disclosed distinct rating counts)",
+     "pass": true
+    },
+    {
+     "case": "plain_partial",
+     "expected_issues": 0,
+     "actual_issues": 0,
+     "receipt_status": "pass",
+     "formula": "self_evaluation_count >= sum(disclosed distinct rating counts)",
+     "pass": true
+    }
+   ]
+  },
+  "minimal_export_membership": {
+   "ok": true,
+   "expected": "reject: relation-B/page24/81.11/19.56 omitted in all three",
+   "actual": {
+    "ok": false,
+    "csv_missing": [
+     "relation-A",
+     "relation-B"
+    ],
+    "docx_missing": [
+     "relation-A",
+     "relation-B"
+    ],
+    "pdf_missing": [
+     "relation-A",
+     "relation-B"
+    ],
+    "pdf_one_side_missing": [
+     {
+      "issue_id": "relation-B",
+      "failures": [
+       "page_not_bound",
+       "revision_not_bound",
+       "evidence_not_bound"
+      ],
+      "missing_evidence": [
+       "81.11",
+       "19.56"
+      ]
+     }
+    ],
+    "pdf_wrong_page": [
+     {
+      "issue_id": "relation-B",
+      "failures": [
+       "page_not_bound",
+       "revision_not_bound",
+       "evidence_not_bound"
+      ],
+      "missing_evidence": [
+       "81.11",
+       "19.56"
+      ]
+     }
+    ]
+   }
+  },
+  "actual_csv_missing_issue": {
+   "ok": true,
+   "removed": "V33-CROSS-SAN-GONG-ECON-22",
+   "original_issue_rows": 14,
+   "mutated_issue_rows": 1625,
+   "missing_members": [
+    "V33-CROSS-SAN-GONG-ECON-22"
+   ],
+   "member_count": 13
+  },
+  "d1_split_code_and_column_swap": {
+   "ok": true,
+   "split_code_normal_mismatches": 0,
+   "split_code_identities": [
+    "301:01|302:01",
+    "301:02|302:02"
+   ],
+   "column_swap_mismatches": 2
+  },
+  "d1_real_injections": {
+   "ok": true,
+   "normal": {
+    "pass": 9,
+    "gap": 0
+   },
+   "logical_total_class_swap": {
+    "pass": 8,
+    "gap": 1
+   },
+   "physical_basic_project_swap": {
+    "pass": 8,
+    "gap": 1
+   },
+   "physical_fragments_unchanged": true,
+   "physical_changes": [
+    {
+     "page": 12,
+     "columns": [
+      3,
+      4
+     ]
+    }
+   ],
+   "logical_change": {
+    "before": [
+     "20323.21",
+     "207.40"
+    ],
+    "after": [
+     "207.40",
+     "20323.21"
+    ]
+   }
+  },
+  "real_export_chain": {
+   "ok": true,
+   "normal": {
+    "ok": true,
+    "member_counts": {
+     "csv": 2,
+     "docx": 2,
+     "pdf": 2
+    }
+   },
+   "csv_missing_member": [
+    "relation-B"
+   ],
+   "docx_missing_evidence": [
+    {
+     "issue_id": "relation-B",
+     "failures": [
+      "evidence_not_bound"
+     ],
+     "missing_evidence": [
+      "19.56"
+     ]
+    }
+   ],
+   "wrong_page": [
+    {
+     "issue_id": "relation-A",
+     "failures": [
+      "page_not_bound"
+     ],
+     "missing_evidence": []
+    }
+   ],
+   "wrong_revision": [
+    {
+     "issue_id": "relation-A",
+     "failures": [
+      "revision_not_bound"
+     ],
+     "missing_evidence": []
+    },
+    {
+     "issue_id": "relation-B",
+     "failures": [
+      "revision_not_bound"
+     ],
+     "missing_evidence": []
+    }
+   ]
+  }
+ },
+ "ok": true,
+ "note": "R3 独立反例复现：预期来自 Codex 第三轮核验包；ok=None 仅表示本机缺少该原件，不计通过。"
+}

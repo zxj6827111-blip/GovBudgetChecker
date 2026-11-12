@@ -1,0 +1,138 @@
+{
+ "input": {
+  "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/075e31ba6f282134daad0b9ae225d0a5/上海科技管理学校2025年度决算.pdf",
+  "mode": "auto"
+ },
+ "instances": 9,
+ "pass": 9,
+ "gap": 0,
+ "results": [
+  {
+   "table_code": "FIN_01_income_expenditure_total",
+   "title": "收入支出决算总表",
+   "pages": [
+    5
+   ],
+   "rows": 30,
+   "missing_numbers": {},
+   "extra_numbers": {},
+   "missing_codes": [],
+   "row_mismatches": [],
+   "merged_view_errors": [],
+   "verdict": "PASS"
+  },
+  {
+   "table_code": "FIN_02_income",
+   "title": "收入决算表",
+   "pages": [
+    6
+   ],
+   "rows": 18,
+   "missing_numbers": {},
+   "extra_numbers": {},
+   "missing_codes": [],
+   "row_mismatches": [],
+   "merged_view_errors": [],
+   "verdict": "PASS"
+  },
+  {
+   "table_code": "FIN_03_expenditure",
+   "title": "支出决算表",
+   "pages": [
+    7
+   ],
+   "rows": 18,
+   "missing_numbers": {},
+   "extra_numbers": {},
+   "missing_codes": [],
+   "row_mismatches": [],
+   "merged_view_errors": [],
+   "verdict": "PASS"
+  },
+  {
+   "table_code": "FIN_04_fiscal_grant_total",
+   "title": "财政拨款收入支出决算总表",
+   "pages": [
+    8,
+    9
+   ],
+   "rows": 32,
+   "missing_numbers": {},
+   "extra_numbers": {},
+   "missing_codes": [],
+   "row_mismatches": [],
+   "merged_view_errors": [],
+   "verdict": "PASS"
+  },
+  {
+   "table_code": "FIN_05_general_public_expenditure",
+   "title": "一般公共预算财政拨款支出决算表",
+   "pages": [
+    10
+   ],
+   "rows": 18,
+   "missing_numbers": {},
+   "extra_numbers": {},
+   "missing_codes": [],
+   "row_mismatches": [],
+   "merged_view_errors": [],
+   "verdict": "PASS"
+  },
+  {
+   "table_code": "FIN_06_basic_expenditure",
+   "title": "一般公共预算财政拨款基本支出决算表",
+   "pages": [
+    11
+   ],
+   "rows": 39,
+   "missing_numbers": {},
+   "extra_numbers": {},
+   "missing_codes": [],
+   "row_mismatches": [],
+   "merged_view_errors": [],
+   "verdict": "PASS"
+  },
+  {
+   "table_code": "FIN_07_three_public",
+   "title": "财政拨款“三公”经费支出决算表",
+   "pages": [
+    12
+   ],
+   "rows": 5,
+   "missing_numbers": {},
+   "extra_numbers": {},
+   "missing_codes": [],
+   "row_mismatches": [],
+   "merged_view_errors": [],
+   "verdict": "PASS"
+  },
+  {
+   "table_code": "FIN_08_gov_fund",
+   "title": "政府性基金预算财政拨款收入支出决算表",
+   "pages": [
+    13
+   ],
+   "rows": 4,
+   "missing_numbers": {},
+   "extra_numbers": {},
+   "missing_codes": [],
+   "row_mismatches": [],
+   "merged_view_errors": [],
+   "verdict": "PASS"
+  },
+  {
+   "table_code": "FIN_09_state_capital",
+   "title": "国有资本经营预算财政拨款收入支出决算表",
+   "pages": [
+    14
+   ],
+   "rows": 4,
+   "missing_numbers": {},
+   "extra_numbers": {},
+   "missing_codes": [],
+   "row_mismatches": [],
+   "merged_view_errors": [],
+   "verdict": "PASS"
+  }
+ ]
+}

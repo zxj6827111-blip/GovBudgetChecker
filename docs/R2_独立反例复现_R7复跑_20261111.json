@@ -1,0 +1,74 @@
+{
+ "git_head": "afa17ae6119743e455ef65e64516996bf095d043",
+ "checks": {
+  "d1_column_swap": {
+   "ok": true,
+   "normal_mismatches": 0,
+   "swapped_mismatches": 2
+  },
+  "d4_same_page_missing_operands": {
+   "ok": true,
+   "failure_count": 2,
+   "reasons": [
+    "table_ref_amount_not_in_delivered_evidence",
+    "table_ref_amount_not_in_delivered_evidence"
+   ]
+  },
+  "performance_variants": {
+   "ok": true,
+   "variants": [
+    {
+     "original": "绩效自评的2025年度项目53个，其中，绩效评级为“优”的项目50个。",
+     "issue_count": 0,
+     "receipt_status": "pass",
+     "error": null
+    },
+    {
+     "original": "绩效自评的2025年度项目53个，全部项目评级结果如下：绩效评级为“优”的项目50个，其余评级均为0个。",
+     "issue_count": 1,
+     "receipt_status": "fail",
+     "error": null
+    },
+    {
+     "original": "绩效自评的2025年度项目53个，其中部分项目评级结果如下：绩效评级为“优”的项目50个。",
+     "issue_count": 0,
+     "receipt_status": "pass",
+     "error": null
+    }
+   ]
+  },
+  "suppression_policy_only": {
+   "ok": true,
+   "kept": 1,
+   "ledger": []
+  },
+  "confirm_revision_race": {
+   "ok": true,
+   "http": 409,
+   "detail": {
+    "error": "REVISION_CHANGED",
+    "expected": "R1",
+    "current": "R2"
+   },
+   "records": []
+  },
+  "school_cross_identity": {
+   "ok": true,
+   "version_2025": true,
+   "rule_status": "pass",
+   "vehicle_operation": {
+    "status": "pass",
+    "formula": "基本支出 4.15 ≤ 三公表 4.15 万元"
+   }
+  },
+  "yichuan_operand_evidence": {
+   "ok": true,
+   "relations_total": 3,
+   "relations_ok": 3,
+   "control_ok": true,
+   "failures": []
+  }
+ },
+ "ok": true,
+ "note": "R2 独立反例复现：预期来自 Codex 第二轮核验包；ok=None 仅表示本机缺少该原件，不计通过。"
+}

@@ -1,0 +1,9 @@
+{
+ "git_head": "afa17ae6119743e455ef65e64516996bf095d043",
+ "source_sha256": {
+  "src/engine/native_final_disclosure.py": "9d13fed4297d4c9a97ca598de2d45c7f13ba8542d8c48d448c569e65f5aab035",
+  "scripts/d1_table_reconciliation.py": "3a90a2b6de67ec4a7ae0e92d298b42f390477f0140863b4adefbeb75f3d095d9",
+  "scripts/r7_independent_controls_repro.py": "2022c42b617aa5bd56346e1054d8734d229d8fc3dac47f62c559029200c4feb6",
+  "tests/test_d1_table_reconciliation.py": "06c22220a718d2f90a7fca4841fc2b135b847fb22940f0c81b8beaa3725411dc"
+ }
+}

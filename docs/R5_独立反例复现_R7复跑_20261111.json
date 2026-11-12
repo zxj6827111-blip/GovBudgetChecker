@@ -1,0 +1,116 @@
+{
+ "git_head": "afa17ae6119743e455ef65e64516996bf095d043",
+ "checks": {
+  "performance_scope": {
+   "ok": true,
+   "cases": [
+    {
+     "case": "partial",
+     "expected_issues": 0,
+     "actual_issues": 0,
+     "receipt_status": "pass",
+     "formula": "self_evaluation_count >= sum(disclosed distinct rating counts)",
+     "pass": true
+    },
+    {
+     "case": "materials_a",
+     "expected_issues": 0,
+     "actual_issues": 0,
+     "receipt_status": "pass",
+     "formula": "self_evaluation_count >= sum(disclosed distinct rating counts)",
+     "pass": true
+    },
+    {
+     "case": "materials_b",
+     "expected_issues": 0,
+     "actual_issues": 0,
+     "receipt_status": "pass",
+     "formula": "self_evaluation_count >= sum(disclosed distinct rating counts)",
+     "pass": true
+    },
+    {
+     "case": "materials_before_claims",
+     "expected_issues": 0,
+     "actual_issues": 0,
+     "receipt_status": "",
+     "formula": "",
+     "pass": true
+    },
+    {
+     "case": "bare_with_counts",
+     "expected_issues": 1,
+     "actual_issues": 1,
+     "receipt_status": "fail",
+     "formula": "self_evaluation_count = sum(disclosed distinct rating counts)",
+     "pass": true
+    },
+    {
+     "case": "complete",
+     "expected_issues": 1,
+     "actual_issues": 1,
+     "receipt_status": "fail",
+     "formula": "self_evaluation_count = sum(disclosed distinct rating counts)",
+     "pass": true
+    }
+   ]
+  },
+  "d1_multilane": {
+   "ok": true,
+   "normal_identities": [
+    "收入总计|支出总计",
+    "本年收入A|本年支出A",
+    "本年收入B|本年支出B"
+   ],
+   "corrupted_mismatches": [
+    {
+     "identity": "本年收入A|本年支出A",
+     "page": 1,
+     "kind": "row_number_sequence_mismatch",
+     "merged": [
+      "1E+2",
+      "2E+2"
+     ],
+     "original": [
+      "1E+2",
+      "1E+2"
+     ]
+    },
+    {
+     "identity": "本年收入B|本年支出B",
+     "page": 1,
+     "kind": "row_number_sequence_mismatch",
+     "merged": [
+      "2E+2",
+      "1E+2"
+     ],
+     "original": [
+      "2E+2",
+      "2E+2"
+     ]
+    }
+   ]
+  },
+  "d1_same_value_and_year": {
+   "ok": true,
+   "same_value_normal": true,
+   "same_value_corrupted": true,
+   "year_amount_normal": true,
+   "year_amount_corrupted": true
+  },
+  "d1_real_multilane_pdf": {
+   "ok": true,
+   "normal": {
+    "pass": 1,
+    "gap": 0
+   },
+   "corrupted": {
+    "pass": 0,
+    "gap": 1
+   },
+   "original_unchanged": true,
+   "mutated_positions": 2
+  }
+ },
+ "ok": true,
+ "note": "R5 独立反例复现：预期来自 Codex 第五轮核验包；ok=None 仅表示本机缺少该输入，不计通过。"
+}
