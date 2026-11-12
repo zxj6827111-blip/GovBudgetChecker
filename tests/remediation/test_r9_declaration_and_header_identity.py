@@ -72,12 +72,17 @@ def test_unfulfilled_declaration_stays_insufficient_data(body):
 
 
 def test_unfulfilled_later_declaration_after_answered_counts():
-    """已有数量应答第一个声明，其后新声明无数量 → 仍记未完成。"""
+    """已有数量应答第一个声明，其后新声明无数量 → 未完成另记，
+    但组内已确认的 53≠50 确定问题与 fail 回执必须保留（R10-01 纠正：
+    原新增自测误把 issues==[] 写成预期，与已裁业务规则冲突）。"""
     issues, outcomes, receipts = _run(
         BASE + '评级结果如下。绩效评级为“优”的项目50个，其余评级均为0个。评级结果如下。')
-    assert issues == []
+    assert len(issues) == 1
+    assert issues[0].location['declared_count'] == 53
+    assert issues[0].location['computed_count'] == 50
     assert [value['status'] for value in outcomes] == ['insufficient_data']
-    assert any(receipt.get('status') == 'insufficient_data' for receipt in receipts)
+    statuses = {receipt.get('status') for receipt in receipts}
+    assert statuses == {'fail', 'insufficient_data'}
 
 
 def test_narrow_rating_material_closure_keeps_no_receipt():

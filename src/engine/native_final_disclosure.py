@@ -1532,15 +1532,17 @@ def check_performance_counts(rule, doc):
                 _unresolved(rule, doc, key, '评级类别未识别或不是互斥的标准评级，不能据此认定数量闭合',
                             unresolved, formula='self_evaluation_count = sum(distinct standard rating counts)')
                 continue
-            # R9-01：逐声明应答记账——枚举范围内全部评级披露谓词
+            # R9-01/R10-01：逐声明应答记账——枚举范围内全部评级披露谓词
             # （评级/评价…如下/见下），逐个判定应答：应答窗口（到下一
             # 声明、材料清单标题或范围末尾）内有评级数量，或由窄义评级
             # 材料清单（评级/评价+材料/资料/清单）应答。无关材料标题不能
             # 豁免独立未完成的声明；材料标题之后新出现的声明同样逐个记账。
-            # 未应答 → 显式未完成回执；0 条材料问题与检查未完成是两个维度。
+            # 未完成只阻断依赖它的关系：组内已有完整数量时，已确认关系
+            # 照常计算交付（finding+fail 回执），未完成声明**另键**记
+            # insufficient_data，不以整组 continue 丢掉真问题。
             list_predicates = list(_RATING_LIST_PREDICATE.finditer(
                 text.compact, total.end(), stop))
-            unfulfilled = False
+            unfulfilled_predicates = []
             for position, predicate in enumerate(list_predicates):
                 answer_start = predicate.end()
                 answer_end = stop
@@ -1554,19 +1556,22 @@ def check_performance_counts(rule, doc):
                 if title is not None and _rating_material_title(
                         text.compact, answer_start, title):
                     continue
-                unfulfilled = True
-                break
-            if unfulfilled:
-                _unresolved(rule, doc, key,
+                unfulfilled_predicates.append(predicate)
+            if not ratings:
+                # 无数量：未完成声明记组级未完成；无披露谓词是合法无关系
+                # 场景。窄义评级材料清单应答的声明（R6 冻结例）不建关系、
+                # 不产回执，材料示例不吸入本组。
+                if unfulfilled_predicates:
+                    _unresolved(rule, doc, key,
+                                '评级声明存在但未提取到同组评级数量，不能确认数量关系',
+                                unresolved,
+                                formula='self_evaluation_count = sum(distinct standard rating counts)')
+                continue
+            for predicate in unfulfilled_predicates:
+                _unresolved(rule, doc, f'{key}:unfulfilled:{predicate.start()}',
                             '评级声明存在但未提取到同组评级数量，不能确认数量关系',
                             unresolved,
                             formula='self_evaluation_count = sum(distinct standard rating counts)')
-                continue
-            if not ratings:
-                # 无披露谓词且无数量：合法无关系场景，不建加总关系。
-                # 窄义评级材料清单应答的声明（R6 冻结例）同样不建关系、
-                # 不产回执，材料示例不吸入本组。
-                continue
             prefix_start = max((text.compact.rfind(ch, begin, total.start()) for ch in '。；;'), default=begin - 1) + 1
             proof = text.compact[max(begin, prefix_start):total.end()]
             local_years = [int(value) for value in re.findall(r'(20\d{2})年度', proof)]

@@ -359,27 +359,31 @@ def _semantic_amount_roles(
     pages: List[int],
     page_tables: Optional[List[Any]] = None,
 ) -> Tuple[Optional[Dict[int, str]], Dict[str, Any]]:
-    """R8-02/R9-02：已知九表复用生产语义列映射确定金额列（候选侧假设）。
+    """R8-02/R9-02/R10-02：已知九表复用生产语义列映射确定金额列（候选侧假设）。
 
-    采纳前必须通过独立核对门（原页文本来自 pdfplumber 独立通道）：
+    采纳前必须通过独立核对门（原页文本/表格来自 pdfplumber 独立通道）：
     V1 实例标题归一后出现在原页文本；
     V2 该表 required_headers 归一后都出现在原页文本；
     V3 映射非空、每个映射列位在行宽内、映射列数据格（跳过表头）为数值
     或空白；
-    V4 每个指标的来源列名在原件表头文本中唯一出现，且出现顺序与来源
-    列位一致——表头互换等确定性身份矛盾留 header_mismatches（GAP），
-    表头不可判定则退回。
-    V1-V3 任一不成立 → 不采纳语义角色，退回表头关键词+统计逻辑，并
-    把原因写入 semantic_evidence；不因此把 GAP 改判 PASS。原件侧身份
-    不使用这里的角色——候选提供假设，真值由原页 token 序列逐行裁定。
+    V4 身份：叶栏目名在原件表头格中按同名候选列数配对命中，父栏目按
+    列优先最近格归属，叶格行序须与来源列位一致——确定性矛盾留
+    header_mismatches（GAP）；
+    V4 覆盖：预期指标集合由原件表头独立建立（别名命中表头格），候选
+    映射缺项（未知/重名表头）→ GAP，不能只验成功映射子集。
+    V1-V3 任一不成立或表头不可判定 → 不采纳语义角色，退回表头关键词+
+    统计逻辑，semantic_evidence.verification 显式记 incomplete/
+    not_applicable（不静默）；确定性矛盾记 failed，采纳记 complete。
+    原件侧身份不使用这里的角色——候选提供假设，真值由原页 token 序列
+    逐行裁定。
     """
     from src.engine.fact_context import _column_mappings_for_instance
     from src.services.fiscal_table_rules import NINE_TABLE_RULES
 
-    evidence: Dict[str, Any] = {"adopted": False}
+    evidence: Dict[str, Any] = {"adopted": False, "verification": "incomplete"}
     rule = NINE_TABLE_RULES.get(str(getattr(instance, "table_code", "") or ""))
     if rule is None:
-        evidence["reason"] = "unknown_table"
+        evidence.update(reason="unknown_table", verification="not_applicable")
         return None, evidence
     fragment = _header_fragment_for_instance(doc, instance)
     if fragment is None:
@@ -394,7 +398,7 @@ def _semantic_amount_roles(
         return None, evidence
     mappings = _column_mappings_for_instance(instance, fragment)
     if not mappings:
-        evidence.update(reason="empty_mapping", gate="V3")
+        evidence.update(reason="empty_mapping", gate="V3", verification="not_applicable")
         return None, evidence
 
     def nfkc(value: Any) -> str:
@@ -514,7 +518,8 @@ def _semantic_amount_roles(
     ]
     if identity_errors or order_errors:
         evidence.update(
-            adopted=False, reason="header_semantic_identity_mismatch", gate="V4",
+            adopted=False, verification="failed",
+            reason="header_semantic_identity_mismatch", gate="V4",
             header_mismatches=[{
                 "kind": "header_semantic_identity_mismatch",
                 "table_code": getattr(instance, "table_code", None),
@@ -526,9 +531,37 @@ def _semantic_amount_roles(
                 "order_errors": order_errors,
             }])
         return None, evidence
+    # V4 覆盖核验（R10-02）：预期集合由**原件表头**独立建立，不由候选
+    # 成功映射反向定义。原件表头格含某指标别名 → 该指标属于应核对集合；
+    # 候选映射缺项（未知/重名表头使映射器放弃）→ 确定性身份损坏，GAP。
+    # 双向对账：原件应有 / 候选已识别 / 缺失 全部留痕。
+    # 通用阶段词（预算数/决算数）是阶段包装而非独立栏目身份——生产矩阵
+    # 分支同样跳过，阶段信息由父路径携带，不计入预期指标集合。
+    expected_measures = set()
+    for measure, aliases in rule.measure_aliases.items():
+        if measure in {"budget", "actual"}:
+            continue
+        if any(nfkc(alias) and nfkc(alias) in cell[2]
+               for alias in aliases for cell in flat):
+            expected_measures.add(measure)
+    mapped_measures = {str(item.get("canonical_measure")) for item in mappings}
+    missing_measures = sorted(expected_measures - mapped_measures)
+    if missing_measures:
+        evidence.update(
+            adopted=False, verification="failed",
+            reason="header_semantic_measure_missing", gate="V4",
+            header_mismatches=[{
+                "kind": "header_semantic_measure_missing",
+                "table_code": getattr(instance, "table_code", None),
+                "expected_measures": sorted(expected_measures),
+                "mapped_measures": sorted(mapped_measures),
+                "missing_measures": missing_measures,
+            }])
+        return None, evidence
     evidence.update(
-        adopted=True,
+        adopted=True, verification="complete",
         amount_cols=sorted(amount_cols),
+        expected_measures=sorted(expected_measures),
         measures={str(item.get("canonical_measure")): item.get("source_col_idx")
                   for item in mappings})
     return {col: "amount" for col in sorted(amount_cols)}, evidence
