@@ -306,6 +306,113 @@ def _header_fragment_for_instance(doc: Any, instance: Any) -> Any:
                                           str(getattr(f, "fragment_uid", ""))))
 
 
+_TABLE_SCOPE_SETTINGS = {
+    "vertical_strategy": "lines",
+    "horizontal_strategy": "lines",
+    "intersection_tolerance": 3,
+    "min_words_vertical": 1,
+    "min_words_horizontal": 1,
+}
+_SCOPE_TOL = 1.0
+
+
+def _scope_data_line(text: str) -> bool:
+    """表范围延伸的数据行判据：多数值格，或行首为 3~7 位科目编码。
+
+    章节标题（单个年度数字嵌在长文本里）、表题、注释、页码都不满足，
+    延伸遇到它们即停——不把表外年度借进金额清单。单独"2025 年"形态
+    的年度元信息也不是数据行。
+    """
+    tokens = unicodedata.normalize("NFKC", str(text or "")).split()
+    cleaned = [_clean_number_token(token) for token in tokens]
+    cleaned = [token for token in cleaned if token]
+    if not cleaned:
+        return False
+    nums = [token for token in cleaned if _is_number_token(token)]
+    if len(nums) >= 2:
+        return True
+    if cleaned and _is_code_token(cleaned[0]):
+        if (len(nums) == 1 and _is_year_token(nums[0])
+                and any("年" in token for token in cleaned)):
+            return False
+        return True
+    return False
+
+
+_SCOPE_METADATA_WORDS = ("决算表", "预算表", "单位：", "年度", "部分")
+
+
+def _scope_name_fragment(text: str) -> bool:
+    """表范围延伸的名称续行判据：跨行名称的纯文本片段。
+
+    续页名称与编码金额行逐行交错（文旅局/上海大学实证），延伸必须
+    穿过名称片段才能保住编码行身份；章节标题片段（含决算表/部分等
+    元信息词、超长、注/表开头）不在此列。
+    """
+    value = "".join(str(text or "").split())
+    if not value or len(value) > 15:
+        return False
+    if any(char.isdigit() for char in value):
+        return False
+    if value[0] in "注说表第":
+        return False
+    return not any(word in value for word in _SCOPE_METADATA_WORDS)
+
+
+def _table_scoped_texts(pdf_doc: Any) -> List[str]:
+    """R11-01：原件侧对账文本限定独立表格通道的实际表范围。
+
+    每页用 find_tables 的表格 bbox 过滤文本行：只保留与表格纵向范围
+    重叠的行——表外章节标题/年度/目录/页脚不进入金额与行身份推断
+    （老干部活动室第5页"2025 年/度决算表"实证）。续页网格顶/底边框
+    缺失时，首末数据行可能落在 bbox 外：向上下延伸到相邻的数据行或
+    名称续行（横向须在表宽内），遇标题/注释即停。无表格的页退回整页
+    文本（保持既有行为）。表内跨行名称、续行与跨页合计仍在各自页表
+    范围内保留。全文文本另供 V1/V2 标题/栏目核验，不受此过滤影响。
+    """
+    scoped: List[str] = []
+    for page in pdf_doc.pages:
+        try:
+            tables = page.find_tables(table_settings=_TABLE_SCOPE_SETTINGS)
+        except Exception:
+            tables = []
+        if not tables:
+            try:
+                tables = page.find_tables()
+            except Exception:
+                tables = []
+        if not tables:
+            scoped.append(page.extract_text() or "")
+            continue
+        boxes = [table.bbox for table in tables]
+        lines = page.extract_text_lines()
+        kept = [
+            index for index, line in enumerate(lines)
+            if any(line["bottom"] > box[1] - _SCOPE_TOL
+                   and line["top"] < box[3] + _SCOPE_TOL for box in boxes)
+        ]
+        if kept:
+            x0 = min(box[0] for box in boxes) - 2.0
+            x1 = max(box[2] for box in boxes) + 2.0
+
+            def extendable(index: int, _lines=lines, _x0=x0, _x1=x1) -> bool:
+                line = _lines[index]
+                return (line["x0"] >= _x0 and line["x1"] <= _x1
+                        and (_scope_data_line(line["text"])
+                             or _scope_name_fragment(line["text"])))
+
+            start, stop = kept[0], kept[-1]
+            while start > 0 and extendable(start - 1):
+                start -= 1
+            while stop + 1 < len(lines) and extendable(stop + 1):
+                stop += 1
+            kept = sorted(set(kept)
+                          | set(range(start, kept[0]))
+                          | set(range(kept[-1] + 1, stop + 1)))
+        scoped.append("\n".join(lines[index]["text"] for index in kept))
+    return scoped
+
+
 def _original_header_rows(page_tables: List[Any], pages: List[int], rule: Any) -> List[List[Tuple[int, str]]]:
     """原件表头行（独立 pdfplumber 表格通道，R9-02 V4 用，保留列位）。
 
@@ -1124,6 +1231,7 @@ def reconcile(pdf: str, anchor: str, page_spec: str) -> Dict[str, Any]:
     with pdfplumber.open(pdf) as pdf_doc:
         page_texts = [(p.extract_text() or "") for p in pdf_doc.pages]
         page_tables = [extract_tables_from_page(p) for p in pdf_doc.pages]
+        scoped_texts = _table_scoped_texts(pdf_doc)
         total_pages = len(page_texts)
     pages = _parse_pages(page_spec, total_pages)
 
@@ -1146,13 +1254,13 @@ def reconcile(pdf: str, anchor: str, page_spec: str) -> Dict[str, Any]:
     original_numbers: Dict[str, List[int]] = {}
     original_codes: Dict[str, List[int]] = {}
     for page in pages:
-        for record in _parse_original_page(page_texts[page - 1], page, known_codes):
+        for record in _parse_original_page(scoped_texts[page - 1], page, known_codes):
             for number in record["numbers"]:
                 original_numbers.setdefault(number, []).append(page)
             for code in _codes_in_identity(record["identity"]):
                 original_codes.setdefault(code, []).append(page)
 
-    alignment = _reconcile_row_alignment(merged_rows, page_texts, pages, semantic_roles)
+    alignment = _reconcile_row_alignment(merged_rows, scoped_texts, pages, semantic_roles)
     identities = set(alignment["merged_row_identities"])
     merged_codes = {code for identity in identities for code in _codes_in_identity(identity)}
     missing_codes = {code: pages for code in original_codes if code not in merged_codes}
@@ -1226,6 +1334,7 @@ def self_test(pdf: str) -> Dict[str, Any]:
     with pdfplumber.open(pdf) as pdf_doc:
         page_texts = [(p.extract_text() or "") for p in pdf_doc.pages]
         page_tables = [extract_tables_from_page(p) for p in pdf_doc.pages]
+        scoped_texts = _table_scoped_texts(pdf_doc)
     doc = doc_for_artifact(artifact, pdf, page_texts)
     instance = next(
         (item for item in getattr(artifact, "logical_tables", []) or []
@@ -1247,7 +1356,7 @@ def self_test(pdf: str) -> Dict[str, Any]:
     semantic_roles, semantic_evidence = _semantic_amount_roles(
         doc, instance, merged_rows, page_texts, sorted(pages_set), page_tables)
     roles, _codes = _learn_column_roles(merged_rows, semantic_roles)
-    normal = _reconcile_row_alignment(merged_rows, page_texts, sorted(pages_set),
+    normal = _reconcile_row_alignment(merged_rows, scoped_texts, sorted(pages_set),
                                       semantic_roles)
 
     by_page: Dict[Any, List[Tuple[str, List[str], Dict[str, Any]]]] = {}
@@ -1279,7 +1388,7 @@ def self_test(pdf: str) -> Dict[str, Any]:
     indices_b = _amount_cell_indices(row_b["cells"], roles)
     for left, right in zip(indices_a, indices_b):
         row_a["cells"][left], row_b["cells"][right] = row_b["cells"][right], row_a["cells"][left]
-    mutated = _reconcile_row_alignment(injected, page_texts, sorted(pages_set),
+    mutated = _reconcile_row_alignment(injected, scoped_texts, sorted(pages_set),
                                        semantic_roles)
     detected = any(
         str(item.get("kind", "")).endswith("mismatch")
@@ -1329,6 +1438,7 @@ def reconcile_auto(pdf: str) -> Dict[str, Any]:
     with pdfplumber.open(pdf) as pdf_doc:
         page_texts = [(p.extract_text() or "") for p in pdf_doc.pages]
         page_tables = [extract_tables_from_page(p) for p in pdf_doc.pages]
+        scoped_texts = _table_scoped_texts(pdf_doc)
     doc = doc_for_artifact(artifact, pdf, page_texts)
     fragments = {f.fragment_uid: f for f in getattr(artifact, "table_fragments", []) or []}
     results = []
@@ -1351,7 +1461,7 @@ def reconcile_auto(pdf: str) -> Dict[str, Any]:
         for page in sorted(pages_set):
             if not (1 <= page <= len(page_texts)):
                 continue
-            for record in _parse_original_page(page_texts[page - 1], page,
+            for record in _parse_original_page(scoped_texts[page - 1], page,
                                                known_codes):
                 for number in record["numbers"]:
                     original_numbers[number] = original_numbers.get(number, 0) + 1
@@ -1376,7 +1486,7 @@ def reconcile_auto(pdf: str) -> Dict[str, Any]:
             if value not in original_numbers
         }
         alignment = _reconcile_row_alignment(
-            merged_rows, page_texts, sorted(pages_set), semantic_roles)
+            merged_rows, scoped_texts, sorted(pages_set), semantic_roles)
         row_mismatches = alignment["row_mismatches"]
         results.append({
             "table_code": getattr(instance, "table_code", None),
