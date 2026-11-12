@@ -281,10 +281,155 @@ def _header_column_roles(merged_rows: List[Dict[str, Any]]) -> Dict[int, str]:
     return roles
 
 
+def _header_fragment_for_instance(doc: Any, instance: Any) -> Any:
+    """实例页序最早的物理片段——表头几何与栏目映射的来源。"""
+    physical = {f.fragment_uid: f
+                for f in getattr(doc.parse_artifact, "physical_fragments", []) or []}
+    table_frags = {f.fragment_uid: f
+                   for f in getattr(doc.parse_artifact, "table_fragments", []) or []}
+    candidates: List[Any] = []
+    for fragment_uid in getattr(instance, "fragment_uids", None) or []:
+        frag = table_frags.get(fragment_uid)
+        if frag is not None:
+            children = list(getattr(frag, "source_fragment_uids", None) or [])
+            if children:
+                candidates.extend(physical[child] for child in children
+                                  if child in physical)
+            else:
+                candidates.append(frag)
+        elif fragment_uid in physical:
+            candidates.append(physical[fragment_uid])
+    if not candidates:
+        return None
+    return min(candidates, key=lambda f: (getattr(f, "page_number", 0) or 0,
+                                          str(getattr(f, "fragment_uid", ""))))
+
+
+def _semantic_amount_roles(
+    doc: Any,
+    instance: Any,
+    merged_rows: List[Dict[str, Any]],
+    page_texts: List[str],
+    pages: List[int],
+) -> Tuple[Optional[Dict[int, str]], Dict[str, Any]]:
+    """R8-02：已知九表复用生产语义列映射确定金额列（候选侧假设）。
+
+    采纳前必须通过独立核对门（原页文本来自 pdfplumber 独立通道）：
+    V1 实例标题归一后出现在原页文本；
+    V2 该表 required_headers 归一后都出现在原页文本；
+    V3 映射非空、每个映射列位在行宽内、映射列数据格（跳过表头）为数值
+    或空白。任一不成立 → 不采纳语义角色，退回表头关键词+统计逻辑，并
+    把原因写入 semantic_evidence；不因此把 GAP 改判 PASS。原件侧身份
+    不使用这里的角色——候选提供假设，真值由原页 token 序列逐行裁定。
+    """
+    from src.engine.fact_context import _column_mappings_for_instance
+    from src.services.fiscal_table_rules import NINE_TABLE_RULES
+
+    evidence: Dict[str, Any] = {"adopted": False}
+    rule = NINE_TABLE_RULES.get(str(getattr(instance, "table_code", "") or ""))
+    if rule is None:
+        evidence["reason"] = "unknown_table"
+        return None, evidence
+    fragment = _header_fragment_for_instance(doc, instance)
+    if fragment is None:
+        evidence["reason"] = "no_header_fragment"
+        return None, evidence
+    # 生产映射路径消费表头几何与提取方式；合成/最小片段缺这些属性时
+    # 无语义证据可用，退回表头关键词+统计（不改判 GAP/PASS）。
+    if not all(hasattr(fragment, attr) for attr in (
+            "extraction_method", "rows", "cells",
+            "header_row_count", "page_number", "table_code")):
+        evidence["reason"] = "fragment_lacks_header_geometry"
+        return None, evidence
+    mappings = _column_mappings_for_instance(instance, fragment)
+    if not mappings:
+        evidence.update(reason="empty_mapping", gate="V3")
+        return None, evidence
+
+    def nfkc(value: Any) -> str:
+        return "".join(unicodedata.normalize("NFKC", str(value or "")).split())
+
+    original_text = nfkc("".join(
+        page_texts[page - 1] for page in pages if 1 <= page <= len(page_texts)))
+    title = nfkc(getattr(instance, "title", ""))
+    if not title or title not in original_text:
+        evidence.update(reason="title_not_in_original", gate="V1")
+        return None, evidence
+    missing_headers = [header for header in rule.required_headers
+                       if nfkc(header) not in original_text]
+    if missing_headers:
+        evidence.update(reason="required_headers_missing", gate="V2",
+                        missing_headers=missing_headers)
+        return None, evidence
+    lengths: Dict[int, int] = {}
+    for row in merged_rows:
+        if any(_is_number_token(_clean_number_token(_norm(cell)))
+               for cell in row["cells"] if _norm(cell)):
+            lengths[len(row["cells"])] = lengths.get(len(row["cells"]), 0) + 1
+    modal_width = max(lengths, key=lengths.get) if lengths else 0
+    amount_cols: set = set()
+    for item in mappings:
+        try:
+            col = int(item.get("source_col_idx"))
+        except (TypeError, ValueError):
+            continue
+        if not 0 <= col < modal_width:
+            evidence.update(reason="mapping_col_out_of_width", gate="V3", col=col)
+            return None, evidence
+        amount_cols.add(col)
+    if not amount_cols:
+        evidence.update(reason="no_valid_mapping_cols", gate="V3")
+        return None, evidence
+    for row in merged_rows:
+        cells = [_norm(cell) for cell in row["cells"]]
+        if not any(_is_number_token(_clean_number_token(cell))
+                   for cell in cells if cell):
+            continue  # 表头/纯文本行不参与数据格校验
+        for col in sorted(amount_cols):
+            value = cells[col] if col < len(cells) else ""
+            if value and not _is_number_token(_clean_number_token(value)):
+                evidence.update(reason="mapping_col_non_numeric_data", gate="V3",
+                                col=col, page=row.get("page"))
+                return None, evidence
+    evidence.update(
+        adopted=True,
+        amount_cols=sorted(amount_cols),
+        measures={str(item.get("canonical_measure")): item.get("source_col_idx")
+                  for item in mappings})
+    return {col: "amount" for col in sorted(amount_cols)}, evidence
+
+
+def _combined_semantic_roles(
+    doc: Any,
+    instances: List[Any],
+    merged_rows: List[Dict[str, Any]],
+    page_texts: List[str],
+    pages: List[int],
+) -> Tuple[Optional[Dict[int, str]], Dict[str, Any]]:
+    """多实例锚点：每实例单独算语义角色；全部采纳且一致才共用，冲突退回。"""
+    if not instances:
+        return None, {"adopted": False, "reason": "no_instance"}
+    per_instance = []
+    for instance in instances:
+        instance_pages = sorted(_instance_pages(doc, instance) & set(pages))
+        per_instance.append(_semantic_amount_roles(
+            doc, instance, merged_rows, page_texts, instance_pages or pages))
+    if len(per_instance) == 1:
+        return per_instance[0]
+    first_roles, _first_evidence = per_instance[0]
+    if first_roles is not None and all(
+            roles == first_roles for roles, _evidence in per_instance[1:]):
+        return first_roles, {"adopted": True, "instances": len(per_instance),
+                             "amount_cols": sorted(first_roles)}
+    return None, {"adopted": False, "reason": "multi_instance_conflict",
+                  "instances": [evidence for _roles, evidence in per_instance]}
+
+
 def _learn_column_roles(
     merged_rows: List[Dict[str, Any]],
+    semantic_roles: Optional[Dict[int, str]] = None,
 ) -> Tuple[Optional[Dict[int, str]], set]:
-    """列角色学习（R6-02/R7-02）：角色跟**列**走，栏目身份优先。
+    """列角色学习（R6-02/R7-02/R8-02）：角色跟**列**走，栏目身份优先。
 
     返回 ``(roles, codes)``：
     - ``roles``：``{列位: 'code'|'subcode'|'amount'|'label'}``；学习失败
@@ -295,7 +440,12 @@ def _learn_column_roles(
     一律是金额（整数金额不得因占比被认成编码），写“编码”的列才是编码；
     统计只用于无表头证据的列。金额守卫保留：候选编码列会把全表数字列
     吃光时判学习失败。同一个数值在编码列是编码、在金额列是金额。
+    R8-02：已知九表经 V1-V3 核对门采纳的语义金额列一律是 amount，优先
+    于表头关键词与统计；统计候选不得把语义金额列改判 code，只填充语义
+    未覆盖的列。
     """
+    semantic_amounts = {index for index, role in (semantic_roles or {}).items()
+                        if role == "amount"}
     header_roles = _header_column_roles(merged_rows)
     stats: Dict[int, Dict[str, int]] = {}
     for row in merged_rows:
@@ -316,9 +466,10 @@ def _learn_column_roles(
         index for index, stat in stats.items()
         if stat["total"] and stat["code"] * 2 >= stat["total"]
     }
-    # 表头明确的金额列不得成为候选编码列（栏目身份优先于统计）。
+    # 表头明确的金额列与语义金额列不得成为候选编码列（栏目身份优先于统计）。
     candidates = {index for index in candidates
-                  if header_roles.get(index) != "amount"}
+                  if header_roles.get(index) != "amount"
+                  and index not in semantic_amounts}
     if candidates and not any(
             index not in candidates and stat["num"] > 0
             for index, stat in stats.items()):
@@ -328,7 +479,9 @@ def _learn_column_roles(
     roles: Dict[int, str] = {}
     for index in sorted(stats):
         header = header_roles.get(index)
-        if header == "code":
+        if index in semantic_amounts:
+            roles[index] = "amount"
+        elif header == "code":
             roles[index] = "code"
         elif header == "amount":
             roles[index] = "amount"
@@ -656,6 +809,7 @@ def _reconcile_row_alignment(
     merged_rows: List[Dict[str, Any]],
     page_texts: List[str],
     pages: List[int],
+    semantic_roles: Optional[Dict[int, str]] = None,
 ) -> Dict[str, Any]:
     """按「语义车道身份 + 逐位金额序列」逐页对齐。
 
@@ -667,8 +821,10 @@ def _reconcile_row_alignment(
     不因整数占比被认成编码），统计只辅助无表头列；合并侧按列位取角色，
     原件侧编码集合与日期单元同源。逐行对象由身份+序列比对承担，数值
     出现在同页其他行不满足本行；原件有、合并缺失的数据行反向报告。
+    R8-02：语义金额列（经 V1-V3 核对门）参与同一次角色学习，两侧共用
+    同一 roles；原件侧解析仍独立按 token 顺序，不使用合并侧列角色。
     """
-    roles, known_codes = _learn_column_roles(merged_rows)
+    roles, known_codes = _learn_column_roles(merged_rows, semantic_roles)
     merged_by_page: Dict[int, Dict[str, List[List[str]]]] = {}
     for row in merged_rows:
         identity, numbers = _row_identity_and_numbers(row["cells"], roles)
@@ -773,7 +929,9 @@ def reconcile(pdf: str, anchor: str, page_spec: str) -> Dict[str, Any]:
     merged_rows = [row for row in merged_rows if row["page"] in set(pages)]
 
     # 原件侧数字清单：只取解析出的表格行（排除表头、页码、年份、编码）
-    roles, known_codes = _learn_column_roles(merged_rows)
+    semantic_roles, semantic_evidence = _combined_semantic_roles(
+        doc, instances, merged_rows, page_texts, pages)
+    roles, known_codes = _learn_column_roles(merged_rows, semantic_roles)
     original_numbers: Dict[str, List[int]] = {}
     original_codes: Dict[str, List[int]] = {}
     for page in pages:
@@ -783,7 +941,7 @@ def reconcile(pdf: str, anchor: str, page_spec: str) -> Dict[str, Any]:
             for code in _codes_in_identity(record["identity"]):
                 original_codes.setdefault(code, []).append(page)
 
-    alignment = _reconcile_row_alignment(merged_rows, page_texts, pages)
+    alignment = _reconcile_row_alignment(merged_rows, page_texts, pages, semantic_roles)
     identities = set(alignment["merged_row_identities"])
     merged_codes = {code for identity in identities for code in _codes_in_identity(identity)}
     missing_codes = {code: pages for code in original_codes if code not in merged_codes}
@@ -800,6 +958,7 @@ def reconcile(pdf: str, anchor: str, page_spec: str) -> Dict[str, Any]:
         "extra_numbers": {},
         "missing_codes": missing_codes,
         "code_pages_in_merged": merged_pages_by_code,
+        "semantic_evidence": semantic_evidence,
     }
 
 
@@ -872,8 +1031,11 @@ def self_test(pdf: str) -> Dict[str, Any]:
     merged_rows = [
         row for row in _merged_cells_text(doc, [instance]) if row["page"] in pages_set
     ]
-    roles, _codes = _learn_column_roles(merged_rows)
-    normal = _reconcile_row_alignment(merged_rows, page_texts, sorted(pages_set))
+    semantic_roles, semantic_evidence = _semantic_amount_roles(
+        doc, instance, merged_rows, page_texts, sorted(pages_set))
+    roles, _codes = _learn_column_roles(merged_rows, semantic_roles)
+    normal = _reconcile_row_alignment(merged_rows, page_texts, sorted(pages_set),
+                                      semantic_roles)
 
     by_page: Dict[Any, List[Tuple[str, List[str], Dict[str, Any]]]] = {}
     for row in merged_rows:
@@ -904,7 +1066,8 @@ def self_test(pdf: str) -> Dict[str, Any]:
     indices_b = _amount_cell_indices(row_b["cells"], roles)
     for left, right in zip(indices_a, indices_b):
         row_a["cells"][left], row_b["cells"][right] = row_b["cells"][right], row_a["cells"][left]
-    mutated = _reconcile_row_alignment(injected, page_texts, sorted(pages_set))
+    mutated = _reconcile_row_alignment(injected, page_texts, sorted(pages_set),
+                                       semantic_roles)
     detected = any(
         str(item.get("kind", "")).endswith("mismatch")
         for item in mutated["row_mismatches"]
@@ -912,6 +1075,7 @@ def self_test(pdf: str) -> Dict[str, Any]:
     return {
         "ok": (not normal["row_mismatches"]) and detected,
         "instance": getattr(instance, "table_code", None),
+        "semantic_evidence": semantic_evidence,
         "pages": sorted(pages_set),
         "swap": {"page": page, "identity_a": identity_a, "identity_b": identity_b},
         "normal_mismatches": normal["row_mismatches"][:5],
@@ -964,7 +1128,9 @@ def reconcile_auto(pdf: str) -> Dict[str, Any]:
             continue
         merged_rows, view_errors = _logical_view_with_provenance(doc, [instance])
         merged_rows = [row for row in merged_rows if row["page"] in pages_set]
-        roles, known_codes = _learn_column_roles(merged_rows)
+        semantic_roles, semantic_evidence = _semantic_amount_roles(
+            doc, instance, merged_rows, page_texts, sorted(pages_set))
+        roles, known_codes = _learn_column_roles(merged_rows, semantic_roles)
         original_numbers: Dict[str, int] = {}
         original_codes: set = set()
         for page in sorted(pages_set):
@@ -995,13 +1161,14 @@ def reconcile_auto(pdf: str) -> Dict[str, Any]:
             if value not in original_numbers
         }
         alignment = _reconcile_row_alignment(
-            merged_rows, page_texts, sorted(pages_set))
+            merged_rows, page_texts, sorted(pages_set), semantic_roles)
         row_mismatches = alignment["row_mismatches"]
         results.append({
             "table_code": getattr(instance, "table_code", None),
             "title": str(getattr(instance, "title", "") or ""),
             "pages": sorted(pages_set),
             "rows": len(merged_rows),
+            "semantic_evidence": semantic_evidence,
             "missing_numbers": missing,
             "extra_numbers": extra,
             "missing_codes": sorted(original_codes - merged_codes),

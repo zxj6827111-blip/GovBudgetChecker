@@ -98,6 +98,44 @@ _CANCELLED_PROJECTS = re.compile(r'(?:年内调整取消|年内取消|调整取�
 # 评级数量披露谓词：限定词必须与该谓词同子句才算声明范围（R4-01）。
 _RATING_DISCLOSURE_PREDICATE = re.compile(
     r'(?:评级|评价)(?:结果|情况|等级)?(?:如下|见下)|(?:评级|评价)为')
+# R8-01：材料清单标题必须绑定自己的披露对象与引出谓词。归档等谓词
+# （"材料已归档"）不能借后句评级声明的"如下"拼成"材料…如下"。
+_MATERIAL_OBJECT = re.compile(r'资料|材料|清单')
+_RATING_OBJECT = re.compile(r'(?:绩效)?(?:评级|评价)(?:结果|情况|等级)?|等级')
+_DISCLOSURE_PREDICATE = re.compile(r'如下|见下')
+_RATING_LIST_PREDICATE = re.compile(r'(?:评级|评价)(?:结果|情况|等级)?(?:如下|见下)')
+#: 子句边界只认句末标点；compact 已去空白，换行不构成边界，逗号/括号/
+#: 分号也不终止子句（NFKC 后中文分号已是 ASCII ";"）。
+_SENTENCE_STOP = '。！？!?'
+#: 谓词向前找对象锚点的有限窗口（覆盖"绩效评级结果/情况"等对象短语）。
+_OBJECT_ANCHOR_WINDOW = 12
+
+
+def _material_group_boundary(compact: str, start: int, stop: int) -> int | None:
+    """材料清单标题的组终止位置（compact 坐标），无标题返回 None。
+
+    在 [start, stop) 内逐个披露谓词（如下/见下）判定：同一子句内向前
+    取结束位置最近的对象锚点；最近锚点是材料类（资料/材料/清单）时该
+    谓词才是材料清单标题，边界取材料锚点起点；最近锚点是评级对象或
+    无锚点时，谓词属于评级等披露，不产生边界。多个材料标题取最早一个。
+    任务切换由调用方先行收窄 stop，本函数只在收窄后的范围工作。
+    """
+    earliest: int | None = None
+    for predicate in _DISCLOSURE_PREDICATE.finditer(compact, start, stop):
+        clause_start = max(
+            [start - 1]
+            + [compact.rfind(ch, start, predicate.start()) for ch in _SENTENCE_STOP]
+        ) + 1
+        window_start = max(clause_start, predicate.start() - _OBJECT_ANCHOR_WINDOW)
+        anchor_end, anchor_start, is_material = -1, -1, False
+        for pattern, material in ((_MATERIAL_OBJECT, True), (_RATING_OBJECT, False)):
+            for anchor in pattern.finditer(compact, window_start, predicate.start()):
+                if anchor.end() > anchor_end:
+                    anchor_end, anchor_start, is_material = (
+                        anchor.end(), anchor.start(), material)
+        if is_material and anchor_end >= 0 and (earliest is None or anchor_start < earliest):
+            earliest = anchor_start
+    return earliest
 
 
 def _name(value):
@@ -1460,17 +1498,16 @@ def check_performance_counts(rule, doc):
                                text.compact[total.end():stop])
             if switch:
                 stop = total.end() + switch.start()
-            # R7-01：声明组的**数量范围**必须先确定，并贯穿全部消费者
+            # R7-01/R8-01：声明组的**数量范围**必须先确定，并贯穿全部消费者
             # （数量提取/声明/重复校验/加总/构成/取消项/证据跨度）。
-            # 组终止符 = 任务切换（上文已收窄）或不同披露对象标题
-            # （资料/材料/清单…如下）。标题之后的数字属于其他材料，
-            # 不进入本组操作数——既不凑平矛盾，也不制造部分列举误报。
+            # 组终止符 = 任务切换（上文已收窄）或材料清单标题——标题必须
+            # 绑定自己的披露对象（谓词前最近锚点是资料/材料/清单），归档
+            # 等谓词不能借后句评级声明的"如下"。标题之后的数字属于其他
+            # 材料，不进入本组操作数——既不凑平矛盾，也不制造部分列举误报。
             group_end = stop
-            material = re.search(
-                r'(?:资料|材料|清单)[^。；]{0,10}如下',
-                text.compact[total.end():stop])
-            if material:
-                group_end = total.end() + material.start()
+            boundary = _material_group_boundary(text.compact, total.end(), stop)
+            if boundary is not None:
+                group_end = boundary
             ratings = list(_RATING.finditer(text.compact, total.end(), group_end))
             declarations = list(_RATING_DECLARATION.finditer(
                 text.compact, total.end(), group_end))
@@ -1480,7 +1517,20 @@ def check_performance_counts(rule, doc):
                             unresolved, formula='self_evaluation_count = sum(distinct standard rating counts)')
                 continue
             if not ratings:
-                continue  # No classification declared: no sum relation exists.
+                # R8-01 零回执守卫：有评级披露谓词（评级/评价…如下/见下）
+                # 但组内提取不到任何评级数量，且**没有材料清单标题应答该
+                # 声明** → 显式未完成，不允许"零问题零回执"静默 pass。
+                # 材料标题合法闭合本组时（boundary 存在），声明指向材料
+                # 清单、其后数字属于其他材料，沿用 R7 裁定不建关系、不产
+                # 回执（R6 materials_title_terminates_group 冻结预期）。
+                # 全文无披露谓词时是合法无关系场景，不新增问题。
+                if boundary is None and _RATING_LIST_PREDICATE.search(
+                        text.compact, total.end(), stop):
+                    _unresolved(rule, doc, key,
+                                '评级声明存在但未提取到同组评级数量，不能确认数量关系',
+                                unresolved,
+                                formula='self_evaluation_count = sum(distinct standard rating counts)')
+                continue
             prefix_start = max((text.compact.rfind(ch, begin, total.start()) for ch in '。；;'), default=begin - 1) + 1
             proof = text.compact[max(begin, prefix_start):total.end()]
             local_years = [int(value) for value in re.findall(r'(20\d{2})年度', proof)]
@@ -1581,23 +1631,25 @@ def check_performance_counts(rule, doc):
                 _qualifier_governs_ratings(match) for match in re.finditer(
                     r'(?:全部|所有|整体|全量)(?:项目|自评项目|单位)?'
                     r'[^。；;，,（）()]{0,12}(?:评级|评价)', scope_compact))
-            # R5-01/R6-01：无条件披露与限定词走同一声明依据，且必须绑定
-            # **同组实际数量**——声明打开一个组，组内向后扫描实际评级
-            # 数量；组终止符只有不同披露对象标题（资料/材料/清单）与本组
-            # 末尾（下一自评总数/任务切换，由 stop 界定）。句号、分号、
-            # 括号、断行不终止组：主体/年度/任务未变时标点不改变业务
-            # 关系。其后的其他材料评级数字不吸入本组。
-            def _declaration_attracts_group_counts(match: 're.Match[str]') -> bool:
-                window = scope_compact[match.end():]
-                material = re.search(
-                    r'(?:资料|材料|清单)[^。；]{0,10}如下', window)
-                scan = window[:material.start()] if material else window
-                return bool(_RATING.search(scan))
+            # R5-01/R6-01/R8-01：无条件披露与限定词走同一声明依据，且必须
+            # 绑定**同组实际数量**——声明打开一个组，组内向后扫描实际评级
+            # 数量；组终止符只有材料清单标题（与主边界同一
+            # _material_group_boundary，对象-谓词绑定）与本组末尾（下一
+            # 自评总数/任务切换，由 stop 界定）。句号、分号、括号、断行不
+            # 终止组：主体/年度/任务未变时标点不改变业务关系。其后的其他
+            # 材料评级数字不吸入本组。
+            def _declaration_attracts_group_counts(
+                    match: 're.Match[str]',
+                    _total_end: int = total.end(),
+                    _group_end: int = group_end) -> bool:
+                scan_start = _total_end + match.end()
+                boundary = _material_group_boundary(text.compact, scan_start, _group_end)
+                scan_end = boundary if boundary is not None else _group_end
+                return bool(_RATING.search(text.compact, scan_start, scan_end))
 
             declares_ratings = any(
-                _declaration_attracts_group_counts(match) for match in re.finditer(
-                    r'(?:评级|评价)(?:结果|情况|等级)?(?:如下|见下)',
-                    scope_compact))
+                _declaration_attracts_group_counts(match)
+                for match in _RATING_LIST_PREDICATE.finditer(scope_compact))
             if partial_declared and complete_declared:
                 reason = reason or '同一评级声明范围内完整构成与部分列举冲突，范围不能唯一确定'
             complete_declaration = (not partial_declared
