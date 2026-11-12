@@ -1,0 +1,4972 @@
+{
+ "code_commit": "8ecf1a0a",
+ "method": "reconcile_auto 默认参数（无AI/OCR）；原件只读；独立pdfplumber通道",
+ "sample": "uploads 按文件名排序前30份决算PDF（非挑选）",
+ "cross_tab": {
+  "PASS|complete": 173,
+  "PASS|incomplete": 86,
+  "GAP|complete": 10
+ },
+ "full_pass_pdf_count": 24,
+ "pdfs": [
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/075e31ba6f282134daad0b9ae225d0a5/上海科技管理学校2025年度决算.pdf",
+   "sha256": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
+   "instances": 9,
+   "pass": 9,
+   "gap": 0,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      5
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      6
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_03_expenditure",
+     "pages": [
+      7
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      8,
+      9
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      10
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      11
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      12
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      13
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      14
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  },
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/0a8a27f6c4b683b21e931cf9ff342442/上海市粮食和物资储备局老干部活动室2025年度决算.pdf",
+   "sha256": "6a4f88d513dc5f41d1e51fbc6f9dabf4cbd68d16b28b5be0a4abb29597ee29f3",
+   "instances": 9,
+   "pass": 9,
+   "gap": 0,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      5
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      6,
+      7
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_03_expenditure",
+     "pages": [
+      8,
+      9
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      10,
+      11
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      12
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      13
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      14
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "required_headers_missing",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      15
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      16
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  },
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/0b507c0dfb58921a6780870a4681f48c/上海市自然资源调查利用研究院2025年度决算.pdf",
+   "sha256": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
+   "instances": 9,
+   "pass": 6,
+   "gap": 3,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      5
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      6,
+      7
+     ],
+     "verdict": "GAP",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [
+      {
+       "identity": "合计",
+       "page": 6,
+       "kind": "row_missing_on_page",
+       "merged": [
+        "14816.7",
+        "7687.99",
+        "0",
+        "3080.97",
+        "3956.86",
+        "0"
+       ]
+      },
+      {
+       "identity": "编码合计",
+       "page": 6,
+       "kind": "row_missing_in_merged",
+       "original": [
+        "14816.7",
+        "7687.99",
+        "0",
+        "3080.97",
+        "3956.86",
+        "0",
+        "90.88"
+       ]
+      }
+     ],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_03_expenditure",
+     "pages": [
+      8,
+      9
+     ],
+     "verdict": "GAP",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [
+      {
+       "identity": "2080506",
+       "page": 8,
+       "kind": "row_missing_on_page",
+       "merged": [
+        "141.55",
+        "141.55",
+        "0",
+        "0",
+        "0",
+        "0"
+       ]
+      },
+      {
+       "identity": "2120806",
+       "page": 8,
+       "kind": "row_missing_on_page",
+       "merged": [
+        "1275.5",
+        "0",
+        "1275.5",
+        "0",
+        "0",
+        "0"
+       ]
+      },
+      {
+       "identity": "关事业单位职业年金缴费支出",
+       "page": 8,
+       "kind": "row_missing_in_merged",
+       "original": [
+        "141.55",
+        "141.55",
+        "0",
+        "0",
+        "0",
+        "0"
+       ]
+      },
+      {
+       "identity": "地出让业务支出",
+       "page": 8,
+       "kind": "row_missing_in_merged",
+       "original": [
+        "1275.5",
+        "0",
+        "1275.5",
+        "0",
+        "0",
+        "0"
+       ]
+      }
+     ],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      10,
+      11
+     ],
+     "verdict": "GAP",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [
+      {
+       "identity": "二、政府性基金预算财政拨款|二、外交支出",
+       "page": 10,
+       "kind": "row_missing_on_page",
+       "merged": [
+        "1275.5",
+        "0",
+        "0",
+        "0",
+        "0"
+       ]
+      },
+      {
+       "identity": "三、国有资本经营预算财政拨款|三、国防支出",
+       "page": 10,
+       "kind": "row_missing_on_page",
+       "merged": [
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+       ]
+      },
+      {
+       "identity": "二、外交支出款",
+       "page": 10,
+       "kind": "row_missing_in_merged",
+       "original": [
+        "1275.5",
+        "0",
+        "0",
+        "0",
+        "0"
+       ]
+      },
+      {
+       "identity": "三、国防支出拨款",
+       "page": 10,
+       "kind": "row_missing_in_merged",
+       "original": [
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+       ]
+      }
+     ],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      12
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      13
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      14
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "required_headers_missing",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      15
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_non_numeric_data",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      16
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  },
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/1c770522c374bff0865f2a8fe4e3533a/上海市普陀区建设和管理委员会2025年度单位决算公开.pdf",
+   "sha256": "5444aedd257eb2505a47f0ad90815d46a329a92a9c435d9b7bee46b615d0230f",
+   "instances": 8,
+   "pass": 6,
+   "gap": 2,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      8
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      9,
+      10
+     ],
+     "verdict": "GAP",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [
+      {
+       "identity": "2080501",
+       "page": 9,
+       "kind": "row_missing_on_page",
+       "merged": [
+        "83.94",
+        "83.94"
+       ]
+      },
+      {
+       "identity": "2080505",
+       "page": 9,
+       "kind": "row_missing_on_page",
+       "merged": [
+        "89.85",
+        "89.85"
+       ]
+      },
+      {
+       "identity": "2080506",
+       "page": 9,
+       "kind": "row_missing_on_page",
+       "merged": [
+        "44.92",
+        "44.92"
+       ]
+      },
+      {
+       "identity": "2080599",
+       "page": 9,
+       "kind": "row_missing_on_page",
+       "merged": [
+        "0.78",
+        "0.78"
+       ]
+      },
+      {
+       "identity": "2080801",
+       "page": 9,
+       "kind": "row_missing_on_page",
+       "merged": [
+        "30.89",
+        "30.89"
+       ]
+      },
+      {
+       "identity": "2101101",
+       "page": 10,
+       "kind": "row_missing_on_page",
+       "merged": [
+        "34.31",
+        "34.31"
+       ]
+      },
+      {
+       "identity": "2120101",
+       "page": 10,
+       "kind": "row_missing_on_page",
+       "merged": [
+        "932.2",
+        "932.2"
+       ]
+      },
+      {
+       "identity": "2120199",
+       "page": 10,
+       "kind": "row_missing_on_page",
+       "merged": [
+        "1933.85",
+        "1933.85"
+       ]
+      },
+      {
+       "identity": "2120803",
+       "page": 10,
+       "kind": "row_missing_on_page",
+       "merged": [
+        "2166.5",
+        "2166.5"
+       ]
+      },
+      {
+       "identity": "2150899",
+       "page": 10,
+       "kind": "row_missing_on_page",
+       "merged": [
+        "6178",
+        "6178"
+       ]
+      },
+      {
+       "identity": "2210201",
+       "page": 10,
+       "kind": "row_missing_on_page",
+       "merged": [
+        "108.57",
+        "108.57"
+       ]
+      },
+      {
+       "identity": "2210203",
+       "page": 10,
+       "kind": "row_missing_on_page",
+       "merged": [
+        "143.55",
+        "143.55"
+       ]
+      },
+      {
+       "identity": "行政单位离退休",
+       "page": 9,
+       "kind": "row_missing_in_merged",
+       "original": [
+        "83.94",
+        "83.94"
+       ]
+      },
+      {
+       "identity": "#numeric",
+       "page": 9,
+       "kind": "row_missing_in_merged",
+       "original": [
+        "89.85",
+        "89.85"
+       ]
+      },
+      {
+       "identity": "#numeric",
+       "page": 9,
+       "kind": "row_missing_in_merged",
+       "original": [
+        "44.92",
+        "44.92"
+       ]
+      },
+      {
+       "identity": "其他行政事业单位养老支出",
+       "page": 9,
+       "kind": "row_missing_in_merged",
+       "original": [
+        "0.78",
+        "0.78"
+       ]
+      },
+      {
+       "identity": "死亡抚恤",
+       "page": 9,
+       "kind": "row_missing_in_merged",
+       "original": [
+        "30.89",
+        "30.89"
+       ]
+      },
+      {
+       "identity": "行政单位医疗",
+       "page": 10,
+       "kind": "row_missing_in_merged",
+       "original": [
+        "34.31",
+        "34.31"
+       ]
+      },
+      {
+       "identity": "行政运行",
+       "page": 10,
+       "kind": "row_missing_in_merged",
+       "original": [
+        "932.2",
+        "932.2"
+       ]
+      },
+      {
+       "identity": "其他城乡社区管理事务支出",
+       "page": 10,
+       "kind": "row_missing_in_merged",
+       "original": [
+        "1933.85",
+        "1933.85"
+       ]
+      }
+     ],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      11,
+      12
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      13
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      14,
+      15
+     ],
+     "verdict": "GAP",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {
+      "30231": 1
+     },
+     "extra_numbers": {},
+     "missing_codes": [
+      "30310"
+     ],
+     "row_mismatches": [
+      {
+       "identity": "30310",
+       "page": 14,
+       "kind": "row_missing_in_merged",
+       "original": [
+        "30231"
+       ]
+      }
+     ],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      16
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "required_headers_missing",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      17
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_non_numeric_data",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      18
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  },
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/23734f26696d2271a1e7246d80329a51/2025年石泉路街道办事处部门决算公开.pdf",
+   "sha256": "e8315830f800e58038b19bfd0f1e36f5930d9da72a22c3e79f781036bd5289a4",
+   "instances": 9,
+   "pass": 9,
+   "gap": 0,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      6
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      7,
+      8,
+      9,
+      10,
+      11
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_03_expenditure",
+     "pages": [
+      12,
+      13,
+      14,
+      15,
+      16
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      17,
+      18
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      19,
+      20,
+      21,
+      22
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      23
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      24
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "required_headers_missing",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      25
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      26
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  },
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/267d5edb686f1a041b9a6294c0aeeba7/复旦大学附属中学2025年度决算.pdf",
+   "sha256": "bbbd1e0b354281ab2692b66adefd59d7029ad39fdcc2bf49abed32a66f9b2d46",
+   "instances": 9,
+   "pass": 9,
+   "gap": 0,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      6
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      7
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_03_expenditure",
+     "pages": [
+      8
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      9,
+      10
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      11
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      12
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      13
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      14
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      15
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  },
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/3090701887a9091c0d556416d16ec7b7/上海市价格认证中心2025年度决算.pdf",
+   "sha256": "c0414964fc6669a8e0ace266127f31dbb8a1e6df0287365541bd6403bf200a24",
+   "instances": 9,
+   "pass": 9,
+   "gap": 0,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      5
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      6,
+      7
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_03_expenditure",
+     "pages": [
+      8,
+      9
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      10,
+      11
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      12
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      13
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      14
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "required_headers_missing",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      15
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      16
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  },
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/34bb0eeb41d8c7571ee10a6de09aca21/上海市建设用地和土地整理事务中心2025年度决算.pdf",
+   "sha256": "b24754cb64fba4552906c4477f6fa1319959b090aa561ddc7dae17e9d29100e2",
+   "instances": 9,
+   "pass": 9,
+   "gap": 0,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      6
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      7,
+      8
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_03_expenditure",
+     "pages": [
+      9,
+      10
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      11,
+      12
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      13
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      14
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      15
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "required_headers_missing",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      16
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_non_numeric_data",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      17
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  },
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/369cfed69ce981643e758df655a2cec4/上海市发展改革研究院2025年度决算.pdf",
+   "sha256": "54baa68acf72bd243c92e16e5ca96622756298a7b1ddd20a620896457ce20502",
+   "instances": 9,
+   "pass": 9,
+   "gap": 0,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      5
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      6
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "required_headers_missing",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_03_expenditure",
+     "pages": [
+      7
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      8,
+      9
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      10
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      11
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      12
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "required_headers_missing",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      13
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      14
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  },
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/3a822a337c9e7cf4e370c72e6c56949c/上海市普陀区宜川路街道经济发展服务中心2025年单位决算.pdf",
+   "sha256": "17d4d01459082356a3072a23a9a5fb9e868d05aaff2d4cb65f441537ea80f8a0",
+   "instances": 9,
+   "pass": 9,
+   "gap": 0,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      5
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      6,
+      7
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_03_expenditure",
+     "pages": [
+      8,
+      9
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      10,
+      11
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      12
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      13
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      14
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "required_headers_missing",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      15
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      16
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  },
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/3c09e146b6161d42fe9023c2f4c4aa09/上海市普陀区残疾人综合服务中心2025年度单位决算.pdf",
+   "sha256": "8d1c1f9da30b889c1e635ff7d61a42ea55782965f54cb1117495942c00717493",
+   "instances": 9,
+   "pass": 8,
+   "gap": 1,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      6
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      7,
+      8
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_03_expenditure",
+     "pages": [
+      9,
+      10
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      11,
+      12
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      13
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      14
+     ],
+     "verdict": "GAP",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {
+      "30108": 1,
+      "31007": 1
+     },
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [
+      {
+       "identity": "30108",
+       "page": 14,
+       "kind": "row_missing_on_page",
+       "merged": [
+        "30206"
+       ]
+      },
+      {
+       "identity": "电费险缴费",
+       "page": 14,
+       "kind": "row_missing_in_merged",
+       "original": [
+        "30108",
+        "30206"
+       ]
+      },
+      {
+       "identity": "更新",
+       "page": 14,
+       "kind": "row_missing_in_merged",
+       "original": [
+        "31007"
+       ]
+      }
+     ],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      15
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "required_headers_missing",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      16
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      17
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  },
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/4289b198cf38f87619cb34db6be11c3d/上海市普陀区残疾人联合会2025年度部门决算.pdf",
+   "sha256": "5b4ececffa2420cbb12235f89c420ce926611f96450e0191f093fe9866887a09",
+   "instances": 9,
+   "pass": 9,
+   "gap": 0,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      6
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      7,
+      8
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_03_expenditure",
+     "pages": [
+      9,
+      10
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      11,
+      12
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      13,
+      14
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      15
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      16
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "required_headers_missing",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      17
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      18
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  },
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/521b0a03d524f2ec965ad95e1a17ad32/上海商业会计学校单位2025年度决算.pdf",
+   "sha256": "0c2a165f93dcd6b09ebd752c06b058d5d1795fc62b7fa5c6693f29d64eac399c",
+   "instances": 9,
+   "pass": 8,
+   "gap": 1,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      5
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      6
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_03_expenditure",
+     "pages": [
+      7,
+      8
+     ],
+     "verdict": "GAP",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": [
+      {
+       "kind": "merged_view_source_mismatch",
+       "table_code": "FIN_03_expenditure",
+       "page": 8,
+       "row_index": 18,
+       "logical": [
+        "2210201",
+        "",
+        "",
+        "住房公积金",
+        "528.96",
+        "528.96"
+       ],
+       "source": [
+        "2210201",
+        "住房公积金",
+        "528.96",
+        "528.96",
+        "0.00",
+        "0.00"
+       ]
+      }
+     ]
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      9,
+      10
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      11
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      12,
+      13
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      14
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      15
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      16
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  },
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/5753d87456676dbd853b8e091a6c7139/上海市普陀区宜川路街道社区党群服务中心2025年单位决算.pdf",
+   "sha256": "65712ca838f0231d43471b413edce4c6dea1bce5ae9a6d5a3c1d6e3ba2061c8b",
+   "instances": 9,
+   "pass": 9,
+   "gap": 0,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      5
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      6,
+      7
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_03_expenditure",
+     "pages": [
+      8,
+      9
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      10,
+      11
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      12
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      13
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      14
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "required_headers_missing",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      15
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      16
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  },
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/57934d0d401ff2a9130e84290d51f802/上海市普陀区曹杨新村街道经济发展服务中心2025年度单位决算.pdf",
+   "sha256": "eedeb1ed3ed53ec4a477d0e770e4b9fc6e4b1ae56c2659a70a007550816edaf2",
+   "instances": 9,
+   "pass": 9,
+   "gap": 0,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      5
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      6,
+      7
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_03_expenditure",
+     "pages": [
+      8,
+      9
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      10,
+      11
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      12
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      13
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      14
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "required_headers_missing",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      15
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      16
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  },
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/5c244dd027caa04fc47188406051cd7e/上海市粮食和物资储备局2025年度决算.pdf",
+   "sha256": "52ef1d25a4c18637f865499d06eae93d6b0a6ad757383f24d0ab8fdf4dd70071",
+   "instances": 9,
+   "pass": 9,
+   "gap": 0,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      6
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      7,
+      8
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_03_expenditure",
+     "pages": [
+      9,
+      10
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      11,
+      12
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      13,
+      14
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      15
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      16
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "required_headers_missing",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      17
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      18
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  },
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/5c9899d5f9d57bff5f49a35b82514203/上海市文化和旅游局2022年度部门决算.pdf",
+   "sha256": "a9ddd6ec08df3e7781dcd536fe953839a0250203ff933207eba94ec3dc710975",
+   "instances": 9,
+   "pass": 9,
+   "gap": 0,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      8
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      9,
+      10,
+      11
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_03_expenditure",
+     "pages": [
+      12,
+      13,
+      14
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      15,
+      16
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      17,
+      18
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      19,
+      20
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      21
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "required_headers_missing",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      22
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      23
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  },
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/6000a11c0737d5149975516b44fd8682/上海市普陀区人民政府宜川路街道办事处2025年度部门决算.pdf",
+   "sha256": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
+   "instances": 9,
+   "pass": 9,
+   "gap": 0,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      6
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      7,
+      8,
+      9,
+      10,
+      11
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_03_expenditure",
+     "pages": [
+      12,
+      13,
+      14,
+      15,
+      16
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      17,
+      18
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      19,
+      20,
+      21
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      22,
+      23
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      24
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "required_headers_missing",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      25
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_non_numeric_data",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      26
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  },
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/60b9f2df1a208f95617b7d33d43d9d80/上海市退役军人事务局（本级）2024年度决算.pdf",
+   "sha256": "4ea4ab14d48cf75da54599706982ca3b28696a22c0038c96af152608ad873100",
+   "instances": 9,
+   "pass": 7,
+   "gap": 2,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      5
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      6,
+      7
+     ],
+     "verdict": "GAP",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [
+      {
+       "identity": "合计",
+       "page": 6,
+       "kind": "row_missing_on_page",
+       "merged": [
+        "40381.86",
+        "16517.86",
+        "0",
+        "0",
+        "0",
+        "0"
+       ]
+      },
+      {
+       "identity": "编码合计",
+       "page": 6,
+       "kind": "row_missing_in_merged",
+       "original": [
+        "40381.86",
+        "16517.86",
+        "0",
+        "0",
+        "0",
+        "0",
+        "23864"
+       ]
+      }
+     ],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_03_expenditure",
+     "pages": [
+      8,
+      9
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      10,
+      11
+     ],
+     "verdict": "GAP",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [
+      {
+       "identity": "二、政府性基金预算财政拨款|二、外交支出",
+       "page": 10,
+       "kind": "row_missing_on_page",
+       "merged": [
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+       ]
+      },
+      {
+       "identity": "三、国有资本经营预算财政拨款|三、国防支出",
+       "page": 10,
+       "kind": "row_missing_on_page",
+       "merged": [
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+       ]
+      },
+      {
+       "identity": "二十二、灾害防治及应急管理支出",
+       "page": 11,
+       "kind": "row_missing_on_page",
+       "merged": [
+        "0",
+        "0",
+        "0",
+        "0"
+       ]
+      },
+      {
+       "identity": "三、国有资本经营预算财政拨款",
+       "page": 11,
+       "kind": "row_missing_on_page",
+       "merged": [
+        "0"
+       ]
+      },
+      {
+       "identity": "二、政府性基金预算财政拨|二、外交支出",
+       "page": 10,
+       "kind": "row_missing_in_merged",
+       "original": [
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+       ]
+      },
+      {
+       "identity": "三、国防支出拨款",
+       "page": 10,
+       "kind": "row_missing_in_merged",
+       "original": [
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+       ]
+      },
+      {
+       "identity": "二十一、国有资本经营预算支",
+       "page": 11,
+       "kind": "row_missing_in_merged",
+       "original": [
+        "0",
+        "0",
+        "0",
+        "0"
+       ]
+      },
+      {
+       "identity": "#numeric",
+       "page": 11,
+       "kind": "row_missing_in_merged",
+       "original": [
+        "0",
+        "0",
+        "0",
+        "0"
+       ]
+      },
+      {
+       "identity": "#numeric",
+       "page": 11,
+       "kind": "row_missing_in_merged",
+       "original": [
+        "0"
+       ]
+      },
+      {
+       "identity": "二、政府性基金预算财政拨",
+       "page": 11,
+       "kind": "row_missing_in_merged",
+       "original": [
+        "0"
+       ]
+      }
+     ],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      12
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      13,
+      14
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      15
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      16
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      17
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  },
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/67217a651ab2f9e7f64dba9d85c7742d/上海市信访办公室2024年决算.pdf",
+   "sha256": "10f6afe6ca550ad41fec04ed1cd2c2757ed1434e88172246e46fdccedb8ff973",
+   "instances": 9,
+   "pass": 8,
+   "gap": 1,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      6
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      7,
+      8
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_03_expenditure",
+     "pages": [
+      9,
+      10
+     ],
+     "verdict": "GAP",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [
+      {
+       "identity": "201",
+       "page": 9,
+       "kind": "row_missing_on_page",
+       "merged": [
+        "29767.35",
+        "3994.77",
+        "25772.58",
+        "0",
+        "0",
+        "0"
+       ]
+      },
+      {
+       "identity": "出项",
+       "page": 9,
+       "kind": "row_missing_in_merged",
+       "original": [
+        "29767.35",
+        "3994.77",
+        "25772.58",
+        "0",
+        "0",
+        "0"
+       ]
+      }
+     ],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      11,
+      12
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      13
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      14
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      15
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      16
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      17
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  },
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/68d34dd878d44c6f5888ec3f0c2234c8/上海市普陀区宜川路街道城市运行管理中心2025年单位决算.pdf",
+   "sha256": "fd4acc75b42277f1df4b1aeff632f2b790b1e27f05c23ea9e039ae9d1df0d11a",
+   "instances": 9,
+   "pass": 9,
+   "gap": 0,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      5
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      6,
+      7
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_03_expenditure",
+     "pages": [
+      8,
+      9
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      10,
+      11
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      12
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      13
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      14
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "required_headers_missing",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      15
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      16
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  },
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/6a0ca7cc12b65d2cac89096a52bfd255/上海大学2025年度决算.pdf",
+   "sha256": "f3724e2473a96d085eed5dc0193ca22371e61a94eaa4971e99bf590c1b1b1cf5",
+   "instances": 9,
+   "pass": 9,
+   "gap": 0,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      8
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      9,
+      10,
+      11
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_03_expenditure",
+     "pages": [
+      12,
+      13,
+      14
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      15,
+      16
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      17,
+      18
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      19
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      20
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "required_headers_missing",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      21
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      22
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  },
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/6d16e31d0a393bfdaeb9f9eed8412483/上海市土地储备中心2025年度决算.pdf",
+   "sha256": "5fe6a599204355a42596e810be283ec2d7d642332ccec22a2f84ce41ae108cfb",
+   "instances": 9,
+   "pass": 9,
+   "gap": 0,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      6
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      7,
+      8
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_03_expenditure",
+     "pages": [
+      9,
+      10
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      11,
+      12
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      13
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      14
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      15
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "required_headers_missing",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      16
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_non_numeric_data",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      17
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  },
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/74d2f14063620a23468f32aeae4b3c6b/上海航宇科普中心（上海市工业文化发展中心）2025年度决算.pdf",
+   "sha256": "51e1da9597488644e2802c2cd7c134150a74a884509d9042e6666a07349bb876",
+   "instances": 9,
+   "pass": 9,
+   "gap": 0,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      5
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      6,
+      7
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_03_expenditure",
+     "pages": [
+      8,
+      9
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      10,
+      11
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      12
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      13
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      14
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "required_headers_missing",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      15
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      16
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  },
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/79efdd8f0d7b3a2938de65cfb5aad101/上海市普陀区残疾人联合会2025年度单位决算.pdf",
+   "sha256": "fd7e6f6511df65250eff16dde8482251d04056eaff474a375a053a60bb848557",
+   "instances": 9,
+   "pass": 9,
+   "gap": 0,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      6
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      7,
+      8
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_03_expenditure",
+     "pages": [
+      9,
+      10
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      11,
+      12
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      13
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      14
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      15
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "required_headers_missing",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      16
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      17
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  },
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/7a731d76d80118e88fcb18b7a6b16306/上海市自然资源确权登记事务中心2025年度决算.pdf",
+   "sha256": "5cd999b91dcebc705c11475432c053893b8faad2b589b66cb9fc3e6206072070",
+   "instances": 9,
+   "pass": 9,
+   "gap": 0,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      5
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      6,
+      7
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_03_expenditure",
+     "pages": [
+      8,
+      9
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_non_numeric_data",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      10,
+      11
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      12
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      13
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      14
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "required_headers_missing",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      15
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_non_numeric_data",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      16
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  },
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/7e321e69167f7b021977414699ceeb52/上海市普陀区曹杨新村街道社区党群服务中心2025年度单位决算.pdf",
+   "sha256": "c5c3ab78db312396f3e7e08a2cb822d2b54a74d3d64142e304865c07cbcec515",
+   "instances": 9,
+   "pass": 9,
+   "gap": 0,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      5
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      6,
+      7
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_03_expenditure",
+     "pages": [
+      8,
+      9
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      10,
+      11
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      12,
+      13
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      14
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      15
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "required_headers_missing",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      16
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      17
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  },
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/803142e7e6cfade32c724ee4dbb16165/上海市普陀区曹杨新村街道社区事务受理服务中心2025年度单位决算.pdf",
+   "sha256": "885f124884f9bd9eb84da965f12aaeba68ffafb2744455117ba9406d8a754bd8",
+   "instances": 9,
+   "pass": 9,
+   "gap": 0,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      5
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      6,
+      7
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_03_expenditure",
+     "pages": [
+      8,
+      9
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      10,
+      11
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      12
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      13
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      14
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "required_headers_missing",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      15
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      16
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  },
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/853e910bf32b3d05079011853fe65ae1/上海市普陀区宜川路街道综合行政执法队2025年度单位决算.pdf",
+   "sha256": "238a5f6201e7d25acb4b2420c49e83d8b57823af22823c6f8b9c81d6b8e40615",
+   "instances": 9,
+   "pass": 9,
+   "gap": 0,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      5
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      6,
+      7
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "required_headers_missing",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_03_expenditure",
+     "pages": [
+      8,
+      9
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      10,
+      11
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      12
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      13
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      14
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "required_headers_missing",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      15
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      16
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  },
+  {
+   "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/85877a3a96e57fb95a52e08c1f1c4974/上海市普陀区市政水务管理中心2025年度单位决算公开.pdf",
+   "sha256": "95e77cfc23e9de8bbb898c6c58b2847ee751d94db64795f4ed854be6f032a945",
+   "instances": 9,
+   "pass": 9,
+   "gap": 0,
+   "tables": [
+    {
+     "table": "FIN_01_income_expenditure_total",
+     "pages": [
+      6
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_02_income",
+     "pages": [
+      7,
+      8,
+      9
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_03_expenditure",
+     "pages": [
+      10,
+      11,
+      12
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_04_fiscal_grant_total",
+     "pages": [
+      13,
+      14
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_05_general_public_expenditure",
+     "pages": [
+      15,
+      16
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_06_basic_expenditure",
+     "pages": [
+      17,
+      18
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_07_three_public",
+     "pages": [
+      19
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "required_headers_missing",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_08_gov_fund",
+     "pages": [
+      20
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "complete",
+     "semantic_reason": null,
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    },
+    {
+     "table": "FIN_09_state_capital",
+     "pages": [
+      21
+     ],
+     "verdict": "PASS",
+     "semantic_verification": "incomplete",
+     "semantic_reason": "mapping_col_out_of_width",
+     "missing_numbers": {},
+     "extra_numbers": {},
+     "missing_codes": [],
+     "row_mismatches": [],
+     "header_mismatches": [],
+     "merged_view_errors": []
+    }
+   ]
+  }
+ ]
+}
