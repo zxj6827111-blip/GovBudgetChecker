@@ -52,9 +52,11 @@ def _performance_scope() -> dict:
         "partial": (base + "其中，绩效评级为“优”的项目50个。", 0, "pass", ">="),
         "materials": (base + "其中，绩效评级为“优”的项目50个。"
                       "相关评级材料如下：项目自评表、整改资料。", 0, "pass", ">="),
+        # R7-01：材料标题先于数量时其后数字属于其他组，本组无操作数 →
+        # 不建加总关系（无回执），也不把示例数字吸入本组。
         "materials_title_terminates_group": (
             base + "评级结果如下。相关评级材料如下：项目自评表、整改资料。"
-            "绩效评级为“良”的项目3个。", 0, "pass", ">="),
+            "绩效评级为“良”的项目3个。", 0, None, None),
     }
     outcomes = []
     ok = True
@@ -71,8 +73,11 @@ def _performance_scope() -> dict:
         receipts = list(getattr(doc, "fact_receipts", []) or [])
         formula = str(receipts[-1].get("formula")) if receipts else ""
         status = receipts[-1].get("status") if receipts else ""
-        passed = (signal is None and len(issues) == expected_count
-                  and status == expected_status and expected_op in formula)
+        if expected_status is None:
+            passed = (signal is None and len(issues) == 0 and not receipts)
+        else:
+            passed = (signal is None and len(issues) == expected_count
+                      and status == expected_status and expected_op in formula)
         ok = ok and passed
         outcomes.append({"case": name, "expected_issues": expected_count,
                          "actual_issues": len(issues), "receipt_status": status,
@@ -145,31 +150,25 @@ def _year_amount_real_pdf() -> dict:
 
 
 def _row_grounding() -> dict:
-    from scripts.d1_table_reconciliation import (
-        _learn_column_roles, _row_grounding_mismatches)
+    """R7-02：逐行身份约束——同页其他行出现同一数值不满足本行；
+    原件有、合并缺失的行必须报告（页级存在性不再作为验收依据）。"""
+    from scripts.d1_table_reconciliation import _reconcile_row_alignment
 
-    # 列角色可学习（含小数金额）时 grounding 才有对象集合可依据。
-    text = ("收入支出决算总表\n"
-            "本年收入合计 3000.00 本年支出合计 2800.00\n"
-            "年初结转和结余 2025 年末结转和结余 2225\n"
-            "总计 5025.00 总计 5025.00\n")
-    rows = [{"page": 1, "cells": ["本年收入合计", "3000.00", "本年支出合计", "2800.00"]},
-            {"page": 1, "cells": ["年初结转和结余", "2025", "年末结转和结余", "2225"]},
-            {"page": 1, "cells": ["总计", "5025.00", "总计", "5025.00"]}]
-    roles, _codes, _flag = _learn_column_roles(rows)
-    clean = _row_grounding_mismatches(rows, [text], roles, [1])
-    phantom_rows = [
-        {"page": 1, "cells": ["本年收入合计", "9999.00", "本年支出合计", "2800.00"]},
-        {"page": 1, "cells": ["年初结转和结余", "2025", "年末结转和结余", "2225"]},
-        {"page": 1, "cells": ["总计", "5025.00", "总计", "5025.00"]}]
-    phantom_roles, _c, _f = _learn_column_roles(phantom_rows)
-    phantom = _row_grounding_mismatches(phantom_rows, [text], phantom_roles, [1])
+    page = ("合计 3000 合计 2800\n"
+            "本年收入合计 3000 本年支出合计 2800\n")
+    phantom = _reconcile_row_alignment(
+        [{"page": 1, "cells": ["本年收入合计", "3000",
+                               "本年支出合计", "9999"]}], [page], [1])
+    reverse = _reconcile_row_alignment(
+        [{"page": 1, "cells": ["合计", "3000", "合计", "2800"]}],
+        ["合计 3000 合计 2800\n本年收入合计 3000 本年支出合计 2800\n"], [1])
     return {
-        "ok": (clean == [] and any(
-            item["kind"] == "row_grounding_mismatch"
-            and item["missing_value"] == "9999" for item in phantom)),
-        "clean": clean,
-        "phantom": phantom[:2],
+        "ok": (bool(phantom["row_mismatches"])
+               and any(item["kind"] == "row_missing_in_merged"
+                       for item in reverse["row_mismatches"])),
+        "value_elsewhere_does_not_satisfy_row": phantom["row_mismatches"][:2],
+        "reverse_coverage": [item for item in reverse["row_mismatches"]
+                             if item["kind"] == "row_missing_in_merged"][:2],
     }
 
 

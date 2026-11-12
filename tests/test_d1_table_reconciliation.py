@@ -17,7 +17,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from d1_table_reconciliation import (  # noqa: E402
     _reconcile_row_alignment,
-    _row_grounding_mismatches,
     _row_identity_and_numbers,
 )
 
@@ -208,12 +207,12 @@ def test_negative_and_zero_amounts_are_still_compared():
     """负数、零与两位小数金额同机制逐位核对，不因格式豁免。"""
     page = "合计 0.00\n201 教育支出 -5.00\n202 科技支出 100"
     normal = _reconcile_row_alignment(
-        [{"page": 1, "cells": ["合计", "0.00"]},
+        [{"page": 1, "cells": ["合计", "", "0.00"]},
          {"page": 1, "cells": ["201", "教育支出", "-5.00"]},
          {"page": 1, "cells": ["202", "科技支出", "100"]}], [page], [1])
     assert normal["row_mismatches"] == []
     corrupted = _reconcile_row_alignment(
-        [{"page": 1, "cells": ["合计", "0.00"]},
+        [{"page": 1, "cells": ["合计", "", "0.00"]},
          {"page": 1, "cells": ["201", "教育支出", "5.00"]},
          {"page": 1, "cells": ["202", "科技支出", "100"]}], [page], [1])
     assert corrupted["row_mismatches"]
@@ -333,17 +332,24 @@ def test_year_shaped_amount_in_amount_column_is_verified():
     assert kinds & {"row_number_sequence_mismatch", "row_grounding_mismatch"}
 
 
-def test_row_grounding_catches_missing_original_value():
-    """行级 grounding：合并行的金额原值必须能在原件页按序找到。"""
-    rows = [{"page": 1, "cells": ["合计", "3000", "合计", "2800"]}]
-    grounding = _row_grounding_mismatches(rows, [YEAR_AMOUNT_TEXT],
-                                          {1: "amount", 3: "amount"}, [1])
-    assert grounding == []
-    phantom = _row_grounding_mismatches(
-        [{"page": 1, "cells": ["合计", "9999", "合计", "2800"]}],
-        [YEAR_AMOUNT_TEXT], {1: "amount", 3: "amount"}, [1])
-    assert any(item["kind"] == "row_grounding_mismatch"
-               and item["missing_value"] == "9999" for item in phantom)
+def test_value_elsewhere_on_page_does_not_satisfy_row():
+    """R7-02：同页其他行出现同一数值不能证明本行正确（逐行身份约束）。"""
+    page = ("合计 3000 合计 2800\n"
+            "本年收入合计 3000 本年支出合计 2800\n")
+    merged = [{"page": 1, "cells": ["本年收入合计", "3000", "本年支出合计", "9999"]}]
+    result = _reconcile_row_alignment(merged, [page], [1])
+    assert result["row_mismatches"], "同页存在 3000/2800 不能使本行的 9999 通过"
+    kinds = {item["kind"] for item in result["row_mismatches"]}
+    assert "row_missing_on_page" in kinds or "row_number_sequence_mismatch" in kinds
+
+
+def test_original_row_missing_from_merged_is_reported():
+    """R7-02 反向覆盖：原件有、合并视图没有的数据行必须报告。"""
+    page = "合计 100 合计 200\n本年收入合计 100 本年支出合计 200\n"
+    merged = [{"page": 1, "cells": ["合计", "100", "合计", "200"]}]
+    result = _reconcile_row_alignment(merged, [page], [1])
+    assert any(item["kind"] == "row_missing_in_merged"
+               for item in result["row_mismatches"])
 
 
 # ---------------------------------------------------------------------------

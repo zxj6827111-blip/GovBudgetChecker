@@ -50,9 +50,11 @@ def _performance_scope() -> dict:
                         0, "pass", ">="),
         "materials_b": (partial + "相关评级材料如下：项目自评表、整改资料。",
                         0, "pass", ">="),
+        # R7-01：材料标题在数量之前时，其后数字属于其他组，不进入本组；
+        # 本组无数量操作数 → 不建加总关系（无回执），也不制造矛盾。
         "materials_before_claims": (
             "绩效自评的2025年度项目53个，相关评级材料如下：自评表。"
-            "其中，绩效评级为“优”的项目50个。", 0, "pass", ">="),
+            "其中，绩效评级为“优”的项目50个。", 0, None, None),
         "bare_with_counts": (
             "绩效自评的2025年度项目53个，评级结果如下："
             "绩效评级为“优”的项目50个，其余评级均为0个。", 1, "fail", "="),
@@ -75,8 +77,11 @@ def _performance_scope() -> dict:
         receipts = list(getattr(doc, "fact_receipts", []) or [])
         formula = str(receipts[-1].get("formula")) if receipts else ""
         status = receipts[-1].get("status") if receipts else ""
-        passed = (signal is None and len(issues) == expected_count
-                  and status == expected_status and expected_op in formula)
+        if expected_status is None:
+            passed = (signal is None and len(issues) == 0 and not receipts)
+        else:
+            passed = (signal is None and len(issues) == expected_count
+                      and status == expected_status and expected_op in formula)
         ok = ok and passed
         outcomes.append({"case": name, "expected_issues": expected_count,
                          "actual_issues": len(issues), "receipt_status": status,

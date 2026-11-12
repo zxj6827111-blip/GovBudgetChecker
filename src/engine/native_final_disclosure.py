@@ -1450,6 +1450,8 @@ def check_performance_counts(rule, doc):
                         unresolved, formula='self_evaluation_count = sum(4 rating counts)')
         for index, total in enumerate(totals):
             stop = totals[index + 1].start() if index + 1 < len(totals) else end
+            # 取消项目括号的闭合校验使用未被任务切换收窄的范围（右括号可
+            # 在定性说明之后），但数量提取只使用下面的 group_end。
             scope_stop = stop
             # The standard rating parenthesis may contain semicolons and one
             # sentence stop. An explicit following task changes the scope.
@@ -1458,8 +1460,20 @@ def check_performance_counts(rule, doc):
                                text.compact[total.end():stop])
             if switch:
                 stop = total.end() + switch.start()
-            ratings = list(_RATING.finditer(text.compact, total.end(), stop))
-            declarations = list(_RATING_DECLARATION.finditer(text.compact, total.end(), stop))
+            # R7-01：声明组的**数量范围**必须先确定，并贯穿全部消费者
+            # （数量提取/声明/重复校验/加总/构成/取消项/证据跨度）。
+            # 组终止符 = 任务切换（上文已收窄）或不同披露对象标题
+            # （资料/材料/清单…如下）。标题之后的数字属于其他材料，
+            # 不进入本组操作数——既不凑平矛盾，也不制造部分列举误报。
+            group_end = stop
+            material = re.search(
+                r'(?:资料|材料|清单)[^。；]{0,10}如下',
+                text.compact[total.end():stop])
+            if material:
+                group_end = total.end() + material.start()
+            ratings = list(_RATING.finditer(text.compact, total.end(), group_end))
+            declarations = list(_RATING_DECLARATION.finditer(
+                text.compact, total.end(), group_end))
             key = f'performance:self_evaluation_ratings:{total.start()}'
             if len(declarations) != len(ratings):
                 _unresolved(rule, doc, key, '评级类别未识别或不是互斥的标准评级，不能据此认定数量闭合',
@@ -1489,7 +1503,7 @@ def check_performance_counts(rule, doc):
             parts = {claim['rating']: int(claim['count']) for claim in ratings}
             declared, computed = int(total['count']), sum(parts.values())
             complete = set(parts) == {'优', '良', '合格', '不合格'}
-            cancelled = list(_CANCELLED_PROJECTS.finditer(text.compact, total.end(), stop))
+            cancelled = list(_CANCELLED_PROJECTS.finditer(text.compact, total.end(), group_end))
             cancelled_count = 0
             evidence_end = ratings[-1].end()
             if cancelled:
@@ -1542,7 +1556,7 @@ def check_performance_counts(rule, doc):
             #     不因句号把声明与评级数字分开而失效；
             #   - 只有同一范围内同时出现带披露谓词的完整与部分声明（真实
             #     冲突）才进入明确歧义，不默认部分优先。
-            scope_compact = text.compact[total.end():stop]
+            scope_compact = text.compact[total.end():group_end]
 
             def _qualifier_governs_ratings(match: 're.Match[str]') -> bool:
                 """限定词所在子句必须含评级数量披露谓词（如下/见下/评级为）。"""
