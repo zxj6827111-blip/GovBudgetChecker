@@ -1,0 +1,16 @@
+{
+ "code_commit": "dcbb048c",
+ "files": {
+  "src/engine/native_final_disclosure.py": "e4a0b59c996e26e1d61ae4e754209a6effc71dcfc7d5a65d4a9b17f3142ea484",
+  "scripts/d1_table_reconciliation.py": "f5579bf085242fd9788cd46b6b38f848be43f81a931452a443d2e2bcd93f76a4",
+  "tests/remediation/test_r8_mechanism_remediation.py": "27c0202908827434fd32716a994049efe7cd6e5a4fffa101db3b626b0fa2249b",
+  "tests/fixtures/r8/expenditure_header_business.pdf": "d87a5307525cd0818eb59314174ff6afa199f11daec7be528a0ca71214086c2a",
+  "tests/fixtures/r8/expenditure_header_explicit_amount.pdf": "eb6ba1483de0d0ec071aed9a75e68ede4104a7ec37fd63e003c09e5c3f622e3c",
+  "src/services/report_confirmation_gate.py": "034f96871606cd7af2a045aaf95dcf46bac8aaab5f3f108752397799355aeb90",
+  "src/services/evidence_guard.py": "4e6ff64ab85339d0cffab2dc8afd3d672fb7c30b77a22f2ccaf30f4bc3e6edb2",
+  "src/services/rule_source_binding.py": "296d299343ab2aa4db8a99b8c084a0be0c63cc1e5e60e9b1b7b200243e6ec462",
+  "src/engine/pipeline.py": "f639093ffee1a8116b819f5bd035768c789aea59d95491b161f1b54622d6a3ba",
+  "src/engine/issue_evidence.py": "073c8f49b94246ba7728e1964e3cd1dfdd9f19ca4ff81ce0ca37c2dabc33fbb4",
+  "api/routes/jobs.py": "49e0363e808c95167226626219f6be21d98b14a9c773683e54a78a6f37553a93"
+ }
+}
