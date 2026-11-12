@@ -959,16 +959,4 @@ rules:
   false_positive_notes: ''
   evidence_extract: {}
   auto_explain: ''
-# --- begin: budget section (used by V33-002) ---
-budget:
-  nine_tables:
-    - 收入支出决算总表
-    - 收入决算表
-    - 支出决算表
-    - 财政拨款收支总表
-    - 一般公共预算财政拨款支出决算表（功能分类）
-    - 一般公共预算财政拨款基本支出决算表（经济分类）
-    - 政府性基金预算财政拨款收入支出决算表（如适用）
-    - 国有资本经营预算财政拨款收入支出决算表（如适用）
-    - 三公经费/机关运行经费/绩效说明章节
-# --- end: budget section ---
+# 旧版误置的决算表别名块已移除；预算配置只保留顶部唯一 budget。
