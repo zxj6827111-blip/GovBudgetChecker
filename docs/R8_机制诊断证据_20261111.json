@@ -1,0 +1,357 @@
+{
+ "git_head": "3a7615bb2ae73054061e2a8c0a8449c7e985ac73",
+ "review_package": "/Volumes/workSSD/software development/GovBudgetChecker/outputs/independent_3a7615bb_20261111",
+ "r8_01_current_behavior": [
+  {
+   "case": "base",
+   "issues": 1,
+   "receipts": 1,
+   "formula": "self_evaluation_count = sum(disclosed distinct rating counts)",
+   "actual_rule_runner_status": "fail",
+   "expected_ok": true,
+   "compact": "绩效自评的2025年度项目53个,评级结果如下。绩效评级为“优”的项目50个,其余评级均为0个。",
+   "material_match_current": null
+  },
+  {
+   "case": "archive_period",
+   "issues": 1,
+   "receipts": 1,
+   "formula": "self_evaluation_count = sum(disclosed distinct rating counts)",
+   "actual_rule_runner_status": "fail",
+   "expected_ok": true,
+   "compact": "绩效自评的2025年度项目53个,相关材料已归档。评级结果如下。绩效评级为“优”的项目50个,其余评级均为0个。",
+   "material_match_current": null
+  },
+  {
+   "case": "archive_comma",
+   "issues": 0,
+   "receipts": 0,
+   "formula": null,
+   "actual_rule_runner_status": "pass",
+   "expected_ok": false,
+   "compact": "绩效自评的2025年度项目53个,相关材料已归档,评级结果如下。绩效评级为“优”的项目50个,其余评级均为0个。",
+   "material_match_current": "材料已归档,评级结果如下"
+  },
+  {
+   "case": "archive_parentheses",
+   "issues": 0,
+   "receipts": 0,
+   "formula": null,
+   "actual_rule_runner_status": "pass",
+   "expected_ok": false,
+   "compact": "绩效自评的2025年度项目53个,(相关材料已归档)评级结果如下。绩效评级为“优”的项目50个,其余评级均为0个。",
+   "material_match_current": "材料已归档)评级结果如下"
+  },
+  {
+   "case": "archive_semicolon",
+   "issues": 0,
+   "receipts": 0,
+   "formula": null,
+   "actual_rule_runner_status": "pass",
+   "expected_ok": false,
+   "compact": "绩效自评的2025年度项目53个,相关材料已归档;评级结果如下。绩效评级为“优”的项目50个,其余评级均为0个。",
+   "material_match_current": "材料已归档;评级结果如下"
+  },
+  {
+   "case": "partial",
+   "issues": 0,
+   "receipts": 1,
+   "formula": "self_evaluation_count >= sum(disclosed distinct rating counts)",
+   "actual_rule_runner_status": "pass",
+   "expected_ok": true,
+   "compact": "绩效自评的2025年度项目53个,其中,绩效评级为“优”的项目50个。",
+   "material_match_current": null
+  }
+ ],
+ "r8_02_current_behavior": {
+  "fixture": "/Volumes/workSSD/software development/GovBudgetChecker/outputs/independent_3a7615bb_20261111/fixtures/expenditure_header_business.pdf",
+  "original_page_text": [
+   "支出决算表\n金额单位：万元\n项目 本年支出合计 基本支出 项目支出\n一般公共服务支出 100 20.50 79.50\n教育支出 200 80.50 119.50\n合计 300 101.00 199.00"
+  ],
+  "parser_rows": [
+   [
+    "项目",
+    "本年支出合计",
+    "基本支出",
+    "项目支出"
+   ],
+   [
+    "一般公共服务支出",
+    "100",
+    "20.50",
+    "79.50"
+   ],
+   [
+    "教育支出",
+    "200",
+    "80.50",
+    "119.50"
+   ],
+   [
+    "合计",
+    "300",
+    "101.00",
+    "199.00"
+   ]
+  ],
+  "parser_rows_equal_original_expected": true,
+  "learned_roles_current": {
+   "0": "label",
+   "1": "code",
+   "2": "amount",
+   "3": "amount"
+  },
+  "canonical_mappings": [
+   {
+    "source_col_idx": 1,
+    "canonical_measure": "total_actual",
+    "source_col_name": "本年支出合计",
+    "source_label_cols": [
+     0
+    ],
+    "confidence": 0.9
+   },
+   {
+    "source_col_idx": 2,
+    "canonical_measure": "basic_actual",
+    "source_col_name": "基本支出",
+    "source_label_cols": [
+     0
+    ],
+    "confidence": 0.9
+   },
+   {
+    "source_col_idx": 3,
+    "canonical_measure": "project_actual",
+    "source_col_name": "项目支出",
+    "source_label_cols": [
+     0
+    ],
+    "confidence": 0.9
+   }
+  ],
+  "detect_table_code_from_merged_header": [
+   "FIN_03_expenditure",
+   0.99
+  ],
+  "title_in_original_text": true,
+  "required_headers": [
+   "合计",
+   "基本支出",
+   "项目支出"
+  ],
+  "required_headers_in_original_text": {
+   "合计": true,
+   "基本支出": true,
+   "项目支出": true
+  },
+  "actual_verdict": {
+   "pass": 0,
+   "gap": 1,
+   "missing_numbers": {
+    "1E+2": 1,
+    "2E+2": 1,
+    "3E+2": 1
+   },
+   "row_mismatches": [
+    {
+     "identity": "100",
+     "page": 1,
+     "kind": "row_missing_on_page",
+     "merged": [
+      "20.5",
+      "79.5"
+     ]
+    },
+    {
+     "identity": "200",
+     "page": 1,
+     "kind": "row_missing_on_page",
+     "merged": [
+      "80.5",
+      "119.5"
+     ]
+    },
+    {
+     "identity": "300",
+     "page": 1,
+     "kind": "row_missing_on_page",
+     "merged": [
+      "101",
+      "199"
+     ]
+    },
+    {
+     "identity": "一般公共服务支出",
+     "page": 1,
+     "kind": "row_missing_in_merged",
+     "original": [
+      "1E+2",
+      "20.5",
+      "79.5"
+     ]
+    },
+    {
+     "identity": "教育支出",
+     "page": 1,
+     "kind": "row_missing_in_merged",
+     "original": [
+      "2E+2",
+      "80.5",
+      "119.5"
+     ]
+    },
+    {
+     "identity": "合计",
+     "page": 1,
+     "kind": "row_missing_in_merged",
+     "original": [
+      "3E+2",
+      "101",
+      "199"
+     ]
+    }
+   ]
+  },
+  "explicit_amount_control": {
+   "pass": 1,
+   "gap": 0
+  }
+ },
+ "reuse_path": [
+  "src/engine/fact_context.py:_column_mappings_for_instance / _canonical_mappings_for_fragment",
+  "src/services/fiscal_column_identity.py:canonical_column_mappings / header_paths",
+  "src/services/fiscal_table_rules.py:NINE_TABLE_RULES[FIN_03_expenditure].measure_aliases"
+ ],
+ "note": "只读诊断：运行核验包冻结断言与现有映射；未改业务源码、未改金标/容差、未重跑历史任务。",
+ "known_table_reuse_spot_check": {
+  "宜川": {
+   "table_code": "FIN_03_expenditure",
+   "title": "支出决算表",
+   "header_rows": [
+    [
+     "项目",
+     null,
+     "本年支出合计",
+     "基本支出",
+     "项目支出",
+     "上缴上级支出",
+     "经营支出",
+     "对附属单位补\n助支出"
+    ],
+    [
+     "功能分类\n科目编码",
+     "科目名称",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ]
+   ],
+   "mappings": [
+    {
+     "source_col_idx": 2,
+     "canonical_measure": "total_actual",
+     "source_col_name": "本年支出合计"
+    },
+    {
+     "source_col_idx": 3,
+     "canonical_measure": "basic_actual",
+     "source_col_name": "基本支出"
+    },
+    {
+     "source_col_idx": 4,
+     "canonical_measure": "project_actual",
+     "source_col_name": "项目支出"
+    },
+    {
+     "source_col_idx": 5,
+     "canonical_measure": "to_superior_actual",
+     "source_col_name": "上缴上级支出"
+    },
+    {
+     "source_col_idx": 6,
+     "canonical_measure": "operational_actual",
+     "source_col_name": "经营支出"
+    },
+    {
+     "source_col_idx": 7,
+     "canonical_measure": "subsidiary_actual",
+     "source_col_name": "对附属单位补助支出"
+    }
+   ],
+   "title_in_original_text": true,
+   "required_headers_in_original_text": {
+    "合计": true,
+    "基本支出": true,
+    "项目支出": true
+   }
+  },
+  "数字城市": {
+   "table_code": "FIN_03_expenditure",
+   "title": "支出决算表",
+   "header_rows": [
+    [
+     "项目",
+     null,
+     "本年支出合计",
+     "基本支出",
+     "项目支出",
+     "上缴上级支出",
+     "经营支出",
+     "对附属单位补\n助支出"
+    ],
+    [
+     "功能分类\n科目编码",
+     "科目名称",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ]
+   ],
+   "mappings": [
+    {
+     "source_col_idx": 2,
+     "canonical_measure": "total_actual",
+     "source_col_name": "本年支出合计"
+    },
+    {
+     "source_col_idx": 3,
+     "canonical_measure": "basic_actual",
+     "source_col_name": "基本支出"
+    },
+    {
+     "source_col_idx": 4,
+     "canonical_measure": "project_actual",
+     "source_col_name": "项目支出"
+    },
+    {
+     "source_col_idx": 5,
+     "canonical_measure": "to_superior_actual",
+     "source_col_name": "上缴上级支出"
+    },
+    {
+     "source_col_idx": 6,
+     "canonical_measure": "operational_actual",
+     "source_col_name": "经营支出"
+    },
+    {
+     "source_col_idx": 7,
+     "canonical_measure": "subsidiary_actual",
+     "source_col_name": "对附属单位补助支出"
+    }
+   ],
+   "title_in_original_text": true,
+   "required_headers_in_original_text": {
+    "合计": true,
+    "基本支出": true,
+    "项目支出": true
+   }
+  }
+ }
+}
