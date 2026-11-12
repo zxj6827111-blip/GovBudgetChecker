@@ -550,6 +550,36 @@ def test_material_title_sentence_does_not_absorb_following_claims():
     assert check_performance_counts(DisclosureRule(), performance(body)) == []
 
 
+# ---------------------------------------------------------------------------
+# R6-01：声明组归属——句号/分号不终止同组数量归属
+# ---------------------------------------------------------------------------
+
+R6_COUNTS = '绩效评级为“优”的项目50个，其余评级均为0个。'
+
+
+@pytest.mark.parametrize('separator', ['：', '。', '；'])
+def test_bare_complete_declaration_binds_group_across_punctuation(separator):
+    body = ('绩效自评的2025年度项目53个，评级结果如下' + separator + R6_COUNTS)
+    issue, = check_performance_counts(DisclosureRule(), performance(body))
+    assert issue.location['comparison_basis'] == 'declared_complete_sum'
+    assert issue.location['declared_count'] == 53
+    assert issue.location['computed_count'] == 50
+
+
+def test_material_title_terminates_group_before_later_counts():
+    """声明组在材料/清单标题处终止：其后的其他材料数量不吸入本组。"""
+    body = ('绩效自评的2025年度项目53个，评级结果如下。'
+            '相关评级材料如下：项目自评表、整改资料。'
+            '绩效评级为“良”的项目3个。')
+    assert check_performance_counts(DisclosureRule(), performance(body)) == []
+
+
+def test_explicit_complete_with_period_still_fails():
+    body = ('绩效自评的2025年度项目53个，全部项目评级结果如下。' + R6_COUNTS)
+    issue, = check_performance_counts(DisclosureRule(), performance(body))
+    assert issue.location['comparison_basis'] in ('complete_sum', 'declared_complete_sum')
+
+
 @pytest.mark.parametrize('conflict', ['duplicate_zero', 'duplicate_positive', 'unknown_rating',
                                      'rating_year', 'rating_previous', 'rating_owner', 'rating_scope'])
 def test_equal_rating_sum_cannot_override_identity_or_scope_conflict(conflict):

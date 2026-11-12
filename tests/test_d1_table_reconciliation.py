@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from d1_table_reconciliation import (  # noqa: E402
     _reconcile_row_alignment,
+    _row_grounding_mismatches,
     _row_identity_and_numbers,
 )
 
@@ -68,8 +69,9 @@ def test_wrong_page_attribution_is_rejected():
 
 def test_right_lane_subject_code_is_not_an_amount():
     cells = ["301", "工资福利支出", "11,860.23", "302", "商品和服务支出", "1,844.57"]
-    known = {"301", "302"}
-    identity, numbers = _row_identity_and_numbers(cells, known)
+    # R6-02：角色按列位传入（col0/col3 为编码列）。
+    roles = {0: "code", 3: "code"}
+    identity, numbers = _row_identity_and_numbers(cells, roles)
     # R3-03：多车道行身份包含两条车道的完整类码，金额逐位保留。
     assert identity == "301|302"
     assert numbers == ["11860.23", "1844.57"]
@@ -142,12 +144,22 @@ def test_wrapped_row_amount_corruption_is_rejected():
 
 
 def test_numeric_only_rows_do_not_swallow_codes():
-    """三公表纯金额行身份为 #numeric；带编码行不得被并入金额行。"""
-    text = "31.47 19.86 30.67 19.56\n301 08 67.84\n"
-    rows = [{"page": 1, "cells": ["31.47", "19.86", "30.67", "19.56"]},
-            {"page": 1, "cells": ["301", "08", "", "67.84"]}]
-    result = _reconcile_row_alignment(rows, [text], [1])
-    assert result["row_mismatches"] == []
+    """三公表纯金额行身份为 #numeric；带编码行身份保持完整科目。
+
+    R6-02 起两种版式分表核验：纯金额表（无编码列）与编码表各自学习
+    列角色；混排合成表不是真实版式。
+    """
+    numeric_text = "31.47 19.86 30.67 19.56\n"
+    numeric_rows = [{"page": 1, "cells": ["31.47", "19.86", "30.67", "19.56"]}]
+    numeric_result = _reconcile_row_alignment(numeric_rows, [numeric_text], [1])
+    assert numeric_result["row_mismatches"] == []
+    assert numeric_result["merged_row_identities"] == ["#numeric"]
+
+    coded_text = "301 08 67.84\n"
+    coded_rows = [{"page": 1, "cells": ["301", "08", "", "67.84"]}]
+    coded_result = _reconcile_row_alignment(coded_rows, [coded_text], [1])
+    assert coded_result["row_mismatches"] == []
+    assert coded_result["merged_row_identities"] == ["301:08"]
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +296,54 @@ def test_midrow_lane_code_followed_by_amount_is_identity():
         [page], [1])
     assert result["row_mismatches"] == []
     assert result["merged_row_identities"] == ["30399|30240"]
+
+
+# ---------------------------------------------------------------------------
+# R6-02：年份形态金额按列角色保留；行级 grounding 对回原件
+# ---------------------------------------------------------------------------
+
+YEAR_AMOUNT_TEXT = (
+    "收入支出决算总表（金额角色控制）\n"
+    "金额单位：万元\n"
+    "收入项目 金额 支出项目 金额\n"
+    "本年收入合计 3000 本年支出合计 2800\n"
+    "使用非财政拨款结余 0 结余分配 0\n"
+    "年初结转和结余 2025 年末结转和结余 2225\n"
+    "总计 5025 总计 5025\n"
+)
+
+
+def _year_amount_rows(left_carry: str = "2025"):
+    return [
+        {"page": 1, "cells": ["本年收入合计", "3000", "本年支出合计", "2800"]},
+        {"page": 1, "cells": ["使用非财政拨款结余", "0", "结余分配", "0"]},
+        {"page": 1, "cells": ["年初结转和结余", left_carry,
+                              "年末结转和结余", "2225"]},
+        {"page": 1, "cells": ["总计", "5025", "总计", "5025"]},
+    ]
+
+
+def test_year_shaped_amount_in_amount_column_is_verified():
+    """金额列 2025 与右侧“年末…”科目是两个车道；2025→2026 必须 GAP。"""
+    normal = _reconcile_row_alignment(_year_amount_rows(), [YEAR_AMOUNT_TEXT], [1])
+    assert normal["row_mismatches"] == []
+    corrupted = _reconcile_row_alignment(_year_amount_rows("2026"),
+                                         [YEAR_AMOUNT_TEXT], [1])
+    kinds = {item["kind"] for item in corrupted["row_mismatches"]}
+    assert kinds & {"row_number_sequence_mismatch", "row_grounding_mismatch"}
+
+
+def test_row_grounding_catches_missing_original_value():
+    """行级 grounding：合并行的金额原值必须能在原件页按序找到。"""
+    rows = [{"page": 1, "cells": ["合计", "3000", "合计", "2800"]}]
+    grounding = _row_grounding_mismatches(rows, [YEAR_AMOUNT_TEXT],
+                                          {1: "amount", 3: "amount"}, [1])
+    assert grounding == []
+    phantom = _row_grounding_mismatches(
+        [{"page": 1, "cells": ["合计", "9999", "合计", "2800"]}],
+        [YEAR_AMOUNT_TEXT], {1: "amount", 3: "amount"}, [1])
+    assert any(item["kind"] == "row_grounding_mismatch"
+               and item["missing_value"] == "9999" for item in phantom)
 
 
 # ---------------------------------------------------------------------------

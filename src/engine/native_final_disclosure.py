@@ -1567,22 +1567,21 @@ def check_performance_counts(rule, doc):
                 _qualifier_governs_ratings(match) for match in re.finditer(
                     r'(?:全部|所有|整体|全量)(?:项目|自评项目|单位)?'
                     r'[^。；;，,（）()]{0,12}(?:评级|评价)', scope_compact))
-            # R5-01：无条件披露与限定词走同一声明依据——披露对象必须是
-            # 评级数量本身。“评级（结果/情况/等级）如下”只在其实际引出
-            # 内容（同一句内）出现评级数量（“评级为…项目N个”）时才算
-            # 数量披露；“评级资料/材料如下：项目自评表、评审意见”引出的
-            # 是材料清单，不新增任何评级数量关系，不得触发完整构成。
-            def _introduces_rating_counts(match: 're.Match[str]') -> bool:
-                introduced = scope_compact[match.end():]
-                sentence_end = len(introduced)
-                for boundary in '。；;':
-                    found = introduced.find(boundary)
-                    if found >= 0:
-                        sentence_end = min(sentence_end, found)
-                return bool(_RATING.search(introduced[:sentence_end]))
+            # R5-01/R6-01：无条件披露与限定词走同一声明依据，且必须绑定
+            # **同组实际数量**——声明打开一个组，组内向后扫描实际评级
+            # 数量；组终止符只有不同披露对象标题（资料/材料/清单）与本组
+            # 末尾（下一自评总数/任务切换，由 stop 界定）。句号、分号、
+            # 括号、断行不终止组：主体/年度/任务未变时标点不改变业务
+            # 关系。其后的其他材料评级数字不吸入本组。
+            def _declaration_attracts_group_counts(match: 're.Match[str]') -> bool:
+                window = scope_compact[match.end():]
+                material = re.search(
+                    r'(?:资料|材料|清单)[^。；]{0,10}如下', window)
+                scan = window[:material.start()] if material else window
+                return bool(_RATING.search(scan))
 
             declares_ratings = any(
-                _introduces_rating_counts(match) for match in re.finditer(
+                _declaration_attracts_group_counts(match) for match in re.finditer(
                     r'(?:评级|评价)(?:结果|情况|等级)?(?:如下|见下)',
                     scope_compact))
             if partial_declared and complete_declared:

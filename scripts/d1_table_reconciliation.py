@@ -234,63 +234,93 @@ def _is_table_header_text(text: str) -> bool:
     ))
 
 
-def _codes_from_rows(merged_rows: List[Dict[str, Any]]) -> set:
-    """列角色学习（R5-02）：编码只能来自**编码列**，不做全表数值词表。
+def _learn_column_roles(
+    merged_rows: List[Dict[str, Any]],
+) -> Tuple[Dict[int, str], set, bool]:
+    """列角色学习（R6-02）：角色跟**列**走，并贯穿两侧全部归一分支。
 
-    先按列统计 3~7 位整数占比得到候选编码列；若把候选列全部当成编码
-    会让表内不再剩下任何金额列（数字列整体消失、验收对象为空），则判
-    定学习失败并整表退回"全部数值都是金额"的角色——身份由标签/合计行
-    承担，金额逐位核对照常进行，不会出现零比较 PASS。同一个数值在编
-    码列是编码、在金额列是金额，角色跟列走，不跟数值走。
+    返回 ``(roles, codes, year_shape_amounts)``：
+    - ``roles``：``{列位: 'code'|'subcode'|'amount'|'label'}``；
+    - ``codes``：编码列中的编码值集合（原件侧身份依据之一）；
+    - ``year_shape_amounts``：金额列是否含年份形态值——该表级角色事实
+      决定原件侧"2025"是金额还是日期短语，替代按邻词猜角色的旧规则。
+    金额守卫（R5）保留：候选编码列会把全表数字列吃光时判学习失败、
+    全部数值退回金额。同一个数值在编码列是编码、在金额列是金额。
     """
-    stats: Dict[int, List[int]] = {}
+    stats: Dict[int, Dict[str, int]] = {}
     for row in merged_rows:
         for index, cell in enumerate(row["cells"]):
             token = _norm(cell)
             if not token:
                 continue
-            hits, total = stats.setdefault(index, [0, 0])
-            stats[index] = [hits + (1 if _is_code_token(token) else 0), total + 1]
-    candidates = {
-        index for index, (hits, total) in stats.items()
-        if total and hits * 2 >= total
-    }
-    if not candidates:
-        return set()
-    numeric_elsewhere = False
-    for row in merged_rows:
-        for index, cell in enumerate(row["cells"]):
-            if index in candidates:
-                continue
-            token = _norm(cell)
-            if token and _is_number_token(token):
-                numeric_elsewhere = True
-                break
-        if numeric_elsewhere:
-            break
-    if not numeric_elsewhere:
-        # 金额守卫：所有数字列都会被当成编码 → 角色学习不可信。
-        return set()
-    codes: set = set()
-    for row in merged_rows:
-        for index, cell in enumerate(row["cells"]):
-            if index not in candidates:
-                continue
-            token = _norm(cell)
+            stat = stats.setdefault(index, {"code": 0, "sub": 0, "num": 0,
+                                            "total": 0})
+            stat["total"] += 1
             if _is_code_token(token):
+                stat["code"] += 1
+            if re.fullmatch(r"\d{1,2}", token):
+                stat["sub"] += 1
+            if _is_number_token(token):
+                stat["num"] += 1
+    candidates = {
+        index for index, stat in stats.items()
+        if stat["total"] and stat["code"] * 2 >= stat["total"]
+    }
+    year_shape_amounts = any(
+        _is_year_token(_norm(cell)) and _is_number_token(_norm(cell))
+        for row in merged_rows for cell in row["cells"] if _norm(cell))
+    if candidates and not any(
+            index not in candidates and stat["num"] > 0
+            for index, stat in stats.items()):
+        # 金额守卫：所有数字列都会被当成编码 → 角色学习不可信。此时
+        # 两侧共同退回车道形状规则（同一套解析，保持对称，R5 行为），
+        # 年份形态值按金额保留（可核验优先）。
+        return None, set(), year_shape_amounts
+    roles: Dict[int, str] = {}
+    for index in sorted(stats):
+        if index in candidates:
+            roles[index] = "code"
+        elif (stats[index]["sub"] * 2 >= stats[index]["total"]
+              and roles.get(index - 1) == "code"):
+            roles[index] = "subcode"
+        elif stats[index]["num"] > 0:
+            roles[index] = "amount"
+        else:
+            roles[index] = "label"
+    codes: set = set()
+    year_shape_amounts = False
+    for row in merged_rows:
+        for index, cell in enumerate(row["cells"]):
+            token = _norm(cell)
+            if not token:
+                continue
+            role = roles.get(index)
+            if role == "code" and _is_code_token(token):
                 codes.add(token)
-    return codes
+            if (role == "amount" and _is_year_token(token)
+                    and _is_number_token(token)):
+                year_shape_amounts = True
+    return roles, codes, year_shape_amounts
 
 
-def _parse_lanes(tokens: List[str], known_codes: Optional[set] = None) -> List[Dict[str, Any]]:
+def _parse_lanes(
+    tokens: List[str],
+    known_codes: Optional[set] = None,
+    token_roles: Optional[List[Optional[str]]] = None,
+    year_shape_is_amount: bool = False,
+) -> List[Dict[str, Any]]:
     """一行 → 语义车道序列：每条车道含 (类码, 款/项码, 名称, 金额序列)。
 
     R3-03：完整科目身份必须包含拆开的款/项码（301 01 ≠ 301 02），
-    编码不得进入金额统计；多车道（基本/项目、人员/公用、收入/支出）
-    按出现顺序保留，列位置本身不参与身份。
-    R4-02：3~7 位整数只有位于**车道起点**、且后随名称/两位款/项码或在
-    已学习的编码集合中，才是类码；"合计 100"的 100、"201 教育支出 100"
-    的 100 都是金额，不得凭形态吃成编码。
+    编码不得进入金额统计；多车道按出现顺序保留。
+    R4-02/R5-02：原件侧（无列位）3~7 位整数只有位于**车道起点**且后随
+    名称/两位款/项码、或在已学习的编码集合中并按车道状态确认，才是
+    类码；"合计 100"的 100、"201 教育支出 100" 的 100 都是金额。
+    R6-02：合并侧传入 ``token_roles``（按列位学习到的角色）时，角色
+    跟列走——code/subcode 列按位取身份，amount 列的数值（含年份形态）
+    一律是金额；原件侧的年份形态数值由表级角色事实
+    ``year_shape_is_amount`` 决定，日期短语单元（"2025 年度…"）仍不算
+    金额，"年末结转和结余"不是日期短语。
     """
     known_codes = known_codes or set()
     lanes: List[Dict[str, Any]] = []
@@ -311,77 +341,104 @@ def _parse_lanes(tokens: List[str], known_codes: Optional[set] = None) -> List[D
         if not cleaned:
             index += 1
             continue
-        if _is_code_token(cleaned):
-            at_lane_start = not (current["cls"] or current["label"]
-                                 or current["numbers"])
-            following = ""
-            if index + 1 < len(tokens):
-                following = _clean_number_token(tokens[index + 1])
-            followed_by_label = bool(following) and not _NUM_TOKEN_RE.fullmatch(following)
-            followed_by_subcode = bool(following) and _is_two_digit_token(following)
-            if cleaned in known_codes:
-                # R5-02：已知编码按车道状态定角色，不做全表词表。
-                # 金额只出现在"车道已有身份且尚未记数"的位置：
-                #   合计行 `合计 301`（无编码身份、有标签）→ 金额；
-                #   空名称车道 `301 … 100`（编码后第一个数值）→ 金额；
-                #   同值金额在行尾 `301 工资 301` → 金额；
-                # 其余（车道起点、上一车道已记数、编码身份后还有后续格）
-                # 都是下一车道的编码，如 `30113 … 431.39 30212 13.24`、
-                # `30310 个人农业生产补贴 30231 81.11`。
-                lane_has_cls = current["cls"] is not None
-                lane_has_label = bool(current["label"])
-                lane_has_numbers = bool(current["numbers"])
-                if not lane_has_cls:
-                    is_amount = lane_has_label and not lane_has_numbers
-                elif not lane_has_label and not lane_has_numbers:
-                    # 编码后的第一个数值通常是金额（空名称车道）；但它本身
-                    # 是已知编码且后随名称时，是下一车道的编码
-                    # （`30399 30240 税金及附加费用 20.81`）。
-                    is_amount = not (cleaned in known_codes
-                                     and (followed_by_label or followed_by_subcode))
-                elif lane_has_label and not lane_has_numbers:
-                    is_amount = not (following or followed_by_label
-                                     or followed_by_subcode)
-                else:
-                    is_amount = False
-                if not is_amount:
-                    flush()
-                    current["cls"] = cleaned
-                    index += 1
-                    continue
-            elif at_lane_start and (followed_by_label or followed_by_subcode):
-                # 未学习的 3~7 位整数只有在车道起点且后随名称/两位款/项码
-                # 时才当编码（编码列被守卫拒绝后保留单行表的编码身份）。
+        role = token_roles[index] if token_roles and index < len(token_roles) else None
+        following = ""
+        if index + 1 < len(tokens):
+            following = _clean_number_token(tokens[index + 1])
+        followed_by_label = bool(following) and not _NUM_TOKEN_RE.fullmatch(following)
+        followed_by_subcode = bool(following) and _is_two_digit_token(following)
+        if role == "code":
+            # R6-02：合并侧按列位取角色——编码列的 3~7 位整数是类码；
+            # 编码列里的其他数值仍按金额保留，不丢验收对象。
+            if _is_code_token(cleaned):
                 flush()
                 current["cls"] = cleaned
                 index += 1
                 continue
-        if (_is_two_digit_token(cleaned) and current["cls"]
-                and current["item"] is None and not current["numbers"]
-                and not current["label"]):
-            following = ""
-            if index + 1 < len(tokens):
-                following = _clean_number_token(tokens[index + 1])
-            # 两位款/项码后必须是名称或金额（行尾单独两位数仍按金额处理）。
-            if following:
+            if _NUM_TOKEN_RE.fullmatch(cleaned):
+                canonical = _canonical_number(cleaned)
+                if canonical is not None:
+                    current["numbers"].append(canonical)
+                    seen_number = True
+                index += 1
+                continue
+        elif role == "subcode":
+            if (re.fullmatch(r"\d{1,2}", cleaned) and current["cls"]
+                    and current["item"] is None and not current["numbers"]
+                    and not current["label"]):
                 current["item"] = cleaned
                 index += 1
                 continue
-        if _NUM_TOKEN_RE.fullmatch(cleaned):
-            following_token = ""
-            if index + 1 < len(tokens):
-                following_token = _clean_number_token(tokens[index + 1])
-            if _is_year_token(cleaned) and following_token.startswith("年"):
-                # “2025 年度…”日期短语不是金额；金额列的 2025（后随其他
-                # 数值或行尾）仍是金额，2025→2026 必须被对账拒绝。
+        elif role == "amount":
+            if _NUM_TOKEN_RE.fullmatch(cleaned):
+                canonical = _canonical_number(cleaned)
+                if canonical is not None:
+                    current["numbers"].append(canonical)
+                    seen_number = True
                 index += 1
                 continue
-            canonical = _canonical_number(cleaned)
-            if canonical is not None:
-                current["numbers"].append(canonical)
-                seen_number = True
-            index += 1
-            continue
+        else:
+            if _is_code_token(cleaned):
+                at_lane_start = not (current["cls"] or current["label"]
+                                     or current["numbers"])
+                if cleaned in known_codes:
+                    # R5-02：已知编码按车道状态定角色，不做全表词表。
+                    # 金额只出现在"车道已有身份且尚未记数"的位置：
+                    #   合计行 `合计 301`（无编码身份、有标签）→ 金额；
+                    #   空名称车道 `301 … 100`（编码后第一个数值）→ 金额；
+                    #   同值金额在行尾 `301 工资 301` → 金额；
+                    # 其余（车道起点、上一车道已记数、编码身份后还有后续格）
+                    # 都是下一车道的编码，如 `30113 … 431.39 30212 13.24`、
+                    # `30310 个人农业生产补贴 30231 81.11`。
+                    lane_has_cls = current["cls"] is not None
+                    lane_has_label = bool(current["label"])
+                    lane_has_numbers = bool(current["numbers"])
+                    if not lane_has_cls:
+                        is_amount = lane_has_label and not lane_has_numbers
+                    elif not lane_has_label and not lane_has_numbers:
+                        # 编码后的第一个数值通常是金额（空名称车道）；但它本身
+                        # 是已知编码且后随名称时，是下一车道的编码
+                        # （`30399 30240 税金及附加费用 20.81`）。
+                        is_amount = not (cleaned in known_codes
+                                         and (followed_by_label or followed_by_subcode))
+                    elif lane_has_label and not lane_has_numbers:
+                        is_amount = not (following or followed_by_label
+                                         or followed_by_subcode)
+                    else:
+                        is_amount = False
+                    if not is_amount:
+                        flush()
+                        current["cls"] = cleaned
+                        index += 1
+                        continue
+                elif at_lane_start and (followed_by_label or followed_by_subcode):
+                    # 未学习的 3~7 位整数只有在车道起点且后随名称/两位款/项码
+                    # 时才当编码（编码列被守卫拒绝后保留单行表的编码身份）。
+                    flush()
+                    current["cls"] = cleaned
+                    index += 1
+                    continue
+            if (_is_two_digit_token(cleaned) and current["cls"]
+                    and current["item"] is None and not current["numbers"]
+                    and not current["label"]):
+                # 两位款/项码后必须是名称或金额（行尾单独两位数仍按金额处理）。
+                if following:
+                    current["item"] = cleaned
+                    index += 1
+                    continue
+            if _NUM_TOKEN_RE.fullmatch(cleaned):
+                if (_is_year_token(cleaned) and not year_shape_is_amount
+                        and following.startswith("年度")):
+                    # "2025 年度…"日期短语不是金额（任务书：真实元信息
+                    # 不算金额）；金额列含年份形态值时本表不适用该规则。
+                    index += 1
+                    continue
+                canonical = _canonical_number(cleaned)
+                if canonical is not None:
+                    current["numbers"].append(canonical)
+                    seen_number = True
+                index += 1
+                continue
         if seen_number:
             flush()
         current["label"].append(cleaned)
@@ -426,18 +483,31 @@ def _codes_in_identity(identity: str) -> List[str]:
 
 
 def _row_identity_and_numbers(cells: List[str],
-                              known_codes: Optional[set] = None) -> Tuple[str, List[str]]:
-    """合并行 → (完整科目身份, 金额序列)；兼容旧调用签名。"""
-    tokens = [_norm(cell) for cell in cells if _norm(cell)]
+                              roles: Optional[Dict[int, str]] = None) -> Tuple[str, List[str]]:
+    """合并行 → (完整科目身份, 金额序列)。
+
+    R6-02：角色按**原列位**附加到 token，角色跟列走——code/subcode 列
+    按位取身份，amount 列的数值（含年份形态）一律是金额；不再按数值
+    形态猜测。去空列只影响 token 顺序，列位角色不丢。
+    """
+    tokens: List[str] = []
+    token_roles: List[Optional[str]] = []
+    for index, cell in enumerate(cells):
+        token = _norm(cell)
+        if not token:
+            continue
+        tokens.append(token)
+        token_roles.append(roles.get(index) if roles else None)
     if not tokens:
         return "", []
-    lanes = _parse_lanes(tokens, known_codes)
+    lanes = _parse_lanes(tokens, None, token_roles, year_shape_is_amount=True)
     identity, numbers, _label = _lanes_identity_and_numbers(lanes)
     return identity, numbers
 
 
 def _parse_original_page(page_text: str, page_number: int,
-                         known_codes: Optional[set] = None) -> List[Dict[str, Any]]:
+                         known_codes: Optional[set] = None,
+                         year_shape_is_amount: bool = False) -> List[Dict[str, Any]]:
     """原件单页文本 → 行记录（身份、金额序列、名称）。
 
     处理真实版式的三类跨行：
@@ -446,6 +516,10 @@ def _parse_original_page(page_text: str, page_number: int,
     2. 名称在金额行之后（`机关事业单位基本养老` / `2080505 518.69 …`），
        前缀只作车道名称，身份仍按编码；
     3. 纯金额行（三公表、总表）没有标签时身份为 ``#numeric``。
+
+    ``year_shape_is_amount`` 来自列角色学习（R6-02）：金额列含年份形态
+    值时，原件侧年份形态数值一律是金额；否则仅"2025 年度…"日期短语
+    单元不算金额。
     """
     known_codes = known_codes or set()
     rows: List[Dict[str, Any]] = []
@@ -475,7 +549,9 @@ def _parse_original_page(page_text: str, page_number: int,
                     continue
             numbers = []
             for token in cleaned:
-                if _is_year_token(token):
+                if _is_year_token(token) and not year_shape_is_amount:
+                    # 孤立年份行（标题/页脚年份）不是金额；金额列含年份
+                    # 形态值时本表不适用该规则（R6-02 角色事实传递）。
                     continue
                 canonical = _canonical_number(token)
                 if canonical is not None:
@@ -500,7 +576,8 @@ def _parse_original_page(page_text: str, page_number: int,
                 rows.append({"identity": "#numeric", "label": "",
                              "numbers": numbers, "basis": "numeric"})
             continue
-        lanes = _parse_lanes(tokens, known_codes)
+        lanes = _parse_lanes(tokens, known_codes,
+                             year_shape_is_amount=year_shape_is_amount)
         numbers = [number for lane in lanes for number in lane.get("numbers") or []]
         if numbers:
             identity, sequence, label = _lanes_identity_and_numbers(lanes)
@@ -541,13 +618,15 @@ def _reconcile_row_alignment(
     R2-02 的严格性保留：错列/错行/合并视图损坏都会改变该身份下的金额
     顺序；R3-03 修正身份归一：拆码（301 01/301 02）是不同身份，编码与
     两位款/项码不再当作金额，换行名称与续页行按原件阅读顺序归并。
-    R4-02：两侧共用同一编码集合（由合并表学习），整数金额不再凭形态
-    被当成编码，"合计 100"→"合计 200" 必须按金额逐位比较。
+    R4-02/R5-02：编码列学习 + 金额守卫，整数金额不凭形态吃成编码。
+    R6-02：列角色学习一次、贯穿三个消费者——合并侧按列位取角色、
+    原件侧年份形态由表级角色事实决定、行级 grounding 把角色指定的
+    验收对象逐行对回原件（候选视图不能反向删减原件对象）。
     """
-    known_codes = _codes_from_rows(merged_rows)
+    roles, known_codes, year_shape_is_amount = _learn_column_roles(merged_rows)
     merged_by_page: Dict[int, Dict[str, List[List[str]]]] = {}
     for row in merged_rows:
-        identity, numbers = _row_identity_and_numbers(row["cells"], known_codes)
+        identity, numbers = _row_identity_and_numbers(row["cells"], roles)
         if not identity or not numbers:
             # 纯表头/空行不参与数值对齐（没有金额可逐格核对）。
             continue
@@ -558,7 +637,8 @@ def _reconcile_row_alignment(
     for page in pages:
         if not (1 <= page <= len(page_texts)):
             continue
-        for record in _parse_original_page(page_texts[page - 1], page, known_codes):
+        for record in _parse_original_page(page_texts[page - 1], page, known_codes,
+                                           year_shape_is_amount):
             original_by_page.setdefault(page, {}).setdefault(
                 record["identity"], []).append(record["numbers"])
 
@@ -605,12 +685,105 @@ def _reconcile_row_alignment(
                     "kind": "row_missing_in_merged",
                     "original": extra[:8],
                 })
+    if roles is not None:
+        row_mismatches.extend(_row_grounding_mismatches(
+            merged_rows, page_texts, roles, pages))
     return {
         "merged_row_identities": sorted({
             identity for identities in merged_by_page.values() for identity in identities
         }),
         "row_mismatches": row_mismatches,
     }
+
+
+def _row_grounding_mismatches(
+    merged_rows: List[Dict[str, Any]],
+    page_texts: List[str],
+    roles: Optional[Dict[int, str]],
+    pages: List[int],
+) -> List[Dict[str, Any]]:
+    """R6-02 行级 grounding：角色指定的验收对象逐行对回原件页。
+
+    每条合并行按列角色取编码/款项目码/金额原值（列序），在原件该页
+    token 流中按顺序查找。验收对象集合由列角色决定，独立于车道解析的
+    形状猜测；原件缺少任一对象或顺序不符 → ``row_grounding_mismatch``。
+    候选（合并）视图损坏无法反向删减原件应有的验收对象。
+    角色学习失败（守卫触发，roles=None）时无对象集合可依据，交由
+    身份+序列层核验（两侧共用同一套形状规则，保持对称）。
+    """
+    if roles is None:
+        return []
+    allowed_pages = set(pages)
+    page_tokens: Dict[int, List[Tuple[str, Optional[str]]]] = {}
+
+    def tokens_of(page: int) -> List[Tuple[str, Optional[str]]]:
+        """原件页 token 流：``(原值, 规范值)``。
+
+        编码/款项目码按原值匹配（``210``、``01`` 不得被科学计数法归一
+        吞掉）；金额按规范值匹配（``2,130.98`` ↔ ``2130.98``）。
+        """
+        if page not in page_tokens:
+            text = page_texts[page - 1] if 1 <= page <= len(page_texts) else ""
+            stream: List[Tuple[str, Optional[str]]] = []
+            for raw in str(text or "").split():
+                token = _norm(raw)
+                if not token:
+                    continue
+                cleaned = _clean_number_token(token)
+                if not cleaned:
+                    continue
+                if _is_number_token(cleaned):
+                    stream.append((cleaned, _canonical_number(cleaned)))
+                else:
+                    stream.append((cleaned, None))
+            page_tokens[page] = stream
+        return page_tokens[page]
+
+    mismatches: List[Dict[str, Any]] = []
+    for row in merged_rows:
+        page = row["page"]
+        if page not in allowed_pages:
+            continue
+        expected: List[Tuple[str, str]] = []  # (匹配值, 匹配方式 raw|canonical)
+        for index, cell in enumerate(row["cells"]):
+            token = _norm(cell)
+            if not token:
+                continue
+            role = roles.get(index)
+            cleaned = _clean_number_token(token)
+            if role == "code" and _is_code_token(cleaned):
+                expected.append((cleaned, "raw"))
+            elif role == "subcode" and re.fullmatch(r"\d{1,2}", cleaned):
+                expected.append((cleaned, "raw"))
+            elif role == "amount" and _is_number_token(cleaned):
+                canonical = _canonical_number(cleaned)
+                if canonical is not None:
+                    expected.append((canonical, "canonical"))
+        if not expected:
+            continue
+        stream = tokens_of(page)
+        position = 0
+        missing = None
+        for value, mode in expected:
+            found = None
+            for offset in range(position, len(stream)):
+                raw, canonical = stream[offset]
+                if (raw == value if mode == "raw" else canonical == value):
+                    found = offset
+                    break
+            if found is None:
+                missing = value
+                break
+            position = found + 1
+        if missing is not None:
+            identity, _numbers = _row_identity_and_numbers(row["cells"], roles)
+            mismatches.append({
+                "identity": identity, "page": page,
+                "kind": "row_grounding_mismatch",
+                "missing_value": missing,
+                "expected": [value for value, _mode in expected][:8],
+            })
+    return mismatches
 
 
 def reconcile(pdf: str, anchor: str, page_spec: str) -> Dict[str, Any]:
@@ -635,11 +808,12 @@ def reconcile(pdf: str, anchor: str, page_spec: str) -> Dict[str, Any]:
     merged_rows = [row for row in merged_rows if row["page"] in set(pages)]
 
     # 原件侧数字清单：只取解析出的表格行（排除表头、页码、年份、编码）
-    known_codes = _codes_from_rows(merged_rows)
+    roles, known_codes, year_shape_is_amount = _learn_column_roles(merged_rows)
     original_numbers: Dict[str, List[int]] = {}
     original_codes: Dict[str, List[int]] = {}
     for page in pages:
-        for record in _parse_original_page(page_texts[page - 1], page, known_codes):
+        for record in _parse_original_page(page_texts[page - 1], page, known_codes,
+                                           year_shape_is_amount):
             for number in record["numbers"]:
                 original_numbers.setdefault(number, []).append(page)
             for code in _codes_in_identity(record["identity"]):
@@ -689,13 +863,17 @@ def doc_for_artifact(artifact: Any, pdf: str, page_texts: List[str]) -> Any:
     return doc
 
 
-def _amount_cell_indices(cells: List[str], known_codes: set) -> List[int]:
+def _amount_cell_indices(cells: List[str], roles: Optional[Dict[int, str]] = None) -> List[int]:
+    """金额格：数值列（含年份形态）中的数值；编码/款项目码列除外。"""
     indices: List[int] = []
     for index, cell in enumerate(cells):
         cleaned = _clean_number_token(cell)
         if not _NUM_TOKEN_RE.fullmatch(cleaned):
             continue
-        if _is_code_token(cleaned) and cleaned.lstrip("0") in known_codes:
+        if roles and roles.get(index) in ("code", "subcode"):
+            continue
+        if not roles and _is_code_token(cleaned):
+            # 无角色信息时按旧形状规则排除 3~7 位整数（兼容入口）。
             continue
         indices.append(index)
     return indices
@@ -730,12 +908,12 @@ def self_test(pdf: str) -> Dict[str, Any]:
     merged_rows = [
         row for row in _merged_cells_text(doc, [instance]) if row["page"] in pages_set
     ]
-    known_codes: set = _codes_from_rows(merged_rows)
+    roles, _codes, _year_flag = _learn_column_roles(merged_rows)
     normal = _reconcile_row_alignment(merged_rows, page_texts, sorted(pages_set))
 
     by_page: Dict[Any, List[Tuple[str, List[str], Dict[str, Any]]]] = {}
     for row in merged_rows:
-        identity, numbers = _row_identity_and_numbers(row["cells"], known_codes)
+        identity, numbers = _row_identity_and_numbers(row["cells"], roles)
         if identity and numbers:
             by_page.setdefault(row["page"], []).append((identity, numbers, row))
     pair = None
@@ -755,11 +933,11 @@ def self_test(pdf: str) -> Dict[str, Any]:
 
     injected = copy.deepcopy(merged_rows)
     row_a = next(row for row in injected if row["page"] == page
-                 and _row_identity_and_numbers(row["cells"], known_codes)[0] == identity_a)
+                 and _row_identity_and_numbers(row["cells"], roles)[0] == identity_a)
     row_b = next(row for row in injected if row["page"] == page
-                 and _row_identity_and_numbers(row["cells"], known_codes)[0] == identity_b)
-    indices_a = _amount_cell_indices(row_a["cells"], known_codes)
-    indices_b = _amount_cell_indices(row_b["cells"], known_codes)
+                 and _row_identity_and_numbers(row["cells"], roles)[0] == identity_b)
+    indices_a = _amount_cell_indices(row_a["cells"], roles)
+    indices_b = _amount_cell_indices(row_b["cells"], roles)
     for left, right in zip(indices_a, indices_b):
         row_a["cells"][left], row_b["cells"][right] = row_b["cells"][right], row_a["cells"][left]
     mutated = _reconcile_row_alignment(injected, page_texts, sorted(pages_set))
@@ -822,21 +1000,21 @@ def reconcile_auto(pdf: str) -> Dict[str, Any]:
             continue
         merged_rows, view_errors = _logical_view_with_provenance(doc, [instance])
         merged_rows = [row for row in merged_rows if row["page"] in pages_set]
-        known_codes = _codes_from_rows(merged_rows)
+        roles, known_codes, year_shape_is_amount = _learn_column_roles(merged_rows)
         original_numbers: Dict[str, int] = {}
         original_codes: set = set()
         for page in sorted(pages_set):
             if not (1 <= page <= len(page_texts)):
                 continue
             for record in _parse_original_page(page_texts[page - 1], page,
-                                               known_codes):
+                                               known_codes, year_shape_is_amount):
                 for number in record["numbers"]:
                     original_numbers[number] = original_numbers.get(number, 0) + 1
                 original_codes.update(_codes_in_identity(record["identity"]))
         merged_numbers: Dict[str, int] = {}
         merged_codes: set = set()
         for row in merged_rows:
-            identity, numbers = _row_identity_and_numbers(row["cells"], known_codes)
+            identity, numbers = _row_identity_and_numbers(row["cells"], roles)
             if not identity or not numbers:
                 continue
             for number in numbers:
