@@ -94,7 +94,7 @@
   "r7": true
  },
  "quantity_receipt": {
-  "git_head": "1fcd7647ef405bb9ff22d7dd6037ac2e9dacfb68",
+  "git_head": "c92566f5af8a1c0d9cf2463c322749a373221029",
   "manifest": "data/quantity_reconciliation_cases.json",
   "cases": [
    {
@@ -106,7 +106,7 @@
      "kind": "final"
     },
     "source_file_hash": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
-    "git_head": "1fcd7647ef405bb9ff22d7dd6037ac2e9dacfb68",
+    "git_head": "c92566f5af8a1c0d9cf2463c322749a373221029",
     "coverage": {
      "applicable_total": 62,
      "completed_total": 60,
@@ -413,7 +413,7 @@
      "kind": "final"
     },
     "source_file_hash": "6a4f88d513dc5f41d1e51fbc6f9dabf4cbd68d16b28b5be0a4abb29597ee29f3",
-    "git_head": "1fcd7647ef405bb9ff22d7dd6037ac2e9dacfb68",
+    "git_head": "c92566f5af8a1c0d9cf2463c322749a373221029",
     "coverage": {
      "applicable_total": 58,
      "completed_total": 55,
@@ -749,7 +749,7 @@
      "kind": "final"
     },
     "source_file_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
-    "git_head": "1fcd7647ef405bb9ff22d7dd6037ac2e9dacfb68",
+    "git_head": "c92566f5af8a1c0d9cf2463c322749a373221029",
     "coverage": {
      "applicable_total": 62,
      "completed_total": 57,
@@ -1021,292 +1021,36 @@
  },
  "d1_four_originals": {
   "6000a11c": {
-   "instances": 9,
    "pass": 9,
+   "instances": 9,
    "gap": 0,
    "self_test_ok": true,
-   "original_unchanged": true,
-   "semantic": [
-    {
-     "table": "FIN_01_income_expenditure_total",
-     "verdict": "PASS",
-     "adopted": true,
-     "verification": "complete",
-     "reason": null
-    },
-    {
-     "table": "FIN_02_income",
-     "verdict": "PASS",
-     "adopted": true,
-     "verification": "complete",
-     "reason": null
-    },
-    {
-     "table": "FIN_03_expenditure",
-     "verdict": "PASS",
-     "adopted": true,
-     "verification": "complete",
-     "reason": null
-    },
-    {
-     "table": "FIN_04_fiscal_grant_total",
-     "verdict": "PASS",
-     "adopted": true,
-     "verification": "complete",
-     "reason": null
-    },
-    {
-     "table": "FIN_05_general_public_expenditure",
-     "verdict": "PASS",
-     "adopted": true,
-     "verification": "complete",
-     "reason": null
-    },
-    {
-     "table": "FIN_06_basic_expenditure",
-     "verdict": "PASS",
-     "adopted": true,
-     "verification": "complete",
-     "reason": null
-    },
-    {
-     "table": "FIN_07_three_public",
-     "verdict": "PASS",
-     "adopted": false,
-     "verification": "incomplete",
-     "reason": "required_headers_missing"
-    },
-    {
-     "table": "FIN_08_gov_fund",
-     "verdict": "PASS",
-     "adopted": false,
-     "verification": "incomplete",
-     "reason": "mapping_col_non_numeric_data"
-    },
-    {
-     "table": "FIN_09_state_capital",
-     "verdict": "PASS",
-     "adopted": false,
-     "verification": "incomplete",
-     "reason": "mapping_col_out_of_width"
-    }
-   ]
+   "unchanged": true,
+   "adopted": 6
   },
   "075e31ba": {
-   "instances": 9,
    "pass": 9,
+   "instances": 9,
    "gap": 0,
    "self_test_ok": true,
-   "original_unchanged": true,
-   "semantic": [
-    {
-     "table": "FIN_01_income_expenditure_total",
-     "verdict": "PASS",
-     "adopted": true,
-     "verification": "complete",
-     "reason": null
-    },
-    {
-     "table": "FIN_02_income",
-     "verdict": "PASS",
-     "adopted": true,
-     "verification": "complete",
-     "reason": null
-    },
-    {
-     "table": "FIN_03_expenditure",
-     "verdict": "PASS",
-     "adopted": true,
-     "verification": "complete",
-     "reason": null
-    },
-    {
-     "table": "FIN_04_fiscal_grant_total",
-     "verdict": "PASS",
-     "adopted": true,
-     "verification": "complete",
-     "reason": null
-    },
-    {
-     "table": "FIN_05_general_public_expenditure",
-     "verdict": "PASS",
-     "adopted": true,
-     "verification": "complete",
-     "reason": null
-    },
-    {
-     "table": "FIN_06_basic_expenditure",
-     "verdict": "PASS",
-     "adopted": true,
-     "verification": "complete",
-     "reason": null
-    },
-    {
-     "table": "FIN_07_three_public",
-     "verdict": "PASS",
-     "adopted": true,
-     "verification": "complete",
-     "reason": null
-    },
-    {
-     "table": "FIN_08_gov_fund",
-     "verdict": "PASS",
-     "adopted": false,
-     "verification": "incomplete",
-     "reason": "mapping_col_out_of_width"
-    },
-    {
-     "table": "FIN_09_state_capital",
-     "verdict": "PASS",
-     "adopted": false,
-     "verification": "incomplete",
-     "reason": "mapping_col_out_of_width"
-    }
-   ]
+   "unchanged": true,
+   "adopted": 7
   },
   "8d2bbe5f": {
-   "instances": 9,
    "pass": 9,
+   "instances": 9,
    "gap": 0,
    "self_test_ok": true,
-   "original_unchanged": true,
-   "semantic": [
-    {
-     "table": "FIN_01_income_expenditure_total",
-     "verdict": "PASS",
-     "adopted": true,
-     "verification": "complete",
-     "reason": null
-    },
-    {
-     "table": "FIN_02_income",
-     "verdict": "PASS",
-     "adopted": true,
-     "verification": "complete",
-     "reason": null
-    },
-    {
-     "table": "FIN_03_expenditure",
-     "verdict": "PASS",
-     "adopted": true,
-     "verification": "complete",
-     "reason": null
-    },
-    {
-     "table": "FIN_04_fiscal_grant_total",
-     "verdict": "PASS",
-     "adopted": true,
-     "verification": "complete",
-     "reason": null
-    },
-    {
-     "table": "FIN_05_general_public_expenditure",
-     "verdict": "PASS",
-     "adopted": true,
-     "verification": "complete",
-     "reason": null
-    },
-    {
-     "table": "FIN_06_basic_expenditure",
-     "verdict": "PASS",
-     "adopted": true,
-     "verification": "complete",
-     "reason": null
-    },
-    {
-     "table": "FIN_07_three_public",
-     "verdict": "PASS",
-     "adopted": true,
-     "verification": "complete",
-     "reason": null
-    },
-    {
-     "table": "FIN_08_gov_fund",
-     "verdict": "PASS",
-     "adopted": false,
-     "verification": "incomplete",
-     "reason": "mapping_col_out_of_width"
-    },
-    {
-     "table": "FIN_09_state_capital",
-     "verdict": "PASS",
-     "adopted": false,
-     "verification": "incomplete",
-     "reason": "mapping_col_out_of_width"
-    }
-   ]
+   "unchanged": true,
+   "adopted": 7
   },
   "89427638": {
-   "instances": 9,
    "pass": 9,
+   "instances": 9,
    "gap": 0,
    "self_test_ok": true,
-   "original_unchanged": true,
-   "semantic": [
-    {
-     "table": "FIN_01_income_expenditure_total",
-     "verdict": "PASS",
-     "adopted": true,
-     "verification": "complete",
-     "reason": null
-    },
-    {
-     "table": "FIN_02_income",
-     "verdict": "PASS",
-     "adopted": true,
-     "verification": "complete",
-     "reason": null
-    },
-    {
-     "table": "FIN_03_expenditure",
-     "verdict": "PASS",
-     "adopted": true,
-     "verification": "complete",
-     "reason": null
-    },
-    {
-     "table": "FIN_04_fiscal_grant_total",
-     "verdict": "PASS",
-     "adopted": true,
-     "verification": "complete",
-     "reason": null
-    },
-    {
-     "table": "FIN_05_general_public_expenditure",
-     "verdict": "PASS",
-     "adopted": true,
-     "verification": "complete",
-     "reason": null
-    },
-    {
-     "table": "FIN_06_basic_expenditure",
-     "verdict": "PASS",
-     "adopted": true,
-     "verification": "complete",
-     "reason": null
-    },
-    {
-     "table": "FIN_07_three_public",
-     "verdict": "PASS",
-     "adopted": false,
-     "verification": "incomplete",
-     "reason": "required_headers_missing"
-    },
-    {
-     "table": "FIN_08_gov_fund",
-     "verdict": "PASS",
-     "adopted": false,
-     "verification": "incomplete",
-     "reason": "mapping_col_out_of_width"
-    },
-    {
-     "table": "FIN_09_state_capital",
-     "verdict": "PASS",
-     "adopted": false,
-     "verification": "incomplete",
-     "reason": "mapping_col_out_of_width"
-    }
-   ]
+   "unchanged": true,
+   "adopted": 6
   }
  },
  "seven_original_replay_comparison": {
@@ -1339,7 +1083,7 @@
    "removed_findings": [],
    "added_unresolved": [],
    "removed_unresolved": [],
-   "seconds": 10.69
+   "seconds": 10.54
   },
   "0b507c": {
    "source_hash": "19d05bf629da9c974c69f99b402e255a2d41aaa6d3219bb1e0805944c606fd72",
@@ -1370,7 +1114,7 @@
    "removed_findings": [],
    "added_unresolved": [],
    "removed_unresolved": [],
-   "seconds": 4.04
+   "seconds": 4.03
   },
   "0a8a27": {
    "source_hash": "6a4f88d513dc5f41d1e51fbc6f9dabf4cbd68d16b28b5be0a4abb29597ee29f3",
@@ -1401,7 +1145,7 @@
    "removed_findings": [],
    "added_unresolved": [],
    "removed_unresolved": [],
-   "seconds": 3.85
+   "seconds": 3.78
   },
   "34bb0eeb": {
    "source_hash": "b24754cb64fba4552906c4477f6fa1319959b090aa561ddc7dae17e9d29100e2",
@@ -1432,7 +1176,7 @@
    "removed_findings": [],
    "added_unresolved": [],
    "removed_unresolved": [],
-   "seconds": 4.75
+   "seconds": 4.68
   },
   "075e31ba": {
    "source_hash": "cc5a5af0a794580fa4d90e1b4027910eb4eb7fb5eb6cbf90a2c8393207e7233f",
@@ -1463,7 +1207,7 @@
    "removed_findings": [],
    "added_unresolved": [],
    "removed_unresolved": [],
-   "seconds": 4.67
+   "seconds": 4.59
   },
   "8d2bbe5f": {
    "source_hash": "c71cfeb1b4d9a0e223b50a980c496ed37d663246b988406d3bd9d5c324b0e1f3",
@@ -1494,7 +1238,7 @@
    "removed_findings": [],
    "added_unresolved": [],
    "removed_unresolved": [],
-   "seconds": 5.04
+   "seconds": 4.95
   },
   "89427638": {
    "source_hash": "ef06d23590249637a54b9cf5ec0fc11df88ee9e8f49923995169e5cc4a71b4f7",
@@ -1525,7 +1269,182 @@
    "removed_findings": [],
    "added_unresolved": [],
    "removed_unresolved": [],
-   "seconds": 4.37
+   "seconds": 4.29
   }
+ },
+ "self_review_broad_scan": {
+  "sample": "uploads 前30份真实决算PDF（按文件名排序，非挑选）",
+  "initial_scan": {
+   "total": 30,
+   "with_gap": 9,
+   "errors": 0
+  },
+  "gap_attribution": [
+   {
+    "pdf": "上海市粮食和物资储备局老干部活动室2025年度决算.pdf",
+    "table": "FIN_01_income_expenditure_total",
+    "with_semantic": "GAP",
+    "without_semantic": "GAP",
+    "introduced_by_semantic": false,
+    "reason": null
+   },
+   {
+    "pdf": "上海市自然资源调查利用研究院2025年度决算.pdf",
+    "table": "FIN_02_income",
+    "with_semantic": "GAP",
+    "without_semantic": "GAP",
+    "introduced_by_semantic": false,
+    "reason": null
+   },
+   {
+    "pdf": "上海市自然资源调查利用研究院2025年度决算.pdf",
+    "table": "FIN_03_expenditure",
+    "with_semantic": "GAP",
+    "without_semantic": "GAP",
+    "introduced_by_semantic": false,
+    "reason": null
+   },
+   {
+    "pdf": "上海市自然资源调查利用研究院2025年度决算.pdf",
+    "table": "FIN_04_fiscal_grant_total",
+    "with_semantic": "GAP",
+    "without_semantic": "GAP",
+    "introduced_by_semantic": false,
+    "reason": null
+   },
+   {
+    "pdf": "上海市普陀区建设和管理委员会2025年度单位决算公开.pdf",
+    "table": "FIN_02_income",
+    "with_semantic": "GAP",
+    "without_semantic": "GAP",
+    "introduced_by_semantic": false,
+    "reason": null
+   },
+   {
+    "pdf": "上海市普陀区建设和管理委员会2025年度单位决算公开.pdf",
+    "table": "FIN_06_basic_expenditure",
+    "with_semantic": "GAP",
+    "without_semantic": "GAP",
+    "introduced_by_semantic": false,
+    "reason": null
+   },
+   {
+    "pdf": "上海市普陀区残疾人综合服务中心2025年度单位决算.pdf",
+    "table": "FIN_06_basic_expenditure",
+    "with_semantic": "GAP",
+    "without_semantic": "GAP",
+    "introduced_by_semantic": false,
+    "reason": null
+   },
+   {
+    "pdf": "上海商业会计学校单位2025年度决算.pdf",
+    "table": "FIN_03_expenditure",
+    "with_semantic": "GAP",
+    "without_semantic": "GAP",
+    "introduced_by_semantic": false,
+    "reason": null
+   },
+   {
+    "pdf": "上海市退役军人事务局（本级）2024年度决算.pdf",
+    "table": "FIN_02_income",
+    "with_semantic": "GAP",
+    "without_semantic": "GAP",
+    "introduced_by_semantic": false,
+    "reason": null
+   },
+   {
+    "pdf": "上海市退役军人事务局（本级）2024年度决算.pdf",
+    "table": "FIN_04_fiscal_grant_total",
+    "with_semantic": "GAP",
+    "without_semantic": "GAP",
+    "introduced_by_semantic": false,
+    "reason": null
+   },
+   {
+    "pdf": "上海市信访办公室2024年决算.pdf",
+    "table": "FIN_03_expenditure",
+    "with_semantic": "GAP",
+    "without_semantic": "GAP",
+    "introduced_by_semantic": false,
+    "reason": null
+   },
+   {
+    "pdf": "上海大学2025年度决算.pdf",
+    "table": "FIN_08_gov_fund",
+    "with_semantic": "GAP",
+    "without_semantic": "PASS",
+    "introduced_by_semantic": true,
+    "reason": "header_semantic_identity_mismatch"
+   },
+   {
+    "pdf": "上海市普陀区市政水务管理中心2025年度单位决算公开.pdf",
+    "table": "FIN_08_gov_fund",
+    "with_semantic": "GAP",
+    "without_semantic": "PASS",
+    "introduced_by_semantic": true,
+    "reason": "header_semantic_identity_mismatch"
+   }
+  ],
+  "introduced_by_semantic_before_hardening": [
+   {
+    "pdf": "上海大学2025年度决算.pdf",
+    "table": "FIN_08_gov_fund",
+    "with_semantic": "GAP",
+    "without_semantic": "PASS",
+    "introduced_by_semantic": true,
+    "reason": "header_semantic_identity_mismatch"
+   },
+   {
+    "pdf": "上海市普陀区市政水务管理中心2025年度单位决算公开.pdf",
+    "table": "FIN_08_gov_fund",
+    "with_semantic": "GAP",
+    "without_semantic": "PASS",
+    "introduced_by_semantic": true,
+    "reason": "header_semantic_identity_mismatch"
+   }
+  ],
+  "hardening": [
+   "V4 列序不变量改为叶格原列位（修复 FIN_08 混合多行表头行序误杀：上海大学/市政水务）",
+   "同名叶格按原列位排序配对",
+   "候选叶名空命中且原件该列有不同表头格 → 确定性改名 GAP（超串改名不再依赖整数形态巧合）"
+  ],
+  "after_hardening": {
+   "four": {
+    "6000a11c": {
+     "pass": 9,
+     "instances": 9,
+     "gap": 0,
+     "self_test_ok": true,
+     "unchanged": true,
+     "adopted": 6
+    },
+    "075e31ba": {
+     "pass": 9,
+     "instances": 9,
+     "gap": 0,
+     "self_test_ok": true,
+     "unchanged": true,
+     "adopted": 7
+    },
+    "8d2bbe5f": {
+     "pass": 9,
+     "instances": 9,
+     "gap": 0,
+     "self_test_ok": true,
+     "unchanged": true,
+     "adopted": 7
+    },
+    "89427638": {
+     "pass": 9,
+     "instances": 9,
+     "gap": 0,
+     "self_test_ok": true,
+     "unchanged": true,
+     "adopted": 6
+    }
+   },
+   "semantic_failed_gaps": []
+  },
+  "pre_existing_gaps_note": "其余11处数值/行级GAP在禁用语义采纳后仍GAP，属D1既有严格性（真实解析差异），非本轮机制引入；四原件冻结集9/9保持。"
  }
 }

@@ -1,5 +1,5 @@
 {
- "run_id": "d4link-9a266fd3d6b2",
+ "run_id": "d4link-e5c1897f4d9c",
  "pdf": "/Volumes/workSSD/software development/GovBudgetChecker/uploads/6000a11c0737d5149975516b44fd8682/上海市普陀区人民政府宜川路街道办事处2025年度部门决算.pdf",
  "steps": [
   {
@@ -14,8 +14,8 @@
    "ok": true,
    "evidence": {
     "status": "done",
-    "job_id": "3c69829e4f3d50319e6c7a2013584d3c",
-    "revision": "rev-20261112T125144-0a1c5a23",
+    "job_id": "6e694aaabb8ab782769499f8673e5cd7",
+    "revision": "rev-20261112T132950-f90e94cf",
     "findings": 28,
     "result_keys": [
      "delivery_suppressions",
@@ -30,7 +30,7 @@
    "step": "S2_persist_readback",
    "ok": true,
    "evidence": {
-    "snapshot_hash": "769f9797bb86022a79edf7b01307833be700768b96b904afc570ea4d3ef8a12a",
+    "snapshot_hash": "ed702b63da20201548fc9a6da59e720c51a846249e6a57cb8a6db534498ef4c6",
     "raw": 622,
     "effective": 622,
     "versions_http": 200
@@ -96,8 +96,8 @@
     "rematch_http": 200,
     "dims_get": 200,
     "dims_post": 202,
-    "revision_r1": "rev-20261112T125144-0a1c5a23",
-    "revision_r2": "rev-20261112T125729-0647250e",
+    "revision_r1": "rev-20261112T132950-f90e94cf",
+    "revision_r2": "rev-20261112T133540-80861ea2",
     "dims_detail": null
    }
   },
@@ -180,7 +180,7 @@
      200,
      200
     ],
-    "record_revision": "rev-20261112T125729-0647250e",
+    "record_revision": "rev-20261112T133540-80861ea2",
     "confirmed_count": 28,
     "expected_confirmed_count": 28,
     "records_for_key": 1,
@@ -216,13 +216,13 @@
    "step": "S4d_stale_revision_rejected",
    "ok": true,
    "evidence": {
-    "revision_old": "rev-20261112T125144-0a1c5a23",
-    "revision_current": "rev-20261112T125729-0647250e",
+    "revision_old": "rev-20261112T132950-f90e94cf",
+    "revision_current": "rev-20261112T133540-80861ea2",
     "stale_http": 409,
     "stale_detail": {
      "error": "REVISION_CHANGED",
-     "expected": "rev-20261112T125144-0a1c5a23",
-     "current": "rev-20261112T125729-0647250e"
+     "expected": "rev-20261112T132950-f90e94cf",
+     "current": "rev-20261112T133540-80861ea2"
     },
     "records_on_old_revision": 0
    }
@@ -290,8 +290,8 @@
     "sizes": {
      "json": 8796884,
      "csv": 1657584,
-     "docx": 59876,
-     "pdf": 3184062
+     "docx": 59883,
+     "pdf": 3184049
     },
     "repeat_identical": true,
     "exported_issues": 14,
@@ -340,8 +340,8 @@
    "step": "S7_required_ai_not_run_blocks_confirm",
    "ok": true,
    "evidence": {
-    "job_id": "713a07b1b9b06010756eec4908799e2e",
-    "revision": "rev-20261112T130423-dd5216ef",
+    "job_id": "f3a2c52de5532d13948975a86f4555e7",
+    "revision": "rev-20261112T134233-8cc438d9",
     "control_input": "same-content byte copy (PDF comment appended)",
     "gate": {
      "can_confirm_whole_report": false,
@@ -368,7 +368,7 @@
   }
  ],
  "frozen": {
-  "git_head": "72b1611f163a78464fc1c53761f72d750e8429ac",
+  "git_head": "7060872fb035340b7a87aee7283dd628dc63920a",
   "key_source_sha256": {
    "src/services/report_confirmation_gate.py": "034f96871606cd7af2a045aaf95dcf46bac8aaab5f3f108752397799355aeb90",
    "src/services/evidence_guard.py": "4e6ff64ab85339d0cffab2dc8afd3d672fb7c30b77a22f2ccaf30f4bc3e6edb2",
@@ -380,8 +380,8 @@
   "original_sha256": "f809eef2afa91d258d5fbe4b0d1553dbe3a8ef9c4688d07e3a73aeaecd02ec03",
   "page_count": 41
  },
- "job_id": "3c69829e4f3d50319e6c7a2013584d3c",
- "elapsed_seconds": 792.8,
+ "job_id": "6e694aaabb8ab782769499f8673e5cd7",
+ "elapsed_seconds": 797.0,
  "conclusion": {
   "steps_passed": 16,
   "confirmed_issue_ids": [
@@ -436,7 +436,7 @@
   "note": "本回执验证链路机制：证据逐条回原件核对、门禁如实阻塞/放行、确认写侧版本绑定/幂等/事务失败、刷新读回、复核完成/重开、导出成员与版本一致。复核决定由脚本以复核人身份按原件核对后作出（逐条依据见 S3b 覆盖与 decisions），不计为程序自动完成，也不构成人工工作量下降的证据。"
  },
  "cleanup": {
-  "container": "govbudget-d4link-9a266fd3d6b2",
+  "container": "govbudget-d4link-e5c1897f4d9c",
   "attempted": true,
   "removed": true,
   "rm_ok": true,
