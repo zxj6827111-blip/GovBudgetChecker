@@ -872,7 +872,7 @@ def self_test(pdf: str) -> Dict[str, Any]:
     merged_rows = [
         row for row in _merged_cells_text(doc, [instance]) if row["page"] in pages_set
     ]
-    roles, _codes, _year_flag = _learn_column_roles(merged_rows)
+    roles, _codes = _learn_column_roles(merged_rows)
     normal = _reconcile_row_alignment(merged_rows, page_texts, sorted(pages_set))
 
     by_page: Dict[Any, List[Tuple[str, List[str], Dict[str, Any]]]] = {}
