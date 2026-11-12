@@ -22,6 +22,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button, SectionTitle } from "@/components/ui";
 import type { JobSummaryRecord } from "@/lib/uiAdapters";
+import { normalizeUiTaskStatus } from "@/lib/uiAdapters";
+import { ReanalyzeMethodDialog, type ReanalyzeMethodValue } from "@/components/ReanalyzeMethodPicker";
 import { publishJobCounts } from "@/lib/jobListEvents";
 import { fetchJobPage, type JobPageView } from "@/lib/jobListViews";
 
@@ -43,6 +45,7 @@ import {
   type QueueStageFilter,
 } from "./queuePageAdapters";
 import { resolvePollingDecisionFromActivity } from "@/lib/jobPolling";
+import { formatInheritanceWarnings } from "../reanalyzeOptions";
 import {
   canRunQueueJob,
   requestQueueRun,
@@ -91,6 +94,8 @@ export function QueuePage() {
   const [batchProgress, setBatchProgress] = useState<QueueBatchProgress | null>(null);
   const [batchResult, setBatchResult] = useState<QueueBatchResult | null>(null);
   const [runNotice, setRunNotice] = useState<string | null>(null);
+  const [runDialogJob, setRunDialogJob] = useState<JobSummaryRecord | null>(null);
+  const [isBatchDialogOpen, setIsBatchDialogOpen] = useState(false);
   const [busyJobIds, setBusyJobIds] = useState<Set<string>>(() => new Set());
   const batchRunningRef = useRef(false);
   const busyJobIdsRef = useRef<Set<string>>(new Set());
@@ -186,29 +191,46 @@ export function QueuePage() {
     setSelectedIds(new Set());
   }, []);
 
-  const handleRunJob = useCallback(
-    async (jobId: string) => {
-      if (batchRunningRef.current || busyJobIdsRef.current.has(jobId)) return;
-      const job = viewRef.current?.items.find((item) => String(item.job_id) === jobId);
-      if (!job || !canRunQueueJob(job)) return;
+  const submitRunJob = useCallback(
+    async (job: JobSummaryRecord, method?: ReanalyzeMethodValue) => {
+      const jobId = String(job.job_id);
       busyJobIdsRef.current.add(jobId);
       setBusyJobIds(new Set(busyJobIdsRef.current));
       setRunNotice(null);
       try {
-        await requestQueueRun(job);
-        setRunNotice(`${job.filename ?? jobId} 已提交分析，请在队列中查看进度。`);
+        const outcome = await requestQueueRun(job, fetch, method);
+        const warnings = formatInheritanceWarnings(outcome.warnings);
+        setRunNotice(
+          `${job.filename ?? jobId} 已提交分析，请在队列中查看进度。${warnings ? ` 注意：${warnings}` : ""}`,
+        );
       } catch (error) {
         setRunNotice(`${job.filename ?? jobId}：${error instanceof Error ? error.message : "提交未成功。"}`);
       } finally {
         busyJobIdsRef.current.delete(jobId);
         setBusyJobIds(new Set(busyJobIdsRef.current));
+        setRunDialogJob(null);
         reloadNow();
       }
     },
     [reloadNow],
   );
 
-  const handleBatchRun = useCallback(async () => {
+  const handleRunJob = useCallback(
+    async (jobId: string) => {
+      if (batchRunningRef.current || busyJobIdsRef.current.has(jobId)) return;
+      const job = viewRef.current?.items.find((item) => String(item.job_id) === jobId);
+      if (!job || !canRunQueueJob(job)) return;
+      // 首次分析没有上轮可继承，直接启动；重分析先经统一检查方式对话框。
+      if (normalizeUiTaskStatus(job.status) === "pending_analysis") {
+        await submitRunJob(job);
+        return;
+      }
+      setRunDialogJob(job);
+    },
+    [submitRunJob],
+  );
+
+  const handleBatchRun = useCallback(async (method: ReanalyzeMethodValue) => {
     if (batchRunningRef.current || busyJobIdsRef.current.size > 0) return;
     const targets = selectedJobs;
     if (targets.length === 0) return;
@@ -217,13 +239,14 @@ export function QueuePage() {
     setBatchResult(null);
     setRunNotice(null);
     try {
-      const result = await runQueueBatch(targets, requestQueueRun, setBatchProgress);
+      const result = await runQueueBatch(targets, (job) => requestQueueRun(job, fetch, method), setBatchProgress);
       setBatchResult(result);
       const submitted = new Set(result.submittedIds);
       setSelectedIds((previous) => new Set(Array.from(previous).filter((id) => !submitted.has(id))));
     } finally {
       batchRunningRef.current = false;
       setIsBatchRunning(false);
+      setIsBatchDialogOpen(false);
       // 使用轮询控制器的刷新入口，全部终态时已经停止的轮询也会重新启动。
       reloadNow();
     }
@@ -338,7 +361,7 @@ export function QueuePage() {
         <Button variant="ghost" size="sm" disabled={isBatchRunning || selectedJobs.length === 0} onClick={() => setSelectedIds(new Set())} data-testid="gbc-queue-clear-selection">清空选择</Button>
         <Button
           size="sm"
-          onClick={() => void handleBatchRun()}
+          onClick={() => setIsBatchDialogOpen(true)}
           disabled={isBatchRunning || busyJobIds.size > 0 || selectedJobs.length === 0}
           data-testid="gbc-queue-batch-run"
         >{isBatchRunning ? `提交中 ${batchProgress?.completed ?? 0}/${batchProgress?.total ?? selectedJobs.length}` : `批量重新运行（${selectedJobs.length}）`}</Button>
@@ -353,6 +376,13 @@ export function QueuePage() {
           {batchResult.failures.length > 0 ? (
             <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto text-xs text-danger-700" aria-label="未提交任务及原因">
               {batchResult.failures.map((failure) => <li key={failure.jobId}>{failure.filename}：{failure.message}</li>)}
+            </ul>
+          ) : null}
+          {batchResult.warnings.length > 0 ? (
+            <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto text-xs text-warning-700" aria-label="模型配置变化提示" data-testid="gbc-queue-batch-warnings">
+              {batchResult.warnings.map((warning) => (
+                <li key={warning.jobId}>{warning.filename}：{formatInheritanceWarnings(warning.messages)}</li>
+              ))}
             </ul>
           ) : null}
         </div>
@@ -435,6 +465,27 @@ export function QueuePage() {
             下一页
           </Button>
         </div>
+      ) : null}
+      {runDialogJob ? (
+        <ReanalyzeMethodDialog
+          jobId={String(runDialogJob.job_id)}
+          title={`重新分析：${runDialogJob.filename ?? runDialogJob.job_id}`}
+          submitting={busyJobIds.has(String(runDialogJob.job_id))}
+          onConfirm={(value) => void submitRunJob(runDialogJob, value)}
+          onCancel={() => setRunDialogJob(null)}
+        />
+      ) : null}
+      {isBatchDialogOpen ? (
+        <ReanalyzeMethodDialog
+          batch
+          title={`批量重新运行 ${selectedJobs.length} 个任务`}
+          confirmLabel="开始批量提交"
+          submitting={isBatchRunning}
+          onConfirm={(value) => void handleBatchRun(value)}
+          onCancel={() => {
+            if (!isBatchRunning) setIsBatchDialogOpen(false);
+          }}
+        />
       ) : null}
     </div>
   );

@@ -54,6 +54,8 @@ FROZEN_ROUTES = frozenset(
         ("DELETE", "/api/jobs/{job_id}"),
         ("POST", "/api/jobs/{job_id}/associate"),
         ("POST", "/api/jobs/{job_id}/reanalyze"),
+        # 2026-11-08 检查方式继承：重分析选项预览（上轮配置/执行状态/模型可用性），只读。
+        ("GET", "/api/jobs/{job_id}/reanalyze-options"),
         # 批次 2：版本化材料口径证据与完整重分析入口，继续精确冻结其余接口。
         ("GET", "/api/jobs/{job_id}/document-scope"),
         ("POST", "/api/jobs/{job_id}/document-scope"),

@@ -452,6 +452,9 @@ async def test_reanalyze_job_clears_ephemeral_outputs_before_refresh(tmp_path, m
             "status": "done",
             "progress": 100,
             "filename": "source.pdf",
+            "mode": "legacy",
+            "use_local_rules": True,
+            "use_ai_assist": False,
         },
     )
     for filename in (
@@ -870,6 +873,9 @@ async def test_reanalyze_job_preserves_source_version_timestamp(tmp_path, monkey
             "status": "done",
             "filename": "report.pdf",
             "checksum": "abc123",
+            "mode": "legacy",
+            "use_local_rules": True,
+            "use_ai_assist": False,
             "version_created_at": 1234.5,
             "job_created_at": 1234.5,
             "organization_id": "org-1",

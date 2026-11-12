@@ -251,6 +251,21 @@ test.describe("Report actions", () => {
         return;
       }
 
+      if (path === "/api/jobs/job-001/reanalyze-options" && method === "GET") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            job_id: "job-001",
+            inherit: { available: true, unknown_fields: [], message: null, mode: "dual", use_local_rules: true, use_ai_assist: false, ai_profile_id: null, ai_configuration: null },
+            last_execution: { status: "done", analysis_conclusion: null, ai_requested: false, local_state: "completed", ai_state: "skipped" },
+            model: { state: "not_applicable", message: null, profile: null },
+            capabilities: { enabled: true, active_profile_id: "m1", profiles: [{ id: "m1", name: "模型1", model: "m1" }] },
+          }),
+        });
+        return;
+      }
+
       if (path === "/api/jobs/job-001/reanalyze" && method === "POST") {
         reanalyzeCalls += 1;
         reanalyzeBody = req.postDataJSON() as Record<string, unknown>;
@@ -285,16 +300,17 @@ test.describe("Report actions", () => {
     await expect(reanalyzeButton).toBeVisible({ timeout: 20_000 });
     await expect(reanalyzeButton).toBeEnabled();
 
-    await page.getByTestId("task-reanalyze-ai-toggle").uncheck();
+    // 检查方式继承：默认"按上次检查方式"，对话框即确认，不再有点头 confirm。
     await reanalyzeButton.click();
+    await expect(page.getByTestId("reanalyze-method-dialog")).toBeVisible();
+    await expect(page.getByTestId("reanalyze-method-picker-inherit")).toBeChecked();
+    await page.getByTestId("reanalyze-method-confirm").click();
 
     await expect.poll(() => reanalyzeCalls).toBe(1);
-    // 页面现在用 ai_profile_id 表达"这次重析用哪个模型"，未启用即为 null；
-    // use_ai_assist 已不再是这个入口的字段。
-    await expect.poll(() => reanalyzeBody).toEqual({ use_local_rules: true, ai_profile_id: null });
+    // 默认继承：只发 check_method，由后端按上轮记录解析本地规则/AI/原模型。
+    await expect.poll(() => reanalyzeBody).toEqual({ check_method: "inherit" });
     await expect.poll(() => detailFetches).toBeGreaterThan(1);
     await expect(reanalyzeButton).toBeDisabled();
-    expect(dialogMessages.some((message) => message.includes("confirm:"))).toBe(true);
     expect(dialogMessages.some((message) => message.includes("alert:"))).toBe(true);
   });
 
@@ -707,10 +723,8 @@ test.describe("Report actions", () => {
 
       if ((path === "/api/jobs/job-row-1/reanalyze" || path === "/api/jobs/job-row-2/reanalyze") && method === "POST") {
         reanalyzeCalls += 1;
-        // 部门页在"未配置大模型档位"时只发 {}；配置后才会带 use_local_rules/use_ai_assist。
-        // 这里只守住"没有悄悄打开 AI"：要么不发字段，要么显式 false。
-        const body = req.postDataJSON();
-        expect(body.use_ai_assist === undefined || body.use_ai_assist === false).toBe(true);
+        // 检查方式继承契约：批量默认逐条继承，只发 check_method，不悄悄打开 AI。
+        expect(req.postDataJSON()).toEqual({ check_method: "inherit" });
         const jobId = path.includes("job-row-1") ? "job-row-1" : "job-row-2";
         jobs = jobs.map((job) => job.job_id === jobId ? { ...job, status: "started" } : job);
         await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ success: true }) });
@@ -774,7 +788,6 @@ test.describe("Report actions", () => {
     await page.goto("/department/dept-001");
 
     await expect(page.getByTestId("job-menu-job-row-1")).toBeVisible({ timeout: 20_000 });
-    await page.getByTestId("department-reanalyze-ai-toggle").uncheck();
     await page.getByTestId("toggle-include-sub-control").click();
     await expect(page.getByTestId("toggle-include-sub")).not.toBeChecked();
 
@@ -783,10 +796,17 @@ test.describe("Report actions", () => {
     await expect(page.getByTestId("selected-actions-bar")).toBeVisible();
 
     await page.getByTestId("batch-reanalyze-button").click();
+    await expect(page.getByTestId("reanalyze-method-dialog")).toBeVisible();
+    await expect(page.getByTestId("reanalyze-method-picker-inherit")).toBeChecked();
+    await page.getByTestId("reanalyze-method-confirm").click();
     await expect.poll(() => reanalyzeCalls).toBe(2);
+    // 等待对话框关闭与成功条目取消选择落定，避免与延迟提交的选择清空竞态。
+    await expect(page.getByTestId("reanalyze-method-dialog")).toHaveCount(0);
+    await expect(page.getByTestId("selected-actions-bar")).toHaveCount(0);
 
     await page.getByTestId("job-select-job-row-1").check();
     await page.getByTestId("job-select-job-row-2").check();
+    await expect(page.getByTestId("selected-actions-bar")).toContainText("已选择 2");
     const csvDownload = page.waitForEvent("download");
     await page.getByTestId("batch-export-button").click();
     await csvDownload;

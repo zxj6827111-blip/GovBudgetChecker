@@ -92,6 +92,13 @@ async function installMocks(
     }
     if (path === `/api/jobs/${JOB_ID}`) return json(buildJobDetail(meta, reviewReport, aiFindings));
     if (path === `/api/jobs/${JOB_ID}/structured-ingest`) return json({ status: "done", review_item_count: 0, review_items: [] });
+    if (path === `/api/jobs/${JOB_ID}/reanalyze-options`) return json({
+      job_id: JOB_ID,
+      inherit: { available: true, unknown_fields: [], message: null, mode: "dual", use_local_rules: true, use_ai_assist: true, ai_profile_id: "m1", ai_configuration: { id: "m1", name: "模型1", model: "m1", revision: 1 } },
+      last_execution: { status: "done", analysis_conclusion: null, ai_requested: true, local_state: "completed", ai_state: "degraded" },
+      model: { state: "ok", message: null, profile: { id: "m1", name: "模型1", model: "m1" } },
+      capabilities: { enabled: true, active_profile_id: "m1", profiles: [{ id: "m1", name: "模型1", model: "m1" }] },
+    });
     if (path === "/api/workflow") return json({ issues: {}, packages: [] });
     if (path.startsWith("/api/files/")) {
       return route.fulfill({
@@ -193,7 +200,7 @@ test.describe("AI scope and explanation visibility", () => {
     await page.screenshot({ path: test.info().outputPath("ai-scope-partial.png") });
   });
 
-  test("任务页把检查范围压成一行，详情就地展开，大模型开关在重新分析旁", async ({ page }) => {
+  test("任务页把检查范围压成一行，详情就地展开，重新分析经对话框选择检查方式", async ({ page }) => {
     await page.context().addCookies([sessionCookie]);
     await installMocks(page, partialMeta);
     await page.goto(`/task/${JOB_ID}`);
@@ -210,10 +217,16 @@ test.describe("AI scope and explanation visibility", () => {
     await expect(scope.getByTestId("task-ai-scope-failed-units")).toContainText("server_error");
     await expect(scope.getByTestId("task-ai-scope-failed-units")).toContainText("已尝试 2 次");
 
-    // 开关贴着“重新分析”按钮，不再单独占一条横带。
+    // 检查方式选择收进对话框：默认按上次方式，展示上轮部分完成状态。
     const header = page.getByTestId("task-summary-header");
-    await expect(header.getByTestId("task-reanalyze-ai-toggle")).toBeVisible();
     await expect(header.getByTestId("task-reanalyze-button")).toBeVisible();
+    await header.getByTestId("task-reanalyze-button").click();
+    const dialog = page.getByTestId("reanalyze-method-dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByTestId("reanalyze-method-picker-inherit")).toBeChecked();
+    await expect(dialog.getByTestId("reanalyze-method-picker-execution-hint")).toContainText("部分完成");
+    await dialog.getByTestId("reanalyze-method-cancel").click();
+    await expect(dialog).toHaveCount(0);
     await page.screenshot({ path: test.info().outputPath("ai-scope-task-inline.png") });
   });
 

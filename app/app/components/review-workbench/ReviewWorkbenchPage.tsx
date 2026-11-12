@@ -33,6 +33,7 @@
  */
 "use client";
 import AnalysisCheckProgress from "@/components/AnalysisCheckProgress";
+import { ReanalyzeMethodDialog, buildReanalyzeRequestBody, type ReanalyzeMethodValue } from "@/components/ReanalyzeMethodPicker";
 import { displayedAnalysisRevision, reportDownloadUrl } from "@/lib/reportVersion";
 
 import type { Route } from "next";
@@ -213,6 +214,7 @@ export function ReviewWorkbenchPage() {
   const [noteDialogProblem, setNoteDialogProblem] = useState<Problem | null>(null);
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [isReanalyzing, setIsReanalyzing] = useState(false);
+  const [isReanalyzeDialogOpen, setIsReanalyzeDialogOpen] = useState(false);
   /** 「读取校正」页签选中的原页位置；只在该页签激活时接管左侧高亮。 */
   const [correctionFocus, setCorrectionFocus] = useState<CorrectionFocus | null>(null);
   /** 整行/整表补录时请求左侧原页框选；pickedRegion 是框选结果。 */
@@ -770,7 +772,7 @@ export function ReviewWorkbenchPage() {
     [mutateWorkflow, noteDialogProblem, workflowIssues, workflowNotes],
   );
 
-  const handleReanalyze = useCallback(async () => {
+  const handleReanalyze = useCallback(async (method: ReanalyzeMethodValue) => {
     if (!jobId || isReanalyzing) {
       return;
     }
@@ -779,16 +781,25 @@ export function ReviewWorkbenchPage() {
       const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/reanalyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "dual", use_local_rules: true }),
+        body: JSON.stringify(buildReanalyzeRequestBody(method)),
       });
       if (response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { inheritance_warnings?: string[] };
+        const warnings = Array.isArray(payload.inheritance_warnings) ? payload.inheritance_warnings : [];
+        if (warnings.length) alert(`已开始重新分析。\n注意：${warnings.join("；")}`);
         setLastIssueDecision(null);
         invalidateReviewReads(jobId);
         await Promise.all([loadJobDetail(), loadWorkflow()]);
         refreshJobPolling();
+      } else {
+        const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
+        alert(typeof payload.detail === "string" && payload.detail ? payload.detail : `重新分析未成功（HTTP ${response.status}），请稍后重试。`);
       }
+    } catch {
+      alert("重新分析请求失败，请检查连接后重试。");
     } finally {
       setIsReanalyzing(false);
+      setIsReanalyzeDialogOpen(false);
     }
   }, [isReanalyzing, jobId, loadJobDetail, loadWorkflow, refreshJobPolling]);
 
@@ -1300,7 +1311,7 @@ export function ReviewWorkbenchPage() {
                       <div className="mt-1 border-t border-border pt-1">
                         <button type="button" role="menuitem" onClick={() => { setMoreMenuOpen(false); handleExport(); }} data-testid="gbc-review-export"
                           className="block w-full px-3 py-2 text-left text-xs text-slate-700 hover:bg-surface-100">导出报告</button>
-                        <button type="button" role="menuitem" onClick={() => { setMoreMenuOpen(false); void handleReanalyze(); }}
+                        <button type="button" role="menuitem" onClick={() => { setMoreMenuOpen(false); setIsReanalyzeDialogOpen(true); }}
                           disabled={isReanalyzing || submittingIssueId !== null} data-testid="gbc-review-reanalyze"
                           className="block w-full px-3 py-2 text-left text-xs text-slate-700 hover:bg-surface-100 disabled:cursor-not-allowed disabled:opacity-50">
                           {isReanalyzing ? "重新分析中…" : "重新分析"}
@@ -1414,6 +1425,17 @@ export function ReviewWorkbenchPage() {
           onSave={handleSaveNote}
           onCancel={() => setNoteDialogProblem(null)}
           isSubmitting={submittingIssueId === noteDialogProblem.id}
+        />
+      ) : null}
+      {isReanalyzeDialogOpen && jobId ? (
+        <ReanalyzeMethodDialog
+          jobId={jobId}
+          title="重新分析这份报告"
+          submitting={isReanalyzing}
+          onConfirm={(value) => void handleReanalyze(value)}
+          onCancel={() => {
+            if (!isReanalyzing) setIsReanalyzeDialogOpen(false);
+          }}
         />
       ) : null}
     </div>

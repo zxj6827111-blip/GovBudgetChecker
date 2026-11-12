@@ -712,6 +712,16 @@ async def reanalyze_job(job_id: str, request: Request):
     return await runtime.reanalyze_job(job_id, body)
 
 
+@router.get("/api/jobs/{job_id}/reanalyze-options")
+async def reanalyze_options(job_id: str, request: Request):
+    """重分析选项预览：上轮启动配置、执行状态、原模型当前可用性与本次可选模型。"""
+    require_job_access(request, job_id, include_detail=False)
+    from src.services.reanalyze_inheritance import build_options_preview
+    job_dir = runtime.UPLOAD_ROOT / job_id
+    status = runtime.read_json_file(job_dir / "status.json", default={})
+    return build_options_preview(job_dir, status)
+
+
 class DocumentScopeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     request_id: UUID
