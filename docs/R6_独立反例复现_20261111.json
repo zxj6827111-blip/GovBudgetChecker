@@ -1,0 +1,121 @@
+{
+ "git_head": "7a4e6de1084d0d9af7ed341173f597fd2564e32f",
+ "checks": {
+  "performance_scope": {
+   "ok": true,
+   "cases": [
+    {
+     "case": "complete_colon",
+     "expected_issues": 1,
+     "actual_issues": 1,
+     "receipt_status": "fail",
+     "formula": "self_evaluation_count = sum(disclosed distinct rating counts)",
+     "pass": true
+    },
+    {
+     "case": "complete_period",
+     "expected_issues": 1,
+     "actual_issues": 1,
+     "receipt_status": "fail",
+     "formula": "self_evaluation_count = sum(disclosed distinct rating counts)",
+     "pass": true
+    },
+    {
+     "case": "complete_semicolon",
+     "expected_issues": 1,
+     "actual_issues": 1,
+     "receipt_status": "fail",
+     "formula": "self_evaluation_count = sum(disclosed distinct rating counts)",
+     "pass": true
+    },
+    {
+     "case": "explicit_period",
+     "expected_issues": 1,
+     "actual_issues": 1,
+     "receipt_status": "fail",
+     "formula": "self_evaluation_count = sum(disclosed distinct rating counts)",
+     "pass": true
+    },
+    {
+     "case": "partial",
+     "expected_issues": 0,
+     "actual_issues": 0,
+     "receipt_status": "pass",
+     "formula": "self_evaluation_count >= sum(disclosed distinct rating counts)",
+     "pass": true
+    },
+    {
+     "case": "materials",
+     "expected_issues": 0,
+     "actual_issues": 0,
+     "receipt_status": "pass",
+     "formula": "self_evaluation_count >= sum(disclosed distinct rating counts)",
+     "pass": true
+    },
+    {
+     "case": "materials_title_terminates_group",
+     "expected_issues": 0,
+     "actual_issues": 0,
+     "receipt_status": "pass",
+     "formula": "self_evaluation_count >= sum(disclosed distinct rating counts)",
+     "pass": true
+    }
+   ]
+  },
+  "year_amount_lane": {
+   "ok": true,
+   "normal_identities": [
+    "使用非财政拨款结余|结余分配",
+    "年初结转和结余|年末结转和结余",
+    "总计|总计",
+    "本年收入合计|本年支出合计"
+   ],
+   "corrupted": [
+    {
+     "identity": "年初结转和结余|年末结转和结余",
+     "page": 1,
+     "kind": "row_number_sequence_mismatch",
+     "merged": [
+      "2026",
+      "2225"
+     ],
+     "original": [
+      "2025",
+      "2225"
+     ]
+    }
+   ]
+  },
+  "year_amount_real_pdf": {
+   "ok": true,
+   "normal": {
+    "pass": 1,
+    "gap": 0
+   },
+   "corrupted": {
+    "pass": 0,
+    "gap": 1
+   },
+   "original_unchanged": true,
+   "mutated_positions": 1
+  },
+  "row_grounding": {
+   "ok": true,
+   "clean": [],
+   "phantom": [
+    {
+     "identity": "本年收入合计|本年支出合计",
+     "page": 1,
+     "kind": "row_grounding_mismatch",
+     "missing_value": "9999",
+     "expected": [
+      "9999",
+      "2.8E+3"
+     ]
+    }
+   ]
+  }
+ },
+ "ok": true,
+ "note": "R6 独立反例复现：预期来自 Codex 第六轮核验包；ok=None 仅表示本机缺少该输入，不计通过。"
+}

@@ -1,0 +1,10 @@
+{
+ "git_head": "7a4e6de1084d0d9af7ed341173f597fd2564e32f",
+ "source_sha256": {
+  "src/engine/native_final_disclosure.py": "3392c94c60514c6d197f40cb8c56206bb3a6fae5216a780106396745fe65cf2f",
+  "scripts/d1_table_reconciliation.py": "8a17e3185f51afa962093f556ca71410a3fa3d64fc316272ecffb986ffdaea04",
+  "scripts/r6_independent_controls_repro.py": "92a5acf5fa3535c54b1c0abd3b33d0e0b61c66bbb8177d7b546805dd581a8e0f",
+  "tests/test_d1_table_reconciliation.py": "d7e645c936ad29cb9f04dc32ed625c92fe987b6a95647dacaf7d6c89972822f7",
+  "tests/remediation/test_real_intake_disclosure_numeric.py": "315ef4277ba2a8b0876abdac6c7dc526123c5527733ffe456a710a9076a07750"
+ }
+}
