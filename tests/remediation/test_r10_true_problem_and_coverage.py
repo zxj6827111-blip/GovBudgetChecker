@@ -158,3 +158,81 @@ def test_verification_status_explicit_on_fallback():
     _roles, evidence = d1._semantic_amount_roles(
         doc, unknown, merged_rows, page_texts, pages, page_tables=[])
     assert evidence['verification'] == 'not_applicable'
+
+
+# ---------------------------------------------------------------------------
+# 自复核加固（2026-11-12）：混合多行表头列序 / 超串改名 / 多组与部分列举边界
+# ---------------------------------------------------------------------------
+
+def test_mixed_multirow_header_uses_column_order_not_row_order():
+    """FIN_08 实证版式：叶格跨行（项目支出在行0、基本支出在行1），
+    列序不变量须按原列位而非行序——行序优先会误杀正常产物。"""
+    import pdfplumber
+    artifact = PDFParser(None).build_parse_artifact(str(BUSINESS_PDF))
+    with pdfplumber.open(str(BUSINESS_PDF)) as pdf_doc:
+        page_texts = [(page.extract_text() or '') for page in pdf_doc.pages]
+    doc = d1.doc_for_artifact(artifact, str(BUSINESS_PDF), page_texts)
+    instance = next(item for item in artifact.logical_tables
+                    if item.table_code == 'FIN_03_expenditure')
+    pages = sorted(d1._instance_pages(doc, instance))
+    merged_rows, _errors = d1._logical_view_with_provenance(doc, [instance])
+    mixed_table = [
+        ['项目', '本年支出合计', '', '项目支出'],
+        ['', '', '基本支出', ''],
+        ['一般公共服务支出', '100', '20.50', '79.50'],
+    ]
+    roles, evidence = d1._semantic_amount_roles(
+        doc, instance, merged_rows, page_texts, pages, page_tables=[[mixed_table]])
+    assert evidence['adopted'] is True
+    assert evidence['verification'] == 'complete'
+    assert roles == {1: 'amount', 2: 'amount', 3: 'amount'}
+
+
+def test_superstring_header_rename_is_gap_with_rename_evidence():
+    """"基本支出"→"基本支出补充"：原件该列有不同表头格 → 确定性改名
+    损坏，GAP（不依赖整数形态巧合，全小数表同样拒绝）。"""
+    digest = hashlib.sha256(BUSINESS_PDF.read_bytes()).hexdigest()
+    normal = PDFParser(None).build_parse_artifact(str(BUSINESS_PDF))
+    bad = copy.deepcopy(normal)
+    for fragment in list(bad.table_fragments) + list(bad.physical_fragments):
+        for ri, row in enumerate(fragment.rows):
+            if len(row) == 4 and row[2] == '基本支出':
+                row[2] = '基本支出补充'
+                for cell in fragment.cells:
+                    if cell.row_idx == ri and cell.col_idx == 2:
+                        cell.raw_text = '基本支出补充'
+    with patch.object(d1.PDFParser, 'build_parse_artifact', return_value=bad):
+        report = d1.reconcile_auto(str(BUSINESS_PDF))
+    assert (report['pass'], report['gap']) == (0, 1)
+    evidence = report['results'][0]['semantic_evidence']
+    assert evidence['verification'] == 'failed'
+    mismatch = evidence['header_mismatches'][0]
+    assert mismatch['rename_errors'] == [
+        {'col': 2, 'candidate_name': '基本支出补充',
+         'original_header_at_col': ['基本支出']}]
+    assert hashlib.sha256(BUSINESS_PDF.read_bytes()).hexdigest() == digest
+
+
+def test_two_groups_keep_first_failure_and_second_incomplete():
+    body = ('绩效自评的2025年度项目53个，全部项目评级结果如下：'
+            '绩效评级为“优”的项目50个，其余评级均为0个。'
+            '绩效自评的2025年度项目20个，评级结果如下。')
+    issues, outcomes, receipts = _run(body)
+    assert len(issues) == 1
+    assert issues[0].location['declared_count'] == 53
+    assert [value['status'] for value in outcomes] == ['insufficient_data']
+    by_status = {receipt['status']: receipt['sub_check_id'] for receipt in receipts}
+    assert set(by_status) == {'fail', 'insufficient_data'}
+    assert by_status['fail'] != by_status['insufficient_data']
+
+
+def test_partial_enumeration_with_trailing_empty_declaration():
+    body = ('绩效自评的2025年度项目53个，其中，绩效评级为“优”的项目50个。'
+            '评级结果如下。')
+    issues, outcomes, receipts = _run(body)
+    assert issues == []
+    assert [value['status'] for value in outcomes] == ['insufficient_data']
+    statuses = {receipt['status'] for receipt in receipts}
+    assert statuses == {'pass', 'insufficient_data'}
+    assert any(receipt['status'] == 'pass' and '>=' in receipt['formula']
+               for receipt in receipts)

@@ -1,0 +1,175 @@
+{
+ "sample": "uploads 前30份真实决算PDF（按文件名排序，非挑选）",
+ "initial_scan": {
+  "total": 30,
+  "with_gap": 9,
+  "errors": 0
+ },
+ "gap_attribution": [
+  {
+   "pdf": "上海市粮食和物资储备局老干部活动室2025年度决算.pdf",
+   "table": "FIN_01_income_expenditure_total",
+   "with_semantic": "GAP",
+   "without_semantic": "GAP",
+   "introduced_by_semantic": false,
+   "reason": null
+  },
+  {
+   "pdf": "上海市自然资源调查利用研究院2025年度决算.pdf",
+   "table": "FIN_02_income",
+   "with_semantic": "GAP",
+   "without_semantic": "GAP",
+   "introduced_by_semantic": false,
+   "reason": null
+  },
+  {
+   "pdf": "上海市自然资源调查利用研究院2025年度决算.pdf",
+   "table": "FIN_03_expenditure",
+   "with_semantic": "GAP",
+   "without_semantic": "GAP",
+   "introduced_by_semantic": false,
+   "reason": null
+  },
+  {
+   "pdf": "上海市自然资源调查利用研究院2025年度决算.pdf",
+   "table": "FIN_04_fiscal_grant_total",
+   "with_semantic": "GAP",
+   "without_semantic": "GAP",
+   "introduced_by_semantic": false,
+   "reason": null
+  },
+  {
+   "pdf": "上海市普陀区建设和管理委员会2025年度单位决算公开.pdf",
+   "table": "FIN_02_income",
+   "with_semantic": "GAP",
+   "without_semantic": "GAP",
+   "introduced_by_semantic": false,
+   "reason": null
+  },
+  {
+   "pdf": "上海市普陀区建设和管理委员会2025年度单位决算公开.pdf",
+   "table": "FIN_06_basic_expenditure",
+   "with_semantic": "GAP",
+   "without_semantic": "GAP",
+   "introduced_by_semantic": false,
+   "reason": null
+  },
+  {
+   "pdf": "上海市普陀区残疾人综合服务中心2025年度单位决算.pdf",
+   "table": "FIN_06_basic_expenditure",
+   "with_semantic": "GAP",
+   "without_semantic": "GAP",
+   "introduced_by_semantic": false,
+   "reason": null
+  },
+  {
+   "pdf": "上海商业会计学校单位2025年度决算.pdf",
+   "table": "FIN_03_expenditure",
+   "with_semantic": "GAP",
+   "without_semantic": "GAP",
+   "introduced_by_semantic": false,
+   "reason": null
+  },
+  {
+   "pdf": "上海市退役军人事务局（本级）2024年度决算.pdf",
+   "table": "FIN_02_income",
+   "with_semantic": "GAP",
+   "without_semantic": "GAP",
+   "introduced_by_semantic": false,
+   "reason": null
+  },
+  {
+   "pdf": "上海市退役军人事务局（本级）2024年度决算.pdf",
+   "table": "FIN_04_fiscal_grant_total",
+   "with_semantic": "GAP",
+   "without_semantic": "GAP",
+   "introduced_by_semantic": false,
+   "reason": null
+  },
+  {
+   "pdf": "上海市信访办公室2024年决算.pdf",
+   "table": "FIN_03_expenditure",
+   "with_semantic": "GAP",
+   "without_semantic": "GAP",
+   "introduced_by_semantic": false,
+   "reason": null
+  },
+  {
+   "pdf": "上海大学2025年度决算.pdf",
+   "table": "FIN_08_gov_fund",
+   "with_semantic": "GAP",
+   "without_semantic": "PASS",
+   "introduced_by_semantic": true,
+   "reason": "header_semantic_identity_mismatch"
+  },
+  {
+   "pdf": "上海市普陀区市政水务管理中心2025年度单位决算公开.pdf",
+   "table": "FIN_08_gov_fund",
+   "with_semantic": "GAP",
+   "without_semantic": "PASS",
+   "introduced_by_semantic": true,
+   "reason": "header_semantic_identity_mismatch"
+  }
+ ],
+ "introduced_by_semantic_before_hardening": [
+  {
+   "pdf": "上海大学2025年度决算.pdf",
+   "table": "FIN_08_gov_fund",
+   "with_semantic": "GAP",
+   "without_semantic": "PASS",
+   "introduced_by_semantic": true,
+   "reason": "header_semantic_identity_mismatch"
+  },
+  {
+   "pdf": "上海市普陀区市政水务管理中心2025年度单位决算公开.pdf",
+   "table": "FIN_08_gov_fund",
+   "with_semantic": "GAP",
+   "without_semantic": "PASS",
+   "introduced_by_semantic": true,
+   "reason": "header_semantic_identity_mismatch"
+  }
+ ],
+ "hardening": [
+  "V4 列序不变量改为叶格原列位（修复 FIN_08 混合多行表头行序误杀：上海大学/市政水务）",
+  "同名叶格按原列位排序配对",
+  "候选叶名空命中且原件该列有不同表头格 → 确定性改名 GAP（超串改名不再依赖整数形态巧合）"
+ ],
+ "after_hardening": {
+  "four": {
+   "6000a11c": {
+    "pass": 9,
+    "instances": 9,
+    "gap": 0,
+    "self_test_ok": true,
+    "unchanged": true,
+    "adopted": 6
+   },
+   "075e31ba": {
+    "pass": 9,
+    "instances": 9,
+    "gap": 0,
+    "self_test_ok": true,
+    "unchanged": true,
+    "adopted": 7
+   },
+   "8d2bbe5f": {
+    "pass": 9,
+    "instances": 9,
+    "gap": 0,
+    "self_test_ok": true,
+    "unchanged": true,
+    "adopted": 7
+   },
+   "89427638": {
+    "pass": 9,
+    "instances": 9,
+    "gap": 0,
+    "self_test_ok": true,
+    "unchanged": true,
+    "adopted": 6
+   }
+  },
+  "semantic_failed_gaps": []
+ },
+ "pre_existing_gaps_note": "其余11处数值/行级GAP在禁用语义采纳后仍GAP，属D1既有严格性（真实解析差异），非本轮机制引入；四原件冻结集9/9保持。"
+}

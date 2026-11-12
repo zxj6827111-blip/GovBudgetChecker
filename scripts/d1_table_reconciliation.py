@@ -367,7 +367,7 @@ def _semantic_amount_roles(
     V3 映射非空、每个映射列位在行宽内、映射列数据格（跳过表头）为数值
     或空白；
     V4 身份：叶栏目名在原件表头格中按同名候选列数配对命中，父栏目按
-    列优先最近格归属，叶格行序须与来源列位一致——确定性矛盾留
+    列优先最近格归属，叶格原列位顺序须与来源列位一致——确定性矛盾留
     header_mismatches（GAP）；
     V4 覆盖：预期指标集合由原件表头独立建立（别名命中表头格），候选
     映射缺项（未知/重名表头）→ GAP，不能只验成功映射子集。
@@ -473,11 +473,44 @@ def _semantic_amount_roles(
     leaf_hits: Dict[str, List[Tuple[int, int, str]]] = {}
     for leaf, count in leaf_counts.items():
         hits = _header_cell_hits(flat, leaf)
-        if not leaf or len(hits) != count:
+        if not leaf:
             evidence.update(reason="header_identity_inconclusive", gate="V4",
                             header_cells_found=bool(flat))
             return None, evidence
-        leaf_hits[leaf] = hits
+        if not hits:
+            # 候选叶名在原件表头不存在：原件在该来源列位上有不同表头格
+            # → 确定性改名损坏（含超串改名，如"基本支出"→"基本支出补充"），
+            # GAP；原件该列无表头格（几何不可得）→ 不可判定，退回。
+            rename_errors = []
+            for col, parts in names:
+                if not parts or parts[-1] != leaf:
+                    continue
+                at_col = [cell[2] for cell in flat if cell[1] == col]
+                if at_col and not any(leaf == text or leaf in text for text in at_col):
+                    rename_errors.append({
+                        "col": col, "candidate_name": leaf,
+                        "original_header_at_col": at_col,
+                    })
+            if rename_errors:
+                evidence.update(
+                    adopted=False, verification="failed",
+                    reason="header_semantic_identity_mismatch", gate="V4",
+                    header_mismatches=[{
+                        "kind": "header_semantic_identity_mismatch",
+                        "table_code": getattr(instance, "table_code", None),
+                        "rename_errors": rename_errors,
+                    }])
+                return None, evidence
+            evidence.update(reason="header_identity_inconclusive", gate="V4",
+                            header_cells_found=bool(flat))
+            return None, evidence
+        if len(hits) != count:
+            evidence.update(reason="header_identity_inconclusive", gate="V4",
+                            header_cells_found=bool(flat))
+            return None, evidence
+        # 同名叶格按原列位排序配对（混合多行表头里同名格可能跨行，
+        # 行序不等于列序）。
+        leaf_hits[leaf] = sorted(hits, key=lambda cell: (cell[1], cell[0]))
     used: Dict[str, int] = {}
     positions: List[Tuple[int, Tuple[int, int, str]]] = []
     identity_errors: List[Dict[str, Any]] = []
@@ -510,11 +543,14 @@ def _semantic_amount_roles(
                                     header_cells_found=bool(flat))
                     return None, evidence
             anchor = nearest
+    # 列序不变量：来源列位顺序须与叶格**原列位**顺序一致（混合多行
+    # 表头里叶格跨行，行序优先会把行0的年末列排到行1的基本/项目之前，
+    # 造成误杀——上海大学/市政水务 FIN_08 实证）。
     order_errors = [
         {"col_a": left[0], "col_b": right[0],
          "name_a": left[1][2], "name_b": right[1][2]}
         for left, right in zip(positions, positions[1:], strict=False)
-        if (left[1][0], left[1][1]) > (right[1][0], right[1][1])
+        if (left[1][1], left[1][0]) > (right[1][1], right[1][0])
     ]
     if identity_errors or order_errors:
         evidence.update(
@@ -526,7 +562,7 @@ def _semantic_amount_roles(
                 "candidate_order": [{"col": col, "name": parts[-1]}
                                     for col, parts in names],
                 "original_order": [cell[2] for _col, cell in
-                                   sorted(positions, key=lambda item: (item[1][0], item[1][1]))],
+                                   sorted(positions, key=lambda item: (item[1][1], item[1][0]))],
                 "parent_errors": identity_errors,
                 "order_errors": order_errors,
             }])
