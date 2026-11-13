@@ -199,13 +199,6 @@
       "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
     },
     {
-      "local_ref": "refs/heads/codex/backup-main-cleanup-20261112",
-      "commit": "e258f16dece283fca0c8dc214fd64df05e08c964",
-      "github_ref": "refs/heads/codex/backup-main-cleanup-20261112",
-      "main_disposition": "already_in_selected_main_history",
-      "reason": "already reachable from selected main baseline"
-    },
-    {
       "local_ref": "refs/heads/codex/claude-closeout-20261108",
       "commit": "d407d2b9046650eaa05ba6840b5546448bd63df2",
       "github_ref": "refs/heads/codex/claude-closeout-20261108",
@@ -687,7 +680,8 @@
       "current runtime source and dependencies",
       "current business data and human decisions",
       "original PDF master library",
-      "required regression/gold samples and secrets in local protected backups"
+      "required regression/gold samples and secrets in local protected backups",
+      "legacy local gold helpers with existing tracked CLI references; already backed up, not newly promoted to main"
     ],
     "retire_after_verified_archive": [
       "historical replay expanded directories",
@@ -699,5 +693,26 @@
     "historical drafts are approved",
     "old gold/B1 is newly accepted",
     "new production deployment or historical reanalysis"
+  ],
+  "historical_code_backup": {
+    "ref": "refs/heads/codex/historical-code-backup-20261112",
+    "commit": "d6cac376f9029e41cd20711d2586f0b04279aac0",
+    "unique_code_contents": 6412,
+    "raw_bytes_verified": true,
+    "main_disposition": "backup_only_unreviewed_historical_helpers"
+  },
+  "cleanup_summary": {
+    "historical_directory_count": 228,
+    "old_worktrees_retired": 20,
+    "archive_format": "tar.zst",
+    "archive_restore_checks_completed": true,
+    "current_business_data_preserved": true,
+    "six_original_evidence_directories_retained_as_requested": true,
+    "gold_truth_and_business_rules_unchanged": true,
+    "runtime_integration_worktree_closed_after_preservation": true
+  },
+  "verification_limits": [
+    "118 targeted tests validate the selected product baseline; not a new full PDF/business acceptance",
+    "full large JSON database snapshot scan was stopped on statement timeout; 25 path-related text columns checked read-only without historical-path matches"
   ]
 }
