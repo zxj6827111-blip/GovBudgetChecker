@@ -54687,6 +54687,294 @@
         "artifacts/pdf-intake-r12-20261024/implementation/outputs/intake_remediation_20261024/codex_qoder_verification_20261026_round4/source_validated_probes.py"
       ],
       "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/0f/0ffb88fe0ad98d6809f733536b2b450367363745.py",
+      "export_git_blob": "0ffb88fe0ad98d6809f733536b2b450367363745",
+      "source_examples": [
+        "scratch/rule_inventory_20261110.py"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/bf/bf46687ca95dbbbe22318504798d1cdb4380ab3e.py",
+      "export_git_blob": "bf46687ca95dbbbe22318504798d1cdb4380ab3e",
+      "source_examples": [
+        "scratch/split_e702.py"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/fd/fdd53bc01c365cba82cb3b59fe68014ad6848a4c.py",
+      "export_git_blob": "fdd53bc01c365cba82cb3b59fe68014ad6848a4c",
+      "source_examples": [
+        "scratch/engine_ab_20261025/ab_lib.py"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/ff/fff069bb2fade7813bc7033bb169ac4a85863208.py",
+      "export_git_blob": "fff069bb2fade7813bc7033bb169ac4a85863208",
+      "source_examples": [
+        "scratch/engine_ab_20261025/run_native.py"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/2c/2cfe003406a8dc4fed17771b5a0b85c42d88cd56.py",
+      "export_git_blob": "2cfe003406a8dc4fed17771b5a0b85c42d88cd56",
+      "source_examples": [
+        "scratch/engine_ab_20261025/probe_scan.py"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/8b/8b7139751f55dbe42ae9b8445c31014ecf1b3f27.py",
+      "export_git_blob": "8b7139751f55dbe42ae9b8445c31014ecf1b3f27",
+      "source_examples": [
+        "scratch/engine_ab_20261025/dump_grid.py"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/c0/c07dd7121abf8a23c1e50a210c22fdcf131e661c.py",
+      "export_git_blob": "c07dd7121abf8a23c1e50a210c22fdcf131e661c",
+      "source_examples": [
+        "scratch/engine_ab_20261025/run_camelot.py"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/72/722728b42db3bba961d39212d33e1c29a495de5f.py",
+      "export_git_blob": "722728b42db3bba961d39212d33e1c29a495de5f",
+      "source_examples": [
+        "scratch/engine_ab_20261025/run_screen.py"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/4e/4e4042d0aea08340b8f39ce54b6e6f0147baeffd.py",
+      "export_git_blob": "4e4042d0aea08340b8f39ce54b6e6f0147baeffd",
+      "source_examples": [
+        "scratch/engine_ab_20261025/.venv-camelot/bin/pdf2txt.py"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/f4/f45e81815c01dee1843756fbdaac4d68826d7c32.py",
+      "export_git_blob": "f45e81815c01dee1843756fbdaac4d68826d7c32",
+      "source_examples": [
+        "scratch/engine_ab_20261025/.venv-camelot/bin/dumppdf.py"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/3e/3e7ed8163f2e146615cbd4898592309202d0f69f.py",
+      "export_git_blob": "3e7ed8163f2e146615cbd4898592309202d0f69f",
+      "source_examples": [
+        "scratch/engine_ab_20261025/.venv-camelot/bin/activate_this.py"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/28/2863fe9fe442ebe0c6940a6b9bf1786524f8850f.py",
+      "export_git_blob": "2863fe9fe442ebe0c6940a6b9bf1786524f8850f",
+      "source_examples": [
+        "scratch/llm_compare/cross_review.py"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/60/6078fef7e8d20b2fd753a81873b7bd9f3fbdac42.py",
+      "export_git_blob": "6078fef7e8d20b2fd753a81873b7bd9f3fbdac42",
+      "source_examples": [
+        "scratch/llm_compare/run_one.py"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/0c/0ce9323ca6105753edb35dd0359399a885906256.py",
+      "export_git_blob": "0ce9323ca6105753edb35dd0359399a885906256",
+      "source_examples": [
+        "scratch/llm_compare/score.py"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/eb/ebce57c2cfd63805a1d8d28e3387e2473215c0a9.py",
+      "export_git_blob": "ebce57c2cfd63805a1d8d28e3387e2473215c0a9",
+      "source_examples": [
+        "scratch/pt_org_config/verify_pt_orgs.py"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/b4/b4c5933de1747198e30d080621598f106a4166ab.py",
+      "export_git_blob": "b4c5933de1747198e30d080621598f106a4166ab",
+      "source_examples": [
+        "scratch/pt_org_config/dump_source.py"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/8e/8ea68b95e2158c035b27b301704dacc113c428c8.py",
+      "export_git_blob": "8ea68b95e2158c035b27b301704dacc113c428c8",
+      "source_examples": [
+        "scratch/pt_org_config/derive_roster.py"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/6d/6defcb607fc80fe58c70ec442c4371fc1f51402b.py",
+      "export_git_blob": "6defcb607fc80fe58c70ec442c4371fc1f51402b",
+      "source_examples": [
+        "scratch/pt_org_config/import_pt_orgs.py"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/73/7306f25bfac969d6421edfa16ba49e99049e2778.py",
+      "export_git_blob": "7306f25bfac969d6421edfa16ba49e99049e2778",
+      "source_examples": [
+        "scratch/template_init_20261101/runner.py"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/04/04bcbe8aaffc3d8ef4a70f706a592db420cfe619.py",
+      "export_git_blob": "04bcbe8aaffc3d8ef4a70f706a592db420cfe619",
+      "source_examples": [
+        "scratch/llm_accuracy_recheck_20261101/verify_results.py"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/1e/1e40b5203b29cd8eed913cbe08c1999b336d8532.py",
+      "export_git_blob": "1e40b5203b29cd8eed913cbe08c1999b336d8532",
+      "source_examples": [
+        "scratch/llm_accuracy_recheck_20261101/experiment.py"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/be/bedad2759dbde11f2f039b5712d1eef8c64cf73a.py",
+      "export_git_blob": "bedad2759dbde11f2f039b5712d1eef8c64cf73a",
+      "source_examples": [
+        "scratch/ai_remediation_20261025/acceptance2/run_acceptance.py"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/83/8328bc44eac0beb3c46879bc048ebf81cdb05e36.js",
+      "export_git_blob": "8328bc44eac0beb3c46879bc048ebf81cdb05e36",
+      "source_examples": [
+        "scratch/ai_remediation_20261025/acceptance2/shoot.js"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/2c/2cd82ce28c71f6892d1739b3c6aa30e67d5ffd2d.js",
+      "export_git_blob": "2cd82ce28c71f6892d1739b3c6aa30e67d5ffd2d",
+      "source_examples": [
+        "scratch/ai_remediation_20261025/acceptance2/shoot_s2.js"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/b2/b271ed95e92df09c822cae96b5da102c922183d5.js",
+      "export_git_blob": "b271ed95e92df09c822cae96b5da102c922183d5",
+      "source_examples": [
+        "scratch/ai_remediation_20261025/acceptance2/debug.js"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/fd/fd544c24e8e89b78aed5e5e7b3922a11920ecf18.py",
+      "export_git_blob": "fd544c24e8e89b78aed5e5e7b3922a11920ecf18",
+      "source_examples": [
+        "scratch/ai_remediation_20261025/acceptance3/run_rule_only.py"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/27/27b47b7b1da322ca86ceb0f1ad6554727c61ebb7.js",
+      "export_git_blob": "27b47b7b1da322ca86ceb0f1ad6554727c61ebb7",
+      "source_examples": [
+        "scratch/ai_remediation_20261025/acceptance3/walk_pages.js"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/d3/d3a51033a6678a873da983c0114d995c145d8353.py",
+      "export_git_blob": "d3a51033a6678a873da983c0114d995c145d8353",
+      "source_examples": [
+        "scratch/ai_remediation_20261025/acceptance3/run_acceptance3.py"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/d2/d25256113a11a6ad4a0f2febf0fb114ac51b62e8.py",
+      "export_git_blob": "d25256113a11a6ad4a0f2febf0fb114ac51b62e8",
+      "source_examples": [
+        "scratch/ai_remediation_20261025/acceptance/run_acceptance.py"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/cf/cf3bf376d608b0b642dd0b89ed193d7f07275459.py",
+      "export_git_blob": "cf3bf376d608b0b642dd0b89ed193d7f07275459",
+      "source_examples": [
+        "scratch/ai_remediation_20261025/acceptance/run_acceptance_remaining.py"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/9e/9e3c83897113b07a784c545561556660796e7e57.py",
+      "export_git_blob": "9e3c83897113b07a784c545561556660796e7e57",
+      "source_examples": [
+        "output/system-validation-20261011/repair_local_ledger_catalog.py"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/a2/a2100812d5c35d127d6e2a1bfa03aefd966876ee.py",
+      "export_git_blob": "a2100812d5c35d127d6e2a1bfa03aefd966876ee",
+      "source_examples": [
+        "output/system-validation-20261010/recover_historical_ledger.py"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/71/71e754b81740a31f50fc569cf62992c300f4a493.ts",
+      "export_git_blob": "71e754b81740a31f50fc569cf62992c300f4a493",
+      "source_examples": [
+        "output/ui-layout-batch/e2e.config.ts"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/7e/7e3b9530c4d71fc6b79094d4a66422149eecb5a5.ts",
+      "export_git_blob": "7e3b9530c4d71fc6b79094d4a66422149eecb5a5",
+      "source_examples": [
+        "output/review-refresh/playwright.config.ts"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/28/282addf2b5ac81607b64b0537cbd6228fca9d5d3.py",
+      "export_git_blob": "282addf2b5ac81607b64b0537cbd6228fca9d5d3",
+      "source_examples": [
+        "tmp/pdfs/numeric_review/freeze_numeric.py"
+      ],
+      "status": "exact_backup_copy"
+    },
+    {
+      "export_path": "code/ca/ca9f4800dc028735e84bcc9b6347613ef253553d.py",
+      "export_git_blob": "ca9f4800dc028735e84bcc9b6347613ef253553d",
+      "source_examples": [
+        "tmp/pdfs/numeric_review/adjudicate_numeric.py"
+      ],
+      "status": "exact_backup_copy"
     }
   ],
   "redacted_copies": 0,
