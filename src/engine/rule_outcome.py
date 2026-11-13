@@ -106,6 +106,11 @@ class RuleOutcomeSignal(BaseException):
         unresolved_reasons: Optional[List[str]] = None,
         status: Optional[str] = None,
         reason_codes: Optional[List[str]] = None,
+        blocked_by: Optional[List[Dict[str, Any]]] = None,
+        missing_operands: Optional[List[Dict[str, Any]]] = None,
+        candidates: Optional[List[Dict[str, Any]]] = None,
+        next_action: Optional[str] = None,
+        root_cause_key: Optional[str] = None,
     ) -> None:
         super().__init__(detail or rule_id)
         self.rule_id = rule_id
@@ -115,6 +120,11 @@ class RuleOutcomeSignal(BaseException):
         self.partial_issues: List[Any] = list(partial_issues or [])
         self.unresolved_reasons: List[str] = list(unresolved_reasons or [])
         self.reason_codes: List[str] = list(reason_codes or [])
+        self.blocked_by: List[Dict[str, Any]] = list(blocked_by or [])
+        self.missing_operands: List[Dict[str, Any]] = list(missing_operands or [])
+        self.candidates: List[Dict[str, Any]] = list(candidates or [])
+        self.next_action = next_action
+        self.root_cause_key = root_cause_key
 
 
 class RuleDeferred(RuleOutcomeSignal):
@@ -129,6 +139,11 @@ class RuleDeferred(RuleOutcomeSignal):
         partial_issues: Optional[List[Any]] = None,
         unresolved_reasons: Optional[List[str]] = None,
         reason_codes: Optional[List[str]] = None,
+        blocked_by: Optional[List[Dict[str, Any]]] = None,
+        missing_operands: Optional[List[Dict[str, Any]]] = None,
+        candidates: Optional[List[Dict[str, Any]]] = None,
+        next_action: Optional[str] = None,
+        root_cause_key: Optional[str] = None,
     ) -> None:
         super().__init__(
             rule_id,
@@ -136,6 +151,11 @@ class RuleDeferred(RuleOutcomeSignal):
             partial_issues=partial_issues,
             unresolved_reasons=unresolved_reasons,
             reason_codes=reason_codes,
+            blocked_by=blocked_by,
+            missing_operands=missing_operands,
+            candidates=candidates,
+            next_action=next_action,
+            root_cause_key=root_cause_key,
         )
 
     def __str__(self) -> str:  # pragma: no cover - 调试用
@@ -154,6 +174,11 @@ class RuleNotApplicable(RuleOutcomeSignal):
         partial_issues: Optional[List[Any]] = None,
         unresolved_reasons: Optional[List[str]] = None,
         reason_codes: Optional[List[str]] = None,
+        blocked_by: Optional[List[Dict[str, Any]]] = None,
+        missing_operands: Optional[List[Dict[str, Any]]] = None,
+        candidates: Optional[List[Dict[str, Any]]] = None,
+        next_action: Optional[str] = None,
+        root_cause_key: Optional[str] = None,
     ) -> None:
         super().__init__(
             rule_id,
@@ -161,6 +186,11 @@ class RuleNotApplicable(RuleOutcomeSignal):
             partial_issues=partial_issues,
             unresolved_reasons=unresolved_reasons,
             reason_codes=reason_codes,
+            blocked_by=blocked_by,
+            missing_operands=missing_operands,
+            candidates=candidates,
+            next_action=next_action,
+            root_cause_key=root_cause_key,
         )
 
     def __str__(self) -> str:  # pragma: no cover - 调试用
@@ -179,6 +209,11 @@ class RuleExecutionError(RuleOutcomeSignal):
         partial_issues: Optional[List[Any]] = None,
         unresolved_reasons: Optional[List[str]] = None,
         reason_codes: Optional[List[str]] = None,
+        blocked_by: Optional[List[Dict[str, Any]]] = None,
+        missing_operands: Optional[List[Dict[str, Any]]] = None,
+        candidates: Optional[List[Dict[str, Any]]] = None,
+        next_action: Optional[str] = None,
+        root_cause_key: Optional[str] = None,
     ) -> None:
         super().__init__(
             rule_id,
@@ -186,6 +221,11 @@ class RuleExecutionError(RuleOutcomeSignal):
             partial_issues=partial_issues,
             unresolved_reasons=unresolved_reasons,
             reason_codes=reason_codes,
+            blocked_by=blocked_by,
+            missing_operands=missing_operands,
+            candidates=candidates,
+            next_action=next_action,
+            root_cause_key=root_cause_key,
         )
 
     def __str__(self) -> str:  # pragma: no cover - 调试用
@@ -204,6 +244,11 @@ class RuleParseError(RuleOutcomeSignal):
         partial_issues: Optional[List[Any]] = None,
         unresolved_reasons: Optional[List[str]] = None,
         reason_codes: Optional[List[str]] = None,
+        blocked_by: Optional[List[Dict[str, Any]]] = None,
+        missing_operands: Optional[List[Dict[str, Any]]] = None,
+        candidates: Optional[List[Dict[str, Any]]] = None,
+        next_action: Optional[str] = None,
+        root_cause_key: Optional[str] = None,
     ) -> None:
         super().__init__(
             rule_id,
@@ -211,6 +256,11 @@ class RuleParseError(RuleOutcomeSignal):
             partial_issues=partial_issues,
             unresolved_reasons=unresolved_reasons,
             reason_codes=reason_codes,
+            blocked_by=blocked_by,
+            missing_operands=missing_operands,
+            candidates=candidates,
+            next_action=next_action,
+            root_cause_key=root_cause_key,
         )
 
     def __str__(self) -> str:  # pragma: no cover - 调试用
@@ -232,6 +282,12 @@ class RuleOutcome:
     unresolved_reasons: List[str] = field(default_factory=list)
     # 增量字段：结构化原因代码（identity_conflict / source_missing / ...）
     reason_codes: List[str] = field(default_factory=list)
+    # DH-02 结构化卡点：与 CheckReceipt 同名的新增字段。
+    blocked_by: List[Dict[str, Any]] = field(default_factory=list)
+    missing_operands: List[Dict[str, Any]] = field(default_factory=list)
+    candidates: List[Dict[str, Any]] = field(default_factory=list)
+    next_action: Optional[str] = None
+    root_cause_key: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         data: Dict[str, Any] = {"rule_id": self.rule_id, "status": self.status}
@@ -243,6 +299,16 @@ class RuleOutcome:
             data["unresolved_reasons"] = self.unresolved_reasons
         if self.reason_codes:
             data["reason_codes"] = self.reason_codes
+        if self.blocked_by:
+            data["blocked_by"] = self.blocked_by
+        if self.missing_operands:
+            data["missing_operands"] = self.missing_operands
+        if self.candidates:
+            data["candidates"] = self.candidates
+        if self.next_action:
+            data["next_action"] = self.next_action
+        if self.root_cause_key:
+            data["root_cause_key"] = self.root_cause_key
         return data
 
 

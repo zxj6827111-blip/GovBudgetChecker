@@ -66,6 +66,14 @@ from src.engine.rule_outcome import (
 )
 from src.schemas.parse_artifact import CheckReceipt
 from src.schemas.document_profile import DocumentProfile
+from src.engine.diagnostics import (
+    KNOWN_REASON_CODES,
+    ROOT_PRIORITY,
+    choose_next_action,
+    diagnostic_root_key,
+    make_diagnosis,
+    merge_diagnoses,
+)
 from src.engine.rule_policy import AMOUNT_TOLERANCE_WAN
 
 #: 关系级子检查状态 → 聚合优先级（与规则六态共用优先级语义；
@@ -1174,6 +1182,12 @@ class ObligationInstance:
     depends_on: Tuple[str, ...] = ()
     input_gaps: Tuple[str, ...] = ()
     reason_codes: Tuple[str, ...] = ()
+    #: DH-02 结构化卡点：由关联回执汇总，或 AI 义务自身的模式说明。
+    blocked_by: Tuple[Dict[str, Any], ...] = ()
+    missing_operands: Tuple[Dict[str, Any], ...] = ()
+    candidates: Tuple[Dict[str, Any], ...] = ()
+    next_action: Optional[str] = None
+    root_cause_key: Optional[str] = None
     evidence_kind: str = EVIDENCE_LOCATABLE
     basis: str = ""
     gap_note: str = ""
@@ -1207,6 +1221,11 @@ class ObligationInstance:
             "depends_on": list(self.depends_on),
             "input_gaps": list(self.input_gaps),
             "reason_codes": list(self.reason_codes),
+            "blocked_by": [dict(item) for item in self.blocked_by],
+            "missing_operands": [dict(item) for item in self.missing_operands],
+            "candidates": [dict(item) for item in self.candidates],
+            "next_action": self.next_action,
+            "root_cause_key": self.root_cause_key,
             "evidence_kind": self.evidence_kind,
             "basis": self.basis,
             "gap_note": self.gap_note,
@@ -1433,10 +1452,12 @@ def _resolve_rule_backed(
     statuses: Dict[str, str],
     reason_codes_by_rule: Optional[Mapping[str, Sequence[str]]] = None,
     details_by_rule: Optional[Mapping[str, str]] = None,
+    diagnostics_by_rule: Optional[Mapping[str, Mapping[str, Any]]] = None,
 ) -> None:
     """就地判定规则类义务的状态。"""
     implemented = tuple(item for item in instance.checkers if item in registry)
     reason_codes_by_rule = reason_codes_by_rule or {}
+    diagnostics_by_rule = diagnostics_by_rule or {}
 
     def _codes(for_rules: Sequence[str]) -> Tuple[str, ...]:
         values: List[str] = []
@@ -1445,6 +1466,19 @@ def _resolve_rule_backed(
                 if code and code not in values:
                     values.append(str(code))
         return tuple(values)
+
+    def _apply_diagnostics(for_rules: Sequence[str]) -> None:
+        merged = merge_diagnoses(diagnostics_by_rule.get(rule_id) for rule_id in for_rules)
+        if merged is None:
+            return
+        instance.reason_codes = tuple(
+            dict.fromkeys((*instance.reason_codes, *merged["reason_codes"]))
+        )
+        instance.blocked_by = tuple(merged["blocked_by"])
+        instance.missing_operands = tuple(merged["missing_operands"])
+        instance.candidates = tuple(merged["candidates"])
+        instance.next_action = merged["next_action"]
+        instance.root_cause_key = merged["root_cause_key"]
     # 清单里声明了、但注册表里查不到的编号：既可能是"尚未实现"（pending），
     # 也可能是清单笔误或规则被撤下。两种都要落账，不能静默忽略。
     absent = tuple(item for item in instance.checkers if item not in registry)
@@ -1505,6 +1539,7 @@ def _resolve_rule_backed(
             if details:
                 instance.detail = "；".join(details)
             instance.reason_codes = _codes(implemented)
+            _apply_diagnostics(implemented)
             return
 
     if all(observed[item] == "not_applicable" for item in implemented):
@@ -1651,14 +1686,29 @@ def build_obligation_ledger(
     statuses = _rule_statuses(rule_execution_summary)
     reason_codes_by_rule: Dict[str, Sequence[str]] = {}
     details_by_rule: Dict[str, str] = {}
+    diagnostics_by_rule: Dict[str, Mapping[str, Any]] = {}
     if isinstance(rule_execution_summary, Mapping):
         for entry in rule_execution_summary.get("unresolved_rules") or []:
             if isinstance(entry, Mapping) and entry.get("rule_id") and entry.get("detail"):
                 details_by_rule[str(entry["rule_id"])] = str(entry["detail"])
             if isinstance(entry, Mapping) and entry.get("rule_id"):
-                reason_codes_by_rule[str(entry["rule_id"])] = tuple(
+                rule_id = str(entry["rule_id"])
+                reason_codes_by_rule[rule_id] = tuple(
                     str(code) for code in entry.get("reason_codes") or () if code
                 )
+                codes = [str(code) for code in entry.get("reason_codes") or ()
+                         if str(code) in KNOWN_REASON_CODES]
+                fields = ("blocked_by", "missing_operands", "candidates")
+                if codes or entry.get("next_action") or entry.get("root_cause_key") \
+                        or any(entry.get(field) for field in fields):
+                    diagnostics_by_rule[rule_id] = make_diagnosis(
+                        reason_codes=codes or ["rule_no_reason"],
+                        blocked_by=entry.get("blocked_by") or (),
+                        missing_operands=entry.get("missing_operands") or (),
+                        candidates=entry.get("candidates") or (),
+                        next_action=entry.get("next_action"),
+                        root_cause_key=entry.get("root_cause_key"),
+                    )
 
     for instance in instances:
         if instance.requires_ai:
@@ -1673,6 +1723,7 @@ def build_obligation_ledger(
                 statuses=statuses,
                 reason_codes_by_rule=reason_codes_by_rule,
                 details_by_rule=details_by_rule,
+                diagnostics_by_rule=diagnostics_by_rule,
             )
         instance.input_gaps = tuple(
             _input_gaps(instance.depends_on, structured_ingest)
@@ -1705,6 +1756,23 @@ def build_check_receipts(
 
     statuses = _rule_statuses(rule_execution_summary)
     registry = registry_rule_ids(report_kind)
+    rule_diagnosis_by_rule: Dict[str, Dict[str, Any]] = {}
+    if isinstance(rule_execution_summary, Mapping):
+        for entry in rule_execution_summary.get("unresolved_rules") or []:
+            if not isinstance(entry, Mapping) or not entry.get("rule_id"):
+                continue
+            codes = [str(code) for code in entry.get("reason_codes") or ()
+                     if str(code) in KNOWN_REASON_CODES]
+            if codes or entry.get("next_action") or entry.get("root_cause_key") \
+                    or entry.get("blocked_by") or entry.get("missing_operands") or entry.get("candidates"):
+                rule_diagnosis_by_rule[str(entry["rule_id"])] = make_diagnosis(
+                    reason_codes=codes or ["rule_no_reason"],
+                    blocked_by=entry.get("blocked_by") or (),
+                    missing_operands=entry.get("missing_operands") or (),
+                    candidates=entry.get("candidates") or (),
+                    next_action=entry.get("next_action"),
+                    root_cause_key=entry.get("root_cause_key"),
+                )
     findings_by_pair: Dict[Tuple[str, str], List[str]] = {}
     for finding in iter_findings(result):
         rule_ids = _finding_rule_ids(finding)
@@ -1849,6 +1917,27 @@ def build_check_receipts(
                         "relation_tolerances": per_relation_tolerance,
                     }
 
+            relation_diagnoses: List[Optional[Dict[str, Any]]] = [
+                rule_diagnosis_by_rule.get(raw_rule_id)
+            ]
+            for relation in pair_relations:
+                if relation.status not in UNCOMPLETED_RECEIPT_STATUSES:
+                    continue
+                relation_diagnoses.append(
+                    make_diagnosis(
+                        reason_codes=list(relation.reason_codes) or ["rule_no_reason"],
+                        blocked_by=relation.blocked_by,
+                        missing_operands=relation.missing_operands,
+                        candidates=relation.candidates,
+                        next_action=relation.next_action,
+                        root_cause_key=relation.root_cause_key,
+                    )
+                )
+            diagnosis = merge_diagnoses(relation_diagnoses)
+            if diagnosis is None and (
+                status in UNCOMPLETED_RECEIPT_STATUSES or incomplete_reason
+            ):
+                diagnosis = make_diagnosis(reason_codes=["rule_no_reason"])
             receipt = CheckReceipt(
                 rule_id=raw_rule_id,
                 sub_check_id=f"{obligation_id}:{raw_rule_id}",
@@ -1862,12 +1951,155 @@ def build_check_receipts(
                 obligation_id=obligation_id or None,
                 evaluation_basis="fiscal_fact" if is_fact_based else "legacy_document",
                 fact_migration_status="complete" if is_fact_based else "pending",
+                reason_codes=list(diagnosis["reason_codes"]) if diagnosis else [],
+                blocked_by=list(diagnosis["blocked_by"]) if diagnosis else [],
+                missing_operands=list(diagnosis["missing_operands"]) if diagnosis else [],
+                candidates=list(diagnosis["candidates"]) if diagnosis else [],
+                next_action=diagnosis["next_action"] if diagnosis else None,
+                root_cause_key=diagnosis["root_cause_key"] if diagnosis else None,
             )
             receipt_items.append(receipt.to_dict())
 
     # 关系级回执置于义务级回执之后，逐关系可追溯（AC-04 验收要求）
     receipt_items.extend(relation_receipts)
     return receipt_items
+
+
+#: 方案 DH-02 第 1 条：由未完成回执汇总的义务与语义模型义务。
+DH02_OBLIGATION_SCOPE = frozenset(
+    {"insufficient_data", "parse_ambiguity", "execution_error", "ai_not_run", "ai_failed"}
+)
+
+
+def _diagnosis_reason_priority(code: str) -> int:
+    """与冻结 diagnostic_policy 的原因优先级同构的稳定排序键。"""
+    if code.startswith("ai_"):
+        return 50
+    if code == "rule_no_reason":
+        return 10
+    if code in {
+        "table_mapping_incomplete", "row_code_missing", "row_level_unresolved",
+        "column_identity_unconfirmed", "column_width_drift", "cell_unbound",
+        "text_statement_unparsed", "parse_error", "execution_error",
+    }:
+        return 10
+    if code in {
+        "table_missing", "text_statement_absent", "name_mismatch_confirmed",
+        "code_name_conflict",
+    }:
+        return 20
+    if code in {
+        "stated_total_missing", "withheld_amount_unknown", "sum_scope_not_comparable",
+        "comparison_identity_unresolved", "item_disclosure_missing",
+        "item_amount_not_included", "item_sum_mismatch", "candidate_amount_conflict",
+        "exception_amount_conflict", "exception_scope_ambiguous", "source_unit_normalized",
+    }:
+        return 100
+    return 30
+
+
+def apply_obligation_diagnosis(
+    obligation_coverage: Mapping[str, Any],
+    check_receipts: Sequence[Mapping[str, Any]],
+) -> None:
+    """把关联回执的结构化卡点汇总到义务实例（就地修改台账）。
+
+    汇总规则与验收工具 T13 一致：义务的 ``reason_codes`` 包含全部关联未完成
+    回执的原因码；``blocked_by`` / ``missing_operands`` / ``candidates`` 取
+    并集；主根因键与下一步动作来自同一最上游回执。没有关联回执的 AI 义务
+    使用自身模式说明；其他义务保留过渡原因码，不虚构父子关系。
+    """
+    instances = obligation_coverage.get("instances")
+    if not isinstance(instances, list):
+        return
+    children_by_obligation: Dict[str, List[Mapping[str, Any]]] = {}
+    for receipt in check_receipts or []:
+        if not isinstance(receipt, Mapping):
+            continue
+        obligation_id = receipt.get("obligation_id")
+        if not obligation_id or receipt.get("status") not in UNCOMPLETED_RECEIPT_STATUSES:
+            continue
+        children_by_obligation.setdefault(str(obligation_id), []).append(receipt)
+
+    for instance in instances:
+        if not isinstance(instance, dict):
+            continue
+        status = str(instance.get("status") or "")
+        if status not in DH02_OBLIGATION_SCOPE:
+            continue
+        obligation_id = str(instance.get("obligation_id") or "")
+        existing_codes = [
+            str(code) for code in instance.get("reason_codes") or []
+            if str(code) in KNOWN_REASON_CODES
+        ]
+        children = children_by_obligation.get(obligation_id, [])
+        if not children:
+            if status in {"ai_not_run", "ai_failed"}:
+                codes = (
+                    ["ai_not_requested"] if status == "ai_not_run"
+                    else ["ai_partial_invalid_output"]
+                )
+                diagnosis = make_diagnosis(reason_codes=codes, next_action="rerun_ai")
+            else:
+                diagnosis = make_diagnosis(
+                    reason_codes=existing_codes or ["rule_no_reason"]
+                )
+            instance["reason_codes"] = list(
+                dict.fromkeys((*existing_codes, *diagnosis["reason_codes"]))
+            )
+            instance["blocked_by"] = list(diagnosis["blocked_by"])
+            instance["missing_operands"] = list(diagnosis["missing_operands"])
+            instance["candidates"] = list(diagnosis["candidates"])
+            instance["next_action"] = diagnosis["next_action"]
+            instance["root_cause_key"] = diagnosis["root_cause_key"]
+            continue
+
+        child_diagnoses = [
+            make_diagnosis(
+                reason_codes=list(child.get("reason_codes") or []) or ["rule_no_reason"],
+                blocked_by=child.get("blocked_by") or (),
+                missing_operands=child.get("missing_operands") or (),
+                candidates=child.get("candidates") or (),
+                next_action=child.get("next_action"),
+                root_cause_key=child.get("root_cause_key"),
+            )
+            for child in children
+        ]
+        merged = merge_diagnoses(child_diagnoses)
+        assert merged is not None
+        codes = list(dict.fromkeys((*existing_codes, *merged["reason_codes"])))
+        blocker_children = [
+            child for child in children
+            if isinstance(child.get("blocked_by"), list) and child.get("blocked_by")
+        ]
+        if blocker_children:
+            best_rank = min(
+                min(ROOT_PRIORITY.get(str(blocker.get("dimension")), 99)
+                    for blocker in child.get("blocked_by") or [] if isinstance(blocker, dict))
+                for child in blocker_children
+            )
+            pool = [
+                child for child in blocker_children
+                if min(ROOT_PRIORITY.get(str(blocker.get("dimension")), 99)
+                       for blocker in child.get("blocked_by") or [] if isinstance(blocker, dict)) == best_rank
+            ]
+            target_key = diagnostic_root_key(merged)
+            selected = next(
+                (child for child in pool if child.get("root_cause_key") == target_key),
+                min(pool, key=lambda child: (str(child.get("root_cause_key") or ""),)),
+            )
+        else:
+            primary = min(codes, key=lambda code: (_diagnosis_reason_priority(code), code))
+            selected = next(
+                (child for child in children if primary in (child.get("reason_codes") or [])),
+                min(children, key=lambda child: (str(child.get("root_cause_key") or ""),)),
+            )
+        instance["reason_codes"] = codes
+        instance["blocked_by"] = list(merged["blocked_by"])
+        instance["missing_operands"] = list(merged["missing_operands"])
+        instance["candidates"] = list(merged["candidates"])
+        instance["next_action"] = selected.get("next_action") or choose_next_action(codes)
+        instance["root_cause_key"] = selected.get("root_cause_key") or merged["root_cause_key"]
 
 
 def obligation_ids_for_rule(rule_id: Any) -> List[str]:
