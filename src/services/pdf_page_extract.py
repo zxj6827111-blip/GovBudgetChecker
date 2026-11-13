@@ -242,6 +242,20 @@ def extract_visible_text_from_page(page: Any) -> str:
     try:
         page_height = float(page.height)
         filtered_page = page.filter(lambda obj, h=page_height: is_visible_char(obj, h))
+        # 词块先经视觉行重组再拼页文本：pdfplumber 的行聚类按 top 差分簇，
+        # 同一行内粗体/异字号词块基线偏移超过容差会被划成下一行并排到正文
+        # 之后，金额与"万元"在正文里分离（D1 阅读顺序修复）。重组只做行级
+        # 聚类（垂直区间重叠率），不做跨栏全文坐标排序；失败时逐级回退。
+        from src.services.visual_line_reassembly import reassemble_page_text
+
+        try:
+            filtered_words = filtered_page.extract_words() or []
+        except Exception:
+            filtered_words = []
+        if filtered_words:
+            rebuilt = reassemble_page_text(filtered_words)
+            if rebuilt.strip():
+                return rebuilt
         filtered_text = filtered_page.extract_text() or ""
         if filtered_text.strip():
             return filtered_text

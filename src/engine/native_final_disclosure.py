@@ -896,6 +896,60 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
                 return None, error
         return select(doc, facts, 'total_actual', code=leaf_code)
 
+    def bind_leaf_via_cross_table_code():
+        # D2 统一身份绑定：目标表项名与说明名逐字不一致（如表内中间漏字）时，
+        # 用同一份材料其他原表打印的「编码＋完整名称」定位编码，再按编码在
+        # 目标表内唯一定位行。同名对应多个不同编码、编码在目标表内不唯一、
+        # 或与已绑定的类/款前缀不符时一律放弃；名称差异仍由 V33-227 按原文
+        # 独立报告，金额核对不吞名称问题，名称问题也不阻断金额核对。
+        requested = _name(item['xiang'])
+        if not requested or not facts:
+            return None
+        target_table = getattr(facts[0], 'table_code', '')
+        context = getattr(doc, 'fact_context', None)
+        all_facts = list(getattr(context, 'facts', []) or [])
+        anchors: dict = {}
+        for f in all_facts:
+            code = str(getattr(f, 'subject_code', '') or '')
+            if not re.fullmatch(r'\d{7}', code):
+                continue
+            if getattr(f, 'table_code', '') == target_table:
+                continue  # 只用同文独立原表作交叉证据
+            if _name(getattr(f, 'subject_name', '')) != requested:
+                continue
+            anchors.setdefault(code, []).append(f)
+        if len(anchors) != 1:
+            return None
+        anchor_code = next(iter(anchors))
+        if not paths.get(anchor_code, '').startswith(parent):
+            return None  # 锚编码不在已绑定的类/款链下：同名跨款，不绑
+        target_rows = [f for f in facts if str(f.subject_code) == anchor_code]
+        if not target_rows:
+            return None
+        # 同码多指标（total/basic）属同一表行；行名身份必须唯一且与说明名不同。
+        target_names = {_name(f.subject_name) for f in target_rows}
+        if len(target_names) != 1 or next(iter(target_names)) == requested:
+            return None  # 目标表名本就一致时不应走到这里，防御性放弃
+        fact, error = select(doc, facts, 'total_actual', code=anchor_code, allow_native_blank=True)
+        if error or fact is None:
+            return fact, error
+        if aliases is not None:
+            anchor_refs = []
+            for f in anchors[anchor_code]:
+                anchor_refs.extend(f.extra_dims.get('evidence_refs', [])
+                                   if hasattr(f, 'extra_dims') else [])
+            aliases.extend(anchor_refs)
+            aliases.append({
+                'role': 'cross_table_code_anchor',
+                'subject_code': anchor_code,
+                'narrative_name': item['xiang'],
+                'target_table_name': fact.subject_name,
+                'anchor_tables': sorted({getattr(f, 'table_code', '') for f in anchors[anchor_code]}),
+                'anchor_names': sorted({_name(f.subject_name) for f in anchors[anchor_code]}),
+                'basis': 'same_document_printed_code_with_exact_name',
+            })
+        return fact, error
+
     def bind_under_parent_word_order_error():
         # 款名仅为同字异序时，可用完整原表中逐字唯一的项名及原件层级链
         # 独立核对金额；名称错误仍由 V33-227 报告。不同字、旧名、同名多项
@@ -1025,6 +1079,9 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
                 rebound = rebind_leaf_under_class()
                 if rebound is not None:
                     return rebound
+                anchored = bind_leaf_via_cross_table_code()
+                if anchored is not None:
+                    return anchored
             level = {'klass': '类', 'kuan': '款', 'xiang': '项'}[group]
             if not candidates:
                 # 仅解释原文差异，不把近似名称或相同金额升级为同一科目身份。

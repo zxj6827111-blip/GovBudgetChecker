@@ -80,10 +80,12 @@ PARSE_IMPLEMENTATION_FILES = (
     'src/services/ocr_qualification.py',
     'src/services/ocr_tiled_pipeline.py',
     'src/services/ocr_tiles.py',
+    'src/services/pdf_page_extract.py',
     'src/services/pdf_parser.py',
     'src/services/raster_grid_candidates.py',
     'src/services/source_reconstruction.py',
     'src/services/table_reading_assessment.py',
+    'src/services/visual_line_reassembly.py',
 )
 
 #: 解析依赖。版本变化会改变解析产物，不能继续复用旧缓存。

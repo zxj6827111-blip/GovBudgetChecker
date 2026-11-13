@@ -119,7 +119,9 @@ from src.services.input_processing_identity import (
 )
 
 PARSER_FINGERPRINT = (
-    "pdfplumber-cells-v31-parse-identity-"
+    # v32：词块与页文本统一改走视觉行重组（D1 阅读顺序修复），
+    # 同行粗体金额不再被行聚类排到正文之后；指纹随实现清单自动失效旧缓存。
+    "pdfplumber-cells-v32-visual-line-"
     + parse_implementation_manifest()["sha256"][:16]
 )
 
@@ -288,30 +290,46 @@ class PDFParser:
             # 保留原生文字块及其页坐标，供规则上下文与证据层共享。
             # 文本抽取异常时只影响该页文字块，不丢弃可用的表格片段。
             try:
-                words = page.extract_words() or []
+                words = page.extract_words(extra_attrs=("fontname", "size")) or []
             except Exception:
-                words = []
+                try:
+                    words = page.extract_words() or []
+                except Exception:
+                    words = []
             from src.services.table_reading_assessment import collect_page_probe
             reading_probes.append(collect_page_probe(page, page_number, page_text, words))
-            for word_index, word in enumerate(words):
-                text = str(word.get("text") or "").strip()
-                if not text:
-                    continue
-                bbox_values = [word.get("x0"), word.get("top"), word.get("x1"), word.get("bottom")]
-                try:
-                    bbox = tuple(float(value) for value in bbox_values)
-                except (TypeError, ValueError):
-                    bbox = None
-                text_blocks.append(
-                    ParsedTextBlock(
-                        block_uid=f"native-p{page_number}-w{word_index}",
-                        page_number=page_number,
-                        text=text,
-                        bbox=bbox if bbox and bbox[2] > bbox[0] and bbox[3] > bbox[1] else None,
-                        confidence=None,
-                        extraction_method="native_text",
+            # 视觉行重组（D1）：pdfplumber 按 top 差聚行，同一行内粗体/异字号
+            # 词块基线偏移超容差会被排到正文之后，金额与单位在证据层分离。
+            # 仅做行级聚类重排，词块本身（文本、bbox、字体）不变。
+            from src.services.visual_line_reassembly import cluster_words_into_lines
+
+            word_lines = cluster_words_into_lines(words)
+            word_index = 0
+            for line in word_lines:
+                for word in line:
+                    text = str(word.get("text") or "").strip()
+                    if not text:
+                        continue
+                    bbox_values = [word.get("x0"), word.get("top"), word.get("x1"), word.get("bottom")]
+                    try:
+                        bbox = tuple(float(value) for value in bbox_values)
+                    except (TypeError, ValueError):
+                        bbox = None
+                    font_name = word.get("fontname")
+                    font_size = word.get("size")
+                    text_blocks.append(
+                        ParsedTextBlock(
+                            block_uid=f"native-p{page_number}-w{word_index}",
+                            page_number=page_number,
+                            text=text,
+                            bbox=bbox if bbox and bbox[2] > bbox[0] and bbox[3] > bbox[1] else None,
+                            confidence=None,
+                            extraction_method="native_text",
+                            font_name=str(font_name) if font_name else None,
+                            font_size=float(font_size) if font_size is not None else None,
+                        )
                     )
-                )
+                    word_index += 1
             previous = [t for t in self._coalesce_tables(fragments)
                         if t.extraction_method != 'page_text_fallback']
             current = self._extract_tables_from_page(
