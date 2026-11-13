@@ -538,7 +538,7 @@ def test_ai_off_mode_obligation_can_only_report_not_requested(evidence):
     kit,run=evidence
     base,current=run("base"),run("current","DH-02")
     for root in (base,current):
-        def add(row):
+        def add(row, root=root):
             item={"obligation_id":"OBL-AI-SEMANTIC-REVIEW","status":"ai_not_run","detail":"未请求AI","reason_codes":[]}
             if root==current:
                 item.update(reason_codes=["ai_not_requested"],blocked_by=[],root_cause_key="ai-mode",next_action="rerun_ai")
@@ -617,12 +617,14 @@ def test_snapshot_refuses_packaged_default_and_empty_git_source(tmp_path,monkeyp
     monkeypatch.setattr(h,"DEFAULT_KIT",tmp_path)
     with pytest.raises(SystemExit):
         h.snapshot_main(argparse.Namespace(source=None,out=str(tmp_path/"wrong")))
-    source=tmp_path/"repo";source.mkdir()
+    source=tmp_path/"repo"
+    source.mkdir()
     subprocess.run(["git","init","-q",str(source)],check=True)
     with pytest.raises(SystemExit):
         h.snapshot_main(argparse.Namespace(source=str(source),out=str(tmp_path/"empty")))
     assert not (tmp_path/"empty").exists()
-    (source/"src").mkdir();(source/"src/sample.py").write_text("VALUE=1\n")
+    (source/"src").mkdir()
+    (source/"src/sample.py").write_text("VALUE=1\n")
     assert h.snapshot_main(argparse.Namespace(source=str(source),out=str(tmp_path/"valid")))==0
     assert h.read_json(tmp_path/"valid/SNAPSHOT.json")["file_count"]==1
 
@@ -674,10 +676,12 @@ def registered_seed(kit,base,current,tmp_path):
 
 
 def test_fixed_seed_is_explicitly_selftest_only_even_with_full_source(evidence,tmp_path):
-    kit,run=evidence;base,current=run('base'),run('current','DH-02')
+    kit,run=evidence
+    base,current=run('base'),run('current','DH-02')
     args=audit_args(kit,base,current,tmp_path/'rejected')
     with pytest.raises(SystemExit):h.audit_sample_main(args)
-    args.selftest_sampling=True;args.out=str(tmp_path/'test-only')
+    args.selftest_sampling=True
+    args.out=str(tmp_path/'test-only')
     assert h.audit_sample_main(args)==0
     manifest=h.read_json(tmp_path/'test-only/selection.json')
     assert manifest['formal_source'] is True
@@ -686,14 +690,17 @@ def test_fixed_seed_is_explicitly_selftest_only_even_with_full_source(evidence,t
 
 
 def test_registration_then_random_receipt_is_bound_and_reproducible(evidence,tmp_path):
-    kit,run=evidence;base,current=run('base'),run('current','DH-02')
+    kit,run=evidence
+    base,current=run('base'),run('current','DH-02')
     reg,seed=registered_seed(kit,base,current,tmp_path)
     receipt=h.read_json(seed/'seed.json')
     assert len(receipt['seed'])==64
     assert receipt['registration_sha256']==h.sha256_file(reg/'registration.json')
     assert 'seed' not in h.read_json(reg/'registration.json')
     for name in ('one','two'):
-        args=audit_args(kit,base,current,tmp_path/name);args.registration=str(reg);args.seed_receipt=str(seed)
+        args=audit_args(kit,base,current,tmp_path/name)
+        args.registration=str(reg)
+        args.seed_receipt=str(seed)
         assert h.audit_sample_main(args)==0
     assert (tmp_path/'one/selection.json').read_bytes()==(tmp_path/'two/selection.json').read_bytes()
     manifest=h.read_json(tmp_path/'one/selection.json')
@@ -703,36 +710,46 @@ def test_registration_then_random_receipt_is_bound_and_reproducible(evidence,tmp
 
 
 def test_changed_root_key_after_registration_cannot_grind_sampling(evidence,tmp_path):
-    kit,run=evidence;base,current=run('base'),run('current','DH-02')
+    kit,run=evidence
+    base,current=run('base'),run('current','DH-02')
     reg,seed=registered_seed(kit,base,current,tmp_path)
     edit_rows(current,lambda row:update_diagnostics(row,lambda r:r.update(root_cause_key='renamed-to-evade-sampling')))
     assert h.compare_runs(base,current,'DH-02',kit)['overall']=='PASS'
-    args=audit_args(kit,base,current,tmp_path/'must-not-exist');args.registration=str(reg);args.seed_receipt=str(seed)
+    args=audit_args(kit,base,current,tmp_path/'must-not-exist')
+    args.registration=str(reg)
+    args.seed_receipt=str(seed)
     with pytest.raises(SystemExit):h.audit_sample_main(args)
     assert not (tmp_path/'must-not-exist').exists()
 
 
 @pytest.mark.parametrize('field',['seed','size','selftest_sampling'])
 def test_formal_receipt_cannot_be_mixed_with_seed_or_size_overrides(evidence,tmp_path,field):
-    kit,run=evidence;base,current=run('base'),run('current','DH-02')
+    kit,run=evidence
+    base,current=run('base'),run('current','DH-02')
     reg,seed=registered_seed(kit,base,current,tmp_path)
-    args=audit_args(kit,base,current,tmp_path/'bad');args.registration=str(reg);args.seed_receipt=str(seed)
+    args=audit_args(kit,base,current,tmp_path/'bad')
+    args.registration=str(reg)
+    args.seed_receipt=str(seed)
     setattr(args,field,True if field=='selftest_sampling' else 1 if field=='size' else '20261102')
     with pytest.raises(SystemExit):h.audit_sample_main(args)
 
 
 def test_new_submission_cannot_reuse_old_seed_receipt(evidence,tmp_path):
-    kit,run=evidence;base,current=run('base'),run('current','DH-02')
+    kit,run=evidence
+    base,current=run('base'),run('current','DH-02')
     reg,seed=registered_seed(kit,base,current,tmp_path)
     edit_rows(current,lambda row:update_diagnostics(row,lambda r:r.update(root_cause_key='new-submission')))
     reg2=tmp_path/'registration-new'
     assert h.audit_register_main(audit_args(kit,base,current,reg2))==0
-    args=audit_args(kit,base,current,tmp_path/'bad');args.registration=str(reg2);args.seed_receipt=str(seed)
+    args=audit_args(kit,base,current,tmp_path/'bad')
+    args.registration=str(reg2)
+    args.seed_receipt=str(seed)
     with pytest.raises(SystemExit):h.audit_sample_main(args)
 
 
 def test_seed_issue_uses_randomness_and_records_custody_limit(evidence,tmp_path):
-    kit,run=evidence;base,current=run('base'),run('current','DH-02')
+    kit,run=evidence
+    base,current=run('base'),run('current','DH-02')
     reg,seed=registered_seed(kit,base,current,tmp_path)
     other=tmp_path/'another-reviewer-seed'
     assert h.audit_seed_main(argparse.Namespace(kit=str(kit),registration=str(reg),reviewer='验收测试员',out=str(other)))==0
@@ -744,15 +761,21 @@ def test_seed_issue_uses_randomness_and_records_custody_limit(evidence,tmp_path)
 
 
 def test_tampered_seed_receipt_hash_is_rejected(evidence,tmp_path):
-    kit,run=evidence;base,current=run('base'),run('current','DH-02')
+    kit,run=evidence
+    base,current=run('base'),run('current','DH-02')
     reg,seed=registered_seed(kit,base,current,tmp_path)
-    data=h.read_json(seed/'seed.json');data['seed']='a'*64;h.write_json(seed/'seed.json',data)
-    args=audit_args(kit,base,current,tmp_path/'bad');args.registration=str(reg);args.seed_receipt=str(seed)
+    data=h.read_json(seed/'seed.json')
+    data['seed']='a'*64
+    h.write_json(seed/'seed.json',data)
+    args=audit_args(kit,base,current,tmp_path/'bad')
+    args.registration=str(reg)
+    args.seed_receipt=str(seed)
     with pytest.raises(SystemExit):h.audit_sample_main(args)
 
 
 def test_parse_artifact_identity_changes_are_not_whitelisted_as_volatile(evidence):
-    kit,run=evidence;base,current=run('base'),run('current')
+    kit,run=evidence
+    base,current=run('base'),run('current')
     for path in (base,current):
         edit_rows(path,lambda row:row['receipts'][0].update(cell_observations=[{'parse_run_uid':'artifact-original'}]))
     edit_rows(current,lambda row:row['receipts'][0]['cell_observations'][0].update(parse_run_uid='artifact-changed'))

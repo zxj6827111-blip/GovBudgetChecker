@@ -43,7 +43,7 @@ import hashlib
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 _MAIN_ORDER = ("result.rule_findings", "result.issues", "review_report.issues")
 _RECEIPT_CARRIER = "check_receipts"

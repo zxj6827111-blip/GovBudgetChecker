@@ -309,7 +309,7 @@ def _run_relations_stats(before_path: str, after_path: str, output: str) -> None
                 out[f"{pdf_key}::{rid}"] = str(info.get("status") or "")
         return out
 
-    before_rule_status, after_rule_status = _rule_status(before), _rule_status(after)
+    before_rule_status = _rule_status(before)
 
     def _to_ledger(relation):
         """回执状态 → 台账状态（engine_dimension/derive_attribution 的输入词汇）：

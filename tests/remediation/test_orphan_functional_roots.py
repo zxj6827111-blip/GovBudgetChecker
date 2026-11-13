@@ -30,10 +30,12 @@ def mirror_document():
 def add_native_table(doc,other,prefix,page):
     from src.engine.fact_context import build_fact_context_from_artifact
     for table in [*other.parse_artifact.table_fragments,*other.parse_artifact.physical_fragments]:
-        table.fragment_uid=f'{prefix}-fragment';table.page_number=page
+        table.fragment_uid=f'{prefix}-fragment'
+        table.page_number=page
         for cell in table.cells:cell.page_number=page
     instance=other.parse_artifact.logical_tables[0]
-    instance.instance_uid=f'{prefix}-instance';instance.fragment_uids=[f'{prefix}-fragment']
+    instance.instance_uid=f'{prefix}-instance'
+    instance.fragment_uids=[f'{prefix}-fragment']
     instance.start_page=instance.end_page=page
     doc.parse_artifact.table_fragments+=other.parse_artifact.table_fragments
     doc.parse_artifact.physical_fragments+=other.parse_artifact.physical_fragments
@@ -47,7 +49,8 @@ def add_native_table(doc,other,prefix,page):
 
 
 def test_mistyped_item_requires_complete_native_mirror_chain_and_never_changes_original_code():
-    doc = mirror_document();before=deepcopy(doc.fact_context.to_dict())
+    doc = mirror_document()
+    before=deepcopy(doc.fact_context.to_dict())
     issues = check(doc)
     assert len(issues) == 1 and issues[0].location['check_type']=='orphan_classification'
     assert issues[0].location['orphan_codes']==['3013299']
@@ -91,7 +94,10 @@ def test_mixed_depth_rows_are_not_excluded_without_unique_current_original_mirro
             for cell in table.cells:
                 if cell.col_idx<2:cell.extraction_method='ocr'
     else:
-        candidate=deepcopy(mirror);candidate.fact_uid='different-code';candidate.subject_code='2043299';doc.fact_context.facts.append(candidate)
+        candidate=deepcopy(mirror)
+        candidate.fact_uid='different-code'
+        candidate.subject_code='2043299'
+        doc.fact_context.facts.append(candidate)
     issues=check(doc)
     assert not any(i.location.get('check_type')=='orphan_classification' for i in issues)
     total=next(r for r in doc.fact_receipts if r['sub_check_id']==f'{T5}:total:total_actual')
@@ -148,7 +154,9 @@ def orphan_pair():
     issues=check_native_detail_tables(R33005_TableTotalConsistency(),doc,table_codes=[T5,'FIN_03_expenditure'])
     rows=[asdict(issue) for issue in issues]
     assert len(rows)==2
-    for index,row in enumerate(rows):row['rule_id']='V33-005';row['id']=f'orphan-{index}'
+    for index,row in enumerate(rows):
+        row['rule_id']='V33-005'
+        row['id']=f'orphan-{index}'
     return doc,rows
 
 

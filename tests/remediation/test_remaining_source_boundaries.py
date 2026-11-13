@@ -41,7 +41,8 @@ def test_verified_blank_summary_and_explicit_text_are_really_compared():
 def test_summary_discrepancy_is_not_excused_by_special_point_zero_five_tolerance():
     doc=economics()
     fact=next(f for f in doc.fact_context.facts if f.subject_name=='人员经费合计')
-    fact.normalized_value=Decimal('120.04');fact.raw_value='120.04'
+    fact.normalized_value=Decimal('120.04')
+    fact.raw_value='120.04'
     assert any(i.severity=='error' and '0.04' in i.message for i in R33117_BasicExpenseClassification().apply(doc))
 
 

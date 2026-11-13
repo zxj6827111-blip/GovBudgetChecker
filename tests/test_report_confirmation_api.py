@@ -133,8 +133,6 @@ def test_manual_review_and_failed_evidence_excluded_from_scope(client, monkeypat
     # 换成含歧义/未完成的载荷 → 门禁 409，且 never 签认 manual_review
     import api.routes.jobs as jobs_mod
 
-    original = jobs_mod.require_job_access
-
     def _with_dirty(request, job_id):
         return (None, None, {"username": "tester"}, _payload())
 

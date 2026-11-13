@@ -451,7 +451,9 @@ def _native_mirror_covered_roots(doc, view, roots, paths):
     """
     _, table, _, _, rows, _ = view
     context = doc.fact_context
-    compact = lambda value: re.sub(r'\s+', '', str(value or ''))
+    def compact(value):
+        return re.sub(r'\s+', '', str(value or ''))
+
     ordered = sorted(rows, key=rows.get)
     proofs = {}
     for code in roots:
@@ -473,7 +475,8 @@ def _native_mirror_covered_roots(doc, view, roots, paths):
         mirror_codes = {fact.subject_code for fact in candidates}
         if len(mirror_codes) != 1:
             continue
-        mirror_code = mirror_codes.pop(); parent_code, class_code = mirror_code[:5], mirror_code[:3]
+        mirror_code = mirror_codes.pop()
+        parent_code, class_code = mirror_code[:5], mirror_code[:3]
         position = ordered.index(code)
         if (parent_code not in rows or class_code not in rows or position == 0
                 or ordered[position-1] != parent_code or rows[code] != rows[parent_code]+1

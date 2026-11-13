@@ -22,7 +22,9 @@ def document():
 
 
 def test_whole_blank_money_grid_is_zero_observations_without_new_financial_facts():
-    doc=document();before=doc.fact_context.to_dict();assert not doc.fact_context.facts
+    doc=document()
+    before=doc.fact_context.to_dict()
+    assert not doc.fact_context.facts
     terms,error=table_facts(doc,'FIN_06_basic_expenditure')
     assert error is None and len(terms)==6 and all(isinstance(term,NativeBlankTerm) for term in terms)
     for name in ['人员经费合计','公用经费合计']:
@@ -60,11 +62,14 @@ def test_wrapped_literal_name_matches_same_blank_cell_without_name_aliasing():
 
 @pytest.mark.parametrize('change',['dash','unverified','ocr','no_data_rows','foreign_run','off','duplicate_instance'])
 def test_absence_or_uncertain_blank_is_never_a_zero_table(change,monkeypatch):
-    doc=document();a=doc.parse_artifact
+    doc=document()
+    a=doc.parse_artifact
     if change=='dash':a.table_fragments[0].cells[8].raw_text='—'
     elif change=='unverified':a.table_fragments[0].cells[8].native_blank_verified=False
     elif change=='ocr':a.table_fragments[0].extraction_method='ocr'
-    elif change=='no_data_rows':a.table_fragments[0].rows=a.table_fragments[0].rows[:1];a.table_fragments[0].cells=a.table_fragments[0].cells[:6]
+    elif change=='no_data_rows':
+        a.table_fragments[0].rows=a.table_fragments[0].rows[:1]
+        a.table_fragments[0].cells=a.table_fragments[0].cells[:6]
     elif change=='foreign_run':a.parse_run_uid='another'
     elif change=='off':monkeypatch.setenv('GOVBUDGET_EMPTY_VALUE_CONVENTIONS','off')
     else:a.logical_tables.append(deepcopy(a.logical_tables[0]))
@@ -73,7 +78,8 @@ def test_absence_or_uncertain_blank_is_never_a_zero_table(change,monkeypatch):
 
 @pytest.mark.parametrize('change',['missing_cell','data_cell_marked_header'])
 def test_incomplete_money_grid_cannot_become_a_partial_certified_zero_table(change):
-    doc=document();table=doc.parse_artifact.table_fragments[0]
+    doc=document()
+    table=doc.parse_artifact.table_fragments[0]
     target=next(c for c in table.cells if (c.row_idx,c.col_idx)==(2,2))
     if change=='missing_cell':table.cells.remove(target)
     else:target.is_header=True

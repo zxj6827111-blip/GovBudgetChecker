@@ -15,7 +15,8 @@ def case():
     doc.page_texts=['甲局2025年度部门决算。'+'\n'.join(' '.join(row) for row in rows)]
     issues=check_native_detail_tables(R33241_Table3_ExpenseAdvancedCheck(),doc,table_codes=['FIN_03_expenditure'])
     one=next(i for i in issues if i.location.get('code')=='total' and i.location.get('column')=='basic_actual')
-    two=deepcopy(one);two.rule='V33-005'
+    two=deepcopy(one)
+    two.rule='V33-005'
     return doc,one,two
 
 
@@ -29,9 +30,12 @@ def test_certified_blank_parent_and_numeric_child_are_one_formula_not_multiple_f
 
 
 def test_changed_blank_role_or_missing_observation_does_not_merge():
-    doc,one,two=case();two.location['native_blank_operands'][0]['role']='child'
+    doc,one,two=case()
+    two.location['native_blank_operands'][0]['role']='child'
     assert len(deduplicate_native_issues([one,two],doc))==2
-    doc,one,two=case();two.location['native_blank_operands'].pop()
+    doc,one,two=case()
+    two.location['native_blank_operands'].pop()
     assert len(deduplicate_native_issues([one,two],doc))==2
-    doc,one,two=case();two.location['native_blank_sources']=[]
+    doc,one,two=case()
+    two.location['native_blank_sources']=[]
     assert len(deduplicate_native_issues([one,two],doc))==2

@@ -34,7 +34,7 @@ def labels_covered_by_native_cells(table, row_index, columns):
                or cell.extraction_method not in {'lines', 'lines_strict'} or cell.ocr_provenance
                or cell.col_span != 1 for cell in source):
             continue
-        if (all(abs(left.bbox[2] - right.bbox[0]) <= .5 for left, right in zip(source, source[1:]))
+        if (all(abs(left.bbox[2] - right.bbox[0]) <= .5 for left, right in zip(source, source[1:], strict=False))
                 and abs(enclosing[0].bbox[0] - source[0].bbox[0]) <= .5
                 and abs(enclosing[0].bbox[2] - source[-1].bbox[2]) <= .5):
             proofs.add(index)

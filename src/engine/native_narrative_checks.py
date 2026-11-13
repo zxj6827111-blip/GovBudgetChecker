@@ -110,7 +110,9 @@ class _Text:
             quote = self.raw[begin:finish] if begin < finish else ''
             if quote.strip():
                 if unique_context:
-                    normalize = lambda value: ''.join(unicodedata.normalize('NFKC',value).split())
+                    def normalize(value):
+                        return ''.join(unicodedata.normalize('NFKC', value).split())
+
                     page_text = normalize(self.raw[left:right])
                     expanded_begin, expanded_end = begin, finish
                     # 原文定位只增加相邻完整行作见证，不改动取数范围或原句。

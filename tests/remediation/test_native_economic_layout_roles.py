@@ -15,7 +15,9 @@ def economic_note():
         ['人员经费合计','','10.00','公用经费合计','','3.00'],
         ['注：小数点保留两位。',None,None,None,None,None]])
     table=doc.parse_artifact.table_fragments[0]
-    note=cell(doc,3,0);note.col_span=6;note.bbox=(0,125,420,150)
+    note=cell(doc,3,0)
+    note.col_span=6
+    note.bbox=(0,125,420,150)
     for col in range(1,6):cell(doc,3,col).bbox=None
     doc.parse_artifact.physical_fragments=[deepcopy(table)]
     return doc,table
@@ -29,17 +31,22 @@ def test_full_width_native_note_is_not_a_subject_row():
 
 @pytest.mark.parametrize('change',['not_merged','another_real_cell','numeric_cell','ocr','ordinary_label'])
 def test_note_text_does_not_hide_real_or_unverified_cells(change):
-    doc,table=economic_note();note=cell(doc,3,0)
+    doc,table=economic_note()
+    note=cell(doc,3,0)
     if change=='not_merged':note.col_span=1
     elif change=='another_real_cell':cell(doc,3,5).bbox=(350,125,420,150)
-    elif change=='numeric_cell':cell(doc,3,5).raw_text='3.00';cell(doc,3,5).numeric_value=3
+    elif change=='numeric_cell':
+        cell(doc,3,5).raw_text='3.00'
+        cell(doc,3,5).numeric_value=3
     elif change=='ocr':note.ocr_provenance={'model':'ocr'}
     else:note.raw_text='工资福利支出'
     assert not merged_note_row(table,3)
 
 
 def test_summary_label_merge_covers_labels_but_never_missing_money_cell():
-    doc,table=economic_note();label=cell(doc,2,0);label.col_span=2
+    doc,table=economic_note()
+    label=cell(doc,2,0)
+    label.col_span=2
     table.cells.remove(cell(doc,2,1))
     doc.parse_artifact.physical_fragments=[deepcopy(table)]
     assert labels_covered_by_native_cells(table,2,[0,1])
@@ -56,7 +63,10 @@ def tail():
         ['','','','','置更新','']])
     table=doc.parse_artifact.table_fragments[0]
     for col in range(6):
-        c=cell(doc,2,col);c.page_number=2;c.origin_row_idx=0;c.origin_fragment_uid='next-page'
+        c=cell(doc,2,col)
+        c.page_number=2
+        c.origin_row_idx=0
+        c.origin_fragment_uid='next-page'
     doc.parse_artifact.physical_fragments=[deepcopy(table)]
     doc.fact_context=FactContext([],doc.parse_artifact.source_file_hash,doc.parse_artifact.parse_run_uid,
                                 org_name='甲局',fiscal_year=2025,report_kind='final')
@@ -74,7 +84,9 @@ def test_name_tail_requires_entire_physical_zero_proof(change,monkeypatch):
     doc,table,cells,mapping=tail()
     if change=='same_page':cells[2,4].page_number=1
     elif change=='not_first_row':cells[2,4].origin_row_idx=2
-    elif change=='value':cells[2,5].raw_text='1.00';cells[2,5].numeric_value=1
+    elif change=='value':
+        cells[2,5].raw_text='1.00'
+        cells[2,5].numeric_value=1
     elif change=='dash':cells[2,5].raw_text='—'
     elif change=='unverified':cells[2,5].native_blank_verified=False
     elif change=='unknown_previous':cells[1,3].raw_text='未知'
@@ -131,7 +143,6 @@ def test_duplicate_row_delivered_as_low_finding_by_v33243():
     from src.engine.native_table_arithmetic import check_basic_economics
 
     doc = duplicate_row_doc()
-    facts = [f for f in doc.fact_context.facts if f.table_code == 'FIN_06_basic_expenditure']
     rule = R33243_Table6_BasicExpenseAdvancedCheck()
     issues = check_basic_economics(rule, doc)
     dup_hits = [i for i in issues if '重复科目行' in str(i.message)]

@@ -11002,7 +11002,7 @@ def _econ_table_uses_2025_codes(table6: Any) -> bool:
         for index, cell in enumerate(cells):
             if not cell.text or _normalize_item_label(cell.text) != "差旅费":
                 continue
-            parts: List[str] = []
+            parts = []
             for prior in reversed(cells[max(0, index - 2):index]):
                 if (prior.text or prior.number is None
                         or prior.number != prior.number.to_integral_value()):
@@ -11602,7 +11602,6 @@ class R33CrossSanGongEcon(Rule):
         if blank_keys:
             zero_basis_by_subject: Dict[str, str] = {}
             self._zero_basis_note_by_subject = zero_basis_by_subject
-            fact_ctx = getattr(doc, "fact_context", None)
             row_idx = next(
                 (i for i, r in enumerate(table7.rows) if r is data_row), None)
             for key in sorted(blank_keys):

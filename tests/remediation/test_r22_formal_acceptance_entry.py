@@ -262,7 +262,9 @@ def test_same_relation_evidence_degradation_registered():
     after = json.loads(canonical(before))
     for container in (after["result"]["meta"], after["review_report"]):
         fr = container["fact_receipts"][0]
-        fr["operand_fact_ids"] = []; fr["operand_sources"] = {}; fr["formula"] = None
+        fr["operand_fact_ids"] = []
+        fr["operand_sources"] = {}
+        fr["formula"] = None
     result = entry.compare_payloads(before, after, _contract())
     assert result["verdict"] == "compared"
     degraded = [x for x in result["evidence_lost"] if x["kind"] == "same_relation_evidence_degraded"]

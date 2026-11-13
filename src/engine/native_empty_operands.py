@@ -71,7 +71,8 @@ def blank_table_terms(doc, table_code):
                 return []
             sid = term.extra_dims['native_blank_observation']['source_cell_id']
             if sid not in seen:
-                seen.add(sid);terms.append(term)
+                seen.add(sid)
+                terms.append(term)
     return terms
 
 

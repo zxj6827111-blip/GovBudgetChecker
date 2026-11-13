@@ -131,7 +131,6 @@ _COMPONENT_PATH = Path(__file__).resolve().parent / "verify_three_carriers.py"
 
 def _tool_identity() -> Dict[str, str]:
     """工具自身版本分账绑定：入口脚本与三载体组件的 SHA256。"""
-    import hashlib
 
     def _sha(path: Path) -> str:
         try:
@@ -936,7 +935,9 @@ def _contract(checksum: str = "a" * 64, analysis_revision: str = "rev-test-1") -
 
 def selftest() -> Tuple[int, List[Dict[str, Any]]]:
     """单一故障负控 + 合法正控（QP-06 范围）。返回 (exit_code, 明细)。"""
-    findings = lambda ident, message: {"id": ident, "rule": "V33-X", "message": message, "page": 8}
+    def findings(ident, message):
+        return {"id": ident, "rule": "V33-X", "message": message, "page": 8}
+
     receipts = [{"rule_id": "V33-X", "status": "fail", "issue_refs": ["F-1"]}]
     checks: List[Dict[str, Any]] = []
 
@@ -1210,7 +1211,9 @@ def selftest() -> Tuple[int, List[Dict[str, Any]]]:
     after_m2 = json.loads(_canonical(before_m2))
     for cont in (after_m2["result"]["meta"], after_m2["review_report"]):
         fr = cont["fact_receipts"][0]
-        fr["operand_fact_ids"] = []; fr["operand_sources"] = {}; fr["formula"] = None
+        fr["operand_fact_ids"] = []
+        fr["operand_sources"] = {}
+        fr["formula"] = None
     result = compare_payloads(before_m2, after_m2, _contract())
     deg = [x for x in result.get("evidence_lost", []) if x["kind"] == "same_relation_evidence_degraded"]
     record("M-02 负控：同关系operand证据清空登记+零回归False",

@@ -31,7 +31,8 @@ def test_same_page_equivalent_empty_note_has_twelve_certified_sources(phrase):
     '甲局本年度没有三公经费，故本表无数据？',
 ])
 def test_unconfirmed_or_non_table_note_cannot_close_empty_amount_checks(note):
-    doc=empty_three_public();doc.page_texts=['甲局2024年度部门决算。'+note]
+    doc=empty_three_public()
+    doc.page_texts=['甲局2024年度部门决算。'+note]
     assert require_no_activity_disposition(SimpleNamespace(code='test'),doc) is None
 
 

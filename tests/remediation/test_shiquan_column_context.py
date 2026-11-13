@@ -30,7 +30,8 @@ def bind(doc, value):
 
 
 def test_adjacent_project_amount_is_retained_and_each_column_has_its_own_result():
-    doc = document(); before = doc.fact_context.to_dict()
+    doc = document()
+    before = doc.fact_context.to_dict()
     view, error = _table_view(doc, T3)
     assert error is None
     data = build_expenditure_context(doc, view)
@@ -52,7 +53,8 @@ def test_adjacent_project_amount_is_retained_and_each_column_has_its_own_result(
 @pytest.mark.parametrize('change', ['dropped_class', 'changed_value', 'fake_blank', 'stale', 'wrong_hash',
                                   'swapped_column', 'missing_cell', 'other_year', 'budget'])
 def test_comparison_context_must_not_display_partial_changed_or_incompatible_sources(change):
-    doc = document(); view, error = _table_view(doc, T3)
+    doc = document()
+    view, error = _table_view(doc, T3)
     assert error is None
     data = build_expenditure_context(doc, view)
     if change == 'dropped_class': data['rows'].pop()

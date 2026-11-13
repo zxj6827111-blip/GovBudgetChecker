@@ -29,27 +29,36 @@ Y0, Y1, Y2, Y3 = 50, 75, 105, 135
 
 
 def _merged_total_pdf(tmp_path, *, clipped=True):
-    path=tmp_path/'merged-total.pdf';doc=pymupdf.open();page=doc.new_page(width=400,height=300)
+    path=tmp_path/'merged-total.pdf'
+    doc=pymupdf.open()
+    page=doc.new_page(width=400,height=300)
     for x in (X0,X2,X3):page.draw_line((x,Y0),(x,Y3))
     for y in (Y0,Y1,Y2,Y3):page.draw_line((X0,y),(X3,y))
-    page.draw_line((X1,Y0),(X1,Y1));page.draw_line((X1,Y2),(X1,Y3))
+    page.draw_line((X1,Y0),(X1,Y1))
+    page.draw_line((X1,Y2),(X1,Y3))
     for x,y,text,font in [(55,66,'Code','helv'),(115,66,'Name','helv'),(305,66,'Amount','helv'),
         (170,94,'合计','china-s'),(305,94,'10.00','helv'),(55,124,'201','helv'),
         (115,124,'一般公共服务支出','china-s'),(305,124,'10.00','helv')]:
         page.insert_text((x,y),text,fontname=font,fontsize=9)
     page.insert_text((55,94),'编码',fontname='china-s',fontsize=9)
     if clipped:
-        last=page.get_contents()[-1];doc.update_stream(last,b'q 10 10 5 5 re W n\n'+doc.xref_stream(last)+b'\nQ')
-    doc.save(path);doc.close();return path
+        last=page.get_contents()[-1]
+        doc.update_stream(last,b'q 10 10 5 5 re W n\n'+doc.xref_stream(last)+b'\nQ')
+    doc.save(path)
+    doc.close()
+    return path
 
 
 @pytest.mark.parametrize('clipped',[True,False])
 def test_only_source_proven_hidden_header_tail_is_removed_from_merged_total(tmp_path,monkeypatch,clipped):
-    path=_merged_total_pdf(tmp_path,clipped=clipped);page,table=_table(path)
+    path=_merged_total_pdf(tmp_path,clipped=clipped)
+    page,table=_table(path)
     cell=next(c for c in table.cells if (c.row_idx,c.col_idx)==(1,0))
     assert '编码' in cell.raw_text and '合计' in cell.raw_text
-    cell.col_span=2;cell.is_header=True  # 旧角色误把“编码”所在格当成表头。
-    amount=next(c for c in table.cells if (c.row_idx,c.col_idx)==(1,2));amount.numeric_value=10
+    cell.col_span=2
+    cell.is_header=True  # 旧角色误把“编码”所在格当成表头。
+    amount=next(c for c in table.cells if (c.row_idx,c.col_idx)==(1,2))
+    amount.numeric_value=10
     monkeypatch.setattr(visibility,'_amount_columns',lambda _table:{2})
     result,stats=recover_label_cells(page,table,code_columns=[0],name_columns=[1],page_visibility=PageVisibility(_fitz_page(path)))
     total=next(c for c in result.cells if (c.row_idx,c.col_idx)==(1,0))
@@ -64,9 +73,13 @@ def test_only_source_proven_hidden_header_tail_is_removed_from_merged_total(tmp_
 
 @pytest.mark.parametrize('change',['not_merged','not_first_row','overlaps_amount','not_numeric_row','contains_code'])
 def test_merged_total_role_never_rewrites_an_unproven_cell(tmp_path,monkeypatch,change):
-    path=_merged_total_pdf(tmp_path);page,table=_table(path)
-    cell=next(c for c in table.cells if (c.row_idx,c.col_idx)==(1,0));cell.col_span=2;cell.is_header=True
-    amount=next(c for c in table.cells if (c.row_idx,c.col_idx)==(1,2));amount.numeric_value=10
+    path=_merged_total_pdf(tmp_path)
+    page,table=_table(path)
+    cell=next(c for c in table.cells if (c.row_idx,c.col_idx)==(1,0))
+    cell.col_span=2
+    cell.is_header=True
+    amount=next(c for c in table.cells if (c.row_idx,c.col_idx)==(1,2))
+    amount.numeric_value=10
     if change=='not_merged':cell.col_span=1
     elif change=='not_first_row':table.header_row_count=0
     elif change=='overlaps_amount':cell.col_span=3

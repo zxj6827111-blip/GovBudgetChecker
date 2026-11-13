@@ -1447,7 +1447,7 @@ def main() -> None:
                                   "idempotency_key": key}),
                         fresh_keys))
                 fresh_records = {}
-                for key, answer in zip(fresh_keys, fresh_results):
+                for key, answer in zip(fresh_keys, fresh_results, strict=True):
                     if answer.status_code == 200:
                         fresh_records[key] = answer.json().get("record") or {}
                 final_readback = client.get(f"/api/jobs/{job_id}/report-confirmation")
@@ -1523,11 +1523,6 @@ def main() -> None:
                                 and all(s.status_code == 200 for s in starts))
                 lifecycle = client.get(f"/api/reviews/{slot_id}", params={"job_uuid": job_id})
                 lifecycle.raise_for_status()
-                lifecycle_data = lifecycle.json().get("data") or {}
-                basis_token = ((lifecycle_data.get("current_analysis") or {})
-                               .get("analysis_basis_token")) or ""
-                session = (lifecycle_data.get("current_session") or {})
-                session_token = session.get("analysis_basis_token") or basis_token
                 steps.step("S5d_start_idempotent", same_session,
                            {"start_a": start_a.status_code, "start_b": start_b.status_code,
                             "starts": sorted(s.status_code for s in starts),

@@ -418,7 +418,6 @@ def _original_table_rows(doc, pages, codes=None):
     （fail-closed，不猜）。
     """
     rows = []
-    seen_codes = []
     all_pages = getattr(doc, 'page_texts', []) or []
     hint = {str(c) for c in (codes or ())}
 
@@ -608,7 +607,9 @@ def _native_grid_name_rows(doc, pages):
                     and x0 - .5 <= t.bbox[0] <= t.bbox[2] <= x1 + .5
                     and y0 - .5 <= t.bbox[1] <= t.bbox[3] <= y1 + .5],
                     key=lambda t: (t.bbox[1], t.bbox[0]))
-                literal = lambda v: re.sub(r'\s+', '', str(v or ''))
+                def literal(value):
+                    return re.sub(r'\s+', '', str(value or ''))
+
                 if not native or literal(''.join(t.raw_text for t in native)) != literal(cell.raw_text):
                     break
                 proof.extend({'file_hash': context.file_hash, 'page': t.physical_page,
@@ -1649,7 +1650,9 @@ def check_performance_counts(rule, doc):
             #     冲突）才进入明确歧义，不默认部分优先。
             scope_compact = text.compact[total.end():group_end]
 
-            def _qualifier_governs_ratings(match: 're.Match[str]') -> bool:
+            def _qualifier_governs_ratings(
+                match: 're.Match[str]', scope_compact: str = scope_compact
+            ) -> bool:
                 """限定词所在子句必须含评级数量披露谓词（如下/见下/评级为）。"""
                 clause_start = 0
                 for boundary in '。；;，,（(':

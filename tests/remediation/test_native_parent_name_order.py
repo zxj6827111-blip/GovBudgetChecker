@@ -16,7 +16,7 @@ def document(*, extra=()):
     for row, (code, name) in enumerate(entries):
         y = row * 30
         boxes = [(0, y, 50, y+25), (50, y, 150, y+25)]
-        for col, (raw, box) in enumerate(zip((code, name), boxes)):
+        for col, (raw, box) in enumerate(zip((code, name), boxes, strict=True)):
             cells.append(NS(row_idx=row, col_idx=col, raw_text=raw, page_number=1,
                             bbox=box, ocr_provenance={}, is_header=False))
             for i, part in enumerate(raw.splitlines()):
@@ -83,9 +83,11 @@ def test_two_independent_exact_leaf_chains_can_bind_under_wrong_parent_label(mon
     from src.engine.native_narrative_checks import _Text
     doc,facts=document(extra=(('2120101','行政运行'),))
     doc.page_texts[0]+='\n“城乡社区支出(类)旧款名(款)其他城乡社区管理事务支出(项)”支出决算100万元。\n“城乡社区支出(类)旧款名(款)行政运行(项)”支出决算100万元。'
-    text=_Text.from_pages(doc.page_texts);items=list(target._ITEM.finditer(text.compact))
+    text=_Text.from_pages(doc.page_texts)
+    items=list(target._ITEM.finditer(text.compact))
     monkeypatch.setattr(target,'_general_ranges',lambda doc:(text,[('一般公共预算支出',0,len(text.compact))]))
-    aliases=[];fact,reason=target._hierarchy_fact(doc,facts,items[0],siblings=items,aliases=aliases)
+    aliases=[]
+    fact,reason=target._hierarchy_fact(doc,facts,items[0],siblings=items,aliases=aliases)
     assert reason is None and fact.subject_code=='2120199'
     proof=next(x for x in aliases if x.get('role')=='independent_exact_leaf_chain')
     assert proof['corroborating_leaf_codes']==['2120101','2120199']

@@ -1243,7 +1243,6 @@ def reconcile(pdf: str, anchor: str, page_spec: str) -> Dict[str, Any]:
     ]
     doc = doc_for_artifact(artifact, pdf, page_texts)
     merged_rows, view_errors = _logical_view_with_provenance(doc, instances)
-    merged_row_pages = {row["page"] for row in merged_rows}
     # 行归属页过滤：只对账落在所查页范围内的合并行
     merged_rows = [row for row in merged_rows if row["page"] in set(pages)]
 
@@ -1386,7 +1385,7 @@ def self_test(pdf: str) -> Dict[str, Any]:
                  and _row_identity_and_numbers(row["cells"], roles)[0] == identity_b)
     indices_a = _amount_cell_indices(row_a["cells"], roles)
     indices_b = _amount_cell_indices(row_b["cells"], roles)
-    for left, right in zip(indices_a, indices_b):
+    for left, right in zip(indices_a, indices_b, strict=True):
         row_a["cells"][left], row_b["cells"][right] = row_b["cells"][right], row_a["cells"][left]
     mutated = _reconcile_row_alignment(injected, scoped_texts, sorted(pages_set),
                                        semantic_roles)
@@ -1440,7 +1439,6 @@ def reconcile_auto(pdf: str) -> Dict[str, Any]:
         page_tables = [extract_tables_from_page(p) for p in pdf_doc.pages]
         scoped_texts = _table_scoped_texts(pdf_doc)
     doc = doc_for_artifact(artifact, pdf, page_texts)
-    fragments = {f.fragment_uid: f for f in getattr(artifact, "table_fragments", []) or []}
     results = []
     for instance in getattr(artifact, "logical_tables", []) or []:
         pages_set = _instance_pages(doc, instance)

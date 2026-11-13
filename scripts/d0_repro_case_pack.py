@@ -37,16 +37,12 @@ async def run(pdf: str, org: str, year: int, kind: str, out: str | None,
     fact_context = None
     parse_artifact = None
     page_texts: list[str] = []
+    page_tables: list = []
     if task_dir:
         # --task 仅记录复现归属（哪次分析的输入）；页文本与表格用 runner
         # 自身的抽取器从原件重建（与全新解析同一路径，保证表格规则可用）。
         # 事实上下文不回灌：旧快照缺少 parse_artifact 绑定时表格规则会整体
         # 降级为"表缺失"，不如直接以当前代码从原件重算（D0 复现纪律）。
-        status = {}
-        st_path = Path(task_dir) / "status.json"
-        if st_path.exists():
-            status = json.loads(st_path.read_text(encoding="utf-8"))
-        meta_saved = ((status.get("result") or {}).get("meta") or {})
         try:
             from src.services.pdf_page_extract import (
                 extract_tables_from_page,
@@ -60,11 +56,14 @@ async def run(pdf: str, org: str, year: int, kind: str, out: str | None,
                     page_texts.append(extract_visible_text_from_page(page))
                     page_tables.append(extract_tables_from_page(page))
         except Exception:
+            # 抽取失败时整批回退，不能把残留页文本与不完整表格混用。
             page_texts = []
+            page_tables = []
     ctx = JobContext(
         job_id="d0-repro",
         pdf_path=pdf,
         page_texts=page_texts,
+        page_tables=page_tables,
         fact_context=fact_context,
         parse_artifact=parse_artifact,
         meta={

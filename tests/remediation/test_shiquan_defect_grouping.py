@@ -78,7 +78,8 @@ def test_three_pairs_become_three_cards_with_all_source_locations_and_member_ids
 
 @pytest.mark.parametrize('change', ['code', 'actual_name', 'wrong_page', 'missing_source', 'year'])
 def test_name_grouping_never_merges_other_code_or_unverified_occurrence(change):
-    doc = document(); one, two = names(doc)
+    doc = document()
+    one, two = names(doc)
     if change == 'code': two['location']['code'] = '204'
     elif change == 'actual_name': two['location']['actual_name'] = '一般公共事务'
     elif change == 'wrong_page': two['location']['table_refs'][0]['page'] = 1
@@ -89,8 +90,11 @@ def test_name_grouping_never_merges_other_code_or_unverified_occurrence(change):
 
 @pytest.mark.parametrize('change', ['other_occurrence', 'wrong_page', 'budget', 'stale', 'another_business'])
 def test_equal_amounts_do_not_merge_other_statement_stage_or_fact(change):
-    doc = document(); one, two = reception(doc)
-    if change == 'other_occurrence': doc.page_texts.append(doc.page_texts[3]); two['location']['table_refs'][0]['page'] = 5
+    doc = document()
+    one, two = reception(doc)
+    if change == 'other_occurrence':
+        doc.page_texts.append(doc.page_texts[3])
+        two['location']['table_refs'][0]['page'] = 5
     elif change == 'wrong_page': two['location']['table_refs'][0]['page'] = 2
     elif change == 'budget': two['location']['operand_refs'][0]['budget_stage'] = '年初预算'
     elif change == 'stale': two['location']['fact_context_version_token'] = 'old'
@@ -100,7 +104,8 @@ def test_equal_amounts_do_not_merge_other_statement_stage_or_fact(change):
 
 @pytest.mark.parametrize('change', ['three_values', 'wrong_business', 'wrong_year', 'missing_ref', 'missing_fact', 'ambiguous_fact'])
 def test_narrative_bridge_requires_same_business_two_claims_and_unique_current_table_fact(change):
-    doc = document(); one, two = annuity(doc)
+    doc = document()
+    one, two = annuity(doc)
     if change == 'three_values': two['location']['value_a'] = '260'
     elif change == 'wrong_business': two['location']['indicator'] = '基本养老保险缴费支出'
     elif change == 'wrong_year': two['location']['fiscal_year'] = 2024
@@ -122,12 +127,14 @@ def detail_sums(doc):
 
 
 def test_same_section_budget_and_actual_have_one_card_two_formulas_and_two_failed_receipts():
-    doc = document(); issues = detail_sums(doc)
+    doc = document()
+    issues = detail_sums(doc)
     receipts = [dict(rule_id='V33-251', sub_check_id=f'V33-251:{kind}:item_sum', status='fail')
                 for kind in ['budget', 'final']]
     grouped = deduplicate_native_issues(issues, doc)
     assert len(grouped) == 1
-    item = grouped[0]; item['id'] = 'group'
+    item = grouped[0]
+    item['id'] = 'group'
     deduplicate_native_issues(grouped, doc, receipts=receipts)
     assert len(item['location']['detail_sum_checks']) == 2
     assert len(item['location']['related_findings']) == 2
@@ -138,7 +145,8 @@ def test_same_section_budget_and_actual_have_one_card_two_formulas_and_two_faile
 
 @pytest.mark.parametrize('change', ['other_section', 'wrong_page', 'partial', 'wrong_kind', 'wrong_sum', 'stale'])
 def test_detail_sums_do_not_merge_other_section_or_unverified_computation(change):
-    doc = document(); one, two = detail_sums(doc)
+    doc = document()
+    one, two = detail_sums(doc)
     if change == 'other_section':
         doc.page_texts[4] += '另一节年初预算为30万元。'
         two['location']['detail_section_anchor']['span'] = '年初预算为30万元'

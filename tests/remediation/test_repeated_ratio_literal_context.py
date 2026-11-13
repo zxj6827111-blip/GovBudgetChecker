@@ -9,11 +9,15 @@ from src.services.rule_source_binding import _literal_ref_sources,bind_rule_sour
 
 def test_repeated_ratio_fragment_only_binds_with_unchanged_unique_original_context(tmp_path):
     path=tmp_path/'original.pdf'
-    pdf=pymupdf.open();page=pdf.new_page()
+    pdf=pymupdf.open()
+    page=pdf.new_page()
     page.insert_text((40,50),'A overseas\ndecision 0; completion 100%\nB reception\ndecision 0; completion 100%',fontsize=12)
-    pdf.save(path);pdf.close()
+    pdf.save(path)
+    pdf.close()
     with pdfplumber.open(path) as source:pages=[source.pages[0].extract_text()]
-    text=_Text.from_pages(pages);needle='decision0;completion100%';start=text.compact.index(needle)
+    text=_Text.from_pages(pages)
+    needle='decision0;completion100%'
+    start=text.compact.index(needle)
     original=text.refs(start,start+len(needle),'完成率声明')[0]
     sha=hashlib.sha256(path.read_bytes()).hexdigest()
     assert _literal_ref_sources(original,pages,sha)==[], '重复短语不能按金额或出现顺序猜定位'
@@ -30,6 +34,7 @@ def test_repeated_ratio_fragment_only_binds_with_unchanged_unique_original_conte
 
 def test_unique_quote_and_default_refs_remain_exact_and_do_not_invent_context():
     text=_Text.from_pages(['甲项决算0万元，完成100%。\n乙项决算0万元，完成100%。'])
-    start=text.compact.index('甲项');end=text.compact.index('。')+1
+    start=text.compact.index('甲项')
+    end=text.compact.index('。')+1
     assert text.refs(start,end,'完成率声明')==text.refs(start,end,'完成率声明',unique_context=True)
     assert text.refs(start,end,'完成率声明')[0]['span']=='甲项决算0万元，完成100%。'

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 from decimal import Decimal
-from typing import Any, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .fact_context import _canonical_budget_stage, operand_rejection_reason
 
@@ -218,7 +218,6 @@ def _scope_none_statement(scope: str, doc: Any) -> Optional[Tuple[str, List[dict
     if not compact:
         return None
     for match in _TOTAL_NONE_RE.finditer(compact):
-        sentence = compact[match.start():match.end()]
         context_begin = max(
             compact.rfind("。", 0, match.start()),
             compact.rfind("；", 0, match.start()),
