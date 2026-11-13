@@ -1,0 +1,703 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-12",
+  "repository": "https://github.com/zxj6827111-blip/GovBudgetChecker",
+  "selected_main_code_baseline": "e258f16dece283fca0c8dc214fd64df05e08c964",
+  "policy": "Back up all local code; merge into main only reviewed and verified changes. Preserve frozen rules and gold semantics.",
+  "main_product_code_changes_in_this_round": false,
+  "selected_main_validation": {
+    "command": "pytest tests/test_verify_pending_review.py tests/test_rules_yaml_unique_keys.py tests/test_report_confirmation_gate.py tests/test_reanalyze_inheritance.py",
+    "result": "118 passed"
+  },
+  "local_draft_snapshots": [
+    {
+      "source_branch": "refs/heads/claude/blank-zero-default-20261108",
+      "source_head": "ed9478655bc38266cbea0d2f5e23928249435e28",
+      "backup_ref": "refs/heads/codex/draft-backup-20261112/b5899c2ac4",
+      "commit": "3ea0131a45ea159e3e90c5ce63582037ae44754e",
+      "code_files": 27,
+      "files_already_equal_to_main": [
+        "app/app/components/review-workbench/obligationProblems.ts",
+        "app/app/components/review-workbench/reviewLifecycleAdapters.ts",
+        "app/tests/reviewObligationAdapters.test.ts",
+        "src/engine/cell_value_policy.py",
+        "src/schemas/material_detail.py",
+        "src/schemas/review_lifecycle.py",
+        "src/services/material_detail_query_service.py",
+        "src/services/review_lifecycle_service.py",
+        "tests/remediation/test_narrative_zero_evidence.py",
+        "tests/remediation/test_putuo_code_repair.py",
+        "tests/test_blank_zero_default_20261108.py",
+        "tests/test_cell_value_policy.py",
+        "tests/test_income_vertical_columns.py"
+      ],
+      "status": "backup_only_unreviewed"
+    },
+    {
+      "source_branch": "refs/heads/codex/joint-exp-s45-dev-20261103",
+      "source_head": "5186c35ee50b872def58c98a0746610fa39a35b5",
+      "backup_ref": "refs/heads/codex/draft-backup-20261112/a82f3fb552",
+      "commit": "d1ead9345053a3c9086809ce98b3664332e1b50c",
+      "code_files": 3,
+      "files_already_equal_to_main": [],
+      "status": "backup_only_unreviewed"
+    },
+    {
+      "source_branch": "refs/heads/codex/pending-review-dh0203-dev-20261102",
+      "source_head": "c6cd033d79f907a4541af7036f3d8dc49a140cd2",
+      "backup_ref": "refs/heads/codex/draft-backup-20261112/5771f9f62b",
+      "commit": "aaed69efe8c933e04392141d481191431876fbeb",
+      "code_files": 7,
+      "files_already_equal_to_main": [],
+      "status": "backup_only_unreviewed"
+    },
+    {
+      "source_branch": "refs/heads/codex/pending-review-dh0203-dh03a-dev-20261102",
+      "source_head": "13e3248993e2286af2a401e11d29514d9a0c9aeb",
+      "backup_ref": "refs/heads/codex/draft-backup-20261112/ad7363df0d",
+      "commit": "e2c450f155fe1bb15dc792123f887073ccae9aca",
+      "code_files": 2,
+      "files_already_equal_to_main": [],
+      "status": "backup_only_unreviewed"
+    },
+    {
+      "source_branch": "refs/heads/codex/pending-review-dh0203-dh03b-dev-20261102",
+      "source_head": "13e3248993e2286af2a401e11d29514d9a0c9aeb",
+      "backup_ref": "refs/heads/codex/draft-backup-20261112/67c48b1eb2",
+      "commit": "3de4fe2719c14fd9e9569a8a5bd6aade47dfd417",
+      "code_files": 4,
+      "files_already_equal_to_main": [],
+      "status": "backup_only_unreviewed"
+    },
+    {
+      "source_branch": "refs/heads/codex/automation-restoration-20261110",
+      "source_head": "faff32a12ac9dd00fc01e2037adfa1d2dfe94b73",
+      "backup_ref": "refs/heads/codex/draft-backup-20261112/c73a076100",
+      "commit": "a47043c11117b484e2d8202e07bc7b8929bf42f5",
+      "code_files": 15,
+      "files_already_equal_to_main": [],
+      "status": "backup_only_unreviewed"
+    },
+    {
+      "source_branch": "refs/heads/codex/pdf-intake-r12-20261024",
+      "source_head": "34470b312a99c0f51a53e2185bfb53f7c53ff62d",
+      "backup_ref": "refs/heads/codex/draft-backup-20261112/917d86f10a",
+      "commit": "9a341fc6799dbf03134348ad1a6399db58eb03e3",
+      "code_files": 30,
+      "files_already_equal_to_main": [
+        "app/app/components/review-workbench/correctionAdapters.ts",
+        "app/tests/correctionAdapters.test.ts",
+        "docs/PDF入口整改计划_20261024_R1.2_验收方冻结.md",
+        "docs/PDF入口整改记录_批次3_20261025.md",
+        "docs/PDF入口整改记录_批次3_20261025_更正_20261025.md",
+        "docs/PDF入口整改记录_批次3_20261026_第三轮复核整改.md",
+        "docs/PDF入口整改记录_批次3_20261026_第二轮复核整改.md",
+        "scripts/audit_arithmetic_suspects.py",
+        "scripts/intake_remediation_cases.json",
+        "scripts/intake_remediation_e1.json",
+        "scripts/intake_remediation_t0.json",
+        "scripts/measure_ocr_textlayer_oracle.py",
+        "scripts/rescore_textlayer_oracle.py",
+        "scripts/score_cell_truth.py",
+        "scripts/verify_intake_remediation.py",
+        "src/services/fiscal_table_rules.py",
+        "src/services/ocr_pipeline.py",
+        "src/services/org_binding_decision.py",
+        "src/services/table_reading_assessment.py",
+        "tests/remediation/test_blank_page_rules.py",
+        "tests/remediation/test_manual_cell_fill.py",
+        "tests/test_intake_table_identity.py",
+        "tests/test_native_geometry_candidate.py",
+        "tests/test_org_binding_decision.py",
+        "tests/test_score_cell_truth.py"
+      ],
+      "status": "backup_only_unreviewed"
+    },
+    {
+      "source_branch": "refs/heads/codex/sangong-yichuan-fix-20261110",
+      "source_head": "9dab809808f07454bb1f0aedbf474ed7573be26b",
+      "backup_ref": "refs/heads/codex/draft-backup-20261112/a92dafe419",
+      "commit": "93460005c7f541d4667a624d26ed0d3dbcfda623",
+      "code_files": 7,
+      "files_already_equal_to_main": [],
+      "status": "backup_only_unreviewed"
+    },
+    {
+      "source_branch": "refs/heads/codex/current-runtime-20261112",
+      "source_head": "e258f16dece283fca0c8dc214fd64df05e08c964",
+      "backup_ref": "refs/heads/codex/draft-backup-20261112/75b1922dee",
+      "commit": "a25c83a53fd62c9acbce2c50d17c5f82d6b762d7",
+      "code_files": 21,
+      "files_already_equal_to_main": [],
+      "status": "backup_only_unreviewed"
+    },
+    {
+      "source_branch": "refs/heads/codex/reanalyze-inherit-20261108",
+      "source_head": "92548953631603756b887baf46444a5b2990f4ab",
+      "backup_ref": "refs/heads/codex/draft-backup-20261112/900105d221",
+      "commit": "2fdb399ee9807afc0ed143a296140728a107f0b1",
+      "code_files": 1,
+      "files_already_equal_to_main": [],
+      "status": "backup_only_unreviewed"
+    }
+  ],
+  "backup_refs": [
+    {
+      "local_ref": "refs/heads/claude/blank-zero-default-20261108",
+      "commit": "ed9478655bc38266cbea0d2f5e23928249435e28",
+      "github_ref": "refs/heads/claude/blank-zero-default-20261108",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/claude/dazzling-shirley-b937f0",
+      "commit": "3304e8d683be728d3d2fa863ab55a64a26a7ee40",
+      "github_ref": "refs/heads/claude/dazzling-shirley-b937f0",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/claude/optimistic-archimedes-c75f53",
+      "commit": "c8e5845c4ffe72fa76aa55cd92bbac813e09ed2d",
+      "github_ref": "refs/heads/claude/optimistic-archimedes-c75f53",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/claude/peaceful-clarke-9229bb",
+      "commit": "56c54a6c51e73b234bc0c0bacd1060f1f48840fa",
+      "github_ref": "refs/heads/claude/peaceful-clarke-9229bb",
+      "main_disposition": "backup_only_not_approved_for_main",
+      "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
+    },
+    {
+      "local_ref": "refs/heads/claude/phase0-writing-basis-20261030",
+      "commit": "64243ce5bf6617ec9fef2593a1147844b805cece",
+      "github_ref": "refs/heads/claude/phase0-writing-basis-20261030",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/annual-template-management",
+      "commit": "447876c3d16a3d1cd667003d3146279d83ae8083",
+      "github_ref": "refs/heads/codex/annual-template-management",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/auto-check-remediation-r22",
+      "commit": "b24c22d9137249cbc3c80a23818567c3fe5acb3c",
+      "github_ref": "refs/heads/codex/auto-check-remediation-r22",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/automation-restoration-20261110",
+      "commit": "faff32a12ac9dd00fc01e2037adfa1d2dfe94b73",
+      "github_ref": "refs/heads/codex/automation-restoration-20261110",
+      "main_disposition": "backup_only_not_approved_for_main",
+      "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
+    },
+    {
+      "local_ref": "refs/heads/codex/backup-main-cleanup-20261112",
+      "commit": "e258f16dece283fca0c8dc214fd64df05e08c964",
+      "github_ref": "refs/heads/codex/backup-main-cleanup-20261112",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/claude-closeout-20261108",
+      "commit": "d407d2b9046650eaa05ba6840b5546448bd63df2",
+      "github_ref": "refs/heads/codex/claude-closeout-20261108",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/closeout-tools-r4-20261104",
+      "commit": "99b50799c0db9360ee892a2ffe082ff4a7adc2eb",
+      "github_ref": "refs/heads/codex/closeout-tools-r4-20261104",
+      "main_disposition": "backup_only_not_approved_for_main",
+      "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
+    },
+    {
+      "local_ref": "refs/heads/codex/comprehensive-review-closure-20261109",
+      "commit": "9dab809808f07454bb1f0aedbf474ed7573be26b",
+      "github_ref": "refs/heads/codex/comprehensive-review-closure-20261109",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/consolidate-three-lines-20261112",
+      "commit": "4af5957ad82380d8734622a7fa2fea4bdebf14a0",
+      "github_ref": "refs/heads/codex/consolidate-three-lines-20261112",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/current-runtime-20261112",
+      "commit": "e258f16dece283fca0c8dc214fd64df05e08c964",
+      "github_ref": "refs/heads/codex/current-runtime-20261112",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/daily-ci-closeout-20261105",
+      "commit": "47581360966191d180880f7fb07dab48974948bb",
+      "github_ref": "refs/heads/codex/daily-ci-closeout-20261105",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/daily-integration-20261105",
+      "commit": "26b325154822e13d2e64cd761181082d6440c736",
+      "github_ref": "refs/heads/codex/daily-integration-20261105",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/draft-backup-20261112/5771f9f62b",
+      "commit": "aaed69efe8c933e04392141d481191431876fbeb",
+      "github_ref": "refs/heads/codex/draft-backup-20261112/5771f9f62b",
+      "main_disposition": "backup_only_not_approved_for_main",
+      "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
+    },
+    {
+      "local_ref": "refs/heads/codex/draft-backup-20261112/67c48b1eb2",
+      "commit": "3de4fe2719c14fd9e9569a8a5bd6aade47dfd417",
+      "github_ref": "refs/heads/codex/draft-backup-20261112/67c48b1eb2",
+      "main_disposition": "backup_only_not_approved_for_main",
+      "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
+    },
+    {
+      "local_ref": "refs/heads/codex/draft-backup-20261112/75b1922dee",
+      "commit": "a25c83a53fd62c9acbce2c50d17c5f82d6b762d7",
+      "github_ref": "refs/heads/codex/draft-backup-20261112/75b1922dee",
+      "main_disposition": "backup_only_not_approved_for_main",
+      "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
+    },
+    {
+      "local_ref": "refs/heads/codex/draft-backup-20261112/900105d221",
+      "commit": "2fdb399ee9807afc0ed143a296140728a107f0b1",
+      "github_ref": "refs/heads/codex/draft-backup-20261112/900105d221",
+      "main_disposition": "backup_only_not_approved_for_main",
+      "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
+    },
+    {
+      "local_ref": "refs/heads/codex/draft-backup-20261112/917d86f10a",
+      "commit": "9a341fc6799dbf03134348ad1a6399db58eb03e3",
+      "github_ref": "refs/heads/codex/draft-backup-20261112/917d86f10a",
+      "main_disposition": "backup_only_not_approved_for_main",
+      "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
+    },
+    {
+      "local_ref": "refs/heads/codex/draft-backup-20261112/a82f3fb552",
+      "commit": "d1ead9345053a3c9086809ce98b3664332e1b50c",
+      "github_ref": "refs/heads/codex/draft-backup-20261112/a82f3fb552",
+      "main_disposition": "backup_only_not_approved_for_main",
+      "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
+    },
+    {
+      "local_ref": "refs/heads/codex/draft-backup-20261112/a92dafe419",
+      "commit": "93460005c7f541d4667a624d26ed0d3dbcfda623",
+      "github_ref": "refs/heads/codex/draft-backup-20261112/a92dafe419",
+      "main_disposition": "backup_only_not_approved_for_main",
+      "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
+    },
+    {
+      "local_ref": "refs/heads/codex/draft-backup-20261112/ad7363df0d",
+      "commit": "e2c450f155fe1bb15dc792123f887073ccae9aca",
+      "github_ref": "refs/heads/codex/draft-backup-20261112/ad7363df0d",
+      "main_disposition": "backup_only_not_approved_for_main",
+      "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
+    },
+    {
+      "local_ref": "refs/heads/codex/draft-backup-20261112/b5899c2ac4",
+      "commit": "3ea0131a45ea159e3e90c5ce63582037ae44754e",
+      "github_ref": "refs/heads/codex/draft-backup-20261112/b5899c2ac4",
+      "main_disposition": "backup_only_not_approved_for_main",
+      "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
+    },
+    {
+      "local_ref": "refs/heads/codex/draft-backup-20261112/c73a076100",
+      "commit": "a47043c11117b484e2d8202e07bc7b8929bf42f5",
+      "github_ref": "refs/heads/codex/draft-backup-20261112/c73a076100",
+      "main_disposition": "backup_only_not_approved_for_main",
+      "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
+    },
+    {
+      "local_ref": "refs/heads/codex/fp-batch1-20261103",
+      "commit": "48ee4e28441bd6ddbf34beee85bc6883d60db773",
+      "github_ref": "refs/heads/codex/fp-batch1-20261103",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/gold-b1-20261103",
+      "commit": "e0efa58a5c56b77404f92e6c0dabb07dd8d79f3d",
+      "github_ref": "refs/heads/codex/gold-b1-20261103",
+      "main_disposition": "backup_only_not_approved_for_main",
+      "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
+    },
+    {
+      "local_ref": "refs/heads/codex/gold-coverage-20261103",
+      "commit": "d90ba45956613c13900d1d972a90557a77a1b6cf",
+      "github_ref": "refs/heads/codex/gold-coverage-20261103",
+      "main_disposition": "backup_only_not_approved_for_main",
+      "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
+    },
+    {
+      "local_ref": "refs/heads/codex/integrate-reanalyze-inherit-20261109",
+      "commit": "b19281e8d2aadff99783b638768f3e1c2e8bb954",
+      "github_ref": "refs/heads/codex/integrate-reanalyze-inherit-20261109",
+      "main_disposition": "backup_only_not_approved_for_main",
+      "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
+    },
+    {
+      "local_ref": "refs/heads/codex/issue-category-display-20261108",
+      "commit": "eae15090c23107d14cfd67ca576a7434c2505197",
+      "github_ref": "refs/heads/codex/issue-category-display-20261108",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/joint-exp-batch2-tools-20261103",
+      "commit": "0a1379cd5a4336fda61b2aea217a728c664c0b94",
+      "github_ref": "refs/heads/codex/joint-exp-batch2-tools-20261103",
+      "main_disposition": "backup_only_not_approved_for_main",
+      "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
+    },
+    {
+      "local_ref": "refs/heads/codex/joint-exp-integration-20261103",
+      "commit": "93ea0768fed2c8818c969904033f990635ac6a5b",
+      "github_ref": "refs/heads/codex/joint-exp-integration-20261103",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/joint-exp-integration-preflight-20261103",
+      "commit": "9a9a854a623da971d0d1b5d8ff53e27f44b4f471",
+      "github_ref": "refs/heads/codex/joint-exp-integration-preflight-20261103",
+      "main_disposition": "backup_only_not_approved_for_main",
+      "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
+    },
+    {
+      "local_ref": "refs/heads/codex/joint-exp-rework-20261103",
+      "commit": "11571fafa3a2896794a50622d981904a01801dd6",
+      "github_ref": "refs/heads/codex/joint-exp-rework-20261103",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/joint-exp-s4-clean-20261103",
+      "commit": "d831554d7f28d00359dc31a6a179c1d665fbf824",
+      "github_ref": "refs/heads/codex/joint-exp-s4-clean-20261103",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/joint-exp-s4-n05-final-20261103",
+      "commit": "823fb31f02138f80385586fd064bed633162ac14",
+      "github_ref": "refs/heads/codex/joint-exp-s4-n05-final-20261103",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/joint-exp-s45-dev-20261103",
+      "commit": "5186c35ee50b872def58c98a0746610fa39a35b5",
+      "github_ref": "refs/heads/codex/joint-exp-s45-dev-20261103",
+      "main_disposition": "backup_only_not_approved_for_main",
+      "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
+    },
+    {
+      "local_ref": "refs/heads/codex/joint-exp-s5-clean-20261103",
+      "commit": "fda677701f3f60f339d1c549dfa83afefc2e0281",
+      "github_ref": "refs/heads/codex/joint-exp-s5-clean-20261103",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/merge-3013-to-3000-20261026",
+      "commit": "c6cd033d79f907a4541af7036f3d8dc49a140cd2",
+      "github_ref": "refs/heads/codex/merge-3013-to-3000-20261026",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/native-review-coverage-20261108",
+      "commit": "609599e292564bebcbe961c625975b4d043f3e38",
+      "github_ref": "refs/heads/codex/native-review-coverage-20261108",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/parse-run-identity-20261102",
+      "commit": "133c384bec8881da88eded5cf718fc2d4b3b3e63",
+      "github_ref": "refs/heads/codex/parse-run-identity-20261102",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/pdf-ai-letters-visit-fix-20261026",
+      "commit": "e927b4d63e1a71def66726a8b84c7592391ec4c5",
+      "github_ref": "refs/heads/codex/pdf-ai-letters-visit-fix-20261026",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/pdf-ai-local-acceptance-20261026",
+      "commit": "3ca0a91e225011306cccb90659b97e00fd354907",
+      "github_ref": "refs/heads/codex/pdf-ai-local-acceptance-20261026",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/pdf-intake-r12-20261024",
+      "commit": "34470b312a99c0f51a53e2185bfb53f7c53ff62d",
+      "github_ref": "refs/heads/codex/pdf-intake-r12-20261024",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/pdf-review-remediation-batch1-20261026",
+      "commit": "edfc4ef989590f6c83d7ec920195f546f12d6450",
+      "github_ref": "refs/heads/codex/pdf-review-remediation-batch1-20261026",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/pdf-review-remediation-batch2-20261027",
+      "commit": "9e7ea2234e31e41a1e0c624eb80539822cb8a173",
+      "github_ref": "refs/heads/codex/pdf-review-remediation-batch2-20261027",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/pdf-review-risk-audit-20261027",
+      "commit": "02d826fc9437a30a1b3f8364f5feef24bac9dccb",
+      "github_ref": "refs/heads/codex/pdf-review-risk-audit-20261027",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/pending-review-dh0203-20261102",
+      "commit": "2278f7baaa47a7112e1300fbc3f4840371f7b015",
+      "github_ref": "refs/heads/codex/pending-review-dh0203-20261102",
+      "main_disposition": "backup_only_not_approved_for_main",
+      "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
+    },
+    {
+      "local_ref": "refs/heads/codex/pending-review-dh0203-dev-20261102",
+      "commit": "c6cd033d79f907a4541af7036f3d8dc49a140cd2",
+      "github_ref": "refs/heads/codex/pending-review-dh0203-dev-20261102",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/pending-review-dh0203-dh03a-dev-20261102",
+      "commit": "13e3248993e2286af2a401e11d29514d9a0c9aeb",
+      "github_ref": "refs/heads/codex/pending-review-dh0203-dh03a-dev-20261102",
+      "main_disposition": "backup_only_not_approved_for_main",
+      "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
+    },
+    {
+      "local_ref": "refs/heads/codex/pending-review-dh0203-dh03b-dev-20261102",
+      "commit": "13e3248993e2286af2a401e11d29514d9a0c9aeb",
+      "github_ref": "refs/heads/codex/pending-review-dh0203-dh03b-dev-20261102",
+      "main_disposition": "backup_only_not_approved_for_main",
+      "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
+    },
+    {
+      "local_ref": "refs/heads/codex/pending-review-r5-candidate-20261103",
+      "commit": "5fdab4162ce583107c3010a4c2d32ee66a7ba2c9",
+      "github_ref": "refs/heads/codex/pending-review-r5-candidate-20261103",
+      "main_disposition": "backup_only_not_approved_for_main",
+      "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
+    },
+    {
+      "local_ref": "refs/heads/codex/pending-review-r5-execution-20261103",
+      "commit": "6b00051ad18c48cdccffa8387e3481b6695b26f1",
+      "github_ref": "refs/heads/codex/pending-review-r5-execution-20261103",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/r22-acceptance-boundary-fix",
+      "commit": "bc88321f344317aac0d6fb934af7ec965c96bc49",
+      "github_ref": "refs/heads/codex/r22-acceptance-boundary-fix",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/r22-carrier-schema-guard",
+      "commit": "ed9478655bc38266cbea0d2f5e23928249435e28",
+      "github_ref": "refs/heads/codex/r22-carrier-schema-guard",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/real-painpoint-fixes",
+      "commit": "fcbd17b76eedb10f1ad1cb6cb9606ef184fb553d",
+      "github_ref": "refs/heads/codex/real-painpoint-fixes",
+      "main_disposition": "backup_only_not_approved_for_main",
+      "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
+    },
+    {
+      "local_ref": "refs/heads/codex/reanalyze-inherit-20261108",
+      "commit": "92548953631603756b887baf46444a5b2990f4ab",
+      "github_ref": "refs/heads/codex/reanalyze-inherit-20261108",
+      "main_disposition": "backup_only_not_approved_for_main",
+      "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
+    },
+    {
+      "local_ref": "refs/heads/codex/root-preserved-20261112",
+      "commit": "e8dd1cc689eb42d898448244bc7426c082f6f975",
+      "github_ref": "refs/heads/codex/root-preserved-20261112",
+      "main_disposition": "backup_only_not_approved_for_main",
+      "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
+    },
+    {
+      "local_ref": "refs/heads/codex/runtime-integration-20261112",
+      "commit": "e258f16dece283fca0c8dc214fd64df05e08c964",
+      "github_ref": "refs/heads/codex/runtime-integration-20261112",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/sangong-yichuan-fix-20261110",
+      "commit": "9dab809808f07454bb1f0aedbf474ed7573be26b",
+      "github_ref": "refs/heads/codex/sangong-yichuan-fix-20261110",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/save-ui-20261105",
+      "commit": "7bc2e2d969029df8829643105bdd0db72b41d507",
+      "github_ref": "refs/heads/codex/save-ui-20261105",
+      "main_disposition": "backup_only_not_approved_for_main",
+      "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
+    },
+    {
+      "local_ref": "refs/heads/codex/save-verifier-20261105",
+      "commit": "3ca22f88b913424ee07d7fee6f5bad91131ecca7",
+      "github_ref": "refs/heads/codex/save-verifier-20261105",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/scope-confirm-feedback-20261027",
+      "commit": "459708ff2a7469261da587287a811c8cf3ddd511",
+      "github_ref": "refs/heads/codex/scope-confirm-feedback-20261027",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/shiquan-reconciliation-merge-20261109",
+      "commit": "6e63bdde9292dfb3bb6b649e3f10093a41b6f54c",
+      "github_ref": "refs/heads/codex/shiquan-reconciliation-merge-20261109",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/shiquan-source-coverage-20261109",
+      "commit": "ef44c6031f536f3cffc12e6eff57dd53db56a522",
+      "github_ref": "refs/heads/codex/shiquan-source-coverage-20261109",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/subject-name-binding-20261110",
+      "commit": "18ba7ea5584164f4f737eccddc585df903b821b0",
+      "github_ref": "refs/heads/codex/subject-name-binding-20261110",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/task-header-layout-20261027",
+      "commit": "b557e8b71ef7eaddead3069d3f177dca5ede9342",
+      "github_ref": "refs/heads/codex/task-header-layout-20261027",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/trial-review-entry-fix-20261105",
+      "commit": "f230dcaf33fdec7591b80da4c361a1cfd03a7d8f",
+      "github_ref": "refs/heads/codex/trial-review-entry-fix-20261105",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/unified-closeout-20261103",
+      "commit": "4cda0edd361c81530654da8915306a400bd7f100",
+      "github_ref": "refs/heads/codex/unified-closeout-20261103",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/unified-remediation-20261106",
+      "commit": "6bddb8afa2188185e30ff3beee1d4759e3280910",
+      "github_ref": "refs/heads/codex/unified-remediation-20261106",
+      "main_disposition": "backup_only_not_approved_for_main",
+      "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
+    },
+    {
+      "local_ref": "refs/heads/codex/zcode-remediation",
+      "commit": "57abcf866cc70e813d57e5c94d5387a97f53837a",
+      "github_ref": "refs/heads/codex/zcode-remediation",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/zcode-remediation-r2",
+      "commit": "57abcf866cc70e813d57e5c94d5387a97f53837a",
+      "github_ref": "refs/heads/codex/zcode-remediation-r2",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/codex/zcode-remediation-r3",
+      "commit": "e4158a140e3efafa954d40b2bb3f1ce99455bfe7",
+      "github_ref": "refs/heads/codex/zcode-remediation-r3",
+      "main_disposition": "backup_only_not_approved_for_main",
+      "reason": "historical source/tooling or unreviewed draft; preserve backup without overriding accepted main"
+    },
+    {
+      "local_ref": "refs/heads/feat/probe14-mrp-repair-20260930",
+      "commit": "21a767108aba051abc0519db5e87fe0de36638d0",
+      "github_ref": "refs/heads/feat/probe14-mrp-repair-20260930",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/feat/v2-plan-wp0-wpc1-20260930",
+      "commit": "3062bcdbfba310d2ecae2460e523e12473ef2c8b",
+      "github_ref": "refs/heads/feat/v2-plan-wp0-wpc1-20260930",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    },
+    {
+      "local_ref": "refs/heads/trial/candidate-cd934718",
+      "commit": "cd9347181a81d6c07f7ecddb84b7ed707d079796",
+      "github_ref": "refs/heads/trial/candidate-cd934718",
+      "main_disposition": "already_in_selected_main_history",
+      "reason": "already reachable from selected main baseline"
+    }
+  ],
+  "retention": {
+    "keep": [
+      "current runtime source and dependencies",
+      "current business data and human decisions",
+      "original PDF master library",
+      "required regression/gold samples and secrets in local protected backups"
+    ],
+    "retire_after_verified_archive": [
+      "historical replay expanded directories",
+      "non-runtime historical artifacts",
+      "old worktree directories after preserving drafts and resolving links"
+    ]
+  },
+  "does_not_claim": [
+    "historical drafts are approved",
+    "old gold/B1 is newly accepted",
+    "new production deployment or historical reanalysis"
+  ]
+}
