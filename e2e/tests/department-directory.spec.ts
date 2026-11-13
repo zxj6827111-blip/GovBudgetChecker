@@ -297,6 +297,35 @@ test("管理员看到16区入口，未配置的区不可进入且不伪造材料
   await expect(page.getByTestId("material-report-other-unit26")).toBeVisible();
 });
 
+test("初次加载期间收藏按钮等待目录就绪，点击后筛选不被覆盖", async ({ page }) => {
+  const state = await fixture(page);
+  await page.evaluate((username) => {
+    localStorage.setItem(`gbc:reports:favorites:${username}`, JSON.stringify(["finance"]));
+  }, state.username);
+
+  let releaseReports: () => void = () => undefined;
+  const reportsGate = new Promise<void>((resolve) => { releaseReports = resolve; });
+  await page.route(/\/api\/materials\/reports(?:\?|$)/, async (route) => {
+    await reportsGate;
+    await route.fallback();
+  });
+
+  try {
+    await page.reload({ waitUntil: "domcontentloaded" });
+    const favoritesButton = page.getByTestId("gbc-reports-directory-favorites");
+    // 不靠固定 sleep：响应未释放时必须不能提交会被初始视图覆盖的筛选。
+    await expect(favoritesButton).toBeDisabled();
+    releaseReports();
+    await expect(favoritesButton).toBeEnabled();
+    await favoritesButton.click();
+    await expect(favoritesButton).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId("gbc-reports-directory-grid").locator("button")).toHaveCount(1);
+    await expect(page.getByTestId("gbc-reports-org-finance")).toBeVisible();
+  } finally {
+    releaseReports();
+  }
+});
+
 test("收藏按用户保存，检查明细可展开且质量状态不误报", async ({ page }) => {
   const state = await fixture(page);
   await page.getByTestId("gbc-reports-org-search").fill("上海市财政局");

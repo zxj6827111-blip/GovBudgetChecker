@@ -369,7 +369,8 @@ export function DepartmentReportsPage({ routeOrganizationId }: { routeOrganizati
           </div>
           <div className="flex gap-1" role="group" aria-label="目录展示范围">
             <button type="button" onClick={() => { setFavoritesOnly(false); setDirectoryPage(0); }} aria-pressed={!favoritesOnly} className={toggleClass(!favoritesOnly)} data-testid="gbc-reports-directory-all">全部</button>
-            <button type="button" onClick={() => { setFavoritesOnly(true); setDirectoryPage(0); }} aria-pressed={favoritesOnly} className={`${toggleClass(favoritesOnly)} inline-flex items-center gap-1`} data-testid="gbc-reports-directory-favorites"><Star className="h-3.5 w-3.5" aria-hidden="true" />收藏</button>
+            {/* 初次视图还原会重置筛选，目录就绪后再接受收藏操作，避免点击被覆盖。 */}
+            <button type="button" disabled={!loaded} onClick={() => { setFavoritesOnly(true); setDirectoryPage(0); }} aria-pressed={favoritesOnly} className={`${toggleClass(favoritesOnly)} inline-flex items-center gap-1`} data-testid="gbc-reports-directory-favorites"><Star className="h-3.5 w-3.5" aria-hidden="true" />收藏</button>
           </div>
           <select aria-label="目录排序" value={directorySort} onChange={(event) => changeDirectorySort(event.target.value as DirectorySort)} className={filterClass} data-testid="gbc-reports-directory-sort">
             <option value="attention">待复核优先</option>
