@@ -40,6 +40,7 @@ from .diagnostics import (
     make_diagnosis,
     missing_table_operand,
 )
+from .diagnostic_text import render_receipt_reason
 from .rule_policy import AMOUNT_TOLERANCE_WAN
 
 #: 不能作为确定操作数的识别状态（AC-01：引用即转未完成）
@@ -1643,6 +1644,10 @@ def make_fact_receipt(
             diagnosis, rule_id=str(rule_id), sub_check_id=str(sub_check_id),
             obligation_id=obligation_id,
         )
+        if status in {"insufficient_data", "parse_error", "execution_error"}:
+            incomplete_reason = render_receipt_reason(
+                str(rule_id), str(sub_check_id), diagnosis
+            )
     if evaluation_basis is None or fact_migration_status is None:
         if operand_ids:
             default_basis = "fiscal_fact"
