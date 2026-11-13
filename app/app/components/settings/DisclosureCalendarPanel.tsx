@@ -9,7 +9,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 
-import { SectionTitle } from "@/components/ui";
+import { Button, Card } from "@/components/ui";
 
 type Entry = { deadline: string; source: string; note: string };
 type ByYear = Record<string, Record<string, Record<string, Entry>>>;
@@ -135,24 +135,24 @@ export function DisclosureCalendarPanel() {
   const years = Array.from(new Set([year, ...Object.keys(byYear)])).sort().reverse();
 
   return (
-    <section className="mt-6 rounded-lg border border-border bg-white p-5" data-testid="gbc-disclosure-calendar">
-      <SectionTitle
-        title="年度公开时限"
-        desc="记录客户或财政通知下发的预算、决算公开截止日。未填的年度一律按未知处理，系统不猜测、不套用往年日期。"
-      />
-
+    <Card
+      title="年度公开时限"
+      desc="记录客户或财政通知下发的预算、决算公开截止日。未填的年度一律按未知处理，系统不猜测、不套用往年日期。"
+      bodyClassName="space-y-4"
+      data-testid="gbc-disclosure-calendar"
+    >
       {status === "failed" ? (
-        <div className="mt-3 rounded-md border border-warning-200 bg-warning-50 px-3 py-2 text-sm text-warning-800">
+        <div className="rounded-md border border-warning-200 bg-warning-50 px-3 py-2 text-sm text-warning-800">
           时限读取失败，稍后可点“重新读取”。
           <button className="ml-3 underline" onClick={() => void load()} type="button">重新读取</button>
         </div>
       ) : null}
 
-      <div className="mt-4 flex flex-wrap items-center gap-2">
-        <label className="text-sm font-bold text-slate-700" htmlFor="gbc-cal-year">年度</label>
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="text-sm font-medium text-slate-700" htmlFor="gbc-cal-year">年度</label>
         <input
           id="gbc-cal-year"
-          className="w-28 rounded-md border border-border px-3 py-1.5 text-sm"
+          className="w-28 rounded-md border border-border bg-white text-sm text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 px-3 py-1.5"
           inputMode="numeric"
           value={year}
           onChange={(e) => setYear(e.target.value.replace(/\D/g, "").slice(0, 4))}
@@ -162,7 +162,7 @@ export function DisclosureCalendarPanel() {
             key={y}
             type="button"
             onClick={() => setYear(y)}
-            className={`rounded-full px-3 py-1 text-xs font-bold ${
+            className={`rounded-full px-3 py-1 text-xs font-medium ${
               y === year ? "bg-primary-600 text-white" : "bg-slate-100 text-slate-600"
             }`}
           >
@@ -172,12 +172,12 @@ export function DisclosureCalendarPanel() {
         ))}
       </div>
 
-      <table className="mt-4 w-full border-collapse text-sm" data-testid="gbc-cal-table">
+      <table className="w-full border-collapse text-sm" data-testid="gbc-cal-table">
         <thead>
-          <tr className="bg-slate-50 text-slate-600">
-            <th className="border border-slate-200 px-3 py-2 text-left font-bold">类别</th>
+          <tr className="bg-surface-100 text-slate-600">
+            <th className="border border-border px-3 py-2 text-left font-medium">类别</th>
             {LEVELS.map((level) => (
-              <th key={level} className="border border-slate-200 px-3 py-2 text-left font-bold">
+              <th key={level} className="border border-border px-3 py-2 text-left font-medium">
                 {LEVEL_LABEL[level]}
               </th>
             ))}
@@ -186,12 +186,12 @@ export function DisclosureCalendarPanel() {
         <tbody>
           {KINDS.map((kind) => (
             <tr key={kind}>
-              <th className="border border-slate-200 bg-slate-50 px-3 py-2 text-left font-bold">{kind}</th>
+              <th className="border border-border bg-surface-100 px-3 py-2 text-left font-medium">{kind}</th>
               {LEVELS.map((level) => (
-                <td key={level} className="border border-slate-200 px-3 py-2">
+                <td key={level} className="border border-border px-3 py-2">
                   <input
                     type="date"
-                    className="w-full rounded-md border border-border px-2 py-1.5 text-sm"
+                    className="w-full rounded-md border border-border bg-white text-sm text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 px-2 py-1.5"
                     aria-label={`${year}年${kind}${LEVEL_LABEL[level]}公开截止日`}
                     value={form[kind]?.[level]?.deadline ?? ""}
                     onChange={(e) => setCell(kind, level, { deadline: e.target.value })}
@@ -206,11 +206,11 @@ export function DisclosureCalendarPanel() {
         </tbody>
       </table>
 
-      <div className="mt-3 grid gap-3 md:grid-cols-2">
+      <div className="grid gap-3 md:grid-cols-2">
         <label className="text-sm text-slate-600">
           依据（通知文号或名称）
           <input
-            className="mt-1 w-full rounded-md border border-border px-3 py-1.5 text-sm"
+            className="mt-1 w-full rounded-md border border-border bg-white text-sm text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 px-3 py-1.5"
             placeholder="如：沪普财〔2026〕12号"
             value={source}
             onChange={(e) => {
@@ -222,7 +222,7 @@ export function DisclosureCalendarPanel() {
         <label className="text-sm text-slate-600">
           备注
           <input
-            className="mt-1 w-full rounded-md border border-border px-3 py-1.5 text-sm"
+            className="mt-1 w-full rounded-md border border-border bg-white text-sm text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 px-3 py-1.5"
             placeholder="如：以当年通知为准"
             value={note}
             onChange={(e) => {
@@ -234,29 +234,27 @@ export function DisclosureCalendarPanel() {
       </div>
 
       {error ? (
-        <div className="mt-3 rounded-md border border-danger-200 bg-danger-50 px-3 py-2 text-sm text-danger-700" data-testid="gbc-cal-error">
+        <div className="rounded-md border border-danger-200 bg-danger-50 px-3 py-2 text-sm text-danger-700" data-testid="gbc-cal-error">
           {error}
         </div>
       ) : null}
       {notice ? (
-        <div className="mt-3 rounded-md border border-success-200 bg-success-50 px-3 py-2 text-sm text-success-700" data-testid="gbc-cal-notice">
+        <div className="rounded-md border border-success-200 bg-success-50 px-3 py-2 text-sm text-success-700" data-testid="gbc-cal-notice">
           {notice}
         </div>
       ) : null}
 
-      <div className="mt-4 flex items-center gap-3">
-        <button
-          type="button"
-          className="rounded-md bg-primary-600 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-primary-700 disabled:opacity-60"
+      <div className="flex items-center gap-3">
+        <Button
           onClick={() => void save()}
           disabled={busy || year.length !== 4}
           data-testid="gbc-cal-save"
         >
           {busy ? "保存中…" : `保存 ${year} 年度`}
-        </button>
+        </Button>
         <span className="text-xs text-slate-500">清空某一格并保存，即撤销该层级的确认。</span>
       </div>
-    </section>
+    </Card>
   );
 }
 

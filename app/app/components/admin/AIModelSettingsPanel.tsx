@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 
+import { Button, Card } from "@/components/ui";
+
 type Profile = {
   id: string; name: string; provider_type: string; base_url: string; model: string;
   api_key?: string; has_api_key?: boolean; timeout_s: number; max_tokens: number;
@@ -11,7 +13,7 @@ type ModelSettings = {
   revision: number; enabled: boolean; default_use_ai: boolean;
   active_profile_id: string | null; profiles: Profile[];
 };
-const fieldClass = "mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900";
+const fieldClass = "mt-1 w-full rounded-md border border-border bg-white text-sm text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 px-3 py-2";
 
 export default function AIModelSettingsPanel() {
   const [settings, setSettings] = useState<ModelSettings | null>(null);
@@ -70,10 +72,9 @@ export default function AIModelSettingsPanel() {
     } catch { setTestResults(old => ({ ...old, [p.id]: "连接失败，请检查服务和网络" })); }
     finally { setTesting(null); }
   }
-  if (!settings) return <section className="rounded-md border bg-white p-5"><h3 className="font-bold">大模型配置</h3><p className="mt-3 text-sm">{notice || "正在读取配置…"}</p>{!busy && <button onClick={() => void load()}>重新加载</button>}</section>;
+  if (!settings) return <Card title="大模型配置"><p className="text-sm text-slate-600">{notice || "正在读取配置…"}</p>{!busy && <Button variant="secondary" size="sm" className="mt-3" onClick={() => void load()}>重新加载</Button>}</Card>;
   const disabled = busy || testing !== null;
-  return <section className="space-y-4 rounded-md border border-slate-200 bg-white p-5" data-testid="ai-model-settings">
-    <div><h3 className="text-lg font-bold text-slate-900">大模型配置</h3><p className="mt-1 text-sm text-slate-500">添加多个模型，并选择默认模型。已开始的检查继续使用开始时的配置。</p></div>
+  return <Card title="大模型配置" desc="添加多个模型，并选择默认模型。已开始的检查继续使用开始时的配置。" bodyClassName="space-y-4" data-testid="ai-model-settings">
     <fieldset disabled={disabled} className="space-y-4 disabled:opacity-60">
       <div className="flex flex-wrap gap-5 text-sm">
         <label className="flex items-center gap-2"><input type="checkbox" checked={settings.enabled} onChange={e => change({ enabled: e.target.checked })} />启用大模型检查</label>
@@ -84,8 +85,8 @@ export default function AIModelSettingsPanel() {
           <option value="">请选择模型</option>{settings.profiles.map(p => <option key={p.id} value={p.id}>{p.name || "未命名模型"} · {p.model || "待填写"}</option>)}
         </select>
       </label>
-      {settings.profiles.map(p => <div key={p.id} className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-4" data-testid={`ai-profile-${p.id}`}>
-        <div className="flex justify-between"><strong className="text-sm">{p.name || "新模型"}</strong><button type="button" className="text-sm text-red-600" onClick={() => change({ profiles: settings.profiles.filter(item => item.id !== p.id), active_profile_id: settings.active_profile_id === p.id ? null : settings.active_profile_id })}>删除</button></div>
+      {settings.profiles.map(p => <div key={p.id} className="space-y-3 rounded-md border border-border bg-surface-100 p-4" data-testid={`ai-profile-${p.id}`}>
+        <div className="flex items-center justify-between"><strong className="text-sm font-semibold text-slate-900">{p.name || "新模型"}</strong><Button variant="ghost" size="sm" className="text-danger-600 hover:bg-danger-50" onClick={() => change({ profiles: settings.profiles.filter(item => item.id !== p.id), active_profile_id: settings.active_profile_id === p.id ? null : settings.active_profile_id })}>删除</Button></div>
         <div className="grid gap-3 md:grid-cols-2">
           <label className="text-sm">配置名称<input className={fieldClass} value={p.name} onChange={e => edit(p.id, { name: e.target.value })} placeholder="例如：预算审校模型" /></label>
           <label className="text-sm">接口类型<select className={fieldClass} value={p.provider_type} onChange={e => edit(p.id, { provider_type: e.target.value })}><option value="openai_compat">OpenAI 兼容接口</option><option value="zhipu">智谱</option><option value="doubao">豆包 / 火山方舟</option></select></label>
@@ -97,15 +98,15 @@ export default function AIModelSettingsPanel() {
           <label className="text-sm">推理强度<select className={fieldClass} value={p.reasoning_effort || ""} onChange={e => edit(p.id, { reasoning_effort: e.target.value || null })}><option value="">服务商默认</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="max">最高</option></select><span className="mt-1 block text-xs text-slate-500">仅推理模型支持；服务商不接受时会被忽略。</span></label>
           <label className="flex items-center gap-2 text-sm md:col-span-2"><input type="checkbox" checked={Boolean(p.thinking)} onChange={e => edit(p.id, { thinking: e.target.checked })} />开启思考模式<span className="text-xs text-slate-500">部分模型默认已开启；勾选后会显式下发 thinking 参数。</span></label>
         </div>
-        <div className="flex flex-wrap items-center gap-3"><button type="button" className="rounded-md border bg-white px-3 py-2 text-sm" onClick={() => void test(p)}>{testing === p.id ? "正在测试…" : "测试连接"}</button><span className="text-xs text-slate-500">测试会发送一条简短模型请求。</span></div>
+        <div className="flex flex-wrap items-center gap-3"><Button variant="secondary" size="sm" onClick={() => void test(p)}>{testing === p.id ? "正在测试…" : "测试连接"}</Button><span className="text-xs text-slate-500">测试会发送一条简短模型请求。</span></div>
         {testResults[p.id] && <p role="status" className="text-sm text-slate-700">{testResults[p.id]}</p>}
       </div>)}
-      <button type="button" className="rounded-md border px-3 py-2 text-sm" disabled={settings.profiles.length >= 20} onClick={() => {
+      <Button variant="secondary" disabled={settings.profiles.length >= 20} onClick={() => {
         const id = `model-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
         change({ profiles: [...settings.profiles, { id, name: "", provider_type: "openai_compat", base_url: "", model: "", timeout_s: 90, max_tokens: 4000, reasoning_effort: null, thinking: false }], active_profile_id: settings.active_profile_id || id });
-      }}>添加模型</button>
+      }}>添加模型</Button>
     </fieldset>
-    <div className="flex items-center gap-3"><button disabled={disabled || !dirty} onClick={() => void save()} className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{busy ? "保存中…" : "保存配置"}</button><button disabled={disabled} onClick={() => void load()} className="text-sm text-slate-600">重新加载</button>{dirty && <span className="text-xs text-amber-700">有未保存的修改</span>}</div>
+    <div className="flex items-center gap-3"><Button disabled={disabled || !dirty} onClick={() => void save()}>{busy ? "保存中…" : "保存配置"}</Button><Button variant="ghost" disabled={disabled} onClick={() => void load()}>重新加载</Button>{dirty && <span className="text-xs text-warning-700">有未保存的修改</span>}</div>
     {notice && <p role="status" className="text-sm text-slate-700">{notice}</p>}
-  </section>;
+  </Card>;
 }

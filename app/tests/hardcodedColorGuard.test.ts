@@ -14,8 +14,9 @@ import path from "node:path";
  *
  * 守卫范围 = 本批新 UI 自有文件（登录页 + (workspace) 路由组 + 新组件目录），
  * 以及已收敛完成、纳入防回归的存量组件（GUARDED_FILES）。
- * 不在范围内：app/components/admin/*（SystemManagementPanel 等旧单体共用面板，
- * Task 10 收尾时统一处理，见交付说明的硬编码颜色清单）、旧页面 viewer/*、
+ * 系统设置页的面板（SETTINGS_SURFACE_FILES）另加第三层：原始语义色、font-black、
+ * 超规格圆角和近黑底色也不得回退，这些写法曾让设置页明显偏离其他页面。
+ * 不在范围内：app/components/admin/ 下其余未收敛的文件、旧页面 viewer/*、
  * task-review/*（随 Task 10 删除自然消失）、tailwind.config.ts
  * （令牌定义本身必须用色值，不属于硬编码债务）。
  */
@@ -37,7 +38,34 @@ const GUARDED_DIRS = [
 ];
 
 /** 存量组件逐文件纳入守卫（收敛完成后即锁定，防止回退）。 */
-const GUARDED_FILES = ["app/components/StructuredCleanupDialog.tsx"];
+const GUARDED_FILES = [
+  "app/components/StructuredCleanupDialog.tsx",
+  "app/components/OrganizationTree.tsx",
+  "app/components/admin/SystemManagementPanel.tsx",
+  "app/components/admin/UserManagementPanel.tsx",
+  "app/components/admin/AnalysisResultsPanel.tsx",
+  "app/components/admin/AIModelSettingsPanel.tsx",
+];
+
+/** 系统设置页的面板：已统一到设计令牌，比基础守卫多锁语义色、字重、圆角和近黑底色。 */
+const SETTINGS_SURFACE_FILES = [
+  "app/components/OrganizationTree.tsx",
+  "app/components/admin/SystemManagementPanel.tsx",
+  "app/components/admin/UserManagementPanel.tsx",
+  "app/components/admin/AnalysisResultsPanel.tsx",
+  "app/components/admin/AIModelSettingsPanel.tsx",
+  "app/components/settings/SettingsPage.tsx",
+  "app/components/settings/AnnualTemplatePanel.tsx",
+  "app/components/settings/DisclosureCalendarPanel.tsx",
+  "app/components/settings/TemplateAnchorSlots.tsx",
+];
+
+const SETTINGS_SURFACE_BANNED: Array<[RegExp, string]> = [
+  [/\b(?:red|rose|emerald|green|amber|yellow|gray)-\d{2,3}\b/, "原始调色板类名（应改用 danger/success/warning/slate）"],
+  [/\bfont-black\b/, "font-black（其他页面不用这一档字重）"],
+  [/\brounded-(?:lg|xl|2xl|3xl)\b/, "超规格圆角（卡片用 rounded-card，控件用 rounded-md）"],
+  [/\bbg-slate-9\d{2}\b/, "近黑底色（主操作用 primary，代码块用 surface）"],
+];
 
 /** 去掉块注释与整行 // 注释后再扫描，避免"注释里描述历史问题"被误报。 */
 function stripComments(source: string): string {
@@ -111,6 +139,16 @@ for (const guardedFile of GUARDED_FILES) {
   const paletteMatch = source.match(BANNED_PALETTE_PATTERN);
   if (paletteMatch) {
     violations.push(`${guardedFile}: 禁用调色板类名「${paletteMatch[0]}」`);
+  }
+}
+
+for (const surfaceFile of SETTINGS_SURFACE_FILES) {
+  const source = stripComments(readFileSync(path.join(APP_ROOT, surfaceFile), "utf-8"));
+  for (const [pattern, label] of SETTINGS_SURFACE_BANNED) {
+    const match = source.match(pattern);
+    if (match) {
+      violations.push(`${surfaceFile}: ${label}「${match[0]}」`);
+    }
   }
 }
 

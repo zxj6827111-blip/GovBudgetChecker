@@ -1,9 +1,10 @@
 /**
  * SettingsPage：Task 8.4 系统设置页。
  *
- * 复用既有 SystemManagementPanel（54KB，内部已包含用户管理
- * UserManagementPanel、组织架构、运维操作、分析结果、规则包、配置留档等
- * 全部管理能力），**只套新布局（SectionTitle + 页面容器），不重写业务逻辑**。
+ * 复用既有 SystemManagementPanel（内部已包含用户管理
+ * UserManagementPanel、组织架构、运维操作、分析结果、规则包、配置留档、
+ * 模板管理、年度公开时限等全部管理能力）。本页只负责页面标题和容器，
+ * 各能力都是面板内的分区，不再堆在面板上方，否则切换分区时要先滚过它们。
  *
  * 组织数据：请求 /api/organizations?stats=none 拿只读导航树后拉平为
  * OrganizationRecord[]（与 OrganizationFilterSelect / 旧 gbc-ui-demo 的
@@ -17,8 +18,6 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { SectionTitle } from "@/components/ui";
-import AnnualTemplatePanel from "./AnnualTemplatePanel";
-import DisclosureCalendarPanel from "./DisclosureCalendarPanel";
 import SystemManagementPanel, { type OrganizationsLoadStatus } from "@/components/admin/SystemManagementPanel";
 import type { OrganizationRecord } from "@/lib/uiAdapters";
 
@@ -87,10 +86,10 @@ export function SettingsPage() {
   }, [loadOrganizations]);
 
   return (
-    <div className="p-8" data-testid="gbc-settings-page">
+    <div className="p-8 [&_input[type=checkbox]]:accent-primary-600" data-testid="gbc-settings-page">
       <SectionTitle
         title="系统设置"
-        desc="管理大模型配置、组织架构、用户权限、规则包和导出模板。"
+        desc="管理组织架构、用户权限、年度模板、公开时限、规则包和大模型配置。"
       />
 
       {loadFailed ? (
@@ -102,8 +101,6 @@ export function SettingsPage() {
         </div>
       ) : null}
 
-      <AnnualTemplatePanel />
-      <DisclosureCalendarPanel />
       <div className="mt-6">
         <SystemManagementPanel
           organizations={organizations}

@@ -20,7 +20,7 @@ export function TemplateAnchorSlots({ anchor, onChange }: { anchor: Anchor; onCh
     }
   }
   const slots: Anchor[] = anchor.slots || [];
-  return <fieldset className="space-y-2 rounded border p-3"><legend>逐位置审核槽位</legend>
+  return <fieldset className="space-y-2 rounded-md border border-border p-3"><legend>逐位置审核槽位</legend>
     <p>只替换所选位置。固定文献年份、金额和科目编码保持原文；位置按归一原文字符计数。</p>
     {!candidates.length && <p>当前锚点没有可选的年度或完整名称位置。</p>}
     {candidates.map(c => <label className="block" key={`${c.start}:${c.end}:${c.name}`}>
