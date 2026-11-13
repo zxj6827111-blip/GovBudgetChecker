@@ -63,7 +63,7 @@ from src.engine.check_obligations import (
     get_obligation,
 )
 from src.schemas.material_detail import CoverageObligationItem
-from src.services.obligation_finding_coverage import obligation_covered_by_finding
+from src.services.obligation_finding_coverage import cascade_root_issue_id, obligation_covered_by_finding
 from src.services.obligation_locations import (
     merge_locations,
     resolve_obligation_locations,
@@ -112,6 +112,8 @@ from src.schemas.review_lifecycle import (
     CurrentAnalysisRef,
     ObligationDecisionData,
     ObligationDecisionRecord,
+    ObligationCascadeGroup,
+    ObligationCascadeItem,
     ObligationReviewBlock,
     ObligationReviewItem,
     ReviewBlocker,
@@ -584,7 +586,32 @@ def blocking_coverage_obligations(
         if item.blocks_gate
         and item.status in UNRESOLVED_OBLIGATION_STATUSES
         and not obligation_covered_by_finding(item, result_row, visible_issue_ids=visible)
+        and cascade_root_issue_id(item, result_row, visible_issue_ids=visible) is None
     ]
+
+
+def cascaded_coverage_obligations(
+    items: List[CoverageObligationItem],
+    result_row: Any,
+    *,
+    visible_issue_ids: Iterable[str],
+) -> Dict[str, List[CoverageObligationItem]]:
+    """缺表/空表的连带核对：根问题 issue id → 因它做不下去的阻塞义务。
+
+    这些义务不进「必须处理」（见 ``blocking_coverage_obligations``），由审核台
+    挂在根问题下面展示；根问题处理了，连带项随之了结。
+    """
+    visible = set(visible_issue_ids)
+    grouped: Dict[str, List[CoverageObligationItem]] = {}
+    for item in items:
+        if not item.blocks_gate or item.status not in UNRESOLVED_OBLIGATION_STATUSES:
+            continue
+        if obligation_covered_by_finding(item, result_row, visible_issue_ids=visible):
+            continue
+        root = cascade_root_issue_id(item, result_row, visible_issue_ids=visible)
+        if root is not None:
+            grouped.setdefault(root, []).append(item)
+    return grouped
 
 
 def _unhandled_obligations(state: ReviewState) -> List[CoverageObligationItem]:
@@ -827,12 +854,29 @@ def _obligation_review_block(state: ReviewState) -> "ObligationReviewBlock":
                 legacy_coverage_terms=getattr(item, "legacy_coverage_terms", None),
             )
         )
+    cascaded = cascaded_coverage_obligations(
+        state.coverage_items,
+        state.analysis.result_row,
+        visible_issue_ids={problem.issue_id for problem in state.problems},
+    )
+    cascade_groups = []
+    for root_issue_id, group in cascaded.items():
+        cascade_items = []
+        for item in group:
+            definition = get_obligation(item.obligation_id)
+            cascade_items.append(ObligationCascadeItem(
+                obligation_id=item.obligation_id,
+                title=definition.title if definition else item.title,
+                detail=item.detail,
+            ))
+        cascade_groups.append(ObligationCascadeGroup(root_issue_id=root_issue_id, items=cascade_items))
     return ObligationReviewBlock(
         available=True,
         reason=None,
         pending_total=len(_unhandled_obligations(state)),
         covered_total=covered_total,
         items=items,
+        cascaded=cascade_groups,
     )
 
 

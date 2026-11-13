@@ -1180,14 +1180,30 @@ class PDFParser:
         if not chars or images is None:
             return
 
-        boxes = []
+        glyph_boxes = []
+        image_boxes = []
         # PDF 的排版空格没有可见字形，不应阻止对原件空白格的认证；未知字符仍保守阻塞。
         visible = [c for c in chars if 'text' not in c or str(c.get('text') or '').strip()]
-        for item in [*visible, *images]:
+        for item, target in [*((c, glyph_boxes) for c in visible), *((i, image_boxes) for i in images)]:
             try:
-                boxes.append(tuple(float(item[k]) for k in ("x0", "top", "x1", "bottom")))
+                target.append(tuple(float(item[k]) for k in ("x0", "top", "x1", "bottom")))
             except (KeyError, TypeError, ValueError):
                 return  # 坐标未确认时保留未识别，不能当作原件空白。
+
+        def glyph_in_cell(box, bbox):
+            # 字形框（含字体上下留白）常越过格线 1~2pt 蹭进相邻格（2026-11-08 建管委
+            # 基本支出表：上一行“4.36”的字形框下沿压进下一行空白格 1pt）。取字时
+            # pdfplumber 按字符中心归格，这里同口径：中心在格内即本格有字；中心在格外、
+            # 只蹭进不足四成字高/字宽的，属相邻格的字。蹭进更深的仍保守算本格墨迹。
+            width, height = box[2] - box[0], box[3] - box[1]
+            overlap_w = min(box[2], bbox[2]) - max(box[0], bbox[0])
+            overlap_h = min(box[3], bbox[3]) - max(box[1], bbox[1])
+            if overlap_w <= .1 or overlap_h <= .1:
+                return False
+            cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+            if bbox[0] < cx < bbox[2] and bbox[1] < cy < bbox[3]:
+                return True
+            return not ((height > 0 and overlap_h < .4 * height) or (width > 0 and overlap_w < .4 * width))
 
         # 向量字形和填充图形也可能是没有文本层的数字。表框线仅在边界，
         # 不把整张外框的bbox当作格内墨迹；未知曲线则保守拒绝认证。
@@ -1221,8 +1237,10 @@ class PDFParser:
                    and inner[1] < (float(line.get('top', 0)) + float(line.get('bottom', 0))) / 2 < inner[3]
                    for line in (getattr(page, 'lines', []) or [])):
                 continue
+            if any(glyph_in_cell(box, cell.bbox) for box in glyph_boxes):
+                continue
             if not any(min(box[2], cell.bbox[2]) > max(box[0], cell.bbox[0]) + .1
-                       and min(box[3], cell.bbox[3]) > max(box[1], cell.bbox[1]) + .1 for box in boxes):
+                       and min(box[3], cell.bbox[3]) > max(box[1], cell.bbox[1]) + .1 for box in image_boxes):
                 cell.native_blank_verified = True
 
     def _build_cells(

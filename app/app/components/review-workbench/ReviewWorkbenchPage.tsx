@@ -87,6 +87,7 @@ import {
 } from "./reviewLifecycleAdapters";
 import {
   obligationItemsByProblemId,
+  cascadedChecksByProblemId,
   obligationStatusEntries,
   toObligationProblems,
   type ObligationDecision,
@@ -465,6 +466,7 @@ export function ReviewWorkbenchPage() {
     : null;
   const obligationProblems = useMemo(() => toObligationProblems(obligationBlock, jobId), [obligationBlock, jobId]);
   const obligationItems = useMemo(() => obligationItemsByProblemId(obligationBlock), [obligationBlock]);
+  const cascadedChecks = useMemo(() => cascadedChecksByProblemId(obligationBlock), [obligationBlock]);
   const reviewProblems = useMemo(() => [...problems, ...obligationProblems], [problems, obligationProblems]);
   const reviewStatusById = useMemo(
     () => ({ ...workflowStatusByIssueId, ...obligationStatusEntries(obligationBlock) }),
@@ -1342,6 +1344,7 @@ export function ReviewWorkbenchPage() {
                 lastDecision={lastIssueDecision}
                 onUndo={handleUndoIssueDecision}
                 obligationItems={obligationItems}
+                cascadedChecks={cascadedChecks}
                 onObligationDecision={handleObligationDecision}
                 onOpenScope={() => openTab("metadata")}
                 onSelectEvidenceRef={handleSelectEvidenceRef}

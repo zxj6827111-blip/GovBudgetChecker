@@ -140,6 +140,117 @@ def blank_term(doc, table_code, indicator, *, code=None, names=(), stage='决算
                           extra_dims={'native_blank_observation': observation})
 
 
+def verified_blank_zero_by_code(doc, table_code, page, code):
+    """旧结构化表（单元格无坐标）上的空白金额格，回到原件网格核实。
+
+    在逻辑表 ``table_code`` 第 ``page`` 页里找科目编码恰为 ``code`` 的唯一一格，
+    取同一行“编码｜名称｜金额”版式中名称右侧的金额格（表头须含“决算”）。
+    仅当该格经网格认证为空白、且命中空白约定（U-5）时返回观察记录；
+    任何一步不唯一或不成立都返回 None，调用方保持未知。
+    """
+    import re
+
+    context, artifact = getattr(doc, 'fact_context', None), getattr(doc, 'parse_artifact', None)
+    code = str(code or '').strip()
+    if (context is None or artifact is None or not code or not page
+            or context.file_hash != artifact.source_file_hash
+            or context.parse_run_uid != artifact.parse_run_uid
+            or not context.org_name or context.fiscal_year is None):
+        return None
+
+    def norm(text):
+        return re.sub(r'\s+', '', str(text or ''))
+
+    hits = []
+    for table in getattr(artifact, 'table_fragments', []) or []:
+        if table.table_code != table_code or table.extraction_method not in {'lines', 'lines_strict'}:
+            continue
+        cells = {(c.row_idx, c.col_idx): c for c in table.cells}
+        for cell in table.cells:
+            if cell.page_number == page and not cell.is_header and norm(cell.raw_text) == code:
+                hits.append((table, cells, cell))
+    if len(hits) != 1:
+        return None
+    table, cells, code_cell = hits[0]
+    name_cell = cells.get((code_cell.row_idx, code_cell.col_idx + 1))
+    amount_col = code_cell.col_idx + 2
+    target = cells.get((code_cell.row_idx, amount_col))
+    header = ''.join(norm(row[amount_col]) for row in table.rows[:table.header_row_count]
+                     if amount_col < len(row))
+    if (name_cell is None or not norm(name_cell.raw_text) or target is None or '决算' not in header
+            or target.is_header or target.raw_text.strip() or target.numeric_value is not None
+            or not target.native_blank_verified or not target.bbox
+            or target.page_number != page):
+        return None
+    sid = cell_id(table, target)
+    physical = [c for fragment in getattr(artifact, 'physical_fragments', [])
+                for c in fragment.cells if cell_id(fragment, c) == sid]
+    if len(physical) != 1 or not physical[0].native_blank_verified or physical[0].raw_text.strip():
+        return None
+    from .cell_value_policy import interpret_cell_value
+    interpreted, _presence, convention = interpret_cell_value(
+        '', native_blank_verified=True, region=context.org_name, year=context.fiscal_year,
+        table_code=table_code, row=target.row_idx, column=amount_col)
+    if interpreted is None or not convention:
+        return None
+    return {'source_cell_id': sid, 'file_hash': context.file_hash,
+            'parse_run_uid': context.parse_run_uid, 'physical_page': target.page_number,
+            'bbox': list(target.bbox), 'presence': 'blank', 'raw_text': '',
+            'table_code': table_code, 'subject_code': code, 'subject_name': norm(name_cell.raw_text),
+            'budget_stage': '决算', 'basis': 'verified_native_grid_blank_with_scoped_convention',
+            'convention': convention.get('id') if isinstance(convention, dict) else convention,
+            'calculation': True}
+
+
+def verified_blank_column(doc, table_code, indicator):
+    """某金额列在原件网格中整列都是认证空白、且逐格命中空白约定（U-5）时，
+    返回各格观察记录（该列明确为 0）；列身份不唯一、任一格有字或未认证则返回 None。"""
+    context, artifact = getattr(doc, 'fact_context', None), getattr(doc, 'parse_artifact', None)
+    if (context is None or artifact is None
+            or context.file_hash != artifact.source_file_hash
+            or context.parse_run_uid != artifact.parse_run_uid
+            or not context.org_name or context.fiscal_year is None):
+        return None
+    pairs = [(instance, _fragment_for_instance(artifact, instance))
+             for instance in getattr(artifact, 'logical_tables', []) if instance.table_code == table_code]
+    pairs = [(instance, table) for instance, table in pairs
+             if table is not None and table.extraction_method in {'lines', 'lines_strict'}]
+    if len(pairs) != 1:
+        return None
+    instance, table = pairs[0]
+    if instance.identity_conflict or len({len(row) for row in table.rows}) != 1:
+        return None
+    columns = {int(m['source_col_idx']) for m in _column_mappings_for_instance(instance, table)
+               if m.get('canonical_measure') == indicator}
+    if len(columns) != 1:
+        return None
+    col = columns.pop()
+    if any(f.table_code == table_code and f.instance_uid == instance.instance_uid
+           and f.indicator == indicator for f in context.facts):
+        return None
+    from .cell_value_policy import interpret_cell_value
+    observations = []
+    for cell in table.cells:
+        if cell.col_idx != col or cell.is_header or cell.row_idx < table.header_row_count:
+            continue
+        if cell.raw_text.strip() or cell.numeric_value is not None:
+            return None
+        zero, _presence, convention = interpret_cell_value(
+            '', native_blank_verified=cell.native_blank_verified, region=context.org_name,
+            year=context.fiscal_year, table_code=table_code, row=cell.row_idx, column=col)
+        if zero is None or not cell.bbox:
+            return None
+        observations.append({'source_cell_id': cell_id(table, cell), 'file_hash': context.file_hash,
+                             'parse_run_uid': context.parse_run_uid, 'physical_page': cell.page_number,
+                             'bbox': list(cell.bbox), 'presence': 'blank', 'raw_text': '',
+                             'table_code': table_code, 'instance_uid': instance.instance_uid,
+                             'indicator': indicator, 'budget_stage': '决算',
+                             'basis': 'verified_native_grid_blank_with_scoped_convention',
+                             'convention': convention.get('id') if isinstance(convention, dict) else convention,
+                             'calculation': True})
+    return observations or None
+
+
 def valid_blank_observation(artifact, context, observation, page_texts=None):
     term = blank_term(SimpleNamespace(parse_artifact=artifact, fact_context=context,
                                       page_texts=list(page_texts or [])),

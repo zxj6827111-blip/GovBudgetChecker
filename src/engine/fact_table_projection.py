@@ -192,6 +192,16 @@ def fact_bound_table_rows(doc, table_name, *, strict_unknown_values=False):
             # 有金额的业务行中，缺失分项不能被旧规则的 `or 0` 静默吞掉。
             if strict_unknown_values and any(c.numeric_value is not None and c.col_idx in measure_columns
                    for c in table.cells if c.row_idx == cell.row_idx):
+                # 原件网格认证空白 + 空白值约定（U-5）：按 0 写入投影行，
+                # 让按列位取数的旧规则拿到显式 0，而不是被跳过的空串。
+                from .cell_value_policy import interpret_cell_value
+                zero, _presence, _basis = interpret_cell_value(
+                    "", native_blank_verified=bool(getattr(cell, "native_blank_verified", False)),
+                    region=getattr(context, "org_name", None), year=getattr(context, "fiscal_year", None),
+                    table_code=code, row=cell.row_idx, column=cell.col_idx)
+                if zero is not None:
+                    rows[cell.row_idx][cell.col_idx] = "0"
+                    continue
                 message = f"{table_name} 第{cell.row_idx + 1}行第{cell.col_idx + 1}列为空白，不能按零计算"
                 _record_projection_gap(doc, message, codes=['cell_blank_semantics_unknown'],
                                        blockers=[_cell_blocker(f'{code}:r{cell.row_idx}c{cell.col_idx}',

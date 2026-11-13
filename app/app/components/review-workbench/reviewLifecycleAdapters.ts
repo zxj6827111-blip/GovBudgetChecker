@@ -152,6 +152,24 @@ export interface ObligationReviewBlockRecord {
   /** 已被同源正式问题覆盖、不重复列出的补核条数；旧后端可能没有。 */
   covered_total?: number;
   items: ObligationReviewItemRecord[];
+  /**
+   * 缺表/空表的连带核对：按根问题分组，不计入待办、不阻塞完成，
+   * 只在根问题卡片下展示。旧后端没有该字段。
+   */
+  cascaded?: ObligationCascadeGroupRecord[];
+}
+
+/** 因某张表缺失/为空表而无法自动进行的核对（连带项）。 */
+export interface ObligationCascadeItemRecord {
+  obligation_id: string;
+  title: string;
+  detail?: string | null;
+}
+
+export interface ObligationCascadeGroupRecord {
+  /** 根问题（“缺失表：X”“X 为空表”）的 issue id。 */
+  root_issue_id: string;
+  items: ObligationCascadeItemRecord[];
 }
 
 /** `GET /api/reviews/{slot_id}` 的数据体。 */

@@ -10,7 +10,7 @@ from .amount_math import classify_amount_diff
 from .fact_context import _canonical_budget_stage, operand_rejection_reason
 from .native_three_public_ratios import operand_ref
 from .rule_outcome import RuleDeferred
-from .native_empty_operands import NativeBlankTerm, blank_term, blank_observations, money_facts
+from .native_empty_operands import NativeBlankTerm, blank_term, blank_observations, money_facts, verified_blank_column
 
 
 def table_facts(doc, code):
@@ -245,12 +245,13 @@ def journal(rule, doc, facts):
 
 def receipt(rule, doc, relation, facts, *, status, formula, reason=None, disclosure_sources=(),
             reason_codes=(), amount_subcheck_status=None, explained_by=None,
-            residual_difference_wan=None, cascade_of=None):
+            residual_difference_wan=None, cascade_of=None, cell_observations=()):
     from .rules_v33 import _v33_relation_receipt
     ids, evidence = journal(rule, doc, facts)
     _v33_relation_receipt(doc, rule.code, relation, status=status,
                           operand_fact_ids=ids, formula=formula, incomplete_reason=reason,
-                          cell_observations=blank_observations(facts), disclosure_sources=disclosure_sources,
+                          cell_observations=[*blank_observations(facts), *cell_observations],
+                          disclosure_sources=disclosure_sources,
                           reason_codes=reason_codes,
                           amount_subcheck_status=amount_subcheck_status,
                           explained_by=explained_by,
@@ -491,7 +492,9 @@ def check_fund_zero_disclosures(rule, doc):
     ):
         terms = [fact for fact in source if fact.indicator == indicator]
         key = f'{code}:zero_source'
-        if not terms or any(operand_rejection_reason(f, doc.fact_context.org_name)
+        # 总表该资金列整列原件空白（网格认证 + 空白值约定 U-5）＝该列明确为 0。
+        column_blanks = [] if terms else (verified_blank_column(doc, 'FIN_04_fiscal_grant_total', indicator) or [])
+        if (not terms and not column_blanks) or any(operand_rejection_reason(f, doc.fact_context.org_name)
                             or f.fund_scope != fund or f.fiscal_year != doc.fact_context.fiscal_year for f in terms):
             unresolved.append(f'{title}对应的总表资金列缺少明确可用数值，不能按零解释')
             continue
@@ -509,7 +512,7 @@ def check_fund_zero_disclosures(rule, doc):
                     and _target_disclosed_empty(doc, code)):
                 # 原文明确本表无数据，且总表资金列明确为零：空表成立。
                 receipt(rule, doc, key, terms, status='pass',
-                        formula='原文明确本表无数据，总表资金列明确为零')
+                        formula='原文明确本表无数据，总表资金列明确为零', cell_observations=column_blanks)
                 continue
             unresolved.append(error)
             continue
@@ -519,7 +522,8 @@ def check_fund_zero_disclosures(rule, doc):
             continue
         nonzero = [f for f in target if amount_difference_exceeds_policy(f.normalized_value)]
         ids, evidence = receipt(rule, doc, key, [*terms, *target], status='fail' if nonzero else 'pass',
-                                formula='总表资金列明确为零时，对应表不得出现非零金额')
+                                formula='总表资金列明确为零时，对应表不得出现非零金额',
+                                cell_observations=column_blanks)
         if nonzero:
             message = f'{title}存在非零金额，但财政拨款总表对应资金列均明确为零，请核对资金口径。'
             issues.append(rule._issue(message, {'table': title, 'table_code': code,

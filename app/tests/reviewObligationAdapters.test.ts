@@ -6,6 +6,7 @@ import {
   obligationDecisionTone,
 } from "../lib/reviewLifecyclePresentation";
 import {
+  cascadedChecksByProblemId,
   obligationAutoEvidence,
   obligationItemsByProblemId,
   obligationProblemId,
@@ -335,6 +336,27 @@ assert.equal(readableObligationReason(null), "");
   assert.equal(refs[1].locationLevel, "search_region", "关联框同样是诚实粒度");
   assert.equal(refs[1].verificationStatus, "unverified");
   assert.ok(refs[1].key.startsWith(`${refs[0].key}|r1`), "关联框 key 可追溯到主框");
+}
+
+{
+  // 缺表/空表连带项（2026-11-08）：按根问题 id 分组，不进待办、不生成「未能自动核对」条目。
+  const block = {
+    available: true, reason: null, pending_total: 0, items: [],
+    cascaded: [
+      { root_issue_id: "f-missing", items: [
+        { obligation_id: "OBL-INTERNAL-T3-TOTAL", title: "支出决算表：本年支出合计 = 基本支出 + 项目支出" },
+        { obligation_id: "OBL-CROSS-T1-T3", title: "收入支出决算总表 与 支出决算表 同口径总额一致" },
+      ] },
+      { root_issue_id: "f-empty", items: [] },
+    ],
+  };
+  const grouped = cascadedChecksByProblemId(block);
+  assert.deepEqual(Object.keys(grouped), ["f-missing"], "空分组不挂");
+  assert.equal(grouped["f-missing"].length, 2);
+  assert.equal(toObligationProblems(block, "job").length, 0, "连带项不进入必须处理");
+  assert.deepEqual(cascadedChecksByProblemId({ ...block, available: false }), {});
+  assert.deepEqual(cascadedChecksByProblemId({ available: true, reason: null, pending_total: 0, items: [] }), {},
+    "旧后端没有 cascaded 字段时为空");
 }
 
 console.log("reviewObligationAdapters.test.ts passed");
