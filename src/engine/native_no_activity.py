@@ -50,30 +50,47 @@ def empty_three_public_evidence(doc):
 
 
 def require_no_activity_disposition(rule, doc):
-    """空表没有数字可复算；正数披露或百分比声明仍须核对，不能被无支出说明覆盖。"""
+    """空表没有数字可复算；正数披露仍须核对，不能被无支出说明覆盖。
+
+    百分比（完成率口径）不构成披露矛盾：分母为 0 的完成率表述由
+    V33-TREND-COMPLETION-RATE 独立报告，不得连带阻断金额加总、分项
+    齐备与表文一致检查（2026-11-10 宜川任务 5753d874… 裁定）。
+    认证空白格按既定口径（空白=0）参与金额勾稽，回执携带十二格认证。
+    """
     proof = empty_three_public_evidence(doc)
     if proof is None:
         return
     from .native_table_text import sections, context_guard
     from .native_narrative_checks import _NUMBER, _UNIT, _wan
     from .native_table_arithmetic import receipt
+    from .diagnostic_fields import record_gap
     text, ranges = sections(doc, lambda title: '三公' in title and '决算' in title)
-    conflict = False
+    conflicts = []
     for _title, begin, end in ranges:
         for match in re.finditer(rf'(?P<amount>{_NUMBER})(?P<unit>{_UNIT})', text.compact[begin:end]):
             start, finish = begin + match.start(), begin + match.end()
             if not context_guard(doc, text.compact, start, finish) and _wan(match['amount'], match['unit']) > 0:
-                conflict = True
-        # 空白分母不是已披露的零分母，仍保留百分比核对缺口。
-        if re.search(r'\d+(?:\.\d+)?[%％]', text.compact[begin:end]):
-            conflict = True
+                page = next((ref.get('page') for ref in text.refs(start, finish, '') if ref.get('page')), None)
+                conflicts.append({'source': 'text', 'section': '三公经费支出决算情况说明',
+                                  'role': '与认证空白表冲突的正数披露',
+                                  'page': page, 'quote': match.group()})
     terms, sources = proof
-    reason = ('原表明确无三公支出且十二格原件留空，但说明存在正数或百分比，需核对披露'
-              if conflict else '原表明确本年度无三公支出且十二格原件留空，金额复算不适用')
+    if conflicts:
+        reason = ('原表明确无三公支出且十二格原件留空，但说明存在正数金额披露，'
+                  '与按0口径的表内金额矛盾，需核对披露')
+        # 具体诊断：正数披露位置须逐处人工核对，诊断不再落入 rule_no_reason。
+        record_gap(doc, reason, reason_codes=['text_binding_failed'],
+                   missing_operands=conflicts, preferred_action='human_confirm')
+        receipt(rule, doc, 'three_public:explicit_empty', terms,
+                status='insufficient_data',
+                formula='literal no-activity disclosure + certified native blank grid',
+                reason=reason, disclosure_sources=sources)
+        raise RuleDeferred(rule.code, detail=reason)
+    reason = ('原表明确本年度无三公支出且十二格原件留空（认证空白格按既定口径为0，'
+              '金额加总与表文一致恒成立），金额复算不适用；说明中的完成率百分比'
+              '由预算完成率专项规则独立核对')
     receipt(rule, doc, 'three_public:explicit_empty', terms,
-            status='insufficient_data' if conflict else 'not_applicable',
+            status='not_applicable',
             formula='literal no-activity disclosure + certified native blank grid',
             reason=reason, disclosure_sources=sources)
-    if conflict:
-        raise RuleDeferred(rule.code, detail=reason)
     raise RuleNotApplicable(rule.code, detail=reason)

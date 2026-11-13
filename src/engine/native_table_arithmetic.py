@@ -825,7 +825,16 @@ def _economic_zero_layout_tail(doc, table, cells, row_idx, mapping):
 
 
 def _economic_table_view(doc, facts):
-    """完整网格决定明细集合，事实只提供当前金额；左右车道独立绑定标签。"""
+    """完整网格决定明细集合，事实只提供当前金额；左右车道独立绑定标签。
+
+    科目重复不再整表拒收（2026-11-10 宜川任务 5753d874… 裁定）：
+    - 整行内容完全相同的重复＝排版把同一行印了两遍，按一行参与合计，
+      原件缺陷由 V33-243 单独报告（与 V33-005 的 21211 先例同口径）；
+    - 内容不同的重复＝行身份歧义：只阻断依赖该科目的检查关系（含三公
+      跨表核对的目标科目），不再全表阻断，无关科目的重复只单独报告。
+    所有结构性门禁（唯一网格、覆盖率、标签/金额原格、车道绑定、编码
+    识别、类级行齐备）原样保留，全表加总完整性不受重复豁免影响。
+    """
     from .fact_context import _column_mappings_for_instance, _fragment_for_instance, _stage_for_fact
     from src.services.fiscal_fact_materializer import FiscalFactMaterializer
     from src.services.fiscal_row_roles import is_index_header
@@ -892,9 +901,10 @@ def _economic_table_view(doc, facts):
             if amount is None or not labels_covered_by_native_cells(table, row_idx, label_cols):
                 return None, f'经济分类表第{row_idx + 1}行原始标签或金额单元格缺失'
             key = name if code == 'total' else code
-            if key in rows:
-                return None, f'经济分类表科目{key}存在重复原行身份'
-            rows[key] = (row_idx, code, mapping)
+            # 车道内身份签名：编码+名称+金额原文。整行签名会把左右车道的
+            # 无关科目标成同排，不能用于重复判定。
+            signature = (str(code), name, re.sub(r'\s+', '', str(amount.raw_text or '')))
+            rows.setdefault(key, []).append((row_idx, code, mapping, signature))
     unknown = [f for f in facts if f.subject_code != 'total'
                and not re.fullmatch(r'3\d{2}(?:\d{2})?', str(f.subject_code or ''))]
     if unknown:
@@ -903,17 +913,79 @@ def _economic_table_view(doc, facts):
         return None, '经济分类表未取得原件科目行集合'
     if any(len(key) == 5 and key[:3] not in rows for key in rows if key.isdigit()):
         return None, '经济分类表项级科目的原始类级行缺失，明细归集未完成'
-    return (instance, table, mappings, cells, rows, facts), None
+    duplicates = {key: {'identical': len({entry[3] for entry in entries}) == 1,
+                        'name': entries[0][3][1]}
+                  for key, entries in rows.items() if len(entries) > 1}
+    return (instance, table, mappings, cells, rows, facts, duplicates), None
 
 
-def _economic_operand(doc, view, key):
+def _economic_operand(doc, view, key, *, allow_identical_duplicate=False):
+    """按科目取唯一原行金额。
+
+    默认严格唯一（三公跨表核对按目标科目验证唯一身份：目标科目自身
+    重复仍须阻断）。``allow_identical_duplicate=True`` 供全表加总路径：
+    排版重复（整行内容完全相同）按一行参与合计，内容不同的重复仍阻断。
+    """
     from .native_hierarchy_checks import _select
 
-    instance, table, _mappings, cells, rows, facts = view
+    instance, table, _mappings, cells, rows, facts, _duplicates = view
     if key not in rows:
         return None, f'经济分类表科目{key}的完整原始行缺失'
-    row_idx, code, mapping = rows[key]
+    entries = rows[key]
+    if len(entries) > 1 and not (allow_identical_duplicate
+                                  and len({entry[3] for entry in entries}) == 1):
+        return None, f'经济分类表科目{key}存在重复原行身份，无法唯一取数'
+    row_idx, code, mapping, _signature = entries[0]
     return _select(doc, (instance, table, [mapping], cells, {code: row_idx}, facts), code, 'total_actual')
+
+
+def _economic_duplicate_row_issues(rule, doc, view):
+    """经济分类表科目重复行的原件缺陷单独报告（与 V33-005 同口径）。
+
+    - 整行内容完全相同（排版重复）：已按一行参与合计，报 low；
+    - 内容不同（行身份歧义）：相关加总已按取数不足阻断，报 medium。
+    证据走当前事实的原格身份；金额完全一致的重复行取第一条作证据锚，
+    内容不同的重复行不取金额事实，只报缺陷位置。
+    """
+    _instance, _table, _mappings, cells, rows, facts, duplicates = view
+    issues = []
+    for key, info in sorted(duplicates.items()):
+        entries = rows[key]
+        row_idx, _code, _mapping, _signature = entries[0]
+        pages = sorted({int(cells[(entry[0], int(entry[2]['source_col_idx']))].page_number)
+                        for entry in entries
+                        if cells.get((entry[0], int(entry[2]['source_col_idx'])))
+                        and cells[(entry[0], int(entry[2]['source_col_idx']))].page_number})
+        page = pages[0] if pages else None
+        page_text = f'第{page}页' if page else '原件'
+        label = f"{key} {info['name']}".strip()
+        row_facts = [fact for fact in facts
+                     if str(fact.subject_code) == str(key) and fact.indicator == 'total_actual']
+        if info['identical']:
+            severity, message = 'low', (
+                f'一般公共预算财政拨款基本支出决算表{page_text}科目{label}整行重复印了两遍'
+                '（各列金额完全相同），本次已按一行参与合计；该重复属于原件排版缺陷，'
+                '若其中一行本应是其他科目行，请核对原表编码是否误植。')
+        else:
+            severity, message = 'medium', (
+                f'一般公共预算财政拨款基本支出决算表{page_text}科目{label}重复出现且各行金额不一致，'
+                '无法归入同一业务项；涉及该科目的明细加总已按取数不足处理，请人工核对原表。')
+        location = {'table': '一般公共预算财政拨款基本支出决算表',
+                    'table_code': 'FIN_06_basic_expenditure', 'code': key,
+                    'page': page, 'pages': pages, 'row_index': row_idx + 1}
+        if info['identical'] and len(row_facts) > 1 and len({
+                (str(fact.raw_value), str(fact.normalized_value), fact.unit)
+                for fact in row_facts}) == 1:
+            row_facts = row_facts[:1]
+        if len(row_facts) == 1:
+            journal(rule, doc, row_facts)
+            from .native_three_public_ratios import operand_ref
+            location['operand_refs'] = [operand_ref(row_facts[0], 'duplicate_row')]
+            location['fact_context_version_token'] = doc.fact_context.version_token
+        issues.append(rule._issue(
+            message, location, severity, evidence_text=message,
+            check_relation_id=f"{rule.code}:FIN_06_basic_expenditure:duplicate_row:{key}"))
+    return issues
 
 
 def check_basic_economics(rule, doc):
@@ -933,10 +1005,11 @@ def check_basic_economics(rule, doc):
     issues, unresolved = [], []
     for name, codes in ([('人员经费合计', ('301', '303')), ('公用经费合计', ('302', '310'))]
                         if rule.code == 'V33-117' else []):
-        parent, error = _economic_operand(doc, view, name)
+        # 加总路径允许排版重复按一行参与合计；内容不同的重复仍按取数不足阻断。
+        parent, error = _economic_operand(doc, view, name, allow_identical_duplicate=True)
         children = []
         for code in codes:
-            child, cr = _economic_operand(doc, view, code)
+            child, cr = _economic_operand(doc, view, code, allow_identical_duplicate=True)
             error = error or cr
             if child is not None:
                 children.append(child)
@@ -951,12 +1024,16 @@ def check_basic_economics(rule, doc):
             unresolved.extend(missing)
     if rule.code == 'V33-117':
         return finish(rule, cluster_rounding(rule, issues), unresolved)
+    # 科目重复的原件缺陷只在表格级规则（V33-243）报告一次，避免 V33-117
+    # 与跨表专项里重复出现；重复行本身已按一行参与合计，不影响勾稽。
+    if rule.code == 'V33-243':
+        issues.extend(_economic_duplicate_row_issues(rule, doc, view))
     for code in sorted(key for key in rows if re.fullmatch(r'3\d{2}', key)):
-        parent, error = _economic_operand(doc, view, code)
+        parent, error = _economic_operand(doc, view, code, allow_identical_duplicate=True)
         children = []
         child_codes = sorted(key for key in rows if key.startswith(code) and len(key) == 5)
         for child_code in child_codes:
-            child, cr = _economic_operand(doc, view, child_code)
+            child, cr = _economic_operand(doc, view, child_code, allow_identical_duplicate=True)
             error = error or cr
             if child is not None:
                 children.append(child)

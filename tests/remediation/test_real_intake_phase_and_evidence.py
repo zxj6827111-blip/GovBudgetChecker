@@ -115,13 +115,17 @@ def test_cross_table_difference_has_current_fact_ids_and_original_pages():
 def test_common_three_public_incomplete_affects_selected_final_obligations():
     summary = {'rule_statuses': {'V33-108': 'pass', 'V33-224': 'pass', 'CMM-001': 'insufficient_data'}}
     coverage = build_obligation_ledger(None, report_kind='final', rule_execution_summary=summary)
+    # 2026-11-10 合并重复表文义务：原 OBL-TXT-T7 与 OBL-SG-TABLE-TEXT 是同一
+    # 检查（V33-108/V33-224/CMM-001，table:FIN_07）的重复登记，人工待办成对
+    # 出现；合并后只保留 OBL-SG-TABLE-TEXT，关联检查项不变。
     selected = [x for x in coverage['instances'] if x['obligation_id'] in ('OBL-TXT-T7', 'OBL-SG-TABLE-TEXT')]
-    assert len(selected) == 2
+    assert [x['obligation_id'] for x in selected] == ['OBL-SG-TABLE-TEXT']
     assert all(x['reason'] == 'insufficient_data' for x in selected)
+    assert set(selected[0]['checkers']) == {'V33-108', 'V33-224', 'CMM-001'}
     receipts = build_check_receipts({}, report_kind='final', rule_execution_summary=summary,
         obligation_coverage=coverage, fact_receipts=[make_fact_receipt('CMM-001', 'detail', status='insufficient_data', incomplete_reason='字段未识别')])
     relation = [r for r in receipts if r['sub_check_id'] == 'detail']
-    assert {r['obligation_id'] for r in relation} == {'OBL-TXT-T7', 'OBL-SG-TABLE-TEXT'}
+    assert {r['obligation_id'] for r in relation} == {'OBL-SG-TABLE-TEXT'}
     assert all('BUDGET' not in r['obligation_id'] for r in relation)
 
 
