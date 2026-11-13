@@ -1277,6 +1277,41 @@ def get_job_problem_snapshot(job_id: str) -> Dict[str, Any]:
         }
 
 
+def confirm_report_issues_if_snapshot_matches(job_id, *, expected_token, expected_revision, issue_ids, actor):
+    """用户一次整份签认，原子写入当前问题的既有决定事件。
+
+    这是明确的人工签认，不是后台自动放行；未完成检查不在该签认范围。
+    签认先落本地恢复源，即使随后整份复核提交失败，已签认的问题决定仍有效，
+    但不会产生 completed 会话；重试不会重复追加同一决定。
+    """
+    from src.services.review_problem_set import automatic_finding_verified
+    normalized = str(job_id or '').strip()
+    with _state_lock():
+        state = _read_state()
+        _require_issue_mutable(state, normalized)
+        _migrate_legacy_ignored_locked(state, normalized)
+        if _problem_snapshot_token(state, normalized) != expected_token:
+            raise HTTPException(status_code=409, detail={'error': 'review_workflow_changed',
+                                                        'message': '问题清单已变化，请刷新后确认'})
+        payload = runtime.get_job_status_payload(normalized, apply_issue_filters=False)
+        if str(payload.get('analysis_revision')) != str(expected_revision):
+            raise HTTPException(status_code=409, detail={'error': 'analysis_basis_changed',
+                                                        'message': '分析版本已变化，请重新核对'})
+        selected = [_find_issue(payload, key) for key in issue_ids]
+        if any(issue is None or not automatic_finding_verified(issue) for issue in selected):
+            raise HTTPException(status_code=409, detail={'error': 'report_confirmation_unverified',
+                                                        'message': '存在证据不足的问题，不能随整份清单确认'})
+        for issue in selected:
+            record = _decision_record(payload, issue, status='confirmed', actor=actor,
+                note='用户确认整份问题清单；采用系统已核实并定位的确定性检查结果',
+                origin='whole_report_confirmation')
+            _record_decision(state, record)
+        state = _write_state(state)
+        token = _problem_snapshot_token(state, normalized)
+        runtime.invalidate_job_summary_cache(normalized)
+        return {'token': token, 'state': state}
+
+
 def set_review_lock_if_problem_snapshot_matches(
     job_id: str,
     *,

@@ -301,6 +301,7 @@ class _CommitEffects:
     lock_clears: List[Dict[str, Any]] = field(default_factory=list)
     #: 提交成功后才写的业务成功审计
     audits: List[Dict[str, Any]] = field(default_factory=list)
+    workflow_states: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @asynccontextmanager
@@ -330,6 +331,10 @@ async def _mutation_scope(conn: Any, effects: _CommitEffects):
         _compensate_lock_writes(effects)
         raise
     _run_post_commit_effects(effects)
+    if effects.workflow_states:
+        from src.services.issue_workflow_store import persist_workflow_state
+        for workflow in effects.workflow_states:
+            await persist_workflow_state(workflow)
 
 
 def _run_post_commit_effects(effects: _CommitEffects) -> None:
@@ -486,9 +491,8 @@ async def _load_obligation_decisions(conn: Any, state: ReviewState) -> None:
     rows = await review_obligation_store.list_session_decisions(
         conn, effective.get("review_session_id")
     )
-    state.obligation_decisions = {
-        str(row.get("obligation_id") or ""): row for row in rows if row.get("obligation_id")
-    }
+    from src.engine.relation_coverage import canonical_session_decisions
+    state.obligation_decisions = canonical_session_decisions(rows)
 
 
 # ---- 门禁（纯函数，输入即事实） ---------------------------------------------
@@ -585,8 +589,9 @@ def blocking_coverage_obligations(
         for item in items
         if item.blocks_gate
         and item.status in UNRESOLVED_OBLIGATION_STATUSES
-        and not obligation_covered_by_finding(item, result_row, visible_issue_ids=visible)
-        and cascade_root_issue_id(item, result_row, visible_issue_ids=visible) is None
+        and (obligation_requires_system_recheck(item) or (
+            not obligation_covered_by_finding(item, result_row, visible_issue_ids=visible)
+            and cascade_root_issue_id(item, result_row, visible_issue_ids=visible) is None))
     ]
 
 
@@ -635,9 +640,15 @@ def unhandled_coverage_obligations(
             continue
         row = decisions.get(item.obligation_id)
         current = str((row or {}).get("decision") or "").strip() or "pending"
-        if current not in RESOLVED_OBLIGATION_DECISIONS:
+        if obligation_requires_system_recheck(item) or current not in RESOLVED_OBLIGATION_DECISIONS:
             unhandled.append(item)
     return unhandled
+
+
+def obligation_requires_system_recheck(item: CoverageObligationItem) -> bool:
+    """已登记的程序/取数失败由系统修复；不能用人工点击冒充计算完成。"""
+    return (item.status in {'execution_error', 'not_implemented', 'not_executed'}
+            or getattr(item, 'next_action', None) in {'tech_fix', 'system_recheck'})
 
 
 def evaluate_start_gate(state: ReviewState) -> CompletionGate:
@@ -665,7 +676,15 @@ def evaluate_start_gate(state: ReviewState) -> CompletionGate:
     return CompletionGate(can_complete=not blockers, blockers=blockers)
 
 
-def evaluate_completion_gate(state: ReviewState) -> CompletionGate:
+def report_confirmation_ids(state: ReviewState) -> List[str]:
+    """只签认确定性、证据齐全、当前尚未表态的问题；不覆盖人工疑问/忽略决定。"""
+    from src.services.review_problem_set import problem_status
+    return [p.issue_id for p in state.problems if p.is_formal and p.automatic_verified
+            and state.decisions.get(p.issue_id, 'pending') == 'pending'
+            and problem_status(p, state.decisions) == 'pending']
+
+
+def evaluate_completion_gate(state: ReviewState, *, confirm_report: bool = False) -> CompletionGate:
     """完成门禁（§三十四）：服务端重新计算全部条件，前端 disabled 不作数。
 
     顺序是固定的：先后回答"我看到的事实还是不是会话开始时的那些"，
@@ -697,7 +716,10 @@ def evaluate_completion_gate(state: ReviewState) -> CompletionGate:
     if state.slot_row.get("caliber_conflict_candidate"):
         blockers.append(ReviewBlocker(code=BLOCKER_CALIBER_CONFLICT))
 
-    blockers.extend(_problem_blockers(state.problems, state.decisions))
+    decisions = dict(state.decisions)
+    if confirm_report:
+        decisions.update({key: 'confirmed' for key in report_confirmation_ids(state)})
+    blockers.extend(_problem_blockers(state.problems, decisions))
 
     if not state.coverage_available:
         # "没有覆盖记录"与"覆盖完整"在数字上不能长得一样。
@@ -781,6 +803,7 @@ def _lifecycle_data(state: ReviewState) -> ReviewLifecycleData:
         ),
         history=[_history_item(row) for row in state.history],
         completion_gate=evaluate_completion_gate(state),
+        report_confirmation_gate=evaluate_completion_gate(state, confirm_report=True),
         obligation_review=_obligation_review_block(state),
     )
 
@@ -847,6 +870,8 @@ def _obligation_review_block(state: ReviewState) -> "ObligationReviewBlock":
                 missing_operands=[dict(value) for value in getattr(item, "missing_operands", []) or []],
                 candidates=[dict(value) for value in getattr(item, "candidates", []) or []],
                 next_action=getattr(item, "next_action", None),
+                handling_kind=('system_recheck' if obligation_requires_system_recheck(item)
+                               else 'human_confirm'),
                 root_cause_key=getattr(item, "root_cause_key", None),
                 # DH-03a：旧兼容字段原样透传；只作提示，不参与关闭/待办/门禁。
                 # 历史结果没有字段时保持 None，让旧匹配器仍可按 detail 回退。
@@ -1274,7 +1299,8 @@ async def _insert_session_resilient(
 
 
 async def complete_review(
-    conn: Any, slot_id: str, *, actor: str, job_uuid: Optional[str] = None
+    conn: Any, slot_id: str, *, actor: str, job_uuid: Optional[str] = None,
+    confirm_report: bool = False,
 ) -> ReviewMutationData:
     _require_autocommit(conn, operation="complete_review")
     """完成复核：只有门禁全通过才写完成记录。
@@ -1315,7 +1341,7 @@ async def complete_review(
             # 当前代际上已完成：幂等返回。**不**新建第二条完成记录、不新增审计。
             outcome = _mutation_data(state, state.completed_session, gate_override=True)
         else:
-            gate = evaluate_completion_gate(state)
+            gate = evaluate_completion_gate(state, confirm_report=confirm_report)
             if not gate.can_complete:
                 # 把"为什么不能完成"原样回给前端：409 本身不是业务原因。
                 raise ReviewLifecycleError(
@@ -1327,6 +1353,17 @@ async def complete_review(
 
             assert active is not None and state.basis_token  # 门禁已保证有活动会话
 
+            report_ids = report_confirmation_ids(state) if confirm_report else []
+            # 一次整份确认，沿用按问题保存的版本绑定事件，保留签认范围与审计历史。
+            if report_ids:
+                from src.services import issue_workflow_store
+                signed = issue_workflow_store.confirm_report_issues_if_snapshot_matches(
+                    str(state.analysis.job_uuid), expected_token=state.problem_snapshot_token,
+                    expected_revision=state.analysis.analysis_revision,
+                    issue_ids=report_ids, actor=actor)
+                state.problem_snapshot_token = signed['token']
+                effects.workflow_states.append(signed['state'])
+            state.decisions.update({key: 'confirmed' for key in report_ids})
             issue_counts = build_issue_counts(state.problems, state.decisions)
             manual_decisions = _manual_decision_summary(state)
             review_result = {
@@ -1334,6 +1371,8 @@ async def complete_review(
                 "analysis_job_uuid": active.get("analysis_job_uuid"),
                 "analysis_basis_token": active.get("analysis_basis_token"),
                 "issue_counts": issue_counts,
+                "report_confirmation": {"mode": "whole_report" if confirm_report else "per_issue",
+                                        "confirmed_issue_ids": report_ids, "confirmed_by": actor},
                 "coverage": {
                     "applicable_total": _coverage_summary_value(state, "applicable_total"),
                     "completed_total": _coverage_summary_value(state, "completed_total"),
@@ -1661,6 +1700,12 @@ def _prepare_obligation_decision(
             409,
             ERROR_OBLIGATION_NOT_BLOCKING,
             "该检查义务当前不由引擎判定为待补核（已自动完成或不适用）",
+        )
+    item = next(item for item in state.coverage_items if item.obligation_id == obligation_id)
+    if obligation_requires_system_recheck(item):
+        return ReviewLifecycleError(
+            409, 'obligation_requires_system_recheck',
+            '该项尚未由系统完成，需要修复或重查；人工表态不能替代检查回执',
         )
     return None
 
@@ -2126,7 +2171,7 @@ def _lock_identity(session: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _set_workflow_lock_or_raise(
-    effects: _CommitEffects, state: ReviewState, *, actor: str, session: Dict[str, Any]
+    effects: _CommitEffects, state: ReviewState, *, actor: str, session: Dict[str, Any],
 ) -> None:
     """在**事务内**落下"问题不可再改"的编辑锁；失败即中止本次复核（fail-closed）。
 

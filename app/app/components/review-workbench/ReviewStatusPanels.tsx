@@ -185,7 +185,7 @@ export function ReviewInfoPanel({
           ) : (
             <p className="mb-2 text-xs text-success-700">服务端完成条件已满足。</p>
           )}
-          <p className="mb-2 text-xs text-slate-500">问题确认，或记录理由后忽略；未能自动核对的检查选核对无误、确认有问题或不适用，都计为已处理。参考条目不影响完成复核。</p>
+          <p className="mb-2 text-xs text-slate-500">证据充分、定位明确的系统问题可随整份问题清单一起确认。存在歧义的线索仍需判断；系统未完成的检查需先修复或重查，整份确认不会把它们改成已核对。参考条目不影响完成复核。</p>
           <div className="flex flex-wrap gap-2">
             <button type="button" className={BUTTON} onClick={onShowRequired}>查看必须处理</button>
           </div>
@@ -195,7 +195,7 @@ export function ReviewInfoPanel({
           {progress.obligationPending === null ? (
             <p>当前复核上下文没有提供检查覆盖信息。</p>
           ) : progress.obligationPending > 0 ? (
-            <p>有 {progress.obligationPending} 项检查系统未能自动核对，已列在「必须处理」的“未能自动核对”里，逐项对照原文选择结论即可。</p>
+            <p>有 {progress.obligationPending} 项检查尚未完成，原因和位置列在“未能自动核对”中。技术问题由系统修复或重查；只有材料本身的歧义才需要人工判断。</p>
           ) : (
             <p>未能自动核对的检查已全部处理。</p>
           )}

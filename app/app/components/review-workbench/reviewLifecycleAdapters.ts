@@ -135,6 +135,7 @@ export interface ObligationReviewItemRecord {
   missing_operands?: Array<Record<string, unknown>>;
   candidates?: Array<Record<string, unknown>>;
   next_action?: string | null;
+  handling_kind?: "system_recheck" | "human_confirm" | null;
   root_cause_key?: string | null;
   /**
    * DH-03a 旧兼容字段：后端原样透传，只供第一阶段同源提示；
@@ -180,6 +181,7 @@ export interface ReviewLifecycleDataRecord {
   current_session: ReviewSessionRecord | null;
   history: ReviewHistoryRecord[];
   completion_gate: ReviewCompletionGateRecord;
+  report_confirmation_gate?: ReviewCompletionGateRecord | null;
   /**
    * 人工补核块（WP3-B）。旧后端/旧 mock 可能没有该字段——按"无待办"处理，
    * 不能因为字段缺失就把面板当成"0 项待补核"渲染出来骗人的反方向是
@@ -197,6 +199,7 @@ export const RESOLVED_OBLIGATION_DECISIONS = [
 
 /** 这条义务在当前会话上是否已被人工处理（待处理 = 无记录 / pending / 未知值）。 */
 export function isObligationHandled(item: ObligationReviewItemRecord | null | undefined): boolean {
+  if (item?.handling_kind === "system_recheck") return false;
   const decision = String(item?.decision ?? "").trim();
   return (RESOLVED_OBLIGATION_DECISIONS as readonly string[]).includes(decision);
 }
@@ -368,21 +371,21 @@ export function resolveCompleteButtonState(
     // completed 改回 reviewing——那会让"这份材料复核过"这一事实凭空消失（§七十六）。
     return { enabled: true, hint: "", label: "重新复核", completed: true };
   }
-  if (review?.completion_gate?.can_complete) {
-    return { enabled: true, hint: "", label: "完成复核", completed: false };
+  if ((review?.report_confirmation_gate ?? review?.completion_gate)?.can_complete) {
+    return { enabled: true, hint: "", label: "确认整份问题清单", completed: false };
   }
   if (pendingProblemCount > 0) {
     return {
       enabled: false,
       hint: "还有待处理问题，无法完成复核",
-      label: "完成复核",
+      label: "确认整份问题清单",
       completed: false,
     };
   }
   return {
     enabled: false,
     hint: "当前无法完成复核（详见下方原因）",
-    label: "完成复核",
+    label: "确认整份问题清单",
     completed: false,
   };
 }

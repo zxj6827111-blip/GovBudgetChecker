@@ -419,7 +419,7 @@ def test_gate_blocks_on_unavailable_coverage():
 
 
 def _obligation_item(
-    obligation_id: str, *, status: str = "not_executed", blocks_gate: bool = True
+    obligation_id: str, *, status: str = "insufficient_data", blocks_gate: bool = True
 ) -> Any:
     """WP3-B：门禁的"待补核"口径从覆盖台账实例推导，因此用例给出真实实例。"""
     from src.schemas.material_detail import CoverageObligationItem

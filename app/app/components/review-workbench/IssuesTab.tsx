@@ -763,7 +763,7 @@ export function IssuesTab({
               })}
             </div>
             <div className="shrink-0 border-t border-border px-4 py-2 text-[11px] text-slate-500">
-              {queue === "required" ? "这些条目计入完成条件：问题逐条确认或记录理由后忽略；未能自动核对的检查选核对无误、确认有问题或不适用。" : "参考项不影响完成复核；可按需确认、忽略或补充意见。"}
+              {queue === "required" ? "证据充分的问题可随整份清单确认；材料歧义需判断，系统未完成的检查需修复或重查。" : "参考项不影响完成复核；可按需确认、忽略或补充意见。"}
               <span className="ml-1 text-slate-400">同类集中展示，各项分别记录结论；↑ ↓ 切换，Esc 关闭。</span>
             </div>
           </div>
@@ -797,7 +797,7 @@ export function IssuesTab({
         <IssueDecisionFooter
           problem={detailProblem}
           workflowStatus={detailProblem ? workflowStatusByIssueId[detailProblem.id] ?? null : null}
-          showActions={Boolean(detailProblem) && !readOnly && !obligationPanelTarget && (sourceView === "all" || (detailProblem !== null && baseProblemIds.has(detailProblem.id)))}
+          showActions={Boolean(detailProblem) && !readOnly && !obligationPanelTarget && obligationItems[detailProblem?.id ?? ""]?.handling_kind !== "system_recheck" && (sourceView === "all" || (detailProblem !== null && baseProblemIds.has(detailProblem.id)))}
           readOnlyHint={readOnlyHint}
           savedAtText={savedAtText}
           isSubmitting={submittingIssueId !== null || obligationSubmitting}

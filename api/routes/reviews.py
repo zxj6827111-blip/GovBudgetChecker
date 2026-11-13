@@ -383,8 +383,9 @@ async def _mutate(
         candidate = await _authorize_review_write(
             user, slot_id, payload.job_uuid if payload is not None else None
         )
+        kwargs = {'confirm_report': payload.confirm_report} if action == 'complete' and payload is not None and payload.confirm_report else {}
         data = await _with_connection(
-            lambda conn: handler(conn, slot_id, actor=actor, job_uuid=candidate)
+            lambda conn: handler(conn, slot_id, actor=actor, job_uuid=candidate, **kwargs)
         )
     except review_lifecycle_service.ReviewLifecycleError as exc:
         # 被门禁拒绝也要留痕：审计关心的是"谁在什么时候尝试过什么"，

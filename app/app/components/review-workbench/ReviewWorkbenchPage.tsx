@@ -276,7 +276,7 @@ export function ReviewWorkbenchPage() {
         const response = await fetch(`/api/reviews/${encodeURIComponent(slotId)}/${action}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ job_uuid: jobId }),
+          body: JSON.stringify({ job_uuid: jobId, ...(action === "complete" ? { confirm_report: true } : {}) }),
         });
         if (response.ok) {
           loadSeqRef.current += 1; reviewLoadSeqRef.current += 1; workflowLoadSeqRef.current += 1;
@@ -1026,10 +1026,10 @@ export function ReviewWorkbenchPage() {
    * - 其余原因（身份未确认、口径冲突、版本已换、覆盖不可用……）→ 状态条常驻。
    * 完整清单在「完成条件」说明里，并作为完成按钮的悬停提示。
    */
-  const gateBlockers = reviewData?.completion_gate?.blockers ?? [];
+  const gateBlockers = (reviewData?.report_confirmation_gate ?? reviewData?.completion_gate)?.blockers ?? [];
   const gateBlockerLines = describeBlockers(gateBlockers);
   const extraGateBlockerLines = describeBlockers(gateBlockers.filter((item) => !COUNTED_BLOCKER_CODES.has(String(item?.code ?? ""))));
-  const canComplete = completeButton.completed || reviewData?.completion_gate?.can_complete === true;
+  const canComplete = completeButton.completed || (reviewData?.report_confirmation_gate ?? reviewData?.completion_gate)?.can_complete === true;
   const visibleBlockerLines = showAllBlockers ? blockerLines : blockerLines.slice(0, COLLAPSED_BLOCKER_COUNT);
   const hiddenBlockerCount = blockerLines.length - visibleBlockerLines.length;
   const startLabel = invalidated ? "重新开始复核" : "开始复核";

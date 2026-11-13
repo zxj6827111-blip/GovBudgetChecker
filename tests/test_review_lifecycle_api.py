@@ -934,3 +934,16 @@ def test_write_without_resolvable_current_analysis_is_409(client, monkeypatch):
     response = client.post(f"/api/reviews/{SLOT_MINE}/complete", headers=_headers(token), json={})
     assert response.status_code == 409
     assert response.json()["detail"]["error"] == "review_context_unavailable"
+
+
+def test_complete_whole_report_opt_in_is_explicit_and_keeps_authorization(client, monkeypatch):
+    token = _admin(client)
+    calls = []
+    async def complete(conn, slot_id, *, actor, job_uuid=None, confirm_report=False):
+        calls.append(confirm_report)
+        return _mutation_data()
+    monkeypatch.setattr(review_lifecycle_service, 'complete_review', complete)
+    assert client.post(f'/api/reviews/{SLOT_MINE}/complete', headers=_headers(token)).status_code == 200
+    assert client.post(f'/api/reviews/{SLOT_MINE}/complete', headers=_headers(token),
+                       json={'confirm_report': True}).status_code == 200
+    assert calls == [False, True]

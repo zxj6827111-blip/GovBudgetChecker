@@ -63,6 +63,19 @@ logger = logging.getLogger(__name__)
 STRUCTURED_REVIEW_ID_MARKER = ":structured-review:"
 
 
+def automatic_finding_verified(item):
+    """整份签认的候选必须是确定性规则、证据完整且有核实过的原页位置。"""
+    return (isinstance(item, dict) and item.get('source') == 'rule'
+            and item.get('evidence_status') == 'complete'
+            and item.get('verification_status') == 'verified'
+            and isinstance(item.get('location'), dict)
+            and item['location'].get('verification_status') == 'verified'
+            and isinstance(item['location'].get('page'), int)
+            and not isinstance(item['location'].get('page'), bool)
+            and item['location']['page'] > 0
+            and not item.get('_merge_candidate_review') and is_formal_finding(item))
+
+
 @dataclass(frozen=True)
 class ReviewProblem:
     """一条需要人工表态的复核问题。
@@ -78,6 +91,8 @@ class ReviewProblem:
     is_formal: bool
     #: 已并组成员（旧成员报告 id）。只用于兼容查询；门禁仍只按 issue_id 计一次。
     member_issue_ids: tuple = ()
+    #: 服务端已验证的确定性规则问题，可随用户整份确认签认。
+    automatic_verified: bool = False
 
     @property
     def is_blocking_candidate(self) -> bool:
@@ -347,6 +362,7 @@ def collect_review_problems(
                     if structured_item
                     else PROBLEM_SOURCE_FINDING
                 ),
+                automatic_verified=(not structured_item and automatic_finding_verified(item)),
                 title=_text(item.get("title")) or _text(item.get("message")),
                 severity=_text(item.get("severity")),
                 # 结构化待复核项没有 evidence_status，恒为正式项；

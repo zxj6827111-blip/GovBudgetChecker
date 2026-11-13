@@ -69,6 +69,12 @@ export function ObligationCard({
 
       <h2 className="mb-3 break-words text-[1.25em] font-semibold leading-snug text-slate-900">{checkName}</h2>
 
+      {item.handling_kind === "system_recheck" ? (
+        <p className="mb-4 rounded-md bg-info-50 px-3.5 py-3 text-[0.9em] text-info-700" data-testid="gbc-system-recheck">
+          等待系统修复或重查。该项尚未完成自动核对，整份确认和人工表态都不会将其改为已完成。
+        </p>
+      ) : null}
+
       <section className="mb-4 rounded-md bg-warning-50 px-3.5 py-3" data-testid={`gbc-review-obligation-reason-${item.obligation_id}`}>
         <h3 className="mb-1 text-[0.8em] font-semibold text-warning-700">为什么没能自动核对</h3>
         <p className="whitespace-pre-line break-words text-[0.9em] leading-relaxed text-slate-700">

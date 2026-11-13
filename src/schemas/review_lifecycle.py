@@ -328,6 +328,8 @@ class ObligationReviewItem(BaseModel):
     missing_operands: List[Dict[str, Any]] = Field(default_factory=list)
     candidates: List[Dict[str, Any]] = Field(default_factory=list)
     next_action: Optional[str] = None
+    #: 技术失败与材料歧义分开处理；系统重查项不能通过人工按钮关闭。
+    handling_kind: Optional[str] = None
     root_cause_key: Optional[str] = None
     #: DH-03a 旧兼容字段：只透传，不参与义务关闭、待办或门禁。
     #: ``None`` 表示历史结果没有该字段；新生产结果必为列表（含 []）。
@@ -433,6 +435,7 @@ class ReviewLifecycleData(BaseModel):
     current_session: Optional[ReviewSessionSummary] = None
     history: List[ReviewHistoryItem] = Field(default_factory=list)
     completion_gate: CompletionGate
+    report_confirmation_gate: Optional[CompletionGate] = None
     #: 人工补核块（WP3-B）。注意它**不是**覆盖台账的替代品：材料详情页的
     #: CoverageTab 展示全量义务，这里只给"本次复核要人工处理的待办"。
     obligation_review: ObligationReviewBlock = Field(default_factory=ObligationReviewBlock)
@@ -468,13 +471,15 @@ class ReviewMutationData(BaseModel):
 class ReviewActionRequest(BaseModel):
     """start / complete / reopen 的请求体。
 
-    只允许带 ``job_uuid`` 一个字段。**前端传什么都不改变判定**：服务端会用
+    ``job_uuid`` 用于核对当前运行；``confirm_report`` 只声明整份确认意图。服务端会用
     精确链路自行验证这个 job 确实属于 URL 里的槽位、且正是当前分析，
     不匹配一律 409（§二十八）。这个字段的作用是让"用户看的是哪一次运行"
     这件事可被服务端核对，而不是让前端替服务端决定复核对象。
     """
 
     job_uuid: Optional[str] = None
+    # 仅 complete 消费：确认当前整份问题清单，不改变未完成检查的状态。
+    confirm_report: bool = False
 
 
 class ReviewMutationResponse(BaseModel):
