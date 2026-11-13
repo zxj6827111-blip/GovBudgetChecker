@@ -58,13 +58,14 @@ def _row_cells(raw: Any) -> Optional[Dict[int, str]]:
 
 
 def _confirm_table_code(artifact: Any, table: Any, requested: Any) -> Optional[str]:
-    from src.services.fiscal_table_rules import NINE_TABLE_RULES
+    from src.services.fiscal_table_rules import NINE_TABLE_RULES, is_unknown_table_code
 
     if requested in (None, ""):
         return None
     requested_code = str(requested).strip()
     current = str(table.table_code or "").strip()
-    if current and current != "UNKNOWN" and current != requested_code:
+    # 只拦“已识别表种”之间的改写；解析器未定表种（UNKNOWN_P1_T0 等）必须允许人工确认。
+    if current and not is_unknown_table_code(current) and current != requested_code:
         return f"已识别表种 {current} 与提交表种 {requested_code} 不一致"
     if requested_code not in NINE_TABLE_RULES:
         return "提交的表种未登记"
@@ -74,6 +75,17 @@ def _confirm_table_code(artifact: Any, table: Any, requested: Any) -> Optional[s
             if table.fragment_uid in (getattr(instance, "fragment_uids", []) or []):
                 instance.table_code = requested_code
     return None
+
+
+def _restore_table_code(table: Any, previous_code: str, instances: List[Any]) -> None:
+    """把表种恢复到确认前的状态。
+
+    整行补录会先确认表种再校验金额；校验失败时若只返回不恢复，就会出现
+    “回执说未应用、解析对象身份已被改掉”的不一致。
+    """
+    table.table_code = previous_code
+    for instance, code in instances:
+        instance.table_code = code
 
 
 def _sync_row_cells(artifact: Any, table: Any, start: int, rows: List[Dict[int, str]],
@@ -125,14 +137,16 @@ def _sync_row_cells(artifact: Any, table: Any, start: int, rows: List[Dict[int, 
         else:
             table.rows.append(values)
         report["targets"].append({"target_id": table.fragment_uid, "record_id": record_id,
-                                  "source_cell_ids": row_cids, "row_idx": row_idx})
+                                  "source_cell_ids": row_cids, "row_idx": row_idx,
+                                  "field": "table_rows"})
 
 
 def _apply_table_identity(artifact: Any, table: Any, record_id: str, record: Dict[str, Any],
                           change: Dict[str, Any], report: Dict[str, Any]) -> None:
     value = change.get("value") if isinstance(change.get("value"), dict) else {}
     code = value.get("table_code")
-    where = {"target_id": table.fragment_uid, "record_id": record_id, "row_idx": None, "col_idx": None}
+    where = {"target_id": table.fragment_uid, "record_id": record_id, "row_idx": None, "col_idx": None,
+             "field": "table_identity"}
     if not isinstance(code, str) or not code.strip():
         report["unresolved"].append({**where, "reason": "表种确认需要 table_code"})
         return
@@ -154,14 +168,16 @@ def _apply_table_identity(artifact: Any, table: Any, record_id: str, record: Dic
     artifact.processing_manifest["manual_table_identity"] = identities
     report["applied"] += 1
     report["targets"].append({"target_id": table.fragment_uid, "record_id": record_id,
-                              "source_cell_id": None, "row_idx": None, "col_idx": None})
+                              "source_cell_id": None, "row_idx": None, "col_idx": None,
+                              "field": "table_identity"})
 
 
 def _apply_table_rows(artifact: Any, table: Any, record_id: str, record: Dict[str, Any],
                       change: Dict[str, Any], report: Dict[str, Any], manual: Dict[str, Any]) -> None:
     value = change.get("value") if isinstance(change.get("value"), dict) else {}
     mode = str(value.get("mode") or "").strip()
-    where = {"target_id": table.fragment_uid, "record_id": record_id, "row_idx": None, "col_idx": None}
+    where = {"target_id": table.fragment_uid, "record_id": record_id, "row_idx": None, "col_idx": None,
+             "field": "table_rows"}
     if mode not in {"append_rows", "replace_data_rows"}:
         report["unresolved"].append({**where, "reason": "整行补录必须指定 append_rows 或 replace_data_rows"})
         return
@@ -179,6 +195,14 @@ def _apply_table_rows(artifact: Any, table: Any, record_id: str, record: Dict[st
             report["unresolved"].append({**where, "reason": "表头行不接受补录；原件缺表头只能确认缺失，不能替原件补列名"})
             return
         rows.append(cells)
+    # 表种确认会就地改写 table 与逻辑实例；后续校验若失败必须整体回滚，
+    # 否则回执报“未应用”而解析对象身份已经变了。快照必须在确认之前取。
+    previous_code = str(table.table_code or "")
+    previous_instances = [
+        (instance, str(instance.table_code or ""))
+        for instance in getattr(artifact, "logical_tables", []) or []
+        if table.fragment_uid in (getattr(instance, "fragment_uids", []) or [])
+    ]
     code_error = _confirm_table_code(artifact, table, value.get("table_code"))
     if code_error:
         report["unresolved"].append({**where, "reason": code_error})
@@ -194,6 +218,7 @@ def _apply_table_rows(artifact: Any, table: Any, record_id: str, record: Dict[st
     for cells in rows:
         for col, text in cells.items():
             if col in known_amount_columns and text and number(text) is None:
+                _restore_table_code(table, previous_code, previous_instances)
                 report["unresolved"].append({**where, "reason": "金额列只能补录数字"})
                 return
     location = change.get("location") if isinstance(change.get("location"), dict) else {}
@@ -266,7 +291,7 @@ def apply_table_cell_overlays(artifact: Any, records: Iterable[Dict[str, Any]]) 
                 if table is None:
                     report["unresolved"].append({
                         "target_id": target_id, "record_id": record_id,
-                        "row_idx": None, "col_idx": None,
+                        "row_idx": None, "col_idx": None, "field": change["field"],
                         "reason": "补录目标表不在当前解析结果中"})
                 elif change.get("field") == "table_identity":
                     _apply_table_identity(artifact, table, record_id, record, change, report)
@@ -277,7 +302,8 @@ def apply_table_cell_overlays(artifact: Any, records: Iterable[Dict[str, Any]]) 
                 continue
             value = change.get("value") if isinstance(change.get("value"), dict) else {}
             where = {"target_id": target_id, "record_id": record_id,
-                     "row_idx": value.get("row_idx"), "col_idx": value.get("col_idx")}
+                     "row_idx": value.get("row_idx"), "col_idx": value.get("col_idx"),
+                     "field": "cell_value"}
 
             table = tables.get(target_id)
             if table is None:
@@ -331,7 +357,8 @@ def apply_table_cell_overlays(artifact: Any, records: Iterable[Dict[str, Any]]) 
                            "evidence_ids": [str(item) for item in change.get("evidence_ids") or []]}
             report["applied"] += 1
             report["targets"].append({"target_id": target_id, "record_id": record_id,
-                                      "source_cell_id": cid, "row_idx": row, "col_idx": col})
+                                      "source_cell_id": cid, "row_idx": row, "col_idx": col,
+                                      "field": "cell_value"})
     if report["applied"]:
         artifact.processing_manifest["manual_cells"] = manual
         digest_payload = {
@@ -347,6 +374,15 @@ def apply_table_cell_overlays(artifact: Any, records: Iterable[Dict[str, Any]]) 
             artifact.source_file_hash, artifact.parser_fingerprint,
             artifact.config_fingerprint, artifact.ocr_model_fingerprint or "",
         )).encode()).hexdigest()[:32]
+    # 按校正字段分组：主链路要分别呈现“格/行补录”和“表种确认”的结果，
+    # 否则只提交表种确认时，回执会错误地写成 not_requested。
+    report["by_field"] = {
+        field: {
+            "applied": sum(1 for target in report["targets"] if target.get("field") == field),
+            "unresolved": [item for item in report["unresolved"] if item.get("field") == field],
+        }
+        for field in ("cell_value", "table_rows", "table_identity")
+    }
     return report
 
 

@@ -1,0 +1,688 @@
+{
+ "version": "T0-v1.1",
+ "frozen_by": "验收方（Claude），2026-10-24；真值取自渲染原页的人工读取，不取自系统输出",
+ "value_rules": "数值单位为万元，按原件显示精度比较；BLANK 表示原件该格空白；DASH 表示原件该格为横线；UNLABELED 表示该列原件无表头",
+ "admitted_definition": "recognition_status 不属于 ambiguous/low_confidence/missing，且 operand_rejection_reason 为空",
+ "expectation_kinds": {
+  "exact": "每个数值格都有可进规则的事实且金额一致；BLANK/DASH 格若有事实，原值必须保留为空白/横线，不得写成 0.00",
+  "no_wrong_admission": "凡可进规则的事实必须与真值一致；缺失可以，但所在页须标出待复核",
+  "unlabeled_not_admitted": "无表头列的数值不得以任何指标进入规则；其余列按 no_wrong_admission",
+  "read_or_flag": "要么每个数值格都正确进入规则，要么该文件有待复核或读取缺口；不得有金额错误的事实进入规则；BLANK/DASH 原值保留",
+  "incomplete_not_passed": "全管线结论不得为 no_findings 或 done，且不报 V33-002 缺失表"
+ },
+ "binding": [
+  {
+   "file": "2022/上海市人力资源和社会保障局/上海市人力资源和社会保障局咨询服务中心2022年度决算.pdf",
+   "expected_org": "上海市人力资源和社会保障局咨询服务中心",
+   "evidence": "封面原文：上海市人力资源和社会保障局咨询服务中心2022年度决算"
+  },
+  {
+   "file": "2022/上海市监狱管理局/上海市监狱管理局机关2022年度决算.pdf",
+   "expected_org": "上海市监狱管理局机关",
+   "evidence": "封面原文：上海市监狱管理局机关2022年度决算"
+  },
+  {
+   "file": "2022/上海市民政局/上海市居民经济状况核对中心2022年度决算.pdf",
+   "expected_org": "上海市居民经济状况核对中心",
+   "evidence": "封面原文：上海市居民经济状况核对中心2022年度决算"
+  },
+  {
+   "file": "2022/上海市公安局/上海市刑事科学技术研究院2022年度决算.pdf",
+   "expected_org": "上海市刑事科学技术研究院",
+   "evidence": "封面原文：上海市刑事科学技术研究院2022年度决算"
+  },
+  {
+   "file": "2022/上海市绿化和市容管理局/上海市市容环境质量监测中心2022年度决算.pdf",
+   "expected_org": "上海市市容环境质量监测中心",
+   "evidence": "封面原文：上海市市容环境质量监测中心2022年度决算"
+  },
+  {
+   "file": "2022/上海市生态环境局/上海市环境保护信息中心2022年度决算.pdf",
+   "expected_org": "上海市环境保护信息中心",
+   "evidence": "封面原文：上海市环境保护信息中心2022年度决算"
+  },
+  {
+   "file": "2022/上海市生态环境局/上海市环境科学研究院2022年度决算.pdf",
+   "expected_org": "上海市环境科学研究院",
+   "evidence": "封面原文：上海市环境科学研究院2022年度决算"
+  },
+  {
+   "file": "2023/上海市水务局（上海市海洋局）/上海市水务局行政服务中心（上海市海洋局行政服务中心）2023年度决算.pdf",
+   "expected_org": "上海市水务局行政服务中心（上海市海洋局行政服务中心）",
+   "evidence": "封面原文：上海市水务局行政服务中心（上海市海洋局行政服务中心）2023年度决算"
+  },
+  {
+   "file": "2023/上海市体育局/上海市体育局.pdf",
+   "expected_org": "上海市体育局",
+   "evidence": "封面原文：上海市体育局2023年度部门决算"
+  },
+  {
+   "file": "2023/上海市医疗保障局/上海市医药集中招标采购事务管理所（上海医药采购中心）2023年度决算公开.pdf",
+   "expected_org": "上海市医药集中招标采购事务管理所（上海医药采购中心）",
+   "evidence": "封面原文：上海市医药集中招标采购事务管理所（上海医药采购中心）2023年度决算"
+  },
+  {
+   "file": "2023/上海市水务局（上海市海洋局）/上海市水务局（上海市海洋局）.pdf",
+   "expected_org": "上海市水务局（上海市海洋局）",
+   "evidence": "封面原文：上海市水务局（上海市海洋局）2023年度部门决算"
+  },
+  {
+   "file": "2023/上海市体育局/上海市社会体育管理中心（上海市体育竞赛管理中心）2023年度决算.pdf",
+   "expected_org": "上海市社会体育管理中心（上海市体育竞赛管理中心）",
+   "evidence": "封面原文：上海市社会体育管理中心（上海市体育竞赛管理中心）2023年度决算"
+  },
+  {
+   "file": "2023/上海市监狱管理局/上海市军天湖监狱2023 年度决算.pdf",
+   "expected_org": "上海市军天湖监狱",
+   "evidence": "封面原文：上海市军天湖监狱2023年度决算"
+  },
+  {
+   "file": "2023/上海市卫生健康委员会/上海市卫生和健康发展研究中心（上海市医学科学技术情报研究所）2023年度决算.pdf",
+   "expected_org": "上海市卫生和健康发展研究中心（上海市医学科学技术情报研究所）",
+   "evidence": "封面原文：上海市卫生和健康发展研究中心（上海市医学科学技术情报研究所）2023年度决算"
+  },
+  {
+   "file": "2023/上海市科学技术委员会/上海市信息技术研究中心2023年度决算.pdf",
+   "expected_org": "上海市信息技术研究中心",
+   "evidence": "封面原文：上海市信息技术研究中心2023年度决算"
+  },
+  {
+   "file": "2024/上海市绿化和市容管理局/上海市园林科学规划研究院2024年度决算公开.pdf",
+   "expected_org": "上海市园林科学规划研究院",
+   "evidence": "封面原文：上海市园林科学规划研究院2024年度决算"
+  },
+  {
+   "file": "2024/上海市科学技术委员会/沪杏科技图书馆2024年度决算.pdf",
+   "expected_org": "沪杏科技图书馆",
+   "evidence": "封面原文：沪杏科技图书馆2024年度决算"
+  },
+  {
+   "file": "2024/上海市退役军人事务局/上海市荣誉军人疗养院2024年度决算.pdf",
+   "expected_org": "上海市荣誉军人疗养院",
+   "evidence": "封面原文：上海市荣誉军人疗养院2024年度决算"
+  },
+  {
+   "file": "2024/上海市民政局/上海市居民经济状况核对中心2024年度决算.pdf",
+   "expected_org": "上海市居民经济状况核对中心",
+   "evidence": "封面原文：上海市居民经济状况核对中心2024年度决算"
+  },
+  {
+   "file": "2024/上海市住房和城乡建设管理委员会/上海防灾救灾研究所2024年度决算.pdf",
+   "expected_org": "上海防灾救灾研究所",
+   "evidence": "封面原文：上海防灾救灾研究所2024年度决算"
+  },
+  {
+   "file": "2024/上海市人民政府办公厅/上海市人民政府办公厅2024年度部门决算.pdf",
+   "expected_org": "上海市人民政府办公厅",
+   "evidence": "封面原文：上海市人民政府办公厅2024年度部门决算"
+  },
+  {
+   "file": "2024/上海市住房和城乡建设管理委员会/上海市房屋状况事务中心2024年度决算.pdf",
+   "expected_org": "上海市房屋状况事务中心",
+   "evidence": "封面原文：上海市房屋状况事务中心2024年度决算"
+  },
+  {
+   "file": "2024/上海市住房和城乡建设管理委员会/上海市房屋安全监察所2024年度决算.pdf",
+   "expected_org": "上海市房屋安全监察所",
+   "evidence": "封面原文：上海市房屋安全监察所2024年度决算"
+  },
+  {
+   "file": "2025/上海市公安局/上海市社会保障卡服务中心2025年度决算.pdf",
+   "expected_org": "上海市社会保障卡服务中心",
+   "evidence": "封面原文：上海市社会保障卡服务中心2025年度决算"
+  },
+  {
+   "file": "2025/上海市水务局（上海市海洋局）/上海市水务建设工程安全质量监督中心站2025年度决算.pdf",
+   "expected_org": "上海市水务建设工程安全质量监督中心站",
+   "evidence": "封面原文：上海市水务建设工程安全质量监督中心站2025年度决算"
+  },
+  {
+   "file": "2025/上海市民政局/上海市民政局2025年度部门决算.pdf",
+   "expected_org": "上海市民政局",
+   "evidence": "封面原文：1上海市民政局2025年度部门决算"
+  },
+  {
+   "file": "2025/上海市交通委员会/上海中国航海博物馆2025年度单位决算.pdf",
+   "expected_org": "上海中国航海博物馆",
+   "evidence": "封面原文：上海中国航海博物馆2025年度决算"
+  },
+  {
+   "file": "2025/上海市生态环境局/上海市固体废物与化学品管理技术中心2025年度决算.pdf",
+   "expected_org": "上海市固体废物与化学品管理技术中心",
+   "evidence": "封面原文：上海市固体废物与化学品管理技术中心2025年度决算"
+  },
+  {
+   "file": "2025/上海市文化和旅游局/上海市文化和旅游局老干部服务中心2025年度决算.pdf",
+   "expected_org": "上海市文化和旅游局老干部服务中心",
+   "evidence": "封面原文：上海市文化和旅游局老干部服务中心2025年度决算"
+  },
+  {
+   "file": "2025/上海市卫生健康委员会/上海市卫生人才交流服务中心2025年度决算.pdf",
+   "expected_org": "上海市卫生人才交流服务中心",
+   "evidence": "封面原文：上海市卫生人才交流服务中心2025年度决算"
+  }
+ ],
+ "cells": [
+  {
+   "id": "T0-C01",
+   "category": "重复框线错列",
+   "file": "2022/上海市交通委员会/上海市交通委员会2022年度部门决算.pdf",
+   "page": 9,
+   "table_code": "FIN_02_income",
+   "rows": [
+    {
+     "code": "total",
+     "cells": {
+      "total_actual": "1885313.67",
+      "fiscal_allocation": "1866107.83",
+      "superior_subsidy_income": "BLANK",
+      "business_income": "8063.37",
+      "operational_income": "BLANK",
+      "subsidiary_income": "BLANK",
+      "other_income": "11142.47"
+     }
+    },
+    {
+     "code": "201",
+     "cells": {
+      "total_actual": "2249.00",
+      "fiscal_allocation": "2249.00",
+      "superior_subsidy_income": "BLANK",
+      "business_income": "BLANK",
+      "operational_income": "BLANK",
+      "subsidiary_income": "BLANK",
+      "other_income": "BLANK"
+     }
+    },
+    {
+     "code": "20104",
+     "cells": {
+      "total_actual": "2249.00",
+      "fiscal_allocation": "2249.00",
+      "superior_subsidy_income": "BLANK",
+      "business_income": "BLANK",
+      "operational_income": "BLANK",
+      "subsidiary_income": "BLANK",
+      "other_income": "BLANK"
+     }
+    },
+    {
+     "code": "2010499",
+     "cells": {
+      "total_actual": "2249.00",
+      "fiscal_allocation": "2249.00",
+      "superior_subsidy_income": "BLANK",
+      "business_income": "BLANK",
+      "operational_income": "BLANK",
+      "subsidiary_income": "BLANK",
+      "other_income": "BLANK"
+     }
+    },
+    {
+     "code": "205",
+     "cells": {
+      "total_actual": "34475.11",
+      "fiscal_allocation": "23639.07",
+      "superior_subsidy_income": "BLANK",
+      "business_income": "3927.26"
+     }
+    }
+   ],
+   "batches": {
+    "1": "no_wrong_admission",
+    "2": "exact"
+   }
+  },
+  {
+   "id": "T0-C02",
+   "category": "原件多处勾稽错误",
+   "file": "2025/上海市教育委员会/华东政法大学2025年度决算.pdf",
+   "page": 7,
+   "table_code": "FIN_02_income",
+   "rows": [
+    {
+     "code": "total",
+     "cells": {
+      "total_actual": "147338.58",
+      "fiscal_allocation": "101023.18",
+      "superior_subsidy_income": "0.00",
+      "business_income": "33450.96",
+      "operational_income": "0.00",
+      "subsidiary_income": "0.00",
+      "other_income": "12864.44"
+     }
+    },
+    {
+     "code": "205",
+     "cells": {
+      "total_actual": "87161.66",
+      "fiscal_allocation": "0.00",
+      "superior_subsidy_income": "27561.36",
+      "business_income": "0.00",
+      "operational_income": "0.00",
+      "subsidiary_income": "12864.44",
+      "other_income": "BLANK"
+     }
+    }
+   ],
+   "batches": {
+    "1": "exact",
+    "2": "exact"
+   }
+  },
+  {
+   "id": "T0-C03",
+   "category": "原件多处勾稽错误",
+   "file": "2023/上海市经济和信息化委员会/上海航宇科普中心2023年度决算.pdf",
+   "page": 6,
+   "table_code": "FIN_02_income",
+   "rows": [
+    {
+     "code": "total",
+     "cells": {
+      "total_actual": "3047.90",
+      "fiscal_allocation": "2776.69",
+      "superior_subsidy_income": "0.00",
+      "business_income": "244.65",
+      "operational_income": "26.56",
+      "subsidiary_income": "0.00",
+      "other_income": "0.00"
+     }
+    },
+    {
+     "code": "206",
+     "cells": {
+      "total_actual": "2438.14",
+      "fiscal_allocation": "0.00",
+      "superior_subsidy_income": "0.00",
+      "business_income": "244.65",
+      "operational_income": "26.56",
+      "subsidiary_income": "0.00",
+      "other_income": "0.00"
+     }
+    },
+    {
+     "code": "20607",
+     "cells": {
+      "total_actual": "2438.14",
+      "fiscal_allocation": "0.00",
+      "superior_subsidy_income": "0.00",
+      "business_income": "244.65",
+      "operational_income": "26.56",
+      "subsidiary_income": "0.00",
+      "other_income": "0.00"
+     }
+    },
+    {
+     "code": "2060703",
+     "cells": {
+      "total_actual": "2438.14",
+      "fiscal_allocation": "0.00",
+      "superior_subsidy_income": "0.00",
+      "business_income": "244.65",
+      "operational_income": "26.56",
+      "subsidiary_income": "0.00",
+      "other_income": "0.00"
+     }
+    }
+   ],
+   "batches": {
+    "1": "exact",
+    "2": "exact"
+   }
+  },
+  {
+   "id": "T0-C04",
+   "category": "原件多处勾稽错误",
+   "file": "2025/上海市退役军人事务局/上海市龙华烈士陵园（龙华烈士纪念馆、上海市烈士纪念设施保护中心）2025年度决算.pdf",
+   "page": 6,
+   "table_code": "FIN_02_income",
+   "rows": [
+    {
+     "code": "total",
+     "cells": {
+      "total_actual": "15675.62",
+      "fiscal_allocation": "15592.22",
+      "superior_subsidy_income": "0.00",
+      "business_income": "0.00",
+      "operational_income": "0.00",
+      "subsidiary_income": "0.00",
+      "other_income": "83.40"
+     }
+    },
+    {
+     "code": "207",
+     "cells": {
+      "total_actual": "76.74",
+      "fiscal_allocation": "0.00",
+      "superior_subsidy_income": "0.00",
+      "business_income": "0.00",
+      "operational_income": "0.00",
+      "subsidiary_income": "0.00",
+      "other_income": "76.74"
+     }
+    },
+    {
+     "code": "20702",
+     "cells": {
+      "total_actual": "76.74",
+      "fiscal_allocation": "0.00",
+      "superior_subsidy_income": "0.00",
+      "business_income": "0.00",
+      "operational_income": "0.00",
+      "subsidiary_income": "0.00",
+      "other_income": "76.74"
+     }
+    },
+    {
+     "code": "2070205",
+     "cells": {
+      "total_actual": "76.74",
+      "fiscal_allocation": "0.00",
+      "superior_subsidy_income": "0.00",
+      "business_income": "0.00",
+      "operational_income": "0.00",
+      "subsidiary_income": "0.00",
+      "other_income": "76.74"
+     }
+    }
+   ],
+   "batches": {
+    "1": "exact",
+    "2": "exact"
+   }
+  },
+  {
+   "id": "T0-C05",
+   "category": "原件多处勾稽错误 + 空白格",
+   "file": "2022/上海市教育委员会/上海应用技术大学（本级）2022年度决算.pdf",
+   "page": 11,
+   "table_code": "FIN_02_income",
+   "rows": [
+    {
+     "code": "total",
+     "cells": {
+      "total_actual": "112552.31",
+      "fiscal_allocation": "79196.20",
+      "superior_subsidy_income": "BLANK",
+      "business_income": "32250.32",
+      "operational_income": "BLANK",
+      "subsidiary_income": "BLANK",
+      "other_income": "1105.79"
+     }
+    },
+    {
+     "code": "205",
+     "cells": {
+      "total_actual": "95918.38",
+      "fiscal_allocation": "65698.04",
+      "superior_subsidy_income": "BLANK",
+      "business_income": "29114.55",
+      "operational_income": "BLANK",
+      "subsidiary_income": "BLANK",
+      "other_income": "1105.79"
+     }
+    },
+    {
+     "code": "20502",
+     "cells": {
+      "total_actual": "95788.71",
+      "fiscal_allocation": "65568.37",
+      "superior_subsidy_income": "BLANK",
+      "business_income": "29114.55",
+      "operational_income": "BLANK",
+      "subsidiary_income": "BLANK",
+      "other_income": "1105.79"
+     }
+    },
+    {
+     "code": "2050299",
+     "cells": {
+      "total_actual": "231.63",
+      "fiscal_allocation": "231.63",
+      "superior_subsidy_income": "BLANK",
+      "business_income": "1813.46",
+      "operational_income": "BLANK",
+      "subsidiary_income": "BLANK",
+      "other_income": "BLANK"
+     }
+    },
+    {
+     "code": "208",
+     "cells": {
+      "total_actual": "10476.05",
+      "fiscal_allocation": "8662.59",
+      "superior_subsidy_income": "BLANK",
+      "business_income": "1208.97",
+      "operational_income": "BLANK",
+      "subsidiary_income": "BLANK",
+      "other_income": "BLANK"
+     }
+    }
+   ],
+   "batches": {
+    "1": "exact",
+    "2": "exact"
+   }
+  },
+  {
+   "id": "T0-C06",
+   "category": "原件表头缺失",
+   "file": "2022/上海市文化和旅游局/上海市文化旅游公共服务和人才服务中心2022年度决算.pdf",
+   "page": 6,
+   "table_code": "FIN_02_income",
+   "rows": [
+    {
+     "code": "total",
+     "cells": {
+      "total_actual": "3963.40",
+      "UNLABELED": "3842.50",
+      "superior_subsidy_income": "0.00",
+      "business_income": "0.00",
+      "operational_income": "0.00",
+      "subsidiary_income": "0.00",
+      "other_income": "120.90"
+     }
+    },
+    {
+     "code": "207",
+     "cells": {
+      "total_actual": "3480.24",
+      "UNLABELED": "3359.34",
+      "superior_subsidy_income": "0.00",
+      "business_income": "0.00",
+      "operational_income": "0.00",
+      "subsidiary_income": "0.00",
+      "other_income": "120.90"
+     }
+    }
+   ],
+   "batches": {
+    "1": "unlabeled_not_admitted",
+    "2": "unlabeled_not_admitted"
+   }
+  }
+ ],
+ "synthetic": [
+  {
+   "id": "T0-X01",
+   "category": "整数金额（元）",
+   "file": "synthetic/X1_integer_yuan.pdf",
+   "table_code": "FIN_02_income",
+   "unit": "元",
+   "rows": [
+    {
+     "code": "total",
+     "cells": {
+      "total_actual": "1,234,567",
+      "fiscal_allocation": "1,000,000",
+      "superior_subsidy_income": "0",
+      "business_income": "200,000",
+      "operational_income": "0",
+      "subsidiary_income": "0",
+      "other_income": "34,567"
+     }
+    },
+    {
+     "code": "208",
+     "cells": {
+      "total_actual": "234,567",
+      "fiscal_allocation": "200,000",
+      "superior_subsidy_income": "0",
+      "business_income": "0",
+      "operational_income": "0",
+      "subsidiary_income": "0",
+      "other_income": "34,567"
+     }
+    },
+    {
+     "code": "2080505",
+     "cells": {
+      "total_actual": "234,567",
+      "fiscal_allocation": "200,000",
+      "superior_subsidy_income": "0",
+      "business_income": "0",
+      "operational_income": "0",
+      "subsidiary_income": "0",
+      "other_income": "34,567"
+     }
+    },
+    {
+     "code": "210",
+     "cells": {
+      "total_actual": "1,000,000",
+      "fiscal_allocation": "800,000",
+      "superior_subsidy_income": "0",
+      "business_income": "200,000",
+      "operational_income": "0",
+      "subsidiary_income": "0",
+      "other_income": "0"
+     }
+    }
+   ],
+   "batches": {
+    "1": "read_or_flag",
+    "2": "read_or_flag"
+   }
+  },
+  {
+   "id": "T0-X02",
+   "category": "横线与空白",
+   "file": "synthetic/X2_dash_blank.pdf",
+   "table_code": "FIN_02_income",
+   "unit": "万元",
+   "rows": [
+    {
+     "code": "total",
+     "cells": {
+      "total_actual": "150.00",
+      "fiscal_allocation": "120.00",
+      "superior_subsidy_income": "DASH",
+      "business_income": "30.00",
+      "operational_income": "DASH",
+      "subsidiary_income": "BLANK",
+      "other_income": "0.00"
+     }
+    },
+    {
+     "code": "201",
+     "cells": {
+      "total_actual": "150.00",
+      "fiscal_allocation": "120.00",
+      "superior_subsidy_income": "DASH",
+      "business_income": "30.00",
+      "operational_income": "DASH",
+      "subsidiary_income": "BLANK",
+      "other_income": "0.00"
+     }
+    },
+    {
+     "code": "20103",
+     "cells": {
+      "total_actual": "150.00",
+      "fiscal_allocation": "120.00",
+      "superior_subsidy_income": "DASH",
+      "business_income": "30.00",
+      "operational_income": "DASH",
+      "subsidiary_income": "BLANK",
+      "other_income": "0.00"
+     }
+    }
+   ],
+   "batches": {
+    "1": "read_or_flag",
+    "2": "read_or_flag"
+   }
+  },
+  {
+   "id": "T0-X03",
+   "category": "无框线整数表（页面探针看不到整数）",
+   "file": "synthetic/X3_lineless_integer.pdf",
+   "table_code": "FIN_02_income",
+   "unit": "元",
+   "rows": [
+    {
+     "code": "total",
+     "cells": {
+      "total_actual": "5,000,000",
+      "fiscal_allocation": "5,000,000",
+      "superior_subsidy_income": "0",
+      "business_income": "0",
+      "operational_income": "0",
+      "subsidiary_income": "0",
+      "other_income": "0"
+     }
+    },
+    {
+     "code": "205",
+     "cells": {
+      "total_actual": "5,000,000",
+      "fiscal_allocation": "5,000,000",
+      "superior_subsidy_income": "0",
+      "business_income": "0",
+      "operational_income": "0",
+      "subsidiary_income": "0",
+      "other_income": "0"
+     }
+    }
+   ],
+   "batches": {
+    "1": "read_or_flag",
+    "2": "read_or_flag"
+   }
+  }
+ ],
+ "documents": [
+  {
+   "id": "T0-S01",
+   "category": "整份扫描（无 OCR 结果）",
+   "file": "2022/上海市农业农村委员会/上海市农业生物基因中心2022年度决算.pdf",
+   "batches": {
+    "1": "incomplete_not_passed",
+    "2": "incomplete_not_passed"
+   }
+  },
+  {
+   "id": "T0-S02",
+   "category": "整份扫描（无 OCR 结果）",
+   "file": "2022/上海市农业农村委员会/上海市农产品质量安全中心2022年度决算.pdf",
+   "batches": {
+    "1": "incomplete_not_passed",
+    "2": "incomplete_not_passed"
+   }
+  }
+ ],
+ "batch_expectations_note": "第三批（真实 OCR）对 T0-S01/S02 另行追加 exact 期望；追加样本须新增版本号并记录原因与哈希",
+ "changelog": [
+  {
+   "version": "T0-v1",
+   "at": "2026-10-24",
+   "note": "初次冻结（R1.1）"
+  },
+  {
+   "version": "T0-v1.1",
+   "at": "2026-10-24",
+   "note": "R1.2 适配时发现 v1 的三个合成 PDF 有排版缺陷：金额按估算字宽右对齐，跨过列线被切进相邻格，且表头只有一行、与上海模板不符，样本没有测到“整数金额/横线/无框线”本身。改为按实际字宽右对齐、两层模板表头后重新生成。真值、预期和真实样本均未改变；v1 的合成 PDF 与基线结果保留备查"
+  }
+ ]
+}

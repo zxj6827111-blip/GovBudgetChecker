@@ -1683,6 +1683,12 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                     for record in overlay_records
                     for change in (record.get("changes") if isinstance(record, dict) and isinstance(record.get("changes"), list) else [])
                 )
+                has_table_identity_changes = any(
+                    isinstance(change, dict)
+                    and str(change.get("field") or "") == "table_identity"
+                    for record in overlay_records
+                    for change in (record.get("changes") if isinstance(record, dict) and isinstance(record.get("changes"), list) else [])
+                )
                 overlays = parse_overlays_from_records(overlay_records)
                 unsupported_changes = collect_unsupported_changes(overlay_records)
                 previous_facts = runtime.read_previous_fact_facts(job_dir)
@@ -1724,6 +1730,24 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                             fact_overlay_applied or cell_value_report.get("applied") or column_mapping_report.get("applied")
                         ) else "failed"
                     elif cell_value_report.get("applied") and fact_overlay_report.get("status") == "not_requested":
+                        fact_overlay_report["status"] = "applied"
+                if has_table_identity_changes:
+                    # 只提交表种确认时，本块是它唯一的回执出口：成功/未登记/
+                    # 目标不存在/已识别表种冲突都必须在任务状态里可见。
+                    identity_report = (
+                        (cell_value_report.get("by_field") or {}).get("table_identity")
+                        or {"applied": 0, "unresolved": []}
+                    )
+                    fact_overlay_report["table_identity_overlay"] = identity_report
+                    if identity_report.get("unresolved"):
+                        fact_overlay_report.setdefault("unresolved", []).extend(
+                            {**item, "reason": f"表种确认未生效：{item['reason']}"}
+                            for item in identity_report["unresolved"])
+                        fact_overlay_report["status"] = "partial" if (
+                            fact_overlay_applied or identity_report.get("applied")
+                            or column_mapping_report.get("applied") or cell_value_report.get("applied")
+                        ) else "failed"
+                    elif identity_report.get("applied") and fact_overlay_report.get("status") == "not_requested":
                         fact_overlay_report["status"] = "applied"
                 if unsupported_changes and any(item.get("blocking") for item in unsupported_changes):
                     fact_overlay_report["status"] = (

@@ -284,8 +284,14 @@ export function toCorrectionChanges(list: PendingCorrection[]): Record<string, u
 
 const AMOUNT_RE = /^-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$/;
 
+/** 解析器未定表种的编码：`UNKNOWN` 或 `UNKNOWN_<页>_T<序号>`（真实产物是后者）。 */
+export function isUnknownTableCode(code: string | null | undefined): boolean {
+  const text = (code ?? "").trim();
+  return !text || text === "UNKNOWN" || text.startsWith("UNKNOWN_");
+}
+
 export function needsTableIdentity(table: CorrectionTable): boolean {
-  return !table.table_code || table.table_code === "UNKNOWN";
+  return isUnknownTableCode(table.table_code);
 }
 
 /** 整表/整行草稿：每行一条，列之间用 | 或制表符分隔；空行忽略。 */

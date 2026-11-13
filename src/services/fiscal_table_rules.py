@@ -246,6 +246,17 @@ NINE_TABLE_RULES: Dict[str, TableRule] = {
 }
 
 
+def is_unknown_table_code(code: object) -> bool:
+    """解析器未定表种的编码：``UNKNOWN`` 或 ``UNKNOWN_<页>_T<序号>``。
+
+    解析器实际产出的是带页码后缀的形式（如 ``UNKNOWN_P1_T0``）。只匹配
+    字面量 ``UNKNOWN`` 会让“人工确认表种”在真实链路上永远不生效：
+    界面不显示确认入口，后端也会以“表种不一致”拒绝。
+    """
+    text = str(code or "").strip()
+    return not text or text == "UNKNOWN" or text.startswith("UNKNOWN_")
+
+
 def iter_header_aliases(rule: TableRule) -> Iterable[str]:
     for header in rule.required_headers:
         yield header

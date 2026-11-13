@@ -2,8 +2,22 @@ import pytest
 
 from src.engine.rules_v33 import build_document, R33002_NineTablesCheck
 from src.engine.rule_outcome import RuleDeferred
-from src.services.fiscal_table_rules import detect_table_code
+from src.services.fiscal_table_rules import detect_table_code, is_unknown_table_code
 from src.services.fiscal_fact_materializer import infer_fund_scope
+
+
+@pytest.mark.parametrize("code,expected", [
+    ("UNKNOWN_P1_T0", True),
+    ("UNKNOWN_P25_T0", True),
+    ("UNKNOWN", True),
+    ("", True),
+    ("FIN_02_income", False),
+    ("FIN_07_three_public", False),
+    ("UNKNOWNISH", False),
+])
+def test_unknown_table_code_accepts_the_parsers_real_encoding(code, expected):
+    """解析器产出 UNKNOWN_P<页>_T<序号>；只认字面量 UNKNOWN 会漏掉真实编码。"""
+    assert is_unknown_table_code(code) is expected
 
 
 @pytest.mark.parametrize("title,headers,expected", [

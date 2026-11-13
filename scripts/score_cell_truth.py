@@ -2,7 +2,12 @@
 
 只统计 truth_source 为 human 或 t0_frozen 的样本；unannotated 样本不计入分母，
 指标在分母为 0 时输出 null。系统候选来自当前解析器对同一年原件的重新解析，
-解析快照缓存在 system/<sha12>.json，避免重复解析。
+解析快照缓存在 system/<sha12>-<parser>.json，避免重复解析。
+
+v2（2026-10-25）：分母一律先由真值独立固定，再比对系统输出。v1 只在命中
+表/行之后才累计金额与空白格数，漏表漏行会同步缩小分母，导致"漏得越多、
+召回越高"（9 条种子实测分母 152 而非 166）。另：不存在或未映射的格不再
+算作"保持空白"的命中。
 """
 from __future__ import annotations
 
@@ -14,6 +19,8 @@ import sys
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
+
+SCORER_VERSION = "cell-truth-v2"
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -56,7 +63,11 @@ def resolve_source(truth: dict[str, Any], corpus: Path, t0_dir: Path) -> Path | 
 
 
 def build_snapshot(pdf_path: Path, cache_dir: Path) -> dict[str, Any]:
-    cache = cache_dir / f"{sha256(pdf_path)[:12]}.json"
+    from src.services.pdf_parser import PARSER_FINGERPRINT
+
+    # 缓存必须随解析器与配置指纹失效；只用原件哈希会让改码后继续评分旧结果。
+    parser_key = hashlib.sha256(PARSER_FINGERPRINT.encode()).hexdigest()[:12]
+    cache = cache_dir / f"{sha256(pdf_path)[:12]}-{parser_key}.json"
     if cache.exists():
         return json.loads(cache.read_text(encoding="utf-8"))
     from src.services.manual_cell_overlay import _instance_mappings
@@ -90,7 +101,13 @@ def build_snapshot(pdf_path: Path, cache_dir: Path) -> dict[str, Any]:
                 "canonical_measure": item.get("canonical_measure"),
             } for item in mappings],
         })
-    snapshot = {"sha256": sha256(pdf_path), "file": str(pdf_path), "tables": tables}
+    snapshot = {
+        "sha256": sha256(pdf_path),
+        "file": str(pdf_path),
+        "parser_fingerprint": PARSER_FINGERPRINT,
+        "scorer_version": SCORER_VERSION,
+        "tables": tables,
+    }
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
     return snapshot
@@ -153,18 +170,32 @@ def score_sample(truth: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, A
     }
     if not tables:
         result["notes"].append("未找到同页同表种")
+    # 分母先由真值独立固定：漏表、漏行、漏列都仍须计入应检数量。
+    # 若像 v1 那样命中后才累计，漏读会同步缩小分母，召回率反而虚高。
+    identity = truth.get("column_identity") or {}
+    result["column_total"] = len(identity)
+    for row in truth.get("rows") or []:
+        if not str(row.get("code") or ""):
+            continue
+        result["row_total"] += 1
+        for measure, value in (row.get("cells") or {}).items():
+            text = str(value or "").strip()
+            if str(measure) == "UNLABELED" or text in {"NONE", "UNLABELED"}:
+                continue
+            if text in {"BLANK", "DASH"}:
+                result["blank_total"] += 1
+            else:
+                result["amount_total"] += 1
+    if not tables:
         return result
     table = tables[0]
-    identity = truth.get("column_identity") or {}
     for measure, column in identity.items():
-        result["column_total"] += 1
         if measure_column(table, str(measure)) == int(column):
             result["column_hits"] += 1
     for row in truth.get("rows") or []:
         code = str(row.get("code") or "")
         if not code:
             continue
-        result["row_total"] += 1
         located = find_row(table, code)
         if located is None:
             continue
@@ -178,13 +209,13 @@ def score_sample(truth: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, A
             column = measure_column(table, str(measure))
             cell = cell_at(table, row_idx, column) if column is not None else None
             if text in {"BLANK", "DASH"}:
-                result["blank_total"] += 1
-                if text == "BLANK" and (cell is None or not normalize(cell.get("raw_text"))):
+                # 格不存在或列未映射，无法证明原件空白被保留；只有真实存在的
+                # 空格才算命中，否则整列漏读会被记成“空白保持成功”。
+                if text == "BLANK" and cell is not None and not normalize(cell.get("raw_text")):
                     result["blank_hits"] += 1
                 elif text == "DASH" and cell is not None and "-" in normalize(cell.get("raw_text")):
                     result["blank_hits"] += 1
                 continue
-            result["amount_total"] += 1
             expected = number(text)
             actual = number(cell.get("raw_text")) if cell is not None else None
             if expected is not None and actual is not None and expected == actual:
@@ -203,6 +234,9 @@ def main() -> int:
     parser.add_argument("--t0-dir", type=Path, default=DEFAULT_T0_DIR)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args()
+    from src.services.pdf_parser import PARSER_FINGERPRINT
+
+    parser_fingerprint = PARSER_FINGERPRINT
     truths = []
     for path in sorted(args.truth.glob("*.json")):
         truth = json.loads(path.read_text(encoding="utf-8"))
@@ -226,6 +260,8 @@ def main() -> int:
         "column_identity": (sum(item["column_hits"] for item in per_sample), sum(item["column_total"] for item in per_sample)),
     }
     report = {
+        "scorer_version": SCORER_VERSION,
+        "parser_fingerprint": parser_fingerprint,
         "annotated_samples": len(truths),
         "scored_samples": len(per_sample),
         "missing_sources": missing,
@@ -240,8 +276,11 @@ def main() -> int:
         "per_sample": per_sample,
         "scope_note": (
             "只统计 truth_source=human/t0_frozen 的样本；unannotated 不计入分母。"
+            "全部分母先由真值独立固定，漏表/漏行/漏列仍计入应检数量。"
             "整表召回要求同页同表种存在；行召回按科目编码或合计标签匹配；"
-            "金额格召回按列身份映射后比较数值；列身份只在真值提供列号时统计。"
+            "金额格召回按列身份映射后比较数值；"
+            "空白只在格真实存在且为空时算保持成功；"
+            "列身份只在真值提供列号时统计。"
         ),
     }
     args.out.mkdir(parents=True, exist_ok=True)

@@ -93,6 +93,10 @@ assert.deepEqual(toCorrectionChanges([identityPending]), [{
 assert.match(describePending(identityPending), /原件缺表头/);
 
 assert.equal(needsTableIdentity({ ...table, table_code: "UNKNOWN" }), true);
+// 解析器真实产出带页码后缀，界面必须同样给出表种确认入口。
+assert.equal(needsTableIdentity({ ...table, table_code: "UNKNOWN_P1_T0" }), true);
+assert.equal(needsTableIdentity({ ...table, table_code: "UNKNOWN_P25_T0" }), true);
+assert.equal(needsTableIdentity({ ...table, table_code: "FIN_02_income" }), false);
 assert.equal(needsTableIdentity(table), false);
 assert.deepEqual(tableLocation(table), { physical_page: 8, bbox: [10, 10, 500, 700] });
 assert.deepEqual(Array.from(knownAmountColumns(table)).sort((a, b) => a - b), [2]);

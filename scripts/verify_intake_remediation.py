@@ -39,6 +39,7 @@ import tempfile
 import time
 import unicodedata
 from concurrent.futures import ProcessPoolExecutor
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 from unittest import mock
@@ -46,6 +47,8 @@ from unittest import mock
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_CORPUS = Path.home() / "Desktop" / "决算测试上海市"
 _DEFAULT_CASES = _REPO_ROOT / "scripts" / "intake_remediation_cases.json"
+_DEFAULT_T0 = _REPO_ROOT / "scripts" / "intake_remediation_t0.json"
+_T0_DIR = _REPO_ROOT / "outputs" / "intake_remediation_20261024" / "t0"
 _YEAR_RE = re.compile(r"\s*20\d{2}\s*年")
 _AMOUNT_RE = re.compile(r"^-?\d{1,3}(?:,\d{3})*\.\d{2}$|^-?\d+\.\d{2}$")
 
@@ -85,6 +88,17 @@ def name_key(value: Any) -> str:
     text = re.sub(r"\([^()]*\)", "", text)
     text = re.sub(r"^上海(?!市)", "上海市", text)
     return re.sub(r"(?:本级|本部)$", "", text)
+
+
+def identity_key(value: Any) -> str:
+    """绑定判定用的身份键：只做格式归一，保留身份标记（IR-02）。
+
+    全/半角括号与空白统一；“本级/本部/（本级）/（本部）”视为同一标记“#本级”，
+    但不并入上级部门；其余括号内容（别名、正式名称组成）原样保留。
+    """
+    text = re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(value or "")))
+    text = re.sub(r"^上海(?!市)", "上海市", text)
+    return re.sub(r"\(?(?:本级|本部)\)?$", "#本级", text)
 
 
 def _sha256(path: Path) -> str:
@@ -218,6 +232,8 @@ def _intake_one(task: Dict[str, Any]) -> Dict[str, Any]:
                          for s in (pre.get("suggestions") or [])[:3]],
             conflicts=[c.get("field") for c in (profile.get("conflicts") or [])] if isinstance(profile, dict) else [],
             conflict_check=adapter_conflict_consistency(pre),
+            # IR-01 契约：预检返回 binding_decision = {decision, reasons, evidence}；基线没有该字段。
+            binding_decision=pre.get("binding_decision"),
         )
         bound = adapter_auto_bind(path)
         out["bound"] = bound.get("organization_name") if bound else None
@@ -289,6 +305,34 @@ def _parse_one(task: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _t0_one(task: Dict[str, Any]) -> Dict[str, Any]:
+    """T0：逐格取值。只导出清单所列表种的事实明细，并带上是否可进规则。"""
+    path = Path(task["path"])
+    out: Dict[str, Any] = {"file": task["rel"]}
+    try:
+        from src.engine.fact_context import operand_rejection_reason
+        from src.services.pdf_parser import PDFParser
+        from src.services.table_import_receipt import build_table_import_receipt
+
+        artifact = PDFParser(None).build_parse_artifact(str(path))
+        org = task.get("org_name") or filename_org(path)
+        ctx = adapter_fact_context(artifact, org_name=org, fiscal_year=task["year"], org_level=task.get("org_level"))
+        facts = list(ctx.facts) if ctx else []
+        receipt = build_table_import_receipt(artifact, facts, org_name=org)
+        reading = receipt.get("reading_quality") or {}
+        out.update(
+            pending=(receipt.get("fiscal_coverage") or {}).get("pending_review_count"),
+            gaps=len(reading.get("gaps") or []),
+            facts=[{"table_code": f.table_code, "subject_code": f.subject_code, "indicator": f.indicator,
+                    "raw_value": f.raw_value, "value": None if f.normalized_value is None else str(f.normalized_value),
+                    "status": f.recognition_status, "rejection": operand_rejection_reason(f, org) or ""}
+                   for f in facts if f.table_code in set(task["tables"])],
+        )
+    except Exception as exc:
+        out["error"] = repr(exc)[:300]
+    return out
+
+
 def _e2e_one(task: Dict[str, Any]) -> Dict[str, Any]:
     path = Path(task["path"])
     out: Dict[str, Any] = {"file": task["rel"]}
@@ -343,7 +387,7 @@ def _org_directory(org_data_dir: Path) -> Dict[str, Dict[str, Any]]:
     orgs = list(orgs.values()) if isinstance(orgs, dict) else orgs
     index: Dict[str, Dict[str, Any]] = {}
     for org in orgs:
-        index.setdefault(name_key(org.get("name")), org)
+        index.setdefault(identity_key(org.get("name")), org)
     return index
 
 
@@ -377,6 +421,7 @@ def collect(args: argparse.Namespace) -> int:
         "collected_at": time.strftime("%Y-%m-%d %H:%M:%S"), "corpus": str(corpus), "file_count": len(files),
         "org_data_dir": str(source_org_dir), "org_directory_sha256": _sha256(source_org_dir / "organizations.json"),
         "stages": sorted(stages), "source_fingerprint": _source_fingerprint(),
+        "source_label": args.source_label or _git_head(), "code_root": str(_REPO_ROOT),
     }
     tasks = [{"path": str(p), "rel": rel(p, corpus), "sha256": shas[p], "year": filename_year(p, corpus)} for p in files]
     with ProcessPoolExecutor(args.jobs, initializer=_worker_init, initargs=(str(org_copy), str(upload_dir))) as pool:
@@ -395,7 +440,7 @@ def collect(args: argparse.Namespace) -> int:
                 if task["sha256"] in seen:
                     continue
                 seen.add(task["sha256"])
-                org = directory.get(name_key(filename_org(Path(task["path"]))))
+                org = directory.get(identity_key(filename_org(Path(task["path"]))))
                 level = (org or {}).get("level")
                 unique.append({**task, "org_level": level if level in {"department", "unit"} else None})
             count = _write_jsonl_gz(out_dir / "parse.jsonl.gz", pool.map(_parse_one, unique, chunksize=2))
@@ -405,16 +450,49 @@ def collect(args: argparse.Namespace) -> int:
         e2e_tasks = []
         for task in tasks:
             if task["rel"] in wanted:
-                org = directory.get(name_key(filename_org(Path(task["path"])))) or {}
+                org = directory.get(identity_key(filename_org(Path(task["path"])))) or {}
                 e2e_tasks.append({**task, "org_id": org.get("id"), "org_name": org.get("name")})
         # 生产管线在导入时读取环境变量，单独一个进程池，进程内串行执行。
         with ProcessPoolExecutor(min(args.jobs, 4), initializer=_worker_init,
                                  initargs=(str(org_copy), str(upload_dir))) as pool:
             count = _write_jsonl_gz(out_dir / "e2e.jsonl.gz", pool.map(_e2e_one, e2e_tasks))
         print(f"e2e: {count} 份")
+    if "t0" in stages and Path(args.t0).exists():
+        t0 = json.loads(Path(args.t0).read_text(encoding="utf-8"))
+        t0_dir = Path(args.t0_dir).resolve() if getattr(args, "t0_dir", None) else _T0_DIR
+        t0_tasks = []
+        for item in t0.get("cells", []) + t0.get("synthetic", []):
+            synthetic = item["file"].startswith("synthetic/")
+            path = (t0_dir / item["file"]) if synthetic else (corpus / item["file"])
+            if not path.exists():
+                continue
+            org = directory.get(identity_key(filename_org(path))) if not synthetic else None
+            t0_tasks.append({"path": str(path), "rel": item["file"], "tables": [item["table_code"]],
+                             "year": 2025 if synthetic else filename_year(path, corpus),
+                             "org_name": "上海市T0测试中心" if synthetic else None,
+                             "org_level": (org or {}).get("level") if (org or {}).get("level") in {"department", "unit"} else None})
+        with ProcessPoolExecutor(min(args.jobs, 4), initializer=_worker_init, initargs=(str(org_copy), str(upload_dir))) as pool:
+            count = _write_jsonl_gz(out_dir / "t0.jsonl.gz", pool.map(_t0_one, t0_tasks))
+        meta["t0_version"] = t0.get("version")
+        meta["t0_sha256"] = _sha256(Path(args.t0))
+        print(f"t0: {count} 份")
     (out_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     shutil.rmtree(work, ignore_errors=True)
     return 0
+
+
+def _git_head() -> str:
+    """被测代码的提交号；工作区有未提交改动时加 +dirty。非 git 目录返回空串。"""
+    import subprocess
+
+    try:
+        head = subprocess.run(["git", "rev-parse", "--short=8", "HEAD"], cwd=_REPO_ROOT, capture_output=True,
+                              text=True, check=True).stdout.strip()
+        dirty = subprocess.run(["git", "status", "--porcelain", "--", "src", "api", "config", "rules"], cwd=_REPO_ROOT,
+                               capture_output=True, text=True, check=True).stdout.strip()
+        return head + ("+dirty" if dirty else "")
+    except Exception:
+        return ""
 
 
 def _source_fingerprint() -> Dict[str, str]:
@@ -436,11 +514,15 @@ def _source_fingerprint() -> Dict[str, str]:
 
 
 class Verdicts:
-    def __init__(self) -> None:
+    def __init__(self, batch: str = "1") -> None:
         self.rows: List[Dict[str, Any]] = []
+        self.batch = batch
 
     def add(self, item: str, ok: Optional[bool], expected: str, actual: str, detail: Any = None) -> None:
         verdict = "REVIEW" if ok is None else ("PASS" if ok else "FAIL")
+        # 标注“[第二批]”的条目在第一批验收时只记录现状，不计入失败。
+        if "[第二批]" in item and self.batch == "1":
+            verdict = "LATER"
         self.rows.append({"item": item, "verdict": verdict, "expected": expected, "actual": actual, "detail": detail})
 
 
@@ -448,20 +530,83 @@ def _by_file(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     return {row["file"]: row for row in rows}
 
 
+def _reason_codes(row: Dict[str, Any]) -> List[str]:
+    """binding_decision.reasons 的原因码；冻结结构为对象列表，兼容早期的字符串列表。"""
+    reasons = (row.get("binding_decision") or {}).get("reasons") or []
+    return [r.get("code") if isinstance(r, dict) else r for r in reasons]
+
+
 def _bound_ok(row: Dict[str, Any], expect: Dict[str, Any]) -> bool:
     bound = row.get("bound")
-    if "not" in expect and bound and name_key(bound) in {name_key(x) for x in expect["not"]}:
+    if "not" in expect and bound and identity_key(bound) in {identity_key(x) for x in expect["not"]}:
         return False
+    if bound is None and expect.get("reason_in"):
+        # 待确认必须给出与该个案相符的原因，不能用任意合法原因码过关。
+        if not set(_reason_codes(row)) & set(expect["reason_in"]):
+            return False
     if "one_of" in expect:
-        allowed = {name_key(x) for x in expect["one_of"]}
-        return bound is None and expect.get("allow_unbound", True) or (bound is not None and name_key(bound) in allowed)
+        allowed = {identity_key(x) for x in expect["one_of"]}
+        return bound is None and expect.get("allow_unbound", True) or (bound is not None and identity_key(bound) in allowed)
     return True
+
+
+#: binding_decision 证据来源（R1.2 冻结）；文件名与上传元数据不得带页码。
+_ORIGINAL_SOURCES = {"cover", "cover_label", "part_heading", "toc", "table_header", "table_note", "composition", "page_scan"}
+_NON_PAGE_SOURCES = {"filename", "upload_metadata"}
+
+
+def _a6r_problems(row: Dict[str, Any], allowed: set, non_standard: set) -> List[str]:
+    """按冻结结构核对一份待确认材料的原因与证据；返回不合规之处。"""
+    decision = row.get("binding_decision") or {}
+    if decision.get("decision") != "needs_confirmation":
+        return ["缺少 binding_decision 或 decision 不是 needs_confirmation"]
+    reasons = decision.get("reasons")
+    if not isinstance(reasons, list) or not reasons:
+        return ["reasons 为空"]
+    problems = []
+    codes = [r.get("code") if isinstance(r, dict) else None for r in reasons]
+    if None in codes:
+        problems.append("reasons 须为对象列表（含 code/evidence/candidates/unmet）")
+    if len(set(codes)) != len(codes):
+        problems.append("原因码重复")
+    for reason in [r for r in reasons if isinstance(r, dict)]:
+        code = reason.get("code")
+        if code not in allowed:
+            problems.append(f"{code} 不在规定枚举内")
+        evidence = reason.get("evidence")
+        if not isinstance(evidence, list) or not evidence:
+            problems.append(f"{code} 没有证据")
+            evidence = []
+        for item in evidence:
+            source, page = item.get("source"), item.get("page")
+            if source in _ORIGINAL_SOURCES:
+                if not isinstance(page, int) or page < 1:
+                    problems.append(f"{code} 的原件证据 {source} 缺少 1 起算页码")
+            elif source in _NON_PAGE_SOURCES:
+                if page is not None:
+                    problems.append(f"{code} 的 {source} 证据不得带页码")
+            else:
+                problems.append(f"{code} 的证据来源 {source!r} 不在规定枚举内")
+        if not isinstance(reason.get("unmet"), list) or not reason.get("unmet"):
+            problems.append(f"{code} 未列出未满足的条件")
+        candidates = reason.get("candidates")
+        if code == "equivalent_candidates_tie" and (not isinstance(candidates, list) or len(candidates) < 2):
+            problems.append("equivalent_candidates_tie 须列出至少两个候选")
+        if code == "organization_relation_unverified" and (not isinstance(candidates, list) or not candidates):
+            problems.append("organization_relation_unverified 须列出相关候选")
+        if code == "directory_missing_org" and not isinstance(candidates, list):
+            problems.append("directory_missing_org 须给出候选查找结果（可为空列表）")
+        if code == "scan_without_text" and row.get("first_page_has_text") and row.get("no_text_pages", 0) < row.get("pages", 1):
+            problems.append("scan_without_text 与原件不符：该文件有文字层")
+        if code == "non_standard_material" and row["file"] not in non_standard and row.get("report_kind") in {"budget", "final"}:
+            problems.append("non_standard_material 与文种判定不符")
+    return problems
 
 
 def compare(args: argparse.Namespace) -> int:
     base_dir, cur_dir = Path(args.baseline), Path(args.current)
     cases = json.loads(Path(args.cases).read_text(encoding="utf-8"))
-    v = Verdicts()
+    v = Verdicts(args.batch)
     _compare_intake(v, _by_file(read_jsonl_gz(base_dir / "intake.jsonl.gz")),
                     _by_file(read_jsonl_gz(cur_dir / "intake.jsonl.gz")), cases)
     probe_spec = cases.get("profile", {}).get("mixed_title_probe")
@@ -475,6 +620,10 @@ def compare(args: argparse.Namespace) -> int:
                    _by_file(read_jsonl_gz(cur_dir / "parse.jsonl.gz")), cases)
     _compare_e2e(v, _by_file(read_jsonl_gz(base_dir / "e2e.jsonl.gz")),
                  _by_file(read_jsonl_gz(cur_dir / "e2e.jsonl.gz")), cases)
+    if Path(args.t0).exists():
+        t0 = json.loads(Path(args.t0).read_text(encoding="utf-8"))
+        _compare_t0(v, t0, _by_file(read_jsonl_gz(cur_dir / "intake.jsonl.gz")), _by_file(read_jsonl_gz(cur_dir / "t0.jsonl.gz")),
+                    _by_file(read_jsonl_gz(cur_dir / "e2e.jsonl.gz")), args.batch)
     report = {"baseline": str(base_dir), "current": str(cur_dir), "verdicts": v.rows,
               "summary": dict(collections.Counter(r["verdict"] for r in v.rows))}
     target = Path(args.report or cur_dir / "acceptance_report.json")
@@ -504,20 +653,51 @@ def _compare_intake(v: Verdicts, base: Dict[str, Dict], cur: Dict[str, Dict], ca
     variants = [f for f in org["name_variants_must_bind"] if f in cur and not cur[f].get("bound")]
     v.add("A4 写法差异不得误拒", not variants, f"{len(org['name_variants_must_bind'])} 例仍能绑定",
           f"{len(variants)} 例未绑定", variants)
-    # 回归：基线已正确绑定（与文件名主体等价）的，整改后不得改绑到其他组织或丢失绑定。
-    regress = [f for f, r in base.items() if r.get("bound") and name_key(r["bound"]) == name_key(r.get("filename_org"))
-               and f in cur and name_key(cur[f].get("bound")) != name_key(r["bound"])]
-    v.add("A5 基线正确绑定不回退", len(regress) == 0, "0 份", f"{len(regress)} 份", regress[:20])
+    pending_specs = org.get("name_variants_expected_pending") or []
+    pending_bad = []
+    for spec in pending_specs:
+        f = spec["file"] if isinstance(spec, dict) else spec
+        row = cur.get(f)
+        if row is None:
+            pending_bad.append(f + "（当前采集缺失）")
+            continue
+        required = set(spec.get("reason_in") or []) if isinstance(spec, dict) else set()
+        reasons = set(_reason_codes(row))
+        if row.get("bound") is not None or (required and not (reasons & required)):
+            pending_bad.append(f)
+    v.add("A4b 写法差异但口径不足的样本保持待确认", not pending_bad,
+          f"{len(pending_specs)} 例按 A2 口径待确认", f"{len(pending_bad)} 例不符", pending_bad)
+    # 回归：基线已正确绑定（与文件名主体等价）的，整改后不得改绑到其他组织；
+    # 转为待确认是安全结果，允许少量（封面抽取残缺等），逐条列出复核。
+    correct = [f for f, r in base.items() if r.get("bound") and name_key(r["bound"]) == name_key(r.get("filename_org")) and f in cur]
+    rebound = [f for f in correct if cur[f].get("bound") and name_key(cur[f]["bound"]) != name_key(base[f]["bound"])]
+    # 文件名可能写错，“与文件名等价”不是正确归属的依据：改绑、转待确认都只作观察，逐例复核。
+    # 绑定是否正确只由 A2（已知个案）和 T0-B（封面原文核实的样本）判定。
+    v.add("A5a 与文件名等价的绑定发生改绑", True if not rebound else None, "观察；有则逐例给出封面依据", f"{len(rebound)} 份", rebound[:20])
+    dropped = [f for f in correct if not cur[f].get("bound")]
+    v.add("A5b 与文件名等价的绑定转为待确认", True if not dropped else None, "观察（效率）；逐例说明原因", f"{len(dropped)} 份", dropped[:20])
     unbound = [f for f, r in cur.items() if not r.get("bound")]
-    v.add("A6 未自动绑定数", len(unbound) <= org["max_unbound"], f"≤ {org['max_unbound']}（组织库清洗后）",
+    v.add("A6 未自动绑定数（效率目标）", True if len(unbound) <= org["max_unbound"] else None,
+          f"目标 ≤ {org['max_unbound']}（组织库清洗后）；超出逐例说明",
           f"{len(unbound)}（基线 {sum(1 for r in base.values() if not r.get('bound'))}）", unbound[:30])
+    allowed = set(org.get("allowed_unbound_reasons") or [])
+    non_standard = set(cases.get("profile", {}).get("non_standard") or [])
+    bad_reason = {f: p for f in unbound if (p := _a6r_problems(cur[f], allowed, non_standard))}
+    v.add("A6r 待确认的原因与证据", not bad_reason, "每份未绑定材料的 binding_decision 符合冻结结构，原因码合法、证据可追溯（自动核对部分）",
+          f"{len(bad_reason)} 份不合规", {k: bad_reason[k][:3] for k in list(bad_reason)[:10]} or None)
+    boundary = org.get("binding_boundary_cases") or []
+    if boundary:
+        bad = [f"{c['file']}（{c['kind']}）" for c in boundary if c["file"] in cur and not _bound_ok(cur[c["file"]], c)]
+        kinds = collections.Counter(c["kind"] for c in boundary)
+        v.add("A2b 部门/本级绑定边界", not bad, f"{len(boundary)} 例符合期望：{dict(kinds)}", f"{len(bad)} 例不符", bad[:20])
     agree = sum(1 for r in cur.values() if r.get("bound") and name_key(r["bound"]) == name_key(r.get("filename_org")))
     v.add("A7 绑定结果与文件名主体等价", None, "仅报告，逐例复核差异",
           f"{agree}（基线 {sum(1 for r in base.values() if r.get('bound') and name_key(r['bound']) == name_key(r.get('filename_org')))}）")
 
     prof = cases["profile"]
     empty = [f for f, r in cur.items() if r.get("first_page_has_text") and not r.get("cover_org_name")]
-    v.add("B1 首页有字但封面主体为空", len(empty) <= prof["max_empty_cover_org"], f"≤ {prof['max_empty_cover_org']}",
+    v.add("B1 首页有字但封面主体为空（效率目标）", True if len(empty) <= prof["max_empty_cover_org"] else None,
+          f"目标 ≤ {prof['max_empty_cover_org']}；超出逐例说明",
           f"{len(empty)}（基线 {sum(1 for r in base.values() if r.get('first_page_has_text') and not r.get('cover_org_name'))}）", empty[:20])
     wrong_cover = [f for f, r in cur.items() if r.get("cover_org_name") and f in base and base[f].get("cover_org_name")
                    and name_key(r["cover_org_name"]) != name_key(base[f]["cover_org_name"])]
@@ -528,8 +708,9 @@ def _compare_intake(v: Verdicts, base: Dict[str, Dict], cur: Dict[str, Dict], ca
     std_changed = [f for f, r in base.items() if r.get("report_kind") == "final" and f not in prof["non_standard"]
                    and f in cur and cur[f].get("report_kind") != "final"]
     v.add("B4 标准决算文种不回退", not std_changed, "0 份", f"{len(std_changed)} 份", std_changed[:20])
+    # 目录年份是语料整理时的归档，不保证正确：冲突逐例核对原件。
     year_conflict = [f for f, r in cur.items() if r.get("report_year") and int(r["report_year"]) != int(f[:4])]
-    v.add("B5 年度与目录年份一致", not year_conflict, "0 份冲突", f"{len(year_conflict)} 份", year_conflict[:10])
+    v.add("B5 年度与目录年份冲突", True if not year_conflict else None, "观察；有则逐例核对原件", f"{len(year_conflict)} 份", year_conflict[:10])
 
 
 def _real_facts(row: Dict[str, Any]) -> collections.Counter:
@@ -553,24 +734,30 @@ def _compare_parse(v: Verdicts, base: Dict[str, Dict], cur: Dict[str, Dict], cas
     def total(rows, key):
         return sum(int(r.get(key) or 0) for r in rows)
 
+    # 数量指标只作观察：阻断原有的错误准入会让数量“变差”，这类变化逐例复核，不直接判失败。
     b_rows, c_rows = [b for _, b, _ in pairs], [c for _, _, c in pairs]
-    v.add("C1 进入规则的金额格", total(c_rows, "admitted") >= total(b_rows, "admitted"), "不低于基线",
-          f"{total(c_rows, 'admitted')}（基线 {total(b_rows, 'admitted')}）")
-    v.add("C2 待复核金额格", total(c_rows, "pending") <= total(b_rows, "pending"), "不高于基线",
-          f"{total(c_rows, 'pending')}（基线 {total(b_rows, 'pending')}）")
+    v.add("C1 进入规则的金额格", True if total(c_rows, "admitted") >= total(b_rows, "admitted") else None,
+          "不低于基线；下降须逐例说明", f"{total(c_rows, 'admitted')}（基线 {total(b_rows, 'admitted')}）")
+    v.add("C2 待复核金额格", True if total(c_rows, "pending") <= total(b_rows, "pending") else None,
+          "不高于基线；上升须逐例说明", f"{total(c_rows, 'pending')}（基线 {total(b_rows, 'pending')}）")
     worse = [f for f, b, c in pairs if (c.get("admitted") or 0) < (b.get("admitted") or 0)
              or (c.get("pending") or 0) > (b.get("pending") or 0)]
-    v.add("C3 单份文件不变差", not worse, "0 份 admitted 下降或 pending 上升", f"{len(worse)} 份", worse[:20])
+    v.add("C3 单份文件数量变差", True if not worse else None, "0 份；有则逐例说明", f"{len(worse)} 份", worse[:30])
     lost: Dict[str, List[str]] = {}
     for f, b, c in pairs:
         missing = _real_facts(b) - _real_facts(c)
         if missing:
             lost[f] = list(missing.elements())[:5]
-    v.add("C4 基线可用事实不丢失", not lost, "0 份丢失带编码的可用事实（金额与身份不变）",
+    v.add("C4 基线可用事实丢失", True if not lost else None, "0 份；有则逐例说明（独立核对集 T0 内的事实丢失直接判失败）",
           f"{len(lost)} 份", {k: lost[k] for k in list(lost)[:10]})
     blocked = [f for f, r in cur.items() if r.get("fact_count") and (r.get("identity_incomplete") or 0) >= 0.9 * r["fact_count"]]
-    v.add("C5 整份事实因身份不完整被挡", not blocked, "0 份", f"{len(blocked)} 份（基线 "
+    # 真正身份不明的材料允许保持未确认；已知的三份由 C7 个案判定，其余逐例给出原件依据。
+    v.add("C5 整份事实因身份不完整被挡", True if not blocked else None, "0 份；有则逐例给出口径无法确定的原件依据",
+          f"{len(blocked)} 份（基线 "
           f"{sum(1 for r in base.values() if r.get('fact_count') and (r.get('identity_incomplete') or 0) >= 0.9 * r['fact_count'])}）", blocked)
+    demoted = [f for f, r in cur.items() if (r.get("arithmetic_conflicts") or 0) > 0]
+    v.add("C9 算术门禁降级", True if not demoted else None, "0 份；有则逐例给出独立结构证据",
+          f"{len(demoted)} 份（基线 {sum(1 for r in base.values() if (r.get('arithmetic_conflicts') or 0) > 0)}）", demoted[:20])
     b_time = [b["parse_seconds"] for _, b, _ in pairs if b.get("parse_seconds")]
     c_time = [c["parse_seconds"] for _, _, c in pairs if c.get("parse_seconds")]
     if b_time and c_time:
@@ -590,6 +777,9 @@ def _compare_parse(v: Verdicts, base: Dict[str, Dict], cur: Dict[str, Dict], cas
         if "identity_incomplete_max" in case:
             checks.append(((row.get("identity_incomplete") or 0) <= case["identity_incomplete_max"],
                            f"identity_incomplete {row.get('identity_incomplete')} ≤ {case['identity_incomplete_max']}"))
+        if "arithmetic_conflicts_max" in case:
+            checks.append(((row.get("arithmetic_conflicts") or 0) <= case["arithmetic_conflicts_max"],
+                           f"算术降级 {row.get('arithmetic_conflicts')} ≤ {case['arithmetic_conflicts_max']}"))
         if "no_unknown_pages" in case:
             bad = sorted(set(case["no_unknown_pages"]) & set(unknown_pages))
             checks.append((not bad, f"UNKNOWN 页 {bad or '无'}"))
@@ -602,7 +792,10 @@ def _compare_parse(v: Verdicts, base: Dict[str, Dict], cur: Dict[str, Dict], cas
 
 def _issue_hits(row: Dict[str, Any], spec: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [i for i in row.get("issues") or [] if (not spec.get("rule_id") or i.get("rule_id") == spec["rule_id"])
-            and all(token in (i.get("message") or "") + (i.get("title") or "") for token in spec.get("contains", []))]
+            and (not spec.get("severity_in") or i.get("severity") in spec["severity_in"])
+            and all(token in (i.get("message") or "") + (i.get("title") or "") for token in spec.get("contains", []))
+            and (not spec.get("contains_any")
+                 or any(token in (i.get("message") or "") + (i.get("title") or "") for token in spec["contains_any"]))]
 
 
 def _insufficient_rules(row: Dict[str, Any]) -> Optional[int]:
@@ -652,6 +845,87 @@ def _compare_e2e(v: Verdicts, base: Dict[str, Dict], cur: Dict[str, Dict], cases
         v.add(f"D {case['id']}", not problems, case["expect"], "；".join(problems) or "符合")
 
 
+def _t0_expected(raw: str, unit: str = "万元") -> Optional[Decimal]:
+    if raw in ("BLANK", "DASH", "UNLABELED"):
+        return None
+    value = Decimal(raw.replace(",", ""))
+    return value / Decimal(10000) if unit == "元" else value
+
+
+def _t0_admitted(fact: Dict[str, Any]) -> bool:
+    return fact.get("status") not in {"ambiguous", "low_confidence", "missing"} and not fact.get("rejection")
+
+
+def _t0_cells(v: Verdicts, item: Dict[str, Any], row: Optional[Dict[str, Any]], kind: str) -> None:
+    label = f"T0 {item['id']} {item['category']}"
+    if not row or "error" in row:
+        v.add(label, False, kind, (row or {}).get("error", "未采集"))
+        return
+    unit = item.get("unit", "万元")
+    facts = [f for f in row.get("facts") or [] if f["table_code"] == item["table_code"]]
+    index: Dict[tuple, List[Dict[str, Any]]] = collections.defaultdict(list)
+    for fact in facts:
+        index[(str(fact["subject_code"]), fact["indicator"])].append(fact)
+    flagged = (row.get("pending") or 0) > 0 or (row.get("gaps") or 0) > 0
+    problems, missing = [], 0
+    for spec in item["rows"]:
+        code = spec["code"]
+        for indicator, raw in spec["cells"].items():
+            if indicator == "UNLABELED":
+                expect = _t0_expected(raw, unit)
+                wrong = [f for f in facts if str(f["subject_code"]) == code and _t0_admitted(f)
+                         and f.get("value") is not None and Decimal(f["value"]) == expect]
+                if wrong:
+                    problems.append(f"{code} 无表头列 {raw} 以 {wrong[0]['indicator']} 进入规则")
+                continue
+            got = index.get((code, indicator), [])
+            admitted = [f for f in got if _t0_admitted(f)]
+            if raw in ("BLANK", "DASH"):
+                rewritten = [f for f in got if str(f.get("raw_value") or "").strip() not in ("", "-", "—", "－")]
+                if rewritten:
+                    problems.append(f"{code}/{indicator} 原件{('空白' if raw == 'BLANK' else '横线')}，原值被写成 {rewritten[0].get('raw_value')!r}")
+                continue
+            expect = _t0_expected(raw, unit)
+            bad = [f for f in admitted if f.get("value") is None or Decimal(f["value"]) != expect]
+            if bad:
+                problems.append(f"{code}/{indicator} 应为 {raw}，进入规则的是 {bad[0].get('value')}")
+            elif not admitted:
+                missing += 1
+                if kind == "exact":
+                    problems.append(f"{code}/{indicator} 应为 {raw}，没有可进规则的事实" + (f"（状态 {got[0]['status']}）" if got else ""))
+    if kind in ("no_wrong_admission", "unlabeled_not_admitted", "read_or_flag") and missing and not flagged:
+        problems.append(f"{missing} 格未进入规则，但该文件没有标出待复核")
+    v.add(label, not problems, kind, "；".join(problems[:6]) or f"符合（未进入规则 {missing} 格{'，已标待复核' if missing else ''}）",
+          problems[6:20] or None)
+
+
+def _compare_t0(v: Verdicts, t0: Dict[str, Any], intake: Dict[str, Dict], t0_rows: Dict[str, Dict],
+                e2e: Dict[str, Dict], batch: str) -> None:
+    wrong, unbound = [], []
+    for item in t0.get("binding", []):
+        row = intake.get(item["file"]) or {}
+        if not row.get("bound"):
+            unbound.append(item["file"])
+        elif identity_key(row["bound"]) != identity_key(item["expected_org"]):
+            wrong.append(f"{item['file']} → {row['bound']}（应为 {item['expected_org']}）")
+    v.add("T0-B 封面核实样本绑定正确", not wrong, f"{len(t0.get('binding', []))} 份不得绑错（转待确认计入效率）",
+          f"绑错 {len(wrong)} 份，待确认 {len(unbound)} 份", wrong[:10] or None)
+    for item in t0.get("cells", []) + t0.get("synthetic", []):
+        _t0_cells(v, item, t0_rows.get(item["file"]), item["batches"].get(batch, item["batches"]["1"]))
+    for item in t0.get("documents", []):
+        row = e2e.get(item["file"])
+        label = f"T0 {item['id']} {item['category']}"
+        if not row or "error" in row:
+            v.add(label, False, "incomplete_not_passed", (row or {}).get("error", "未采集"))
+            continue
+        problems = []
+        if row.get("conclusion") == "no_findings" or row.get("status") == "done":
+            problems.append(f"结论 {row.get('conclusion')} / 状态 {row.get('status')}")
+        if any(i.get("rule_id") == "V33-002" for i in row.get("issues") or []):
+            problems.append("报出 V33-002 缺失表")
+        v.add(label, not problems, "检查未完成、不显示通过、不报缺表", "；".join(problems) or "符合")
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -661,15 +935,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     col.add_argument("--cases", default=str(_DEFAULT_CASES))
     col.add_argument("--org-data-dir", default=str(_REPO_ROOT / "data"),
                      help="组织库目录（含 organizations.json）；验收清洗后的组织库时指向其副本")
-    col.add_argument("--stages", default="intake,parse,e2e")
+    col.add_argument("--stages", default="intake,parse,e2e,t0")
     col.add_argument("--jobs", type=int, default=8)
     col.add_argument("--limit", type=int, default=0, help="只取前 N 份（调试用，正式验收不得使用）")
     col.add_argument("--only", help="JSON 文件：只采集其中列出的相对路径（调试用）")
+    col.add_argument("--source-label", help="被测代码来源说明（如从某提交导出的副本）；缺省取 git HEAD")
+    col.add_argument("--t0", default=str(_DEFAULT_T0), help="T0 独立核对集清单")
+    col.add_argument("--t0-dir", help="T0 合成样本所在目录（缺省为 outputs/intake_remediation_20261024/t0）")
     cmp_ = sub.add_parser("compare", help="比较两次采集并逐条判定")
     cmp_.add_argument("--baseline", required=True)
     cmp_.add_argument("--current", required=True)
     cmp_.add_argument("--cases", default=str(_DEFAULT_CASES))
     cmp_.add_argument("--report")
+    cmp_.add_argument("--t0", default=str(_DEFAULT_T0))
+    cmp_.add_argument("--batch", default="1", choices=["1", "2"], help="按哪一批的预期判定 T0 与带批次标注的用例")
     args = parser.parse_args(argv)
     return collect(args) if args.command == "collect" else compare(args)
 

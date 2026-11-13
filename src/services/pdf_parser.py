@@ -438,6 +438,10 @@ class PDFParser:
                 self._certify_native_blank_cells(page, parsed.cells, method_name)
                 parsed = repair_native_dimensions(page, parsed, reference=reference)
                 parsed = repair_native_code_baselines(page, parsed)
+                # 裁决前给所有候选补齐同一原页的字符证明。恢复路径只给改动格
+                # 留证明，不能拿这些稀疏记录与另一候选的完整证明直接比数量。
+                from src.services.native_structure_recovery import bind_native_grid_character_sources
+                parsed = bind_native_grid_character_sources(page, parsed)
                 candidates.append(parsed)
             return candidates
 
@@ -455,7 +459,7 @@ class PDFParser:
                 continue
 
             self._cell_candidate_tables.extend(deepcopy(candidates))
-            best_candidates = self._merge_candidates(best_candidates, candidates)
+            best_candidates = self._merge_candidates(best_candidates, candidates, page=page)
             if method_name == "lines":
                 clusters = self._vertical_line_clusters(page)
                 snap6_needed = any(
@@ -474,7 +478,7 @@ class PDFParser:
                 candidates = []
             if candidates:
                 self._cell_candidate_tables.extend(deepcopy(candidates))
-                best_candidates = self._merge_candidates(best_candidates, candidates)
+                best_candidates = self._merge_candidates(best_candidates, candidates, page=page)
 
         from src.services.source_reconstruction import resolve_empty_table_shadows
         best_candidates, decisions = resolve_empty_table_shadows(best_candidates, page.extract_text() or "")
@@ -1284,9 +1288,11 @@ class PDFParser:
         self,
         existing: List[ParsedTable],
         incoming: List[ParsedTable],
+        *,
+        page=None,
     ) -> List[ParsedTable]:
         from src.services.source_reconstruction import resolve_native_table_candidates
-        return resolve_native_table_candidates(self, existing, incoming)
+        return resolve_native_table_candidates(self, existing, incoming, page=page)
 
     def _text_grid_shadow(self, first: ParsedTable, second: ParsedTable) -> bool:
         """A partial text extraction cannot form a second instance of a grid.
@@ -2263,8 +2269,52 @@ class PDFParser:
                 semantic_bonus = .5 + (.1 if table.extraction_method in {'lines', 'lines_strict'} else 0)
         return table.confidence + semantic_bonus + min(area / 1_000_000, 0.2)
 
+    def _token_claims(self, table: ParsedTable) -> dict[tuple, set[tuple[int, int]]]:
+        """原页字符 token → 认领它的金额格位置集合。"""
+        claimed: dict[tuple, set[tuple[int, int]]] = {}
+        for cell in table.cells:
+            if cell.is_header or cell.numeric_value is None:
+                continue
+            position = (cell.row_idx, cell.col_idx)
+            for source in cell.native_text_sources or []:
+                try:
+                    token = (
+                        int(source.get("physical_page")),
+                        int(source.get("start_char_index")),
+                        int(source.get("end_char_index")),
+                    )
+                except (TypeError, ValueError):
+                    continue
+                claimed.setdefault(token, set()).add(position)
+        return claimed
+
+    def _covered_amount_tokens(self, table: ParsedTable) -> int:
+        """来源记录数量，仅供诊断；部分证明不能作为候选覆盖完整性的依据。"""
+        return len(self._token_claims(table))
+
+    def _duplicate_source_claims(self, table: ParsedTable) -> int:
+        """统计被多个金额格同时认领的原页字符 token / 重合格框数量。
+
+        重复抽取的判据是“同一个原页 token 被认领多次”或“同一行两个金额格
+        框完全重合”，不是数值是否相同。政府报表中两个来源列印相同金额很
+        常见（如财政拨款与事业收入同为 100.00），按值去重会把合法数据当成
+        重复，反而挑中漏列的结果。
+
+        没有来源证明、也没有框的格不参与判定：无法区分“真的金额相同”与
+        “重复展开”，宁可少罚也不误罚。
+        """
+        boxes: dict[tuple[int, tuple[float, ...]], set[tuple[int, int]]] = {}
+        for cell in table.cells:
+            if cell.is_header or cell.numeric_value is None or not cell.bbox:
+                continue
+            key = (cell.row_idx, tuple(round(float(value), 1) for value in cell.bbox))
+            boxes.setdefault(key, set()).add((cell.row_idx, cell.col_idx))
+        claimed = self._token_claims(table)
+        duplicated = sum(1 for positions in claimed.values() if len(positions) > 1)
+        return duplicated + sum(1 for positions in boxes.values() if len(positions) > 1)
+
     def _structure_priority(self, table: ParsedTable) -> float:
-        """同优先级候选的结构裁决：少空列/空行、少重复金额者优先。"""
+        """同优先级候选的结构裁决：少空列/空行、少重复抽取者优先。"""
         rows = table.rows or []
         width = max((len(row) for row in rows), default=0)
         total = sum(len(row) for row in rows)
@@ -2276,10 +2326,7 @@ class PDFParser:
             if not any(col < len(row) and str(row[col] or "").strip() for row in rows)
         )
         empty_rows = sum(1 for row in rows if not any(str(value or "").strip() for value in row))
-        duplicate_amounts = 0
-        for row in rows:
-            amounts = [str(value or "").strip() for value in row if self._looks_numeric(str(value or ""))]
-            duplicate_amounts += len(amounts) - len(set(amounts))
+        duplicate_amounts = self._duplicate_source_claims(table)
         return (non_empty / total) - 0.02 * empty_columns - 0.02 * empty_rows - 0.02 * duplicate_amounts
 
     def _containment_ratio(
