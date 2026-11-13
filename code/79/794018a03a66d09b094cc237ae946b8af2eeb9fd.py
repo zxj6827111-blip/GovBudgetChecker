@@ -1,0 +1,730 @@
+"""
+寮曟搸瑙勫垯杩愯鍣?
+灏佽鐜版湁鐨?engine/rules_v33锛岀粺涓€杈撳嚭鏍煎紡涓?IssueItem
+"""
+
+import logging
+from pathlib import Path
+import time
+import uuid
+from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+from src.schemas.issues import JobContext, AnalysisConfig, IssueItem
+from src.services.check_progress import update_progress
+from src.engine.rules_v33 import build_document, Issue, Document
+from src.engine.rule_registry import all_rule_ids, select_rules
+from src.engine.rule_outcome import (
+    RuleOutcome,
+    RuleOutcomeSignal,
+    STATUS_PARSE_ERROR,
+    STATUS_PRIORITY,
+    resolve_rule_status,
+    summarize_rule_outcomes,
+)
+from src.services.document_profile_resolver import resolve_report_kind_from_path
+from src.utils.issue_bbox import PDFBBoxLocator
+from src.utils.issue_location import normalize_issue_location
+from src.utils.logging_config import describe_exception, safe_log_extra
+from src.utils.provenance import ENGINE_VERSION
+from src.utils.rule_text import default_rule_suggestion, infer_rule_title
+
+logger = logging.getLogger(__name__)
+
+
+class EngineRuleRunner:
+    """Execute local engine rules and normalize findings."""
+
+    def __init__(self):
+        self._stats = {
+            "total_rules": 0,
+            "successful_rules": 0,
+            "failed_rules": 0,
+        }
+        self._outcomes: List[RuleOutcome] = []
+
+    @staticmethod
+    def _normalize_severity(raw_severity: Any) -> str:
+        severity_map = {
+            "critical": "critical",
+            "fatal": "critical",
+            "error": "high",
+            "high": "high",
+            "warn": "medium",
+            "warning": "medium",
+            "medium": "medium",
+            "manual_review": "manual_review",
+            "low": "low",
+            "hint": "low",
+            "info": "info",
+        }
+        value = str(raw_severity or "medium").strip().lower()
+        return severity_map.get(value, "medium")
+
+    @staticmethod
+    def _normalize_page(page: Any) -> Optional[int]:
+        """页码归一：只接受正整数，未知/无效一律返回 None。
+
+        ZC-00（SYS-07）：禁止把未知页码折算成第 1 页——那会让"没有定位"伪装成
+        "定位在第 1 页"，下游证据门和质量门都会被假页码污染。None 会一路保留，
+        由展示层渲染为"未定位"。
+        """
+        if isinstance(page, bool):
+            return None
+        if isinstance(page, int):
+            return page if page > 0 else None
+        try:
+            parsed = int(str(page).strip())
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _build_evidence_list(self, issue: Issue, page_number: Optional[int]) -> List[Dict[str, Any]]:
+        """构造证据列表：只携带真实原文引用，绝不用问题说明冒充原文。
+
+        ZC-00（SYS-07）：此前 text 缺失时回退到 description/message——那把规则的
+        判定说明当成"原文摘录"输出，制造看似有据可查的问题项。现在没有
+        evidence_text（规则给出的命中原文）就保持证据文本为空，由证据门按
+        "缺原文"记录；页码未知时保持 None，不默认第 1 页。
+        """
+        text = str(getattr(issue, "evidence_text", None) or "").strip()
+        evidence_item: Dict[str, Any] = {"page": page_number}
+        if text:
+            evidence_item["text"] = text
+            evidence_item["text_snippet"] = text
+        location = getattr(issue, "location", {}) or {}
+        if (getattr(issue, "rule", None) == "V33-251"
+                and isinstance(location.get("source_claim_refs"), list)
+                and location["source_claim_refs"]):
+            # 重复汇总的原件声明可能跨页，不能拼成一个引文再错误绑定到首个页码。
+            # 此处只保留来源，不认证 OCR；后续证据门仍逐项验证。
+            return [{**dict(ref), "page": ref.get("physical_page"), "text": ref.get("quote"),
+                     "text_snippet": ref.get("quote"), "verification_status": "unverified"}
+                    for ref in location["source_claim_refs"]]
+        location_level = str(getattr(issue, "location_level", None) or "unresolved")
+        if location_level not in {"exact_cell", "exact_span"}:
+            location_level = str(location.get("location_level") or location_level)
+        verification_status = str(getattr(issue, "verification_status", None) or "unverified")
+        if verification_status != "verified":
+            verification_status = str(location.get("verification_status") or verification_status)
+        bbox = getattr(issue, "bbox", None) or location.get("bbox")
+        evidence_item["location_level"] = location_level
+        evidence_item["verification_status"] = verification_status
+        if (
+            bbox
+            and location_level in {"exact_cell", "exact_span"}
+            and verification_status == "verified"
+        ):
+            evidence_item["bbox"] = bbox
+        return [evidence_item]
+
+    def _issue_to_finding(
+        self,
+        issue: Issue,
+        rule_id: Optional[str] = None,
+        document: Optional[Document] = None,
+        rule_version: Optional[str] = None,
+    ) -> IssueItem:
+        raw_location = getattr(issue, "location", {}) or {}
+        location = normalize_issue_location(
+            rule_id=rule_id or getattr(issue, "rule", ""),
+            location=raw_location,
+            message=getattr(issue, "message", "") or "",
+            evidence_text=getattr(issue, "evidence_text", None)
+            or getattr(issue, "message", "")
+            or "",
+            document=document,
+        )
+        page_number = self._normalize_page(
+            location.get("page", getattr(issue, "page_number", None))
+        )
+        if page_number is not None:
+            location.setdefault("page", page_number)
+        else:
+            # 未知页码保持缺失：location.page 与 page_number 都不落第 1 页
+            location.pop("page", None)
+
+        resolved_rule_id = str(rule_id or getattr(issue, "rule", "") or "UNKNOWN")
+        title = infer_rule_title(resolved_rule_id, getattr(issue, "message", "") or "")
+        suggestion: Optional[str] = getattr(issue, "suggestion", None) or default_rule_suggestion(
+            resolved_rule_id, page_number
+        )
+        if page_number is None or ("page" not in raw_location and "pages" not in location):
+            suggestion = (
+                f"{suggestion} 当前页码未精确定位，可结合证据片段检索原文复核。"
+                if suggestion
+                else "当前页码未精确定位，可结合证据片段检索原文复核。"
+            )
+
+        location_level = str(getattr(issue, "location_level", None) or "unresolved")
+        if location_level not in {"exact_cell", "exact_span"}:
+            location_level = str(location.get("location_level") or location_level)
+        verification_status = str(getattr(issue, "verification_status", None) or "unverified")
+        if verification_status != "verified":
+            verification_status = str(location.get("verification_status") or verification_status)
+        source_bbox = getattr(issue, "bbox", None) or location.get("bbox")
+        exact_verified = (
+            location_level in {"exact_cell", "exact_span"}
+            and verification_status == "verified"
+        )
+
+        return IssueItem(
+            id=str(uuid.uuid4()),
+            source="rule",
+            rule_id=resolved_rule_id,
+            severity=self._normalize_severity(getattr(issue, "severity", "medium")),
+            title=title,
+            message=getattr(issue, "message", "") or "",
+            evidence=self._build_evidence_list(issue, page_number),
+            location=location,
+            page_number=page_number,
+            bbox=source_bbox if exact_verified else None,
+            location_level=location_level,
+            verification_status=verification_status,
+            suggestion=suggestion,
+            tags=[resolved_rule_id] if resolved_rule_id else [],
+            # AC-11：规则侧关系/事实身份透传（引擎 Issue 未来携带 fact_ids 时
+            # 与 AI 候选建立精确配对；现在保留通道，不再在适配层丢弃）。
+            check_relation_id=str(getattr(issue, "check_relation_id", "") or "") or None,
+            fact_ids=[
+                str(item).strip()
+                for item in (getattr(issue, "fact_ids", None) or [])
+                if str(item).strip()
+            ],
+            evidence_ids=[
+                str(item).strip()
+                for item in (getattr(issue, "evidence_ids", None) or [])
+                if str(item).strip()
+            ],
+            # 版本留痕（P2-02）：规则来源的 finding 记录本次实际使用的规则集版本
+            # 与引擎版本；模型/提示词版本留空，因为这条问题不经过任何 AI 调用。
+            rule_version=rule_version,
+            engine_version=ENGINE_VERSION,
+        )
+
+    def _convert_and_locate_issues(
+        self,
+        issues: Iterable[Any],
+        rule_id: str,
+        document: Optional[Document],
+        rule_version: Optional[str],
+        bbox_locator: Any,
+    ) -> Tuple[List[IssueItem], List[str]]:
+        findings: List[IssueItem] = []
+        conversion_errors: List[str] = []
+        for issue in issues:
+            try:
+                finding = self._issue_to_finding(
+                    issue,
+                    rule_id=rule_id,
+                    document=document,
+                    rule_version=rule_version,
+                )
+                finding = bbox_locator.locate(finding)
+                findings.append(finding)
+            except Exception as e:
+                # 这里的异常多来自 IssueItem 校验失败，pydantic 会把输入值
+                # （证据原文片段）写进异常消息，异常栈里也带着同一段消息，
+                # 所以刻意不用 logger.exception，只留错误类型、字段路径与指纹。
+                logger.error(
+                    "Failed to convert issue to IssueItem",
+                    extra=safe_log_extra({"rule_id": rule_id, **describe_exception(e)}),
+                )
+                conversion_errors.append(type(e).__name__)
+                continue
+        return findings, conversion_errors
+
+    @staticmethod
+    def _link_relation_receipts(
+        document: Optional[Document],
+        rule_id: str,
+        receipt_start: int,
+        findings: List[IssueItem],
+    ) -> None:
+        """Bind failed relation receipts to the exact findings emitted for them."""
+        if document is None:
+            return
+        receipts = getattr(document, "fact_receipts", None)
+        if not isinstance(receipts, list):
+            return
+        finding_ids_by_relation: Dict[str, List[str]] = {}
+        for finding in findings:
+            relation_id = str(getattr(finding, "check_relation_id", "") or "").strip()
+            finding_id = str(getattr(finding, "id", "") or "").strip()
+            if relation_id and finding_id:
+                finding_ids_by_relation.setdefault(relation_id, []).append(finding_id)
+        for receipt in receipts[max(0, receipt_start):]:
+            if not isinstance(receipt, dict) or str(receipt.get("rule_id") or "") != rule_id:
+                continue
+            if str(receipt.get("status") or "") != "fail":
+                continue
+            relation_id = f"{rule_id}:{str(receipt.get('sub_check_id') or '')}"
+            refs = finding_ids_by_relation.get(relation_id, [])
+            if refs:
+                receipt["issue_refs"] = list(dict.fromkeys([*(receipt.get("issue_refs") or []), *refs]))
+
+    def _resolve_report_kind(
+        self,
+        job_context: JobContext,
+        document: Optional[Document] = None,
+    ) -> str:
+        """材料文种判定：显式元数据 > 文件名基名 > 正文首页，兜底 unknown。
+
+        实现已收敛到唯一解析器 ``src/services/document_profile_resolver``。
+        这里不复用 ``job_context.pdf_path`` 的整串路径做关键词判断——
+        项目与上传目录本身可能含 "budget" 等词，与材料内容无关；
+        解析器内部只取基名，并处理了 Windows 路径在 Linux 上取基名的问题。
+        """
+        context = getattr(document, "fact_context", None)
+        if (context is not None and context.context_version == "fact-context-v2"
+                and context.input_status in {"parsed", "no_fiscal_facts"}):
+            return context.report_kind or "unknown"
+        meta = job_context.meta or {}
+        explicit = str(meta.get("report_kind") or "").strip().lower()
+        page_texts: List[str] = []
+        if document is not None and document.page_texts:
+            page_texts = list(document.page_texts)
+        return resolve_report_kind_from_path(job_context.pdf_path, page_texts, explicit)
+
+    def _select_rule_set(
+        self,
+        job_context: JobContext,
+        document: Optional[Document] = None,
+    ) -> List[Any]:
+        report_kind = self._resolve_report_kind(job_context, document)
+        # A material whose type cannot be established must not be checked
+        # against either type-specific rule set.  Common rules still provide
+        # low-risk feedback while the UI requests human confirmation.
+        return select_rules(report_kind)
+
+    async def run_rules(
+        self, job_context: JobContext, rules: List[Dict[str, Any]], config: AnalysisConfig
+    ) -> List[IssueItem]:
+        """
+        杩愯寮曟搸瑙勫垯妫€鏌?
+
+        Args:
+            job_context: 浣滀笟涓婁笅鏂?
+            rules: 寮曟搸瑙勫垯鍒楄〃
+            config: 鍒嗘瀽閰嶇疆
+
+        Returns:
+            List[IssueItem]: 妫€鏌ョ粨鏋滃垪琛?
+        """
+        # Prepare document object and select rules by report kind.
+        document = await self._prepare_document(job_context)
+        report_kind = self._resolve_report_kind(job_context, document)
+        # 一次解析、全程消费：文种结论挂到文档上，规则体（如 CMM-003 的
+        # 锚点选择）读同一个值，不再按文件名重新猜（与 pipeline 同一纪律，
+        # 独立验收 2026-09-17 kind_disagreement 反例整改）。
+        if document is not None:
+            document.report_kind = report_kind
+            profile_snapshot = (job_context.meta or {}).get("document_profile")
+            if isinstance(profile_snapshot, dict):
+                from src.schemas.document_profile import DocumentProfile
+
+                document.document_profile = DocumentProfile.model_validate(profile_snapshot)
+            if document.fact_context is not None:
+                from src.services.fiscal_source_profile import bind_rule_document
+                bind_rule_document(document)
+        selected_rules = self._select_rule_set(job_context, document)
+        from src.engine.rule_registry import restrict_rules_to_profile
+        from src.services.document_profile_resolver import resolve_document_profile
+        profile = getattr(document, 'document_profile', None) or resolve_document_profile(
+            path=str(getattr(document, 'path', '') or ''), page_texts=getattr(document, 'page_texts', []) or [])
+        selected_rules = restrict_rules_to_profile(selected_rules, profile)
+        update_progress(job_context.job_id, "local", state="running", total=len(selected_rules), completed=0, current_step="开始本地规则检查")
+        # 版本留痕（P2-02）：本次实际生效的规则集版本，逐条写进 finding。
+        rule_version = str(getattr(config, "rules_version", "") or "").strip() or None
+
+        logger.info(
+            f"Using {len(selected_rules)} rules for job {job_context.job_id}, "
+            f"report_kind={report_kind}"
+        )
+
+        all_findings = []
+        self._stats = {
+            "total_rules": len(selected_rules),
+            "successful_rules": 0,
+            "failed_rules": 0,
+            "total_findings": 0,
+        }
+        self._outcomes = []
+
+        bbox_locator = PDFBBoxLocator(job_context.pdf_path)
+        try:
+            # Execute selected rule set.
+            for rule_index, rule_obj in enumerate(selected_rules):
+                rule_id = rule_obj.code
+                receipt_start = len(getattr(document, "fact_receipts", []) or []) if document is not None else 0
+
+                try:
+                    start_time = time.time()
+
+                    # 鐩存帴璋冪敤瑙勫垯瀵硅薄鐨刟pply鏂规硶
+                    document.current_rule_code = rule_id
+                    issues = rule_obj.apply(document)
+
+                    int((time.time() - start_time) * 1000)
+
+                    findings, conversion_errors = self._convert_and_locate_issues(
+                        issues=issues,
+                        rule_id=rule_id,
+                        document=document,
+                        rule_version=rule_version,
+                        bbox_locator=bbox_locator,
+                    )
+                    self._link_relation_receipts(document, rule_id, receipt_start, findings)
+
+                    if conversion_errors:
+                        # 规则本身跑完不等于结果可信：只要有一条 issue 在
+                        # IssueItem 边界被丢弃，就必须进入 parse_error 摘要，
+                        # 由质量门转人工复核，不能把“部分输出”记成 pass。
+                        self._stats["failed_rules"] += 1
+                        conv_detail = (
+                            f"{len(conversion_errors)} 个 finding 转换失败，"
+                            f"异常类型={sorted(set(conversion_errors))}"
+                        )
+                        self._outcomes.append(
+                            RuleOutcome(
+                                rule_id=str(rule_id),
+                                status=STATUS_PARSE_ERROR,
+                                detail=conv_detail,
+                                partial_findings_count=len(findings),
+                                unresolved_reasons=[conv_detail],
+                            )
+                        )
+                    else:
+                        self._stats["successful_rules"] += 1
+                        self._outcomes.append(
+                            RuleOutcome(
+                                rule_id=str(rule_id),
+                                status="fail" if findings else "pass",
+                            )
+                        )
+                    all_findings.extend(findings)
+                    self._stats["total_findings"] += len(findings)
+
+                    logger.debug(f"Rule {rule_id} found {len(findings)} issues")
+
+                except RuleOutcomeSignal as signal:
+                    # 非 fail 结局（insufficient_data/not_applicable 等）：
+                    # 保留已确认的 partial_issues，原因双保留
+                    partial_list = list(getattr(signal, "partial_issues", []) or [])
+                    findings, conversion_errors = self._convert_and_locate_issues(
+                        issues=partial_list,
+                        rule_id=rule_id,
+                        document=document,
+                        rule_version=rule_version,
+                        bbox_locator=bbox_locator,
+                    )
+                    self._link_relation_receipts(document, rule_id, receipt_start, findings)
+
+                    all_findings.extend(findings)
+                    self._stats["total_findings"] += len(findings)
+
+                    detail_str = str(signal.detail or signal)
+                    unresolved = list(getattr(signal, "unresolved_reasons", []) or [])
+                    if not unresolved and detail_str:
+                        unresolved = [detail_str]
+
+                    if conversion_errors:
+                        conv_detail = (
+                            f"{len(conversion_errors)} 个 finding 转换失败，"
+                            f"异常类型={sorted(set(conversion_errors))}"
+                        )
+                        unresolved.append(conv_detail)
+                        detail_str = f"{detail_str}; {conv_detail}" if detail_str else conv_detail
+                        self._stats["failed_rules"] += 1
+
+                    outcome_status = resolve_rule_status(
+                        base_status=signal.status,
+                        has_findings=bool(findings),
+                        has_conversion_error=bool(conversion_errors),
+                    )
+
+                    self._outcomes.append(
+                        RuleOutcome(
+                            rule_id=str(rule_id),
+                            status=outcome_status,
+                            detail=detail_str,
+                            partial_findings_count=len(findings),
+                            unresolved_reasons=unresolved,
+                        )
+                    )
+                    logger.info(
+                        "Rule %s deferred: %s",
+                        rule_id,
+                        outcome_status,
+                        extra=safe_log_extra({"rule_id": rule_id, "outcome": outcome_status}),
+                    )
+                    continue
+                except Exception as e:
+                    self._stats["failed_rules"] += 1
+                    self._outcomes.append(
+                        RuleOutcome(
+                            rule_id=str(rule_id),
+                            status="execution_error",
+                            detail=f"{type(e).__name__}: {e}",
+                        )
+                    )
+                    logger.exception(
+                        "Rule execution failed",
+                        extra=safe_log_extra({"rule_id": rule_id, **describe_exception(e)}),
+                    )
+
+                    # 创建失败记录。ZC-00（SYS-07）：执行失败记录是系统生成的事件，
+                    # 不允许伪造"第 1 页 + 错误消息即原文"的证据——页码保持缺失、
+                    # 证据列表留空，让证据门按缺证据如实记账。
+                    if config.record_rule_failures:
+                        failure_item = IssueItem(
+                            id=str(uuid.uuid4()),
+                            source="rule",
+                            rule_id=rule_id,
+                            title=f"Rule execution failed: {rule_obj.desc}",
+                            message=f"Rule execution error: {str(e)}",
+                            severity="low",
+                            location={},
+                            page_number=None,
+                            evidence=[],
+                            why_not=f"EXECUTION_ERROR: {str(e)}",
+                            rule_version=rule_version,
+                            engine_version=ENGINE_VERSION,
+                        )
+                        all_findings.append(failure_item)
+                finally:
+                    update_progress(job_context.job_id, "local", completed=rule_index + 1, failed=self._stats["failed_rules"], current_step=f"已检查 {rule_index + 1}/{len(selected_rules)} 条规则（{rule_id}）")
+        finally:
+            bbox_locator.close()
+
+        # ZC-03（AC-04）：规则执行期间写下的关系级子检查回执随运行摘要暴露，
+        # 供双模式结果与 build_check_receipts 消费（与 legacy payload 同源）。
+        self._stats["structured_consumption"] = list(getattr(document, "structured_consumption", None) or [])
+        from src.engine.native_issue_dedup import deduplicate_native_issues
+        all_findings = deduplicate_native_issues(all_findings, document)
+        self._stats["total_findings"] = len(all_findings)
+        self._stats["fact_receipts"] = list(getattr(document, "fact_receipts", None) or [])
+        if getattr(document, "fact_context", None) is not None:
+            try:
+                self._stats["fact_context_summary"] = document.fact_context.summary()
+            except Exception:
+                pass
+
+        logger.info(
+            f"Engine rules completed: {len(all_findings)} findings from {len(selected_rules)} rules "
+            f"(success: {self._stats['successful_rules']}, failed: {self._stats['failed_rules']})"
+        )
+
+        return all_findings
+
+    async def _prepare_document(self, job_context: JobContext) -> Document:
+        """鍑嗗鏂囨。瀵硅薄"""
+
+        # 1. 浼樺厛浣跨敤 JobContext 涓殑 page_texts 鍜?page_tables锛堢簿纭〉鐮侊級
+        if hasattr(job_context, "page_texts") and job_context.page_texts:
+            logger.info(
+                f"Using page_texts from JobContext for job {job_context.job_id} ({len(job_context.page_texts)} pages)"
+            )
+
+            page_texts = job_context.page_texts
+            page_tables = getattr(job_context, "page_tables", []) or []
+
+            # 纭繚 page_tables 涓?page_texts 闀垮害涓€鑷?
+            while len(page_tables) < len(page_texts):
+                page_tables.append([])
+
+            document = build_document(
+                path=job_context.pdf_path,
+                page_texts=page_texts,
+                page_tables=page_tables,
+                filesize=getattr(job_context, "filesize", 0) or job_context.meta.get("filesize", 0),
+            )
+            document.structure_view = job_context.meta.get("structure_view")
+            # ZC-01（AC-01）：双模式路径消费与 legacy 路径同一版本的统一事实
+            fact_snapshot = getattr(job_context, "fact_context", None)
+            if isinstance(fact_snapshot, dict) and fact_snapshot:
+                try:
+                    from src.engine.fact_context import FactContext
+
+                    document.fact_context = FactContext.from_dict(fact_snapshot)
+                except Exception as exc:
+                    # 显式绑定的快照损坏不同于没有事实，不能借缺事实降级绕过版本约束。
+                    if job_context.parse_artifact is not None:
+                        raise ValueError("规则解析产物绑定的财政事实快照损坏") from exc
+                    # 未绑定解析产物的旧任务仍沿用已有降级行为。
+                    document.fact_context = None
+            artifact_snapshot = job_context.parse_artifact
+            if artifact_snapshot is not None:
+                from src.schemas.parse_artifact import ParseArtifact
+
+                artifact = ParseArtifact.from_dict(artifact_snapshot)
+                context = getattr(document, "fact_context", None)
+                # 无财政事实是可降级的取数不足；只有已有事实与解析版本冲突才拒绝执行。
+                if context is not None and (artifact.source_file_hash, artifact.parse_run_uid) != (
+                    context.file_hash, context.parse_run_uid
+                ):
+                    raise ValueError("规则解析产物与当前财政事实版本不一致")
+                document.parse_artifact = artifact
+                if context is None:
+                    from src.engine.fact_context import FactContext
+                    # 缺失绑定快照不能恢复成旧二维表金额；保留正文检查能力。
+                    document.fact_context = FactContext([], file_hash=artifact.source_file_hash,
+                        parse_run_uid=artifact.parse_run_uid, input_status="snapshot_missing",
+                        input_diagnostics=[{"code":"bound_fact_snapshot_missing"}])
+            return document
+
+        # 2. 鍥為€€锛氬皾璇曚粠 ocr_text 鍜?tables 鎭㈠锛堝吋瀹规棫鏁版嵁锛?
+        if job_context.ocr_text and job_context.tables:
+            logger.info(f"Restoring document from JobContext ocr_text for job {job_context.job_id}")
+
+            page_texts = []
+            page_tables = []
+
+            # 灏?ocr_text 鎸夐〉鎷嗗垎锛堝鏋滃彲鑳斤級
+            if job_context.pages > 0 and "\n\n" in job_context.ocr_text:
+                parts = job_context.ocr_text.split("\n\n")
+                if len(parts) == job_context.pages:
+                    page_texts = parts
+
+            # 濡傛灉娌℃媶鎴愶紝灏卞叏閮ㄦ斁杩涚涓€椤?
+            if not page_texts:
+                page_texts = [job_context.ocr_text]
+
+            # 鎭㈠琛ㄦ牸鏁版嵁
+            num_pages = job_context.pages or len(job_context.tables) or 1
+            temp_tables = [[] for _ in range(num_pages)]
+
+            for item in job_context.tables:
+                p_idx = item.get("page", 1) - 1
+                if 0 <= p_idx < len(temp_tables):
+                    temp_tables[p_idx] = item.get("tables", [])
+
+            page_tables = temp_tables
+
+            return build_document(
+                path=job_context.pdf_path,
+                page_texts=page_texts,
+                page_tables=page_tables,
+                filesize=job_context.meta.get("filesize", 0),
+            )
+
+        # 2. 濡傛灉 job_context 涓病鏈夋暟鎹紝鍒欏疄闄呰В鏋?PDF 鏂囦欢
+        logger.warning(f"JobContext missing data, re-parsing PDF: {job_context.pdf_path}")
+        import pdfplumber
+        import os
+        from src.services.pdf_page_extract import (
+            extract_tables_from_page,
+            extract_visible_text_from_page,
+        )
+
+        page_texts = []
+        page_tables = []
+        filesize = 0
+        artifact = None
+        fact_context = None
+
+        try:
+            if os.path.exists(job_context.pdf_path):
+                filesize = os.path.getsize(job_context.pdf_path)
+                with pdfplumber.open(job_context.pdf_path) as pdf:
+                    import hashlib
+                    from src.services.fiscal_input_builder import FiscalInputBuilder
+                    builder = FiscalInputBuilder()
+                    artifact = builder.read_native_from_handle(pdf,
+                        file_hash=hashlib.sha256(Path(job_context.pdf_path).read_bytes()).hexdigest())
+                    fact_context = builder.facts(artifact,
+                        org_name=job_context.meta.get("organization_name"),
+                        fiscal_year=job_context.meta.get("fiscal_year") or job_context.meta.get("report_year"),
+                        report_kind=job_context.meta.get("report_kind"))
+                    job_context.pages = len(pdf.pages)
+                    for page in pdf.pages:
+                        page_texts.append(extract_visible_text_from_page(page))
+                        # fallback 也必须复用带 bbox/表名锚的统一抽取器，
+                        # 否则 structured 规则会在该入口重新丢失表边界。
+                        page_tables.append(extract_tables_from_page(page))
+            else:
+                logger.error(f"PDF鏂囦欢涓嶅瓨鍦? {job_context.pdf_path}")
+        except Exception as e:
+            logger.exception(
+                "parse pdf for rule engine failed",
+                extra=safe_log_extra(describe_exception(e)),
+            )
+
+        document = build_document(path=job_context.pdf_path, page_texts=page_texts,
+                                  page_tables=page_tables, filesize=filesize)
+        document.parse_artifact = artifact
+        document.fact_context = fact_context
+        return document
+
+    def _apply_tolerance(
+        self, findings: List[IssueItem], tolerance: Dict[str, Any]
+    ) -> List[IssueItem]:
+        """搴旂敤瀹瑰樊璁剧疆杩囨护缁撴灉"""
+
+        filtered_findings = []
+
+        money_rel = tolerance.get("money_rel", 0.005)  # 榛樿 0.5%
+        pct_abs = tolerance.get("pct_abs", 0.002)  # 榛樿 0.2pp
+
+        for finding in findings:
+            should_include = True
+
+            # 閲戦瀹瑰樊妫€鏌?
+            if finding.amount is not None and money_rel > 0:
+                # 杩欓噷闇€瑕佹牴鎹叿浣撶殑涓氬姟閫昏緫瀹炵幇瀹瑰樊妫€鏌?
+                # 鏆傛椂淇濈暀鎵€鏈夐噾棰濈浉鍏崇殑闂
+                pass
+
+            # 姣斾緥瀹瑰樊妫€鏌?
+            if finding.percentage is not None and pct_abs > 0:
+                # 杩欓噷闇€瑕佹牴鎹叿浣撶殑涓氬姟閫昏緫瀹炵幇瀹瑰樊妫€鏌?
+                # 鏆傛椂淇濈暀鎵€鏈夋瘮渚嬬浉鍏崇殑闂
+                pass
+
+            if should_include:
+                filtered_findings.append(finding)
+            else:
+                # 鏇存柊 why_not 璇存槑琚宸繃婊?
+                finding.why_not = f"TOLERANCE_FILTERED: money_rel={money_rel}, pct_abs={pct_abs}"
+
+        return filtered_findings
+
+    def get_stats(self) -> Dict[str, Any]:
+        """鑾峰彇鎵ц缁熻"""
+        return self._stats.copy()
+
+    def get_rule_execution_summary(self) -> Dict[str, Any]:
+        """规则执行摘要（RuleOutcome 六态汇总），供 result.meta 与质量门消费。"""
+        return summarize_rule_outcomes(self._outcomes)
+
+    def clear_stats(self):
+        """娓呴櫎缁熻淇℃伅"""
+        self._stats = {
+            "total_rules": 0,
+            "successful_rules": 0,
+            "failed_rules": 0,
+            "total_findings": 0,
+        }
+
+
+# 渚挎嵎鍑芥暟
+async def run_engine_rules(
+    job_context: JobContext, rules: List[Dict[str, Any]], config: Optional[AnalysisConfig] = None
+) -> List[IssueItem]:
+    """Convenience wrapper for running engine rules."""
+    if config is None:
+        from src.schemas.issues import AnalysisConfig
+
+        config = AnalysisConfig()
+
+    runner = EngineRuleRunner()
+    return await runner.run_rules(job_context, rules, config)
+
+
+def get_available_rules() -> List[str]:
+    """Return all available engine rule codes."""
+    return all_rule_ids()
+
+
+def validate_rule_id(rule_id: str) -> bool:
+    """楠岃瘉瑙勫垯ID鏄惁鏈夋晥"""
+    return any(code == rule_id or rule_id in code for code in all_rule_ids())

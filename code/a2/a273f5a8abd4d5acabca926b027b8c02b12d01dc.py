@@ -1,0 +1,560 @@
+"""
+统一数据结构定义
+定义 AI 和规则引擎的统一输出格式
+"""
+from typing import List, Optional, Dict, Any, Literal, Union
+from datetime import datetime
+from enum import Enum
+from pydantic import BaseModel, Field, model_validator
+import time
+import hashlib
+
+from src.utils.issue_display import build_issue_display
+from src.utils.issue_location import normalize_issue_location
+
+
+class IssueSource(str, Enum):
+    """问题来源"""
+    AI = "ai"
+    RULE = "rule"
+    MERGED = "merged"
+
+
+class IssueSeverity(str, Enum):
+    """问题严重程度"""
+    INFO = "info"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+    MANUAL_REVIEW = "manual_review"
+
+
+class ConflictType(str, Enum):
+    """冲突类型"""
+    VALUE_MISMATCH = "value_mismatch"
+    PAGE_MISMATCH = "page_mismatch"
+    TITLE_MISMATCH = "title_mismatch"
+    AMOUNT_MISMATCH = "amount_mismatch"
+    PERCENTAGE_MISMATCH = "percentage_mismatch"
+
+
+# ---------------------------------------------------------------------------
+# 分析结论与任务状态模型
+#
+# 拆成两个正交维度，是为了解决"done 既表示没问题、又表示没查完"的语义混淆：
+#   - JobStatus（任务状态）回答"流程走到哪一步、能不能交付"；
+#   - AnalysisConclusion（分析结论）回答"这次分析到底得出了什么"。
+# 本模块只提供枚举与归一化工具，不改变任何现有调用方行为（Task 1 为纯基础层）。
+# ---------------------------------------------------------------------------
+
+
+class AnalysisConclusion(str, Enum):
+    """分析结论四态。"""
+
+    # 审核完整完成且发现了问题
+    FINDINGS_DETECTED = "findings_detected"
+    # 审核完整完成、质量门禁通过，确实未发现问题
+    NO_FINDINGS = "no_findings"
+    # 分析未完整完成（扫描页漏检 / 类型或年份不明 / 关键能力缺失），结论不可信
+    INCOMPLETE = "incomplete"
+    # 分析过程本身失败
+    ANALYSIS_ERROR = "analysis_error"
+
+
+class JobStatus(str, Enum):
+    """任务状态。
+
+    `review_required` 是本次新增态：分析跑完了，但质量门禁没过，
+    结论不足以当作"审核通过"，必须转人工复核。
+    """
+
+    QUEUED = "queued"
+    PROCESSING = "processing"
+    DONE = "done"
+    DEGRADED = "degraded"
+    REVIEW_REQUIRED = "review_required"
+    ERROR = "error"
+
+
+class AnalysisQualityStatus(str, Enum):
+    """任务级质量门禁判定结果（写入 status.json 的 `quality_status`）。"""
+
+    COMPLETE = "complete"
+    DEGRADED = "degraded"
+    REVIEW_REQUIRED = "review_required"
+
+
+#: 仍在流水线中、未产出终态结论的状态
+ACTIVE_JOB_STATUSES: frozenset[str] = frozenset(
+    {JobStatus.QUEUED.value, JobStatus.PROCESSING.value}
+)
+
+#: 终态状态（可以对外交付结论或错误）
+TERMINAL_JOB_STATUSES: frozenset[str] = frozenset(
+    {
+        JobStatus.DONE.value,
+        JobStatus.DEGRADED.value,
+        JobStatus.REVIEW_REQUIRED.value,
+        JobStatus.ERROR.value,
+    }
+)
+
+#: 分析成功跑完（结论可读）的状态，注意不含 error
+COMPLETED_JOB_STATUSES: frozenset[str] = frozenset(
+    {
+        JobStatus.DONE.value,
+        JobStatus.DEGRADED.value,
+        JobStatus.REVIEW_REQUIRED.value,
+    }
+)
+
+#: 历史/前端遗留写法 -> 规范状态。保证旧任务的 status.json 仍能正确读出。
+_JOB_STATUS_ALIASES: Dict[str, str] = {
+    "done": JobStatus.DONE.value,
+    "completed": JobStatus.DONE.value,
+    "complete": JobStatus.DONE.value,
+    "success": JobStatus.DONE.value,
+    "succeeded": JobStatus.DONE.value,
+    "degraded": JobStatus.DEGRADED.value,
+    "review_required": JobStatus.REVIEW_REQUIRED.value,
+    "review": JobStatus.REVIEW_REQUIRED.value,
+    "needs_review": JobStatus.REVIEW_REQUIRED.value,
+    "error": JobStatus.ERROR.value,
+    "failed": JobStatus.ERROR.value,
+    "failure": JobStatus.ERROR.value,
+    "cancelled": JobStatus.ERROR.value,
+    "canceled": JobStatus.ERROR.value,
+    "queued": JobStatus.QUEUED.value,
+    "pending": JobStatus.QUEUED.value,
+    "processing": JobStatus.PROCESSING.value,
+    "running": JobStatus.PROCESSING.value,
+    "analyzing": JobStatus.PROCESSING.value,
+}
+
+
+def normalize_job_status(value: Any) -> Optional[str]:
+    """把任意历史写法归一到 `JobStatus` 取值；无法识别时返回 None。
+
+    返回 None 而不是兜底成某个状态，避免重演"识别失败却给出确定结论"的老问题。
+    """
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+    return _JOB_STATUS_ALIASES.get(text)
+
+
+def infer_analysis_conclusion(
+    status: Any,
+    issue_total: int = 0,
+    explicit_conclusion: Any = None,
+) -> Optional[str]:
+    """推导分析结论，用于兼容没有 `analysis_conclusion` 字段的历史任务。
+
+    优先采用任务自身已写入的结论；否则按状态与问题数反推。
+    仍在流水线中的任务没有结论，返回 None。
+    """
+    explicit = str(explicit_conclusion or "").strip().lower()
+    if explicit in {item.value for item in AnalysisConclusion}:
+        return explicit
+
+    normalized = normalize_job_status(status)
+    if normalized is None or normalized in ACTIVE_JOB_STATUSES:
+        return None
+    if normalized == JobStatus.ERROR.value:
+        return AnalysisConclusion.ANALYSIS_ERROR.value
+    if normalized == JobStatus.REVIEW_REQUIRED.value:
+        return AnalysisConclusion.INCOMPLETE.value
+    # done / degraded：分析跑完了，用问题数区分"发现问题"与"确实没问题"
+    if issue_total > 0:
+        return AnalysisConclusion.FINDINGS_DETECTED.value
+    return AnalysisConclusion.NO_FINDINGS.value
+
+
+class IssueDisplay(BaseModel):
+    """Readable display fields for UI and exports."""
+
+    summary: str = Field(default="", description="一句话问题摘要")
+    page_text: str = Field(default="", description="页码文本")
+    location_text: str = Field(default="", description="定位文本")
+    detail_lines: List[str] = Field(default_factory=list, description="细项说明")
+    evidence_text: str = Field(default="", description="证据原文")
+
+
+class IssueItem(BaseModel):
+    """统一的问题项数据结构"""
+    id: str = Field(..., description="全局唯一ID")
+    source: Literal["ai", "rule"] = Field(..., description="来源：AI或规则引擎")
+    rule_id: Optional[str] = Field(None, description="规则ID，如 V33-002 或 AI-RATIO-01")
+    severity: Literal["info", "low", "medium", "high", "critical", "manual_review"] = Field(..., description="严重程度")
+    title: str = Field(..., description="问题标题")
+    message: str = Field(..., description="详细描述")
+    evidence: List[Dict[str, Any]] = Field(default_factory=list, description="证据列表")
+    location: Dict[str, Any] = Field(default_factory=dict, description="位置信息")
+    metrics: Dict[str, Any] = Field(default_factory=dict, description="指标数据")
+    suggestion: Optional[str] = Field(None, description="建议")
+    severity_label: Optional[str] = Field(None, description="严重程度展示标签")
+    tags: List[str] = Field(default_factory=list, description="标签")
+    created_at: float = Field(default_factory=time.time, description="创建时间戳")
+    
+    # 新增字段以支持更丰富的数据结构
+    # 页码未知必须保持 None（ZC-00 / SYS-07）：历史默认值 1 会把"不知道第几页"
+    # 伪装成"第 1 页"，制造看似完整的假证据。展示层负责把 None 渲染成"未定位"。
+    page_number: Optional[int] = Field(default=None, description="页码（无法定位时为 None，不得默认第 1 页）")
+    bbox: Optional[List[float]] = Field(default=None, description="边界框 [x1, y1, x2, y2]")
+    location_level: str = Field(
+        default="unresolved",
+        description="定位等级：exact_cell / exact_span / region / unresolved",
+    )
+    verification_status: str = Field(
+        default="unverified",
+        description="来源定位验证状态；只有 verified 的精确定位才可导出 bbox",
+    )
+    amount: Optional[float] = Field(default=None, description="金额")
+    percentage: Optional[float] = Field(default=None, description="百分比")
+    text_snippet: Optional[str] = Field(default=None, description="文本摘录")
+    why_not: Optional[str] = Field(default=None, description="未命中原因")
+
+    # ---- 版本留痕（P2-02）----
+    # 目的是让历史结果可复现：任一条 finding 都能回答"哪个规则版本 / 哪个模型 /
+    # 哪版提示词 / 哪版引擎产出的"。全部为可选字段并默认 None，
+    # 一是保证历史快照（没有这些键）仍能正常反序列化与展示，
+    # 二是坚持"来源不明就留空"，不写占位值冒充留痕。
+    rule_version: Optional[str] = Field(
+        default=None, description="规则集版本（规则来源的 finding 才有，如 v3_3）"
+    )
+    model_version: Optional[str] = Field(
+        default=None, description="AI 模型标识 provider/model（AI 来源的 finding 才有）"
+    )
+    prompt_version: Optional[str] = Field(
+        default=None, description="提示词版本（AI 来源的 finding 才有）"
+    )
+    engine_version: Optional[str] = Field(
+        default=None, description="产出该 finding 的引擎版本"
+    )
+
+    # ---- 证据链完整性（P0-07）----
+    # 由 src/services/evidence_guard 在结果落库前写入。历史快照没有这些字段时，
+    # `evidence_status` 为 None，按"正式问题"处理，旧任务的计数与展示不受影响。
+    evidence_status: Optional[str] = Field(
+        default=None,
+        description="证据状态：complete / degraded_missing_evidence / incomplete_rule_warning",
+    )
+    evidence_missing: List[str] = Field(
+        default_factory=list, description="缺失的证据要素原因码"
+    )
+    original_severity: Optional[str] = Field(
+        default=None, description="因缺证据降级前的原始严重程度"
+    )
+
+    # ---- 检查义务关联（plan §6：问题的业务分组标识与关联检查项）----
+    # 由 src/engine/check_obligations.attach_obligation_ids 在落库前写入。
+    # 让"这条问题属于哪一项应检查事项"可被页面、JSON 与导出直接消费，
+    # 而不必让前端按规则编号反查台账。旧快照没有该字段时为空列表。
+    obligation_ids: List[str] = Field(
+        default_factory=list, description="该问题关联的检查义务编号"
+    )
+
+    # ZC-06：双路结果只有在双方显式携带同一检查关系和同一组财政事实身份时
+    # 才能合并。标题、页码、相同金额及展示文本不得充当事实身份。
+    check_relation_id: Optional[str] = Field(
+        default=None, description="检查关系身份；AI/规则候选的业务关联键"
+    )
+    fact_ids: List[str] = Field(default_factory=list, description="关联财政事实身份")
+    evidence_ids: List[str] = Field(default_factory=list, description="显式关联的来源证据身份")
+
+    display: Optional[IssueDisplay] = Field(default=None, description="可直接展示的问题信息")
+
+    @model_validator(mode="after")
+    def populate_display(self) -> "IssueItem":
+        self.location = normalize_issue_location(
+            rule_id=self.rule_id,
+            location=self.location,
+            message=self.message,
+            evidence_text=self.text_snippet or (self.evidence[0].get("text") if self.evidence else "") or "",
+            evidence=self.evidence,
+        )
+        if self.location.get("page"):
+            self.page_number = int(self.location["page"])
+        if self.display and self.display.summary:
+            return self
+        payload = build_issue_display(self.model_dump(exclude={"display"}, mode="python"))
+        self.display = IssueDisplay.model_validate(payload)
+        return self
+
+    @classmethod
+    def create_id(cls, source: str, rule_id: str, location: Dict[str, Any]) -> str:
+        """生成唯一ID"""
+        loc_str = f"{location.get('page', 0)}_{location.get('section', '')}_{location.get('table', '')}"
+        hash_input = f"{source}:{rule_id}:{loc_str}"
+        return f"{source}:{rule_id}:{hashlib.md5(hash_input.encode()).hexdigest()[:8]}"
+
+
+class ConflictItem(BaseModel):
+    """冲突项数据结构"""
+    key: str = Field(..., description="冲突键")
+    ai_issue: Optional[str] = Field(None, description="AI问题ID")
+    rule_issue: Optional[str] = Field(None, description="规则问题ID")
+    reason: Literal[
+        "value-mismatch",
+        "missing",
+        "page-mismatch",
+        "severity-mismatch",
+        "semantic-mismatch",
+        "evidence-mismatch",
+        "ambiguous-relation",
+        "relation-evaluation-error",
+    ] = Field(..., description="冲突原因")
+    details: Dict[str, Any] = Field(default_factory=dict, description="冲突详情")
+    
+    # 新增字段
+    ai_finding: Optional[IssueItem] = Field(default=None, description="AI检查结果")
+    rule_finding: Optional[IssueItem] = Field(default=None, description="规则检查结果")
+    conflict_type: Optional[ConflictType] = Field(default=None, description="冲突类型")
+    reasons: List[str] = Field(default_factory=list, description="冲突原因列表")
+    similarity_score: float = Field(default=0.0, description="相似度评分")
+    recommended_action: str = Field(default="manual_review", description="建议操作")
+
+
+class MergedSummary(BaseModel):
+    """合并结果汇总"""
+    totals: Dict[str, int] = Field(default_factory=dict, description="计数汇总")
+    conflicts: List[ConflictItem] = Field(default_factory=list, description="冲突列表")
+    agreements: List[str] = Field(default_factory=list, description="一致项ID列表")
+    merged_ids: List[str] = Field(default_factory=list, description="合并后的问题ID列表")
+    
+    # 新增字段
+    ai_only: List[IssueItem] = Field(default_factory=list, description="仅AI发现")
+    rule_only: List[IssueItem] = Field(default_factory=list, description="仅规则发现")
+    relations: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="按显式检查关系与财政事实 ID 建立的来源关系及裁决状态",
+    )
+    candidate_issue_ids: List[str] = Field(
+        default_factory=list, description="仅 AI 候选项 ID；需人工/规则确认"
+    )
+    manual_review_issue_ids: List[str] = Field(
+        default_factory=list, description="存在关系歧义、需人工判读的 finding ID"
+    )
+    merge_policy_version: str = Field(default="legacy", description="合并策略版本")
+
+
+class DualModeResponse(BaseModel):
+    """双模式分析响应"""
+    job_id: str = Field(..., description="任务ID")
+    ai_findings: List[IssueItem] = Field(default_factory=list, description="AI检查结果")
+    rule_findings: List[IssueItem] = Field(default_factory=list, description="规则检查结果")
+    merged: MergedSummary = Field(default_factory=MergedSummary, description="合并结果")
+    meta: Dict[str, Any] = Field(default_factory=dict, description="元数据")
+    
+    # 兼容性字段（camelCase适配）
+    aiFindings: Optional[List[IssueItem]] = Field(default=None, description="AI检查结果（camelCase）")
+    ruleFindings: Optional[List[IssueItem]] = Field(default=None, description="规则检查结果（camelCase）")
+    
+    def __init__(self, **data):
+        super().__init__(**data)
+        
+        # 确保meta中包含provider_stats
+        if "provider_stats" not in self.meta:
+            self.meta["provider_stats"] = []
+            
+        # 添加camelCase适配字段（过渡期兼容）
+        self.aiFindings = self.ai_findings
+        self.ruleFindings = self.rule_findings
+
+
+class JobContext(BaseModel):
+    """任务上下文"""
+    job_id: str = Field(..., description="任务ID")
+    pdf_path: str = Field(..., description="PDF文件路径")
+    ocr_text: Optional[str] = Field(None, description="OCR提取的文本")
+    page_texts: List[str] = Field(default_factory=list, description="每页提取的文本")
+    page_tables: List[Any] = Field(default_factory=list, description="每页提取的表格")
+    tables: List[Dict[str, Any]] = Field(default_factory=list, description="表格数据")
+    pages: int = Field(default=0, description="页数")
+    filesize: int = Field(default=0, description="文件大小")
+    meta: Dict[str, Any] = Field(default_factory=dict, description="其他元数据")
+    # ZC-01（AC-01）：统一财政事实上下文（FactContext.to_dict() 形态）。
+    # 双模式路径经此把与 legacy 路径同一版本的事实传给规则链。
+    fact_context: Optional[Dict[str, Any]] = Field(
+        None, description="统一财政事实上下文快照"
+    )
+
+
+class AnalysisConfig(BaseModel):
+    """分析配置"""
+    dual_mode: bool = Field(default=True, description="是否启用双模式")
+    # ZC-00：AI 分析/定位/失败回退默认全部关闭——不配置真实模型服务时，
+    # 任何调用方不显式开启就不会发出模型请求，启动也不要求 AI 密钥。
+    ai_enabled: bool = Field(default=False, description="是否启用AI分析（默认关闭）")
+    rule_enabled: bool = Field(default=True, description="是否启用规则分析")
+    merge_enabled: bool = Field(default=True, description="是否启用结果合并")
+    
+    # 合并参数
+    title_similarity_threshold: float = Field(default=0.85, description="标题相似度阈值")
+    money_tolerance: float = Field(default=0.005, description="金额容差（0.5%）")
+    percentage_tolerance: float = Field(default=0.002, description="百分比容差（0.2pp）")
+    page_tolerance: int = Field(default=1, description="页码容差")
+    
+    # AI参数
+    ai_timeout: int = Field(default=60, description="AI超时时间（秒）")
+    ai_retry: int = Field(default=1, description="AI重试次数")
+    ai_temperature: float = Field(default=0.2, description="AI温度参数")
+    
+    # 兼容双模式与引擎运行器所需的扩展字段
+    rules_version: str = Field(default="v3_3", description="规则版本（如 v3_3）")
+    enable_ai_analysis: bool = Field(default=False, description="是否启用AI分析（双模式分支开关，默认关闭）")
+    enable_ai_locator: bool = Field(default=False, description="是否启用AI定位增强（默认关闭）")
+    ai_fallback_on_error: bool = Field(default=False, description="AI分析失败时是否静默回退到仅规则模式（默认关闭）")
+    record_rule_failures: bool = Field(default=False, description="是否将规则执行失败记录为问题项")
+
+
+# 新增模型定义
+class ProviderStats(BaseModel):
+    """提供商统计"""
+    name: str = Field(..., description="提供商名称")
+    model: str = Field(..., description="模型名称")
+    requests: int = Field(default=0, description="请求次数")
+    successes: int = Field(default=0, description="成功次数")
+    failures: int = Field(default=0, description="失败次数")
+    total_tokens: int = Field(default=0, description="总token数")
+    total_latency_ms: int = Field(default=0, description="总延迟毫秒")
+    circuit_state: str = Field(default="closed", description="熔断器状态")
+    last_used: Optional[datetime] = Field(default=None, description="最后使用时间")
+
+
+class AnalysisMetrics(BaseModel):
+    """分析指标"""
+    # 时间指标
+    ai_elapsed_ms: int = Field(default=0, description="AI分析耗时")
+    rule_elapsed_ms: int = Field(default=0, description="规则分析耗时")
+    merge_elapsed_ms: int = Field(default=0, description="合并耗时")
+    total_elapsed_ms: int = Field(default=0, description="总耗时")
+    
+    # 结果指标
+    ai_findings_count: int = Field(default=0, description="AI发现数量")
+    rule_findings_count: int = Field(default=0, description="规则发现数量")
+    agreements_count: int = Field(default=0, description="一致结果数量")
+    conflicts_count: int = Field(default=0, description="冲突数量")
+    
+    # AI指标
+    provider_used: Optional[str] = Field(default=None, description="使用的提供商")
+    model_used: Optional[str] = Field(default=None, description="使用的模型")
+    fell_back: bool = Field(default=False, description="是否发生回退")
+    retries: int = Field(default=0, description="重试次数")
+    total_tokens: int = Field(default=0, description="总token数")
+    
+    # 质量指标
+    agreement_rate: float = Field(default=0.0, description="一致率")
+    conflict_rate: float = Field(default=0.0, description="冲突率")
+    coverage_rate: float = Field(default=0.0, description="覆盖率")
+
+
+class AnalysisRequest(BaseModel):
+    """分析请求"""
+    job_id: str = Field(..., description="任务ID")
+    file_path: Optional[str] = Field(default=None, description="文件路径")
+    mode: str = Field(default="auto", description="分析模式")
+    config: Optional[AnalysisConfig] = Field(default=None, description="分析配置")
+    rules: Optional[List[str]] = Field(default=None, description="指定规则")
+
+
+class AnalysisResponse(BaseModel):
+    """分析响应"""
+    job_id: str = Field(..., description="任务ID")
+    status: str = Field(..., description="状态")
+    
+    # 结果数据
+    ai_findings: List[IssueItem] = Field(default_factory=list, description="AI检查结果")
+    rule_findings: List[IssueItem] = Field(default_factory=list, description="规则检查结果")
+    merged: Optional[MergedSummary] = Field(default=None, description="合并结果")
+    
+    # 元数据
+    meta: AnalysisMetrics = Field(default_factory=AnalysisMetrics, description="分析指标")
+    provider_stats: List[ProviderStats] = Field(default_factory=list, description="提供商统计")
+    
+    # 错误信息
+    error: Optional[str] = Field(default=None, description="错误信息")
+    warnings: List[str] = Field(default_factory=list, description="警告信息")
+
+
+class HealthStatus(BaseModel):
+    """健康状态"""
+    status: str = Field(..., description="整体状态")
+    timestamp: datetime = Field(default_factory=datetime.now, description="检查时间")
+    
+    # 组件状态
+    ai_service: Dict[str, Any] = Field(default_factory=dict, description="AI服务状态")
+    rule_engine: Dict[str, Any] = Field(default_factory=dict, description="规则引擎状态")
+    
+    # 提供商状态
+    providers: List[Dict[str, Any]] = Field(default_factory=list, description="提供商状态")
+    
+    # 系统指标
+    uptime_seconds: int = Field(default=0, description="运行时间秒数")
+    total_requests: int = Field(default=0, description="总请求数")
+    success_rate: float = Field(default=0.0, description="成功率")
+
+
+class RuleCoverage(BaseModel):
+    """规则覆盖率"""
+    rule_id: str = Field(..., description="规则ID")
+    rule_name: str = Field(..., description="规则名称")
+    executor: str = Field(..., description="执行器类型")
+    
+    # 统计信息
+    total_runs: int = Field(default=0, description="总运行次数")
+    successful_runs: int = Field(default=0, description="成功运行次数")
+    failed_runs: int = Field(default=0, description="失败运行次数")
+    
+    # 命中信息
+    hits: int = Field(default=0, description="命中次数")
+    misses: int = Field(default=0, description="未命中次数")
+    hit_rate: float = Field(default=0.0, description="命中率")
+    
+    # 失败原因统计
+    failure_reasons: Dict[str, int] = Field(default_factory=dict, description="失败原因统计")
+    
+    # 最近状态
+    last_run: Optional[datetime] = Field(default=None, description="最后运行时间")
+    last_status: Optional[str] = Field(default=None, description="最后状态")
+
+
+# 便捷函数
+def create_issue_item(title: str, 
+                     rule_id: str, 
+                     source: str,
+                     page_number: int,
+                     **kwargs) -> IssueItem:
+    """创建问题项的便捷函数"""
+    return IssueItem(
+        id=IssueItem.create_id(source, rule_id, {"page": page_number}),
+        title=title,
+        rule_id=rule_id,
+        source=source,
+        page_number=page_number,
+        **kwargs
+    )
+
+
+def create_default_config() -> AnalysisConfig:
+    """创建默认配置"""
+    return AnalysisConfig(
+        dual_mode=True,
+        ai_enabled=False,
+        rule_enabled=True,
+        merge_enabled=True,
+        title_similarity_threshold=0.85,  # 调宽阈值，让AI结果更容易显示
+        money_tolerance=0.005,
+        percentage_tolerance=0.002,
+        page_tolerance=1,  # 调宽页码容差
+        ai_timeout=60,
+        ai_retry=1,
+        ai_temperature=0.1,
+        # 新增字段默认值，保证与双模式分析器兼容
+        rules_version="v3_3",
+        enable_ai_analysis=False,
+        enable_ai_locator=False,
+        ai_fallback_on_error=False,
+        record_rule_failures=False
+    )

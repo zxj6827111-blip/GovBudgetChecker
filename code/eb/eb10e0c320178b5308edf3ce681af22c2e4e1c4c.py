@@ -1,0 +1,2600 @@
+from __future__ import annotations
+
+import re
+from decimal import Decimal
+from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple
+
+from .amount_math import classify_amount_diff, compute_dynamic_envelope
+from .rule_policy import amount_difference_exceeds_policy, percentage_difference_exceeds_policy
+from .budget_rules import _append_relation_receipt, _portable_amount_tolerance, find_budget_anchors
+from .rule_outcome import RuleDeferred, RuleNotApplicable
+from .rules_v33 import (
+    Document,
+    Issue,
+    Rule,
+    find_table_anchors,
+    _get_table_rows,
+    _TXT_FUND_UNIT_TO_WAN,
+    _nar_repeat_section_of,
+    _nar_repeat_sections,
+    _resolve_fiscal_year,
+    _txt_fund_display,
+    _txt_fund_merged_pages,
+    _txt_fund_norm,
+    _txt_fund_page_for,
+)
+from src.services.document_profile_resolver import resolve_report_kind_from_path
+from src.utils.narration import (
+    _NEW_PARAGRAPH_RE,
+    merge_page_texts,
+    merge_soft_wrapped_lines as _merge_soft_wrapped_lines_shared,
+)
+
+_AMOUNT = r"([0-9][0-9,]*\.?[0-9]*)"
+
+
+def _page_texts(doc: Document) -> List[str]:
+    texts = getattr(doc, "page_texts", None)
+    if not isinstance(texts, list):
+        return []
+    return [str(item or "") for item in texts]
+
+
+def _page_tables(doc: Document) -> List[Any]:
+    tables = getattr(doc, "page_tables", None)
+    if not isinstance(tables, list):
+        return []
+    return tables
+
+
+def _to_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip().replace(",", "")
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", text):
+        return None
+    try:
+        return float(text)
+    except Exception:
+        return None
+
+
+def _infer_report_kind(doc: Document) -> str:
+    """材料文种判定（收敛到唯一解析器）。
+
+    此前这里有独立的第三份实现：整条 ``doc.path`` 做关键词匹配，并在
+    识别不到时兜底 ``"final"``。整串路径匹配有问题——仓库目录名
+    ``GovBudgetChecker`` 自带 "Budget"，会让任何材料被判成预算；兜底 final
+    则把"不知道"伪装成"知道了"。
+
+    现在的取值顺序（独立验收 2026-09-17 kind_disagreement 反例整改）：
+
+    1. **消费执行入口一次解析的结论** ``doc.report_kind``——同一份材料
+       在 pipeline 与通用规则里不允许得出互斥文种；
+    2. 没有挂接结论时（如单测直接构造 Document），才按"文件名基名 +
+       正文首页"推断；识别不到就是 ``"unknown"``，不兜底。
+
+    本函数的唯一调用方按 ``budget`` / 其它 二分支选择锚点集合。
+    """
+    attached = str(getattr(doc, "report_kind", "") or "").strip().lower()
+    if attached in {"budget", "final"}:
+        return attached
+    return resolve_report_kind_from_path(
+        str(getattr(doc, "path", "") or ""),
+        _page_texts(doc),
+    )
+
+
+def _find_first_amount(text: str, patterns: Sequence[str]) -> Optional[float]:
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.S)
+        if not match:
+            continue
+        value = _to_float(match.group(1))
+        if value is not None:
+            return value
+    return None
+
+
+def _extract_three_public_narrative(text: str) -> Dict[str, Optional[float]]:
+    return {
+        "total": _find_first_amount(
+            text,
+            [
+                r"\u4e09\u516c[^\n]{0,40}\u7ecf\u8d39(?:\u652f\u51fa)?"
+                r"(?:\u9884\u7b97\u6570|\u51b3\u7b97\u6570|\u9884\u7b97|\u51b3\u7b97)?"
+                r"(?:\u4e3a|\u662f)?\s*" + _AMOUNT + r"\u4e07\u5143",
+                r"\u4e09\u516c[^\n]{0,20}\u5408\u8ba1[^\n]{0,8}" + _AMOUNT + r"\u4e07\u5143",
+            ],
+        ),
+        "abroad": _find_first_amount(
+            text,
+            [r"\u56e0\u516c\u51fa\u56fd(?:\uff08\u5883\uff09|\(\u5883\)|\u5883)?\u8d39\s*" + _AMOUNT + r"\u4e07\u5143"],
+        ),
+        "car_total": _find_first_amount(
+            text,
+            [r"\u516c\u52a1\u7528\u8f66\u8d2d\u7f6e\u53ca\u8fd0\u884c\u8d39[^0-9]{0,4}" + _AMOUNT + r"\u4e07\u5143"],
+        ),
+        "car_buy": _find_first_amount(
+            text,
+            [r"\u516c\u52a1\u7528\u8f66\u8d2d\u7f6e\u8d39\s*" + _AMOUNT + r"\u4e07\u5143"],
+        ),
+        "car_run": _find_first_amount(
+            text,
+            [r"\u516c\u52a1\u7528\u8f66\u8fd0\u884c\u8d39\s*" + _AMOUNT + r"\u4e07\u5143"],
+        ),
+        "reception": _find_first_amount(
+            text,
+            [r"\u516c\u52a1\u63a5\u5f85\u8d39\s*" + _AMOUNT + r"\u4e07\u5143"],
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# ZC-02（SYS-04）：三公表格数值改为语义列映射。
+# 旧实现按"数字最多的一行 + 固定位置（合计、出国、接待、公车小计、购置、
+# 运行）"取数，合法列序变化（如「合计、出国、公车小计、购置、运行、接待」）
+# 会产生 4 条错配报警。现在：表头文本 → 字段 语义匹配后按列取数；
+# 匹配不到语义的列不参与判定，宁缺毋错。
+# ---------------------------------------------------------------------------
+
+#: 表头语义匹配表：顺序敏感——更具体的模式在前（car_total 必须先于
+#: car_buy / car_run，「机关运行」必须先于泛化「运行」）。
+_THREE_PUBLIC_HEADER_MATCHERS: Sequence[Tuple[str, Sequence[str]]] = (
+    ("org_run", ("机关运行",)),
+    ("car_total", ("购置及运行", "购置及运行维护")),
+    ("car_buy", ("购置费", "购置")),
+    ("car_run", ("运行维护费", "运行费", "运行")),
+    ("reception", ("公务接待", "接待")),
+    ("abroad", ("因公出国", "出国")),
+    ("total", ("合计", "总计")),
+)
+
+
+def _match_three_public_header(raw_text: Any) -> Optional[str]:
+    compact = _compact_text(str(raw_text or ""))
+    if not compact:
+        return None
+    for field, tokens in _THREE_PUBLIC_HEADER_MATCHERS:
+        if any(token in compact for token in tokens):
+            return field
+    return None
+
+
+def _extract_three_public_table_values_semantic(
+    page_tables: Any,
+) -> Optional[Dict[str, Optional[float]]]:
+    """从表结构中按表头语义提取三公数值；无语义证据时返回 None（不猜位）。"""
+    if not isinstance(page_tables, list):
+        return None
+    best: Optional[Dict[str, Optional[float]]] = None
+    best_matched = 0
+    for table in page_tables:
+        if not isinstance(table, list) or len(table) < 2:
+            continue
+        # 找表头行：前 4 行中非数值单元格最多的行
+        header_idx = 0
+        header_non_numeric = -1
+        for row_idx, row in enumerate(table[:4]):
+            if not isinstance(row, list):
+                continue
+            non_numeric = sum(1 for cell in row if _to_float(cell) is None and str(cell or "").strip())
+            if non_numeric > header_non_numeric:
+                header_non_numeric = non_numeric
+                header_idx = row_idx
+        header_row = table[header_idx] if isinstance(table[header_idx], list) else []
+        if not header_row:
+            continue
+        field_by_col: Dict[int, str] = {}
+        for col_idx, cell in enumerate(header_row):
+            field = _match_three_public_header(cell)
+            if field and field not in field_by_col.values():
+                field_by_col[col_idx] = field
+        # 至少三列具备可读语义，允许金额行缺格时由规则逐项记未完成。
+        if "total" not in field_by_col.values() or len(field_by_col) < 3:
+            continue
+        for row in table[header_idx + 1 :]:
+            if not isinstance(row, list):
+                continue
+            values: Dict[str, Optional[float]] = {
+                "total": None,
+                "abroad": None,
+                "reception": None,
+                "car_total": None,
+                "car_buy": None,
+                "car_run": None,
+                "org_run": None,
+            }
+            matched = 0
+            for col_idx, field in field_by_col.items():
+                value = _to_float(row[col_idx]) if col_idx < len(row) else None
+                if value is not None:
+                    values[field] = value
+                    matched += 1
+            if values.get("total") is None:
+                continue
+            if best is None or matched > best_matched:
+                best = values
+                best_matched = matched
+    return best
+
+
+def _has_three_public_core_fields(values: Mapping[str, Optional[float]]) -> bool:
+    """至少识别到一个语义数值后交给规则记录缺项，不能静默丢弃部分表。"""
+    return any(
+        values.get(key) is not None
+        for key in ("total", "abroad", "reception", "car_total", "car_buy", "car_run")
+    )
+
+
+def _find_three_public_table(doc: Document) -> Tuple[Optional[int], Optional[Dict[str, Optional[float]]]]:
+    """定位三公经费表并按语义提取表侧数值（ZC-02 / SYS-04）。
+
+    顺序：表头语义映射的表结构提取优先；无表结构时退化为"三公表页文本的
+    标签化提取"（与说明侧同一套标签谓词，位置无关）。固定位置映射已删除。
+    """
+    texts = _page_texts(doc)
+    tables = _page_tables(doc)
+
+    for idx, page_text in enumerate(texts):
+        if "\u4e09\u516c" not in page_text:
+            continue
+        if "\u8868" not in page_text:
+            continue
+        if "\u9884\u7b97" not in page_text and "\u51b3\u7b97" not in page_text:
+            continue
+        if "\u76ee\u5f55" in page_text[:120]:
+            continue
+
+        if idx < len(tables):
+            from_table = _extract_three_public_table_values_semantic(tables[idx])
+            if from_table is not None and _has_three_public_core_fields(from_table):
+                return idx + 1, from_table
+
+        # ZC-02 纪律：表侧数值只来自表结构的语义列映射。
+        # 不回退到"表页文本的标签化提取"——说明侧已消费同一批文本，
+        # 再拿来当表侧会造成"自己和自己比"的假一致，掩蔽真实差异；
+        # 表结构缺失时宁可记"未定位到三公经费表格数值"（fail-closed）。
+    return None, None
+
+
+def _close(a: Optional[float], b: Optional[float], tol: float = 0.5) -> bool:
+    if a is None or b is None:
+        return False
+    return abs(a - b) <= tol
+
+
+def _compact_text(text: str) -> str:
+    return re.sub(r"\s+", "", text or "")
+
+
+def _snippet(text: str, start: int, end: int, radius: int = 24) -> str:
+    left = max(0, start - radius)
+    right = min(len(text), end + radius)
+    return text[left:right]
+
+
+def _sentence_around(text: str, start: int, end: int) -> str:
+    if not text:
+        return ""
+    separators = "。！？；\n"
+    left = -1
+    for sep in separators:
+        idx = text.rfind(sep, 0, max(start, 0))
+        if idx > left:
+            left = idx
+
+    right_candidates = [text.find(sep, min(end, len(text))) for sep in separators]
+    right_candidates = [idx for idx in right_candidates if idx != -1]
+    right = min(right_candidates) if right_candidates else len(text)
+
+    begin = left + 1
+    finish = right + 1 if right < len(text) else right
+    sentence = text[begin:finish].strip()
+    if not sentence:
+        return _snippet(text, start, end, radius=36).strip()
+    return sentence
+
+
+# ---------------------------------------------------------------------------
+# B 档一期 MR-B4（2026-09-29）：CMM-001 决算侧新管线。
+# 根因四实证（4/4 决算冻结夹具复验）：旧说明侧 6 字段正则全部要求
+# 「字段名+金额+万元」连续形态，而 PDF 断行把「因公出国（境）/费决算为」
+# 「0.3 万/元」劈开、词形写「购置及运行维护费」，正则全失配 → 0/6 字段
+# → insufficient。另：旧表侧「取数字最多的行按位置硬映射」对 12 列表七
+# 会把决算合计映射到「出国」列（误报雷），本管线换严格网格。
+# ---------------------------------------------------------------------------
+
+#: 字段谓词链：费(支出)?(决算|预算)?(数)?(为|是)? 金额 万元——
+#: 容忍「费决算为」「费支出决算」「费支出」等形态；「增加/减少」等
+#: 同比谓词不在链内，天然不会误配同比变化句（决算增加 0.3 ≠ 决算为 0.3）。
+_NAR_PRED = r"(?:支出)?(?:决算|预算)?(?:数)?(?:为|是)?"
+_NAR_AMT = r"([0-9][0-9,，]*\.?[0-9]*)\s*万\s*元"
+
+_NAR_TOTAL_BUDGET_RE = re.compile(
+    r"(?:年初预算|预算数|预算)(?:数)?(?:为|是)?\s*" + _NAR_AMT
+)
+_NAR_TOTAL_FINAL_RE = re.compile(
+    r"(?:支出决算|决算数|决算)(?:数)?(?:为|是)?\s*" + _NAR_AMT
+)
+_NAR_ABROAD_RE = re.compile(r"因公出国（境）?费" + _NAR_PRED + r"\s*" + _NAR_AMT)
+_NAR_CAR_TOTAL_RE = re.compile(r"公务用车购置及运行(?:维护)?费" + _NAR_PRED + r"\s*" + _NAR_AMT)
+_NAR_CAR_BUY_RE = re.compile(r"公务用车购置(?:费|支出)(?:为|是)?\s*" + _NAR_AMT)
+_NAR_CAR_RUN_RE = re.compile(r"公务用车运行(?:维护)?(?:费|支出)(?:为|是)?\s*" + _NAR_AMT)
+_NAR_RECEPTION_RE = re.compile(r"公务接待费" + _NAR_PRED + r"\s*" + _NAR_AMT)
+
+#: 表七 12 列 → 特征名（预算/决算 × 合计|出国|车小|购置|运行|接待）
+_T7_COL_MAPPING = {
+    0: (0, 0), 1: (0, 1), 2: (1, 0), 3: (1, 1), 4: (2, 0), 5: (2, 1),
+    6: (3, 0), 7: (3, 1), 8: (4, 0), 9: (4, 1), 10: (5, 0), 11: (5, 1),
+}
+_T7_FEATURES = ("total", "abroad", "car_sub", "car_buy", "car_run", "reception")
+
+
+def _nar_amount_to_decimal(raw: str) -> Optional[Decimal]:
+    text = str(raw or "").strip().replace(",", "").replace("，", "")
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", text):
+        return None
+    return Decimal(text)
+
+
+def _nar_first_decimal(text: str, pattern: "re.Pattern[str]") -> Optional[Decimal]:
+    m = pattern.search(text)
+    if not m:
+        return None
+    return _nar_amount_to_decimal(m.group(1))
+
+
+def _nar_pick(*vals: Optional[Decimal]) -> Optional[Decimal]:
+    """取第一个非 None 值——不能用 `or`：Decimal("0") 为 falsy，
+    会把合法的 0 万元（「因公出国 0 万元」）误当缺失回退到其它段
+    （石泉接待 0 被回退成 1.53 的实测根因）。"""
+    for v in vals:
+        if v is not None:
+            return v
+    return None
+
+
+def _locked_three_public_section(merged_all: str) -> str:
+    """锁定三公经费情况说明正文段（取**最后一个**含万元内容的候选——
+    目录候选无万元自然出局）；锁定失败返回空串，由调用方回退旧路径。
+
+    候选只认主章节「X、」裸形态：若把「（一）总体…（二）具体…」子标题
+    也当候选，「（二）」会作为最后候选把 (一) 总体段截掉（宜川实测），
+    总额提取随之丢失。
+    """
+    best = ""
+    for m in re.finditer(
+        r"(?:^|\n)[一二三四五六七八九十]+、[^\n]{0,40}三公[^\n]{0,40}说明",
+        merged_all,
+    ):
+        rest = merged_all[m.end():]
+        m_next = re.search(r"(?:^|\n)[一二三四五六七八九十]+、", rest)
+        seg = rest[: m_next.start()] if m_next else rest[:4000]
+        if "万元" in seg and len(seg) > 40:
+            best = seg
+    return best
+
+
+def _extract_three_public_narrative_v2(section_text: str) -> Dict[str, Optional[Decimal]]:
+    """段内软接合后的三公说明提取（Decimal，万元）。
+
+    总额取自（一）总体情况说明段；分项取自（二）具体情况说明段——
+    （二）是分项的权威披露面。石泉样张（一）写接待决算 1.53、（二）写 0，
+    表内亦为 0：(一) 侧矛盾由 V33-244 专项承担，CMM-001 锚定（二）避免
+    同源双报。某段缺失时整段回退到全文。
+    """
+    m_overall = re.search(r"[（(]一[)）][^\n]{0,40}总体情况说明", section_text)
+    m_detail = re.search(r"[（(]二[)）][^\n]{0,40}具体情况说明", section_text)
+    overall = section_text[m_overall.end(): m_detail.start()] if m_overall else section_text
+    detail = section_text[m_detail.end():] if m_detail else section_text
+
+    joined_overall = "\n".join(_merge_soft_wrapped_lines_shared(overall))
+    joined_detail = "\n".join(_merge_soft_wrapped_lines_shared(detail))
+
+    return {
+        "total_budget": _nar_first_decimal(joined_overall, _NAR_TOTAL_BUDGET_RE),
+        "total_final": _nar_first_decimal(joined_overall, _NAR_TOTAL_FINAL_RE),
+        "abroad": _nar_pick(
+            _nar_first_decimal(joined_detail, _NAR_ABROAD_RE),
+            _nar_first_decimal(joined_overall, _NAR_ABROAD_RE),
+        ),
+        "car_total": _nar_pick(
+            _nar_first_decimal(joined_detail, _NAR_CAR_TOTAL_RE),
+            _nar_first_decimal(joined_overall, _NAR_CAR_TOTAL_RE),
+        ),
+        "car_buy": _nar_pick(
+            _nar_first_decimal(joined_detail, _NAR_CAR_BUY_RE),
+            _nar_first_decimal(joined_overall, _NAR_CAR_BUY_RE),
+        ),
+        "car_run": _nar_pick(
+            _nar_first_decimal(joined_detail, _NAR_CAR_RUN_RE),
+            _nar_first_decimal(joined_overall, _NAR_CAR_RUN_RE),
+        ),
+        "reception": _nar_pick(
+            _nar_first_decimal(joined_detail, _NAR_RECEPTION_RE),
+            _nar_first_decimal(joined_overall, _NAR_RECEPTION_RE),
+        ),
+    }
+
+
+def _t7_cell_to_decimal(cell: Any) -> Optional[Decimal]:
+    text = str(cell or "").strip().replace(",", "").replace("，", "")
+    if not text or text in {"-", "—", "–"}:
+        return None
+    if not re.fullmatch(r"-?[0-9]+(?:\.[0-9]+)?", text):
+        return None
+    return Decimal(text)
+
+
+def _extract_t7_strict_grid(rows: Any) -> Optional[Dict[str, Dict[str, Optional[Decimal]]]]:
+    """表七 12 列双口径严格网格（空白单元格 → None，不做位置硬猜）。
+
+    数据行取「预算数/决算数」表头行的下一行（与 V33-244 同一定位规则）。
+    表内标注「单位：万元」，说明侧同为万元口径，直接比较。
+    """
+    if not rows:
+        return None
+    data_row = None
+    for r_idx, row in enumerate(rows):
+        row_txt = "".join([str(c) for c in row if c])
+        if "预算数" in row_txt or "决算数" in row_txt:
+            if r_idx + 1 < len(rows):
+                data_row = rows[r_idx + 1]
+            break
+    if data_row is None:
+        data_row = rows[-1]
+    if not data_row:
+        return None
+
+    grid: Dict[str, Dict[str, Optional[Decimal]]] = {
+        "budget": {name: None for name in _T7_FEATURES},
+        "final": {name: None for name in _T7_FEATURES},
+    }
+    for col_idx, (feat_idx, type_idx) in _T7_COL_MAPPING.items():
+        if col_idx < len(data_row):
+            value = _t7_cell_to_decimal(data_row[col_idx])
+            if value is not None:
+                key = "budget" if type_idx == 0 else "final"
+                grid[key][_T7_FEATURES[feat_idx]] = value
+    return grid
+
+
+class CMM001_ThreePublicNarrativeConsistency(Rule):
+    code, severity = "CMM-001", "warn"
+    desc = "\u4e09\u516c\u8868\u4e0e\u60c5\u51b5\u8bf4\u660e\u4e00\u81f4\u6027\uff08\u9884/\u51b3\u7b97\u901a\u7528\uff09"
+
+    #: 表七锚点（弯/直引号双变体，决算材料实测锚点为弯引号）
+    _T7_ANCHORS = (
+        "一般公共预算财政拨款“三公”经费支出决算表",
+        '一般公共预算财政拨款"三公"经费支出决算表',
+    )
+
+    def apply(self, doc: Document) -> List[Issue]:
+        # B 档一期 MR-B4：决算材料（存在表七）走新管线——说明侧段内软接合
+        # + 谓词链/词形容忍（Decimal）× 表七严格网格；预算材料与无表七
+        # 材料保持旧路径（预算三份样张当前 pass，行为零变更）。
+        kind = _infer_report_kind(doc)
+        t7_rows = None
+        if kind != "budget":
+            for anchor in self._T7_ANCHORS:
+                t7_rows = _get_table_rows(doc, anchor)
+                if t7_rows:
+                    break
+        if kind == "budget" or not t7_rows:
+            return self._apply_legacy(doc)
+        return self._apply_final(doc, t7_rows)
+
+    def _apply_final(self, doc: Document, t7_rows: Any) -> List[Issue]:
+        grid = _extract_t7_strict_grid(t7_rows)
+        if grid is None:
+            return self._apply_legacy(doc)
+
+        merged_all = "\n".join(_page_texts(doc))
+        section = _locked_three_public_section(merged_all)
+        if not section:
+            return self._apply_legacy(doc)
+        nar = _extract_three_public_narrative_v2(section)
+        if nar.get("car_total") is None and all(
+            nar.get(key) is not None for key in ("car_buy", "car_run")
+        ):
+            nar["car_total"] = nar["car_buy"] + nar["car_run"]
+        if grid["final"].get("car_sub") is None and all(
+            grid["final"].get(key) is not None for key in ("car_buy", "car_run")
+        ):
+            grid["final"]["car_sub"] = grid["final"]["car_buy"] + grid["final"]["car_run"]
+
+        # 表格页码：表七数据行所在页（evidence 定位用）
+        table_page = None
+        texts = _page_texts(doc)
+        for idx, pt in enumerate(texts):
+            if any(anchor in pt for anchor in self._T7_ANCHORS):
+                table_page = idx + 1
+                break
+
+        # RC-01：表侧操作数优先取统一事实（FIN_07 行科目×口径）；
+        # 旧网格降级为诊断对照。事实被识别风险压住 → 该关系转未完成，
+        # 不回退网格值；上下文缺该科目事实 → 允许网格兜底。
+        fact_ctx = getattr(doc, "fact_context", None)
+        fact_operands: Dict[str, Tuple[Any, Any, Optional[str]]] = {}
+        if fact_ctx is not None:
+            from src.engine.fact_context import resolve_operand
+
+            _T7_FACT_KEYS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
+                "total_budget": ("budget", ("合计", "总计")),
+                "total_final": ("actual", ("合计", "总计")),
+                "abroad": ("actual", ("因公出国",)),
+                "car_total": ("actual", ("公务用车购置及运行",)),
+                # 单项必须使用具体科目名，避免“购置”子串命中“购置及运行”合并项。
+                "car_buy": ("actual", ("公务用车购置费",)),
+                "car_run": ("actual", ("公务用车运行",)),
+                "reception": ("actual", ("公务接待",)),
+            }
+            for key, (indicator, tokens) in _T7_FACT_KEYS.items():
+                stage = "年初预算" if key == "total_budget" else "决算"
+                resolution = resolve_operand(
+                    fact_ctx,
+                    indicator,
+                    table_code="FIN_07_three_public",
+                    subject_tokens=tokens,
+                    budget_stages=(stage,),
+                )
+                fact_operands[key] = (
+                    resolution.value,
+                    resolution.fact,
+                    resolution.reason if resolution.status == "blocked" else None,
+                )
+
+        # (说明字段, 网格路径, 显示名)——分项均为决算口径；(一) 总额双口径
+        checks = [
+            ("total_budget", ("budget", "total"), "三公合计（预算）"),
+            ("total_final", ("final", "total"), "三公合计（决算）"),
+            ("abroad", ("final", "abroad"), "因公出国（境）费"),
+            ("car_total", ("final", "car_sub"), "公务用车小计"),
+            ("car_buy", ("final", "car_buy"), "公务用车购置费"),
+            ("car_run", ("final", "car_run"), "公务用车运行费"),
+            ("reception", ("final", "reception"), "公务接待费"),
+        ]
+        compared = 0
+        missing_nar: List[str] = []
+        blank_cells: List[str] = []
+        incomplete_relations: List[str] = []
+        issues: List[Issue] = []
+
+        def _receipt(
+            key: str,
+            label: str,
+            status: str,
+            incomplete: Optional[str] = None,
+            operand_ids: Sequence[str] = (),
+        ) -> None:
+            _append_relation_receipt(
+                doc,
+                self.code,
+                f"san_gong:{key}:narrative_vs_table",
+                formula=f"narrative.{key} == table.FIN_07.{key} (万元)",
+                status=status,
+                incomplete_reason=incomplete,
+                tolerance=_portable_amount_tolerance(),
+                operand_fact_ids=list(operand_ids),
+            )
+
+        for key, grid_path, label in checks:
+            fact_sv, fact_ref, fact_block = fact_operands.get(
+                key, (None, None, None)
+            )
+            operand_ids: List[str] = []
+            if fact_sv is not None:
+                tab = fact_sv
+                if fact_ref is not None:
+                    operand_ids.append(fact_ref.fact_uid)
+            elif fact_block is not None:
+                # RC-01：事实被拒（ambiguous/low_confidence/歧义）→ 该关系
+                # 转未完成，不得回退网格值冒充确定结论。
+                incomplete_relations.append(f"{label}：{fact_block}")
+                _receipt(
+                    key,
+                    label,
+                    "insufficient_data",
+                    fact_block,
+                    operand_ids=[fact_ref.fact_uid] if fact_ref is not None else [],
+                )
+                continue
+            else:
+                tab = grid[grid_path[0]][grid_path[1]]
+            val = nar.get(key)
+            if val is None:
+                # RC-04：缺披露不能自动等同无此项——说明未提及该字段时
+                # 该关系未完成，不得记 not_applicable 冒充完成。
+                missing_nar.append(label)
+                incomplete_relations.append(f"{label}：说明未披露")
+                _receipt(
+                    key,
+                    label,
+                    "insufficient_data",
+                    f"{label}说明未披露，无可比对操作数",
+                    operand_ids=operand_ids,
+                )
+                continue
+            if tab is None and val == 0 and key not in {"total_budget", "total_final"}:
+                # Zero is an explicit no-expenditure statement. For a blank
+                # detail cell, the matching narrative zero is sufficient to
+                # classify this item as not applicable; nonzero text against a
+                # blank cell remains unresolved below.
+                grid[grid_path[0]][grid_path[1]] = Decimal("0")
+                _receipt(
+                    key,
+                    label,
+                    "not_applicable",
+                    "说明明确为0且表格该分项留空，按无此项处理",
+                    operand_ids=operand_ids,
+                )
+                continue
+            if tab is None:
+                # 表内留空且说明有金额，不得把缺操作数记成已完成；只有双方
+                # 都明确为零/无此项时才允许不适用。
+                blank_cells.append(label)
+                reason = f"{label}表内留空，无法与已披露的说明金额核对"
+                incomplete_relations.append(reason)
+                _receipt(key, label, "insufficient_data", reason, operand_ids=operand_ids)
+                continue
+            compared += 1
+            # RC-06：统一政策容差（绝对 0.5 万元 + 独立舍入包络），
+            # 不再使用本规则私设的 0.01 万元。
+            diff_label, diff_val = classify_amount_diff(val, tab, 1)
+            if diff_label != "mismatch":
+                _receipt(key, label, "pass", operand_ids=operand_ids)
+                continue
+            severity = "error" if key == "car_run" else "warn"
+            message = f"三公表与说明不一致：{label}说明={val}万元，表内={tab}万元"
+            if key == "car_run":
+                message += "；建议：请统一“公务用车运行费”在表格与情况说明中的金额口径"
+            relation_id = f"{self.code}:san_gong:{key}:narrative_vs_table"
+            fact_ids = [fact_ref.fact_uid] if fact_ref is not None else []
+            evidence_ids = list(getattr(fact_ref, "evidence_ids", []) or []) if fact_ref is not None else []
+            issue = self._issue(
+                message,
+                {"page": table_page or 1},
+                severity,
+                evidence_text=(
+                    f"narrative={val}, table={tab}, field={label}"
+                    + (f"（说明未提及：{'、'.join(missing_nar)}）" if missing_nar else "")
+                    + (f"（表内留空：{'、'.join(blank_cells)}）" if blank_cells else "")
+                ),
+                check_relation_id=relation_id,
+                fact_ids=fact_ids,
+                evidence_ids=evidence_ids,
+            )
+            issues.append(issue)
+            _receipt(key, label, "fail", operand_ids=operand_ids)
+
+        # 说明侧内部勾稽：公车小计 = 购置 + 运行（三者齐备才判）
+        ct, cb, cr = nar.get("car_total"), nar.get("car_buy"), nar.get("car_run")
+        if None not in (ct, cb, cr):
+            relation_id = f"{self.code}:san_gong:narrative_car_balance"
+            car_diff_label, car_diff_val = classify_amount_diff(ct, cb + cr, 2)
+            if car_diff_label == "mismatch":
+                issues.append(
+                    self._issue(
+                        "三公文字说明内部勾稽不一致：公车小计≠购置费+运行费",
+                        {"page": table_page or 1},
+                        "warn",
+                        evidence_text=f"car_total={ct}, car_buy={cb}, car_run={cr}",
+                        check_relation_id=relation_id,
+                    )
+                )
+            _append_relation_receipt(
+                doc,
+                self.code,
+                "san_gong:narrative_car_balance",
+                formula="narrative.car_total == narrative.car_buy + narrative.car_run (万元)",
+                status="fail" if car_diff_label == "mismatch" else "pass",
+                tolerance=_portable_amount_tolerance(),
+            )
+        else:
+            _append_relation_receipt(
+                doc,
+                self.code,
+                "san_gong:narrative_car_balance",
+                formula="narrative.car_total == narrative.car_buy + narrative.car_run (万元)",
+                status="not_applicable",
+                incomplete_reason="未同时披露公车小计、购置费和运行费",
+                tolerance=_portable_amount_tolerance(),
+            )
+
+        # 三公经费总额必须等于三项法定分项之和；无论正文或表格缺项，都留下
+        # 明确的关系级未完成回执，不以文字/表格的局部一致冒充总额勾稽完成。
+        table_sum_values: Dict[str, Optional[Decimal]] = {}
+        table_sum_fact_refs: Dict[str, Any] = {}
+        table_sum_blocked: Dict[str, Optional[str]] = {}
+        for key, grid_key in (
+            ("total_final", "total"),
+            ("abroad", "abroad"),
+            ("car_total", "car_sub"),
+            ("reception", "reception"),
+        ):
+            fact_value, fact_ref, blocked_reason = fact_operands.get(
+                key, (None, None, None)
+            )
+            if fact_value is not None:
+                table_sum_values[key] = fact_value
+                table_sum_fact_refs[key] = fact_ref
+            elif blocked_reason:
+                # 被事实层识别风险阻断时，不以同一张表的旧网格值绕过阻断。
+                table_sum_values[key] = None
+                table_sum_blocked[key] = blocked_reason
+            elif key == "car_total":
+                # 先等购置/运行事实尝试构成小计，再决定是否使用旧网格值。
+                table_sum_values[key] = None
+                table_sum_fact_refs[key] = None
+            else:
+                table_sum_values[key] = grid["final"].get(grid_key)
+                table_sum_fact_refs[key] = None
+
+        # 公车小计可由两个明确事实相加；如果其中任一事实因识别风险被阻断，
+        # 不用旧表格值替代该关系操作数。
+        if table_sum_values.get("car_total") is None:
+            buy_value, buy_ref, buy_block = fact_operands.get(
+                "car_buy", (None, None, None)
+            )
+            run_value, run_ref, run_block = fact_operands.get(
+                "car_run", (None, None, None)
+            )
+            if buy_block or run_block:
+                table_sum_blocked["car_total"] = buy_block or run_block
+            elif buy_value is not None and run_value is not None:
+                table_sum_values["car_total"] = buy_value + run_value
+                table_sum_fact_refs["car_total"] = (buy_ref, run_ref)
+            elif not table_sum_blocked.get("car_total"):
+                table_sum_values["car_total"] = grid["final"].get("car_sub")
+
+        for side, values, suffix in (
+            ("说明", nar, "narrative_total_balance"),
+            ("表格", table_sum_values, "table_total_balance"),
+        ):
+            required = ("total_final", "abroad", "car_total", "reception")
+            missing = [key for key in required if values.get(key) is None]
+            relation_id = f"{self.code}:san_gong:{suffix}"
+            fact_ids: List[str] = []
+            if side == "表格":
+                for key in required:
+                    fact_ref = table_sum_fact_refs.get(key)
+                    fact_refs = fact_ref if isinstance(fact_ref, tuple) else (fact_ref,)
+                    fact_ids.extend(
+                        item.fact_uid for item in fact_refs if item is not None
+                    )
+            car_value_key = "car_total"
+            if missing:
+                missing_labels = {
+                    "total_final": "三公合计",
+                    "abroad": "因公出国（境）费",
+                    "car_total": "公务用车小计",
+                    "reception": "公务接待费",
+                }
+                blocked_reasons = (
+                    [table_sum_blocked[key] for key in missing if table_sum_blocked.get(key)]
+                    if side == "表格"
+                    else []
+                )
+                blocked_reason = "；".join(blocked_reasons)
+                reason = blocked_reason or (
+                    f"{side}缺少三公合计或分项："
+                    f"{'、'.join(missing_labels[key] for key in missing)}"
+                )
+                incomplete_relations.append(reason)
+                _append_relation_receipt(
+                    doc,
+                    self.code,
+                    f"san_gong:{suffix}",
+                    formula="total == abroad + car_total + reception (万元)",
+                    status="insufficient_data",
+                    incomplete_reason=reason,
+                    operand_fact_ids=fact_ids,
+                    tolerance=_portable_amount_tolerance(),
+                )
+                continue
+            components = (
+                values["abroad"] + values[car_value_key] + values["reception"]
+            )
+            diff_label, _ = classify_amount_diff(values["total_final"], components, 3)
+            if diff_label == "mismatch":
+                evidence_ids = []
+                if side == "表格":
+                    for key in required:
+                        fact_ref = table_sum_fact_refs.get(key)
+                        fact_refs = fact_ref if isinstance(fact_ref, tuple) else (fact_ref,)
+                        for item in fact_refs:
+                            evidence_ids.extend(
+                                list(getattr(item, "evidence_ids", []) or [])
+                                if item is not None
+                                else []
+                            )
+                issues.append(
+                    self._issue(
+                        f"三公经费{side}内部勾稽不一致：合计={values['total_final']}万元，法定分项之和={components}万元",
+                        {"page": table_page or 1},
+                        "warn",
+                        evidence_text=f"total={values['total_final']}; abroad={values['abroad']}; car_total={values[car_value_key]}; reception={values['reception']}",
+                        check_relation_id=relation_id,
+                        fact_ids=fact_ids,
+                        evidence_ids=evidence_ids,
+                    )
+                )
+            _append_relation_receipt(
+                doc,
+                self.code,
+                f"san_gong:{suffix}",
+                formula="total == abroad + car_total + reception (万元)",
+                status="fail" if diff_label == "mismatch" else "pass",
+                operand_fact_ids=fact_ids,
+                tolerance=_portable_amount_tolerance(),
+            )
+
+        # RC-04：任一应检关系缺操作数（说明未披露/事实被拒）时整规则转
+        # 未完成——已确认的比对差异以 partial_issues 保留，不得因部分
+        # 关系可完成而掩盖漏查；关系级回执已逐条留痕。
+        if incomplete_relations:
+            raise RuleDeferred(
+                self.code,
+                detail=f"三公表×说明存在未完成关系：{'；'.join(incomplete_relations[:6])}",
+                partial_issues=issues,
+                unresolved_reasons=incomplete_relations,
+            )
+        return issues
+
+    def _apply_legacy(self, doc: Document) -> List[Issue]:
+        is_budget = _infer_report_kind(doc) == "budget"
+        labels = {
+            "total": "三公合计",
+            "abroad": "因公出国（境）费",
+            "reception": "公务接待费",
+            "car_total": "公务用车购置及运行费",
+            "car_buy": "公务用车购置费",
+            "car_run": "公务用车运行费",
+        }
+        check_keys = tuple(labels)
+
+        def _record_missing_relations(reason: str) -> None:
+            for key, label in labels.items():
+                _append_relation_receipt(
+                    doc,
+                    self.code,
+                    f"san_gong:{key}:narrative_vs_table",
+                    formula=f"narrative.{key} == table.{key} (万元)",
+                    status="insufficient_data",
+                    incomplete_reason=f"{label}：{reason}",
+                    tolerance=_portable_amount_tolerance(),
+                )
+            for relation_suffix in ("narrative_total_balance", "table_total_balance"):
+                _append_relation_receipt(
+                    doc,
+                    self.code,
+                    f"san_gong:{relation_suffix}",
+                    formula="total == abroad + car_total + reception (万元)",
+                    status="insufficient_data",
+                    incomplete_reason=reason,
+                    tolerance=_portable_amount_tolerance(),
+                )
+
+        texts = _page_texts(doc)
+        if not texts:
+            _record_missing_relations("未提取到可用正文")
+            raise RuleDeferred(
+                self.code,
+                detail="未提取到正文页面",
+                unresolved_reasons=["未提取到正文页面"],
+            )
+
+        full_text = "\n".join(texts)
+        narrative = _extract_three_public_narrative(full_text)
+        if all(value is None for value in narrative.values()) and not is_budget:
+            _record_missing_relations("三公说明未披露可比较金额")
+            raise RuleDeferred(
+                self.code,
+                detail="未提取到三公经费情况说明数值",
+                unresolved_reasons=["未提取到三公经费情况说明数值"],
+            )
+
+        fact_ctx = getattr(doc, "fact_context", None)
+        table_page, table_values = _find_three_public_table(doc)
+        if table_values is None:
+            if is_budget and fact_ctx is not None:
+                # 事实表可独立提供带身份的操作数；部分原生/表格解析失败时
+                # 继续事实检查，剩余缺项仍以 insufficient_data 留痕。
+                table_values = {
+                    key: None for key in ("total", "abroad", "reception", "car_total", "car_buy", "car_run")
+                }
+            else:
+                _record_missing_relations("三公表缺失或没有可解析数值")
+                raise RuleDeferred(
+                    self.code,
+                    detail="未定位到三公经费表格数值",
+                    unresolved_reasons=["未定位到三公经费表格数值"],
+                )
+
+        # 预算路径也优先消费同一批财政事实。事实已存在但被识别风险阻断时
+        # 不能回退到旧表格解析值，避免风险值被旧路径“洗成”确定结果。
+        fact_ids_by_key: Dict[str, str] = {}
+        fact_evidence_ids_by_key: Dict[str, List[str]] = {}
+        fact_blocked: List[str] = []
+        fact_blocked_by_key: Dict[str, str] = {}
+        if fact_ctx is not None and _infer_report_kind(doc) == "budget":
+            from src.engine.fact_context import resolve_operand
+
+            fact_subjects = {
+                "total": ("合计", "总计"),
+                "abroad": ("因公出国",),
+                "car_total": ("公务用车购置及运行",),
+                "car_buy": ("公务用车购置费",),
+                "car_run": ("公务用车运行费",),
+                "reception": ("公务接待费",),
+            }
+            for key, tokens in fact_subjects.items():
+                resolution = resolve_operand(
+                    fact_ctx,
+                    "budget",
+                    table_code="FIN_07_three_public",
+                    subject_tokens=tokens,
+                    report_year=getattr(fact_ctx, "fiscal_year", None),
+                    budget_stages=("年初预算", "预算"),
+                )
+                if resolution.status == "blocked":
+                    reason = f"三公{key}事实不可作操作数：{resolution.reason}"
+                    fact_blocked.append(reason)
+                    fact_blocked_by_key[key] = reason
+                    # Do not let the older parsed value replace a risk-blocked fact.
+                    table_values[key] = None
+                elif resolution.status == "ok" and resolution.value is not None:
+                    table_values[key] = float(resolution.value)
+                    if resolution.fact is not None:
+                        fact_ids_by_key[key] = resolution.fact.fact_uid
+                        fact_evidence_ids_by_key[key] = list(resolution.fact.evidence_ids or [])
+        issues: List[Issue] = []
+        unresolved_reasons: List[str] = []
+        incomplete_relations: List[str] = []
+        unresolved_reasons.extend(fact_blocked)
+        # 若预算表只列购置与运行两项，则按同表同单位合成法定公务用车小计；
+        # 明示的小计始终优先，且购置/运行仍单独核验。
+        car_total_from_components = False
+        if table_values.get("car_total") is None and all(
+            table_values.get(key) is not None for key in ("car_buy", "car_run")
+        ):
+            table_values["car_total"] = float(table_values["car_buy"]) + float(table_values["car_run"])
+            car_total_from_components = True
+        if narrative.get("car_total") is None and all(
+            narrative.get(key) is not None for key in ("car_buy", "car_run")
+        ):
+            narrative["car_total"] = float(narrative["car_buy"]) + float(narrative["car_run"])
+        for key in check_keys:
+            nar = narrative.get(key)
+            tab = table_values.get(key)
+            if nar is None or tab is None:
+                missing_reason = f"{labels[key]}分项说明或表格数值缺失"
+                unresolved_reasons.append(missing_reason)
+                if key in {"total", "abroad", "reception", "car_total"} or key in fact_blocked_by_key:
+                    incomplete_relations.append(fact_blocked_by_key.get(key) or missing_reason)
+                _append_relation_receipt(
+                    doc,
+                    self.code,
+                    f"san_gong:{key}:narrative_vs_table",
+                    formula=f"narrative.{key} == table.{key} (万元)",
+                    status="insufficient_data",
+                    incomplete_reason=(
+                        fact_blocked_by_key.get(key)
+                        or f"{labels[key]}分项说明或表格数值未披露，无可比对操作数"
+                    ),
+                    operand_fact_ids=[fact_ids_by_key[key]] if key in fact_ids_by_key else [],
+                    tolerance=_portable_amount_tolerance(),
+                )
+                continue
+            if _close(nar, tab):
+                _append_relation_receipt(
+                    doc,
+                    self.code,
+                    f"san_gong:{key}:narrative_vs_table",
+                    formula=f"narrative.{key} == table.{key} (万元)",
+                    status="pass",
+                    operand_fact_ids=[fact_ids_by_key[key]] if key in fact_ids_by_key else [],
+                    tolerance=_portable_amount_tolerance(),
+                )
+                continue
+            label = labels[key]
+            severity = "error" if key == "car_run" else "warn"
+            message = (
+                f"三公表与说明不一致：{label}说明={nar:.2f}万元，表内={tab:.2f}万元"
+            )
+            if key == "car_run":
+                message += "；建议：请统一“公务用车运行费”在表格与情况说明中的金额口径"
+            issues.append(
+                self._issue(
+                    message,
+                    {"page": table_page or 1},
+                    severity,
+                    evidence_text=f"narrative={nar}, table={tab}, field={label}",
+                    check_relation_id=f"{self.code}:san_gong:{key}:narrative_vs_table",
+                    fact_ids=[fact_ids_by_key[key]] if key in fact_ids_by_key else [],
+                    evidence_ids=fact_evidence_ids_by_key.get(key, []),
+                )
+            )
+            _append_relation_receipt(
+                doc,
+                self.code,
+                f"san_gong:{key}:narrative_vs_table",
+                formula=f"narrative.{key} == table.{key} (万元)",
+                status="fail",
+                operand_fact_ids=[fact_ids_by_key[key]] if key in fact_ids_by_key else [],
+                tolerance=_portable_amount_tolerance(),
+            )
+
+        for side, values in (("narrative", narrative), ("table", table_values)):
+            relation_id = f"{self.code}:san_gong:{side}_car_total_balance"
+            subtotal, purchase, operation = (
+                values.get("car_total"), values.get("car_buy"), values.get("car_run")
+            )
+            operand_ids: List[str] = []
+            evidence_ids: List[str] = []
+            if side == "table":
+                component_keys = (
+                    ("car_buy", "car_run")
+                    if car_total_from_components else ("car_total", "car_buy", "car_run")
+                )
+                for key in component_keys:
+                    if fact_ids_by_key.get(key):
+                        operand_ids.append(fact_ids_by_key[key])
+                        evidence_ids.extend(fact_evidence_ids_by_key.get(key, []))
+            if subtotal is None or purchase is None or operation is None:
+                reason = f"{side}缺少公车小计、购置费或运行费操作数"
+                blocked_reasons = [
+                    fact_blocked_by_key[key]
+                    for key in ("car_total", "car_buy", "car_run")
+                    if side == "table" and fact_blocked_by_key.get(key)
+                ]
+                blocked = bool(blocked_reasons)
+                _append_relation_receipt(
+                    doc, self.code, f"san_gong:{side}_car_total_balance",
+                    formula="car_total == car_buy + car_run (万元)",
+                    status="insufficient_data" if blocked else "not_applicable",
+                    incomplete_reason=("；".join(blocked_reasons) or reason) if blocked else "未同时披露公车小计、购置费和运行费",
+                    operand_fact_ids=operand_ids,
+                    tolerance=_portable_amount_tolerance(),
+                )
+                if blocked:
+                    incomplete_relations.append("；".join(blocked_reasons))
+                continue
+            balanced = _close(subtotal, purchase + operation)
+            if not balanced:
+                issues.append(
+                    self._issue(
+                        f"三公{('文字说明' if side == 'narrative' else '预算表')}内部勾稽不一致：公车小计≠购置费+运行费",
+                        {"page": table_page or 1},
+                        "warn",
+                        evidence_text=(
+                            f"car_total={subtotal}, car_buy={purchase}, car_run={operation}"
+                        ),
+                        check_relation_id=relation_id,
+                        fact_ids=operand_ids,
+                        evidence_ids=list(dict.fromkeys(evidence_ids)),
+                    )
+                )
+            _append_relation_receipt(
+                doc, self.code, f"san_gong:{side}_car_total_balance",
+                formula="car_total == car_buy + car_run (万元)",
+                status="pass" if balanced else "fail",
+                operand_fact_ids=operand_ids,
+                tolerance=_portable_amount_tolerance(),
+            )
+
+        if is_budget:
+            required_sum_keys = ("abroad", "car_total", "reception")
+            for side, values, relation_suffix in (
+                ("文字说明", narrative, "narrative_total_balance"),
+                ("预算表", table_values, "table_total_balance"),
+            ):
+                relation_id = f"{self.code}:san_gong:{relation_suffix}"
+                operands = ["total", *required_sum_keys]
+                missing = [key for key in operands if values.get(key) is None]
+                fact_operands: List[str] = []
+                sum_evidence_ids: List[str] = []
+                operand_sources: Dict[str, str] = {}
+                all_operands_fact_backed = side == "预算表"
+                if side == "预算表":
+                    for key in operands:
+                        if key == "car_total" and car_total_from_components and not fact_ids_by_key.get(key):
+                            component_keys = ("car_buy", "car_run")
+                        else:
+                            component_keys = (key,)
+                        role_fact_ids = [
+                            fact_ids_by_key[item]
+                            for item in component_keys
+                            if fact_ids_by_key.get(item)
+                        ]
+                        role_is_fact_backed = len(role_fact_ids) == len(component_keys)
+                        if role_is_fact_backed:
+                            operand_sources[key] = "fiscal_fact:" + "+".join(role_fact_ids)
+                        else:
+                            operand_sources[key] = "legacy_table"
+                            all_operands_fact_backed = False
+                        fact_operands.extend(
+                            role_fact_ids
+                        )
+                        for item in component_keys:
+                            sum_evidence_ids.extend(fact_evidence_ids_by_key.get(item, []))
+                else:
+                    all_operands_fact_backed = False
+                    operand_sources = {key: "narrative_text" for key in operands}
+                relation_provenance = {
+                    "required_operand_roles": operands,
+                    "operand_sources": operand_sources,
+                    "evaluation_basis": "fiscal_fact" if all_operands_fact_backed else "legacy_document",
+                    "fact_migration_status": "complete" if all_operands_fact_backed else "pending",
+                }
+                if missing:
+                    reason = f"{side}缺少三公合计或法定分项：{'、'.join(labels[key] for key in missing)}"
+                    _append_relation_receipt(
+                        doc,
+                        self.code,
+                        f"san_gong:{relation_suffix}",
+                        formula="total == abroad + car_total + reception (万元)",
+                        status="insufficient_data",
+                        incomplete_reason=reason,
+                        operand_fact_ids=fact_operands,
+                        tolerance=_portable_amount_tolerance(),
+                        **relation_provenance,
+                    )
+                    incomplete_relations.append(reason)
+                    continue
+                components = sum(float(values[key]) for key in required_sum_keys)
+                total = float(values["total"])
+                if _close(total, components):
+                    _append_relation_receipt(
+                        doc,
+                        self.code,
+                        f"san_gong:{relation_suffix}",
+                        formula="total == abroad + car_total + reception (万元)",
+                        status="pass",
+                        operand_fact_ids=fact_operands,
+                        tolerance=_portable_amount_tolerance(),
+                        **relation_provenance,
+                    )
+                    continue
+                issues.append(
+                    self._issue(
+                        f"三公经费{side}内部勾稽不一致：合计={total:.2f}万元，法定分项之和={components:.2f}万元",
+                        {"page": table_page or 1},
+                        "warn",
+                        evidence_text=f"total={total}; abroad={values['abroad']}; car_total={values['car_total']}; reception={values['reception']}",
+                        check_relation_id=relation_id,
+                        fact_ids=fact_operands,
+                        evidence_ids=sum_evidence_ids,
+                    )
+                )
+                _append_relation_receipt(
+                    doc,
+                    self.code,
+                    f"san_gong:{relation_suffix}",
+                    formula="total == abroad + car_total + reception (万元)",
+                    status="fail",
+                    operand_fact_ids=fact_operands,
+                    tolerance=_portable_amount_tolerance(),
+                    **relation_provenance,
+                )
+
+        # 三项法定分项（出国、公车、接待）都必须有双方操作数；金额差异可保留，
+        # 同时将缺字段关系留在未完成集合中。
+        required_keys = ("total", "abroad", "car_total", "reception")
+        missing_required = [
+            labels[key]
+            for key in required_keys
+            if narrative.get(key) is None or table_values.get(key) is None
+        ]
+        if missing_required or incomplete_relations:
+            incomplete_detail = incomplete_relations or missing_required
+            raise RuleDeferred(
+                self.code,
+                detail=f"三公必需分项关系未完成: {', '.join(incomplete_detail)}",
+                partial_issues=issues,
+                unresolved_reasons=unresolved_reasons or [f"{key}说明或表格数值缺失" for key in missing_required],
+            )
+
+        return issues
+
+
+_SOFT_LINE_ENDINGS = "。；：！？!?:;"
+
+
+def _merge_soft_wrapped_lines(page_text: str) -> List[str]:
+    """委托共享实现（src/utils/narration.py），保留旧名兼容既有调用。"""
+    return _merge_soft_wrapped_lines_shared(page_text)
+
+
+class CMM002_TextAnomalyRule(Rule):
+    code, severity = "CMM-002", "warn"
+    desc = "\u91cd\u590d\u8bcd/\u6807\u70b9\u5f02\u5e38\u68c0\u67e5\uff08\u9884/\u51b3\u7b97\u901a\u7528\uff09"
+
+    def apply(self, doc: Document) -> List[Issue]:
+        issues: List[Issue] = []
+        duplicate_patterns: Sequence[Tuple[str, str]] = (
+            (r"\u9884\u7b97\u9884\u7b97", "\u7591\u4f3c\u91cd\u590d\u8bcd\uff1a\u201c\u9884\u7b97\u9884\u7b97\u201d"),
+            (r"\u51b3\u7b97\u51b3\u7b97", "\u7591\u4f3c\u91cd\u590d\u8bcd\uff1a\u201c\u51b3\u7b97\u51b3\u7b97\u201d"),
+            (r"\u8d22\u653f\u62e8\u6b3e\u8d22\u653f\u62e8\u6b3e", "\u7591\u4f3c\u91cd\u590d\u8bcd\uff1a\u201c\u8d22\u653f\u62e8\u6b3e\u8d22\u653f\u62e8\u6b3e\u201d"),
+        )
+        punctuation_pattern = re.compile(r"[\u4e00-\u9fff],\s*[0-9]")
+        abnormal_punctuation_patterns: Sequence[Tuple[re.Pattern[str], str]] = (
+            (re.compile(r"\u3002{2,}"), "\u7591\u4f3c\u8fde\u7eed\u53e5\u53f7"),
+            (re.compile(r"[\uff1b;]\s*\u3002"), "\u7591\u4f3c\u6b8b\u7f3a\u53e5\u6216\u591a\u4f59\u6807\u70b9"),
+        )
+
+        for page_idx, page_text in enumerate(_page_texts(doc), start=1):
+            seen: set[Tuple[int, int]] = set()
+            for pattern, message in duplicate_patterns:
+                for match in re.finditer(pattern, page_text):
+                    span = (match.start(), match.end())
+                    if span in seen:
+                        continue
+                    seen.add(span)
+                    snippet = page_text[max(0, match.start() - 16): match.end() + 24].replace("\n", " ")
+                    issues.append(
+                        self._issue(
+                            message,
+                            {"page": page_idx, "pos": match.start()},
+                            "warn",
+                            evidence_text=snippet,
+                        )
+                    )
+
+            for match in punctuation_pattern.finditer(page_text):
+                span = (match.start(), match.end())
+                if span in seen:
+                    continue
+                seen.add(span)
+                snippet = page_text[max(0, match.start() - 16): match.end() + 24].replace("\n", " ")
+                issues.append(
+                    self._issue(
+                        "\u4e2d\u6587\u8bed\u5883\u4e0b\u7591\u4f3c\u4f7f\u7528\u4e86\u82f1\u6587\u9017\u53f7\u8fde\u63a5\u91d1\u989d",
+                        {"page": page_idx, "pos": match.start()},
+                        "info",
+                        evidence_text=snippet,
+                    )
+                )
+
+            for pattern, message in abnormal_punctuation_patterns:
+                for match in pattern.finditer(page_text):
+                    span = (match.start(), match.end())
+                    if span in seen:
+                        continue
+                    seen.add(span)
+                    snippet = page_text[max(0, match.start() - 16): match.end() + 24].replace("\n", " ")
+                    issues.append(
+                        self._issue(
+                            message,
+                            {"page": page_idx, "pos": match.start()},
+                            "warn",
+                            evidence_text=snippet,
+                        )
+                    )
+
+        # 引号配对按"全篇逻辑段落"检查（先合并软换行，且段落允许跨页）：
+        # 同段右引号多于左引号才算未闭合。
+        # - 逐行检查会把同段跨行的配对引号误判成异常（样张 4 条误报根因，HANDOFF §3.3B）；
+        # - 按页检查会把"段首在上页页尾、段尾在下页页首"的跨页配对误判成异常
+        #   （石泉路样张 3 条误报根因：p29 末"…一般行政管理事"与 p30 首"务（项）"…"）。
+        page_texts_all = _page_texts(doc)
+        page_spans: List[Tuple[int, int, int]] = []
+        parts: List[str] = []
+        offset = 0
+        for page_idx, page_text in enumerate(page_texts_all, start=1):
+            parts.append(page_text)
+            page_spans.append((offset, offset + len(page_text), page_idx))
+            offset += len(page_text) + 1  # +1 为页间连接符
+        full_text = "\n".join(parts)
+
+        def _page_at(pos: int) -> int:
+            for start, end, pageno in page_spans:
+                if start <= pos < end:
+                    return pageno
+            return len(page_texts_all)
+
+        for paragraph in _merge_soft_wrapped_lines(full_text):
+            has_double_imbalance = paragraph.count("\u201d") > paragraph.count("\u201c")
+            has_single_imbalance = paragraph.count("\u2019") > paragraph.count("\u2018")
+            if not (has_double_imbalance or has_single_imbalance):
+                continue
+            pos = full_text.find(paragraph[:20])
+            issues.append(
+                self._issue(
+                    "\u7591\u4f3c\u591a\u4f59\u53f3\u5f15\u53f7",
+                    {"page": _page_at(max(pos, 0))},
+                    "warn",
+                    evidence_text=paragraph[:200],
+                )
+            )
+
+        return issues
+
+
+def _count_toc_table_items(page_texts: Sequence[str]) -> int:
+    table_line_pattern = re.compile(
+        r"^(?:\s*\d+[\.、．]|\s*20\d{2}).*(?:\u603b\u8868|\u9884\u7b97\u8868|\u51b3\u7b97\u8868|\u7ecf\u8d39.*\u8868)"
+    )
+    items: set[str] = set()
+
+    for page_text in page_texts[:4]:
+        if "\u76ee\u5f55" not in page_text:
+            continue
+        for line in page_text.splitlines():
+            text = line.strip()
+            if not text or "\u8868" not in text:
+                continue
+            if not table_line_pattern.search(text):
+                continue
+            items.add(re.sub(r"\s+", "", text))
+    return len(items)
+
+
+class CMM003_TocCountConsistency(Rule):
+    code, severity = "CMM-003", "warn"
+    desc = "\u76ee\u5f55\u8868\u683c\u6570\u91cf\u4e0e\u6b63\u6587\u5b9a\u4f4d\u8868\u683c\u6570\u91cf\u4e00\u81f4\u6027"
+
+    def apply(self, doc: Document) -> List[Issue]:
+        texts = _page_texts(doc)
+        toc_count = _count_toc_table_items(texts)
+        if toc_count < 8:
+            return []
+
+        report_kind = _infer_report_kind(doc)
+        if report_kind == "budget":
+            anchors = find_budget_anchors(doc)
+        else:
+            anchors = find_table_anchors(doc)
+
+        detected_count = sum(1 for pages in anchors.values() if pages)
+        if detected_count == toc_count:
+            return []
+
+        return [
+            self._issue(
+                f"\u76ee\u5f55\u4e0e\u6b63\u6587\u8868\u6570\u7591\u4f3c\u4e0d\u4e00\u81f4\uff1a\u76ee\u5f55={toc_count}\uff0c\u5b9e\u9645\u5b9a\u4f4d={detected_count}",
+                {"page": 1},
+                "warn",
+                evidence_text=f"toc_count={toc_count}, detected={detected_count}",
+            )
+        ]
+
+
+_ROW_CODE_RE = re.compile(
+    r"^\s*(\d{3})(?:\s+(\d{2}))?(?:\s+(\d{2}))?\s+.+?\s+([0-9][0-9,]*\.?[0-9]*)\b"
+)
+
+
+# 科目域判定（docs/SYSTEM_ISSUES_HANDOFF_2026-09-05.md §3.3A）：
+# 收入分类（101-110）、一般公共预算功能分类（201-229）、经济分类（301-310）
+# 属于互不可比的科目体系；经济分类编码只应出现在经济分类性质的表中。
+def _code_domain(code: str) -> str:
+    digits = re.sub(r"\D", "", str(code or ""))
+    if len(digits) < 3:
+        return "other"
+    prefix = int(digits[:3])
+    if 101 <= prefix <= 110:
+        return "revenue"
+    if 201 <= prefix <= 229:
+        return "functional"
+    if 301 <= prefix <= 310:
+        return "economic"
+    return "other"
+
+
+def _dominant_code_domain(codes) -> Optional[str]:
+    """取一组编码的主科目域；域混杂或无法判定时返回 None。"""
+    domains = {_code_domain(code) for code in codes}
+    domains.discard("other")
+    if len(domains) != 1:
+        return None
+    return domains.pop()
+
+
+def _extract_code_amount_pairs(page_texts: Sequence[str]) -> Tuple[Dict[str, float], Dict[str, float]]:
+    income_titles = (
+        "\u6536\u5165\u9884\u7b97\u603b\u8868",
+        "\u6536\u5165\u51b3\u7b97\u8868",
+    )
+    expense_titles = (
+        "\u652f\u51fa\u9884\u7b97\u603b\u8868",
+        "\u652f\u51fa\u51b3\u7b97\u8868",
+    )
+    stop_titles = (
+        "\u8d22\u653f\u62e8\u6b3e\u6536\u652f",
+        "\u4e00\u822c\u516c\u5171\u9884\u7b97",
+        "\u4e00\u822c\u516c\u5171\u51b3\u7b97",
+    )
+
+    mode: Optional[str] = None
+    income: Dict[str, float] = {}
+    expense: Dict[str, float] = {}
+
+    for page_text in page_texts:
+        if any(title in page_text for title in income_titles):
+            mode = "income"
+        elif any(title in page_text for title in expense_titles):
+            mode = "expense"
+        elif mode and any(title in page_text for title in stop_titles):
+            mode = None
+
+        if not mode:
+            continue
+
+        for line in page_text.splitlines():
+            match = _ROW_CODE_RE.match(line.strip())
+            if not match:
+                continue
+            c1, c2, c3, amount_text = match.groups()
+            amount = _to_float(amount_text)
+            if amount is None:
+                continue
+            code = c1 + (c2 or "") + (c3 or "")
+            if mode == "income":
+                income.setdefault(code, amount)
+            else:
+                expense.setdefault(code, amount)
+
+    return income, expense
+
+
+class CMM004_CodeMirrorConsistency(Rule):
+    code, severity = "CMM-004", "warn"
+    desc = "\u6536\u5165/\u652f\u51fa\u603b\u8868\u7c7b\u6b3e\u9879\u7f16\u7801\u4e0e\u91d1\u989d\u955c\u50cf\u4e00\u81f4\u6027"
+
+    def apply(self, doc: Document) -> List[Issue]:
+        income, expense = _extract_code_amount_pairs(_page_texts(doc))
+        if len(income) < 2 or len(expense) < 2:
+            raise RuleDeferred(
+                self.code,
+                detail="收入或支出明细条目不足2条，无法执行镜像比对",
+                unresolved_reasons=["收入或支出明细条目不足"],
+            )
+
+        # 科目域隔离（P0 止血）：只有两侧主科目域一致时才可镜像比较。
+        # 收入分类、功能分类、经济分类互不可比——经济分类编码（301-310）
+        # 只出现在经济分类性质的《基本支出决算表》是正常且必然的，
+        # 不能报"仅出现在支出表"（样张 33 条误报的根因）。
+        income_domain = _dominant_code_domain(income)
+        expense_domain = _dominant_code_domain(expense)
+        if not income_domain or not expense_domain or income_domain != expense_domain:
+            raise RuleNotApplicable(
+                self.code,
+                f"两侧科目域不同（income={income_domain}, expense={expense_domain}）"
+                "或域混杂，收入/功能分类/经济分类之间不可比",
+            )
+
+        common = sorted(set(income).intersection(expense))
+        if len(common) < 2:
+            raise RuleDeferred(
+                self.code,
+                detail="收支公共科目条目不足2条，无法执行镜像比对",
+                unresolved_reasons=["收支公共科目条目不足"],
+            )
+
+        diffs = [
+            code for code in common if abs(income[code] - expense[code]) > 1e-6
+        ]
+        only_income = sorted(set(income) - set(expense))
+        only_expense = sorted(set(expense) - set(income))
+
+        issues: List[Issue] = []
+        anchors = find_table_anchors(doc)
+        candidate_pages = []
+        for table_name in ("\u6536\u5165\u51b3\u7b97\u8868", "\u652f\u51fa\u51b3\u7b97\u8868", "\u6536\u5165\u652f\u51fa\u603b\u8868"):
+            candidate_pages.extend(anchors.get(table_name, []))
+        # ZC-00（SYS-07）：定位不到总表页时保持缺页，不伪装成第 1 页
+        base_location: Dict[str, Any] = {"table": "\u6536\u5165/\u652f\u51fa\u603b\u8868"}
+        if candidate_pages:
+            base_location["page"] = min(candidate_pages)
+
+        for code in diffs:
+            income_value = income[code]
+            expense_value = expense[code]
+            diff_value = abs(income_value - expense_value)
+            issues.append(
+                self._issue(
+                    f"\u7c7b\u6b3e\u9879\u7f16\u7801 {code} \u91d1\u989d\u4e0d\u4e00\u81f4",
+                    {**base_location, "row": code},
+                    "warn",
+                    evidence_text=(
+                        f"code={code}; income={income_value}; expense={expense_value}; diff={diff_value}"
+                    ),
+                )
+            )
+
+        for code in only_income:
+            issues.append(
+                self._issue(
+                    f"\u7c7b\u6b3e\u9879\u7f16\u7801 {code} \u4ec5\u51fa\u73b0\u5728\u6536\u5165\u8868",
+                    {**base_location, "row": code},
+                    "warn",
+                    evidence_text=f"income_only={code}",
+                )
+            )
+
+        for code in only_expense:
+            issues.append(
+                self._issue(
+                    f"\u7c7b\u6b3e\u9879\u7f16\u7801 {code} \u4ec5\u51fa\u73b0\u5728\u652f\u51fa\u8868",
+                    {**base_location, "row": code},
+                    "warn",
+                    evidence_text=f"expense_only={code}",
+                )
+            )
+
+        return issues
+
+
+_ZERO_INCREASE_PATTERN = re.compile(
+    r"([一-龥]{0,24}?拨款支出预算)0(?:\.0+)?万元，比20\d{2}年预算增加([0-9][0-9,]*\.?[0-9]*)万元"
+)
+_ABNORMAL_DELTA_WORDING_PATTERN = re.compile(r"(增加|减少)持平")
+_BUDGET_FINAL_DIRECTION_RE = re.compile(
+    r"(?:^|[。；;\n])(?P<segment>[^。；;\n]{0,80}?"
+    r"年初预算(?:数)?(?:为|是)?\s*(?P<budget>[0-9][0-9,]*(?:\.[0-9]+)?)\s*万元"
+    r"[^。；;\n]{0,120}?"
+    r"(?:支出)?决算(?:数)?(?:为|是)?\s*(?P<final>[0-9][0-9,]*(?:\.[0-9]+)?)\s*万元"
+    r"[^。；;\n]{0,120}?"
+    r"(?P<word>持平|一致|等于|增加|增长|高于|超出|超过|减少|下降|低于|少于)[^。；;\n]{0,40})",
+    re.S,
+)
+_UP_WORDS = {"增加", "增长", "高于", "超出", "超过"}
+_DOWN_WORDS = {"减少", "下降", "低于", "少于"}
+_FLAT_WORDS = {"持平", "一致", "等于"}
+
+
+def _direction_from_word(word: str) -> Optional[str]:
+    if word in _UP_WORDS:
+        return "up"
+    if word in _DOWN_WORDS:
+        return "down"
+    if word in _FLAT_WORDS:
+        return "flat"
+    return None
+
+
+def _expected_budget_final_direction(budget: float, final: float) -> str:
+    if _close(final, budget):
+        return "flat"
+    return "up" if final > budget else "down"
+
+
+def _direction_label(direction: str) -> str:
+    return {"flat": "持平", "up": "增加", "down": "减少"}.get(direction, direction)
+
+
+def _budget_final_direction_issues(rule: Rule, page_idx: int, page_text: str) -> List[Issue]:
+    issues: List[Issue] = []
+    for match in _BUDGET_FINAL_DIRECTION_RE.finditer(page_text or ""):
+        budget = _to_float(match.group("budget"))
+        final = _to_float(match.group("final"))
+        actual_direction = _direction_from_word(match.group("word"))
+        if budget is None or final is None or actual_direction is None:
+            continue
+        expected_direction = _expected_budget_final_direction(budget, final)
+        if actual_direction == expected_direction:
+            continue
+        segment = match.group("segment").strip()
+        issues.append(
+            rule._issue(
+                (
+                    "预算数与决算数文字方向不一致："
+                    f"年初预算数={budget:.2f}万元，决算数={final:.2f}万元，"
+                    f"按金额应表述为“{_direction_label(expected_direction)}”，"
+                    f"当前写为“{match.group('word')}”。"
+                ),
+                {"page": page_idx, "pos": match.start(), "section": "支出决算具体情况"},
+                "error",
+                evidence_text=segment,
+            )
+        )
+    return issues
+
+
+_TEMPLATE_LEFTOVER_PATTERNS: Sequence[Tuple[re.Pattern[str], str]] = (
+    (
+        re.compile(r"(?:增加|减少)[（(](?:减少|增加)[)）]"),
+        "\u7591\u4f3c\u6a21\u677f\u6b8b\u7559\uff1a\u589e\u51cf\u65b9\u5411\u672a\u786e\u5b9a",
+    ),
+    (
+        re.compile(r"\u4e3b\u8981\u539f\u56e0\u662f[：:]?[\u3002\uff1b;!?？！]"),
+        "\u7591\u4f3c\u6b8b\u7f3a\u53e5\uff1a\u201c\u4e3b\u8981\u539f\u56e0\u662f\u201d\u540e\u7f3a\u5c11\u539f\u56e0\u8bf4\u660e",
+    ),
+)
+
+
+class CMM005_ComparativeNarrativeLogic(Rule):
+    code, severity = "CMM-005", "warn"
+    desc = "同比叙述逻辑异常检查（预/决算通用）"
+
+    def apply(self, doc: Document) -> List[Issue]:
+        issues: List[Issue] = []
+        unresolved_reasons: List[str] = []
+
+        for page_idx, page_text in enumerate(_page_texts(doc), start=1):
+            flat_text = _compact_text(page_text)
+            if not flat_text:
+                continue
+
+            seen_spans: set[Tuple[int, int, str]] = set()
+
+            for pattern, message in _TEMPLATE_LEFTOVER_PATTERNS:
+                for match in pattern.finditer(page_text):
+                    span_key = (match.start(), match.end(), message)
+                    if span_key in seen_spans:
+                        continue
+                    seen_spans.add(span_key)
+                    issues.append(
+                        self._issue(
+                            message,
+                            {"page": page_idx, "pos": match.start()},
+                            "warn",
+                            evidence_text=_sentence_around(page_text, match.start(), match.end()),
+                        )
+                    )
+
+            for match in _ABNORMAL_DELTA_WORDING_PATTERN.finditer(flat_text):
+                span_key = (match.start(), match.end(), "wording")
+                if span_key in seen_spans:
+                    continue
+                seen_spans.add(span_key)
+                phrase = match.group(0)
+                issues.append(
+                    self._issue(
+                        f"疑似模板残留：出现“{phrase}”",
+                        {"page": page_idx, "pos": match.start()},
+                        "warn",
+                        evidence_text=_snippet(flat_text, match.start(), match.end()),
+                    )
+                )
+
+            for match in _ZERO_INCREASE_PATTERN.finditer(flat_text):
+                amount = _to_float(match.group(2))
+                if amount is None or amount <= 0:
+                    unresolved_reasons.append(f"第{page_idx}页零增长语句数值解析异常")
+                    continue
+                span_key = (match.start(), match.end(), "zero_increase")
+                if span_key in seen_spans:
+                    continue
+                seen_spans.add(span_key)
+                item_name = match.group(1)
+                issues.append(
+                    self._issue(
+                        f"同比口径矛盾：{item_name}为0万元，却写“比上年增加{amount:.2f}万元”",
+                        {"page": page_idx, "pos": match.start()},
+                        "error",
+                        evidence_text=_snippet(flat_text, match.start(), match.end()),
+                    )
+                )
+
+            issues.extend(_budget_final_direction_issues(self, page_idx, page_text))
+
+        if unresolved_reasons:
+            raise RuleDeferred(
+                self.code,
+                detail=f"部分同比表述数值未能解析: {', '.join(unresolved_reasons[:5])}",
+                partial_issues=issues,
+                unresolved_reasons=unresolved_reasons,
+            )
+
+        return issues
+
+
+_BUDGET_DELTA_PATTERN_TEMPLATE = re.compile(
+    r"(?P<subject>收入|支出)预算[0-9][0-9,]*\.?[0-9]*万元[^。；]{0,120}?比20\d{2}年预算(?P<dir>增加|减少)(?P<amount>[0-9][0-9,]*\.?[0-9]*)万元"
+)
+_INCOME_EXPENSE_SUMMARY_PATTERN = re.compile(r"财政拨款收入支出(?P<dir>增加|减少)")
+
+
+def _extract_budget_delta(flat_text: str, subject: str) -> Optional[Dict[str, Any]]:
+    for match in _BUDGET_DELTA_PATTERN_TEMPLATE.finditer(flat_text):
+        if match.group("subject") != subject:
+            continue
+        amount = _to_float(match.group("amount"))
+        if amount is None:
+            continue
+        return {
+            "direction": match.group("dir"),
+            "amount": amount,
+            "start": match.start(),
+            "end": match.end(),
+        }
+    return None
+
+
+class CMM006_IncomeExpenseTrendConsistency(Rule):
+    code, severity = "CMM-006", "warn"
+    desc = "收入/支出同比方向一致性检查（预/决算通用）"
+
+    def apply(self, doc: Document) -> List[Issue]:
+        issues: List[Issue] = []
+
+        for page_idx, page_text in enumerate(_page_texts(doc), start=1):
+            flat_text = _compact_text(page_text)
+            if not flat_text:
+                continue
+
+            income_delta = _extract_budget_delta(flat_text, "收入")
+            expense_delta = _extract_budget_delta(flat_text, "支出")
+            summary_match = _INCOME_EXPENSE_SUMMARY_PATTERN.search(flat_text)
+
+            if income_delta and expense_delta and income_delta["direction"] != expense_delta["direction"]:
+                start = min(int(income_delta["start"]), int(expense_delta["start"]))
+                end = max(int(income_delta["end"]), int(expense_delta["end"]))
+                mismatch_sentence = _sentence_around(flat_text, start, end)
+                severity = (
+                    "error"
+                    if _close(float(income_delta["amount"]), float(expense_delta["amount"]))
+                    else "warn"
+                )
+                message = (
+                    "收入/支出同比方向矛盾：同页同时出现“收入增加/减少”与“支出减少/增加”的相反方向描述。"
+                )
+                if mismatch_sentence:
+                    message += f" 命中原文：{mismatch_sentence}"
+                issues.append(
+                    self._issue(
+                        message,
+                        {"page": page_idx, "pos": start},
+                        severity,
+                        evidence_text=mismatch_sentence or _snippet(flat_text, start, end),
+                    )
+                )
+
+            if summary_match and income_delta and expense_delta:
+                summary_direction = summary_match.group("dir")
+                if (
+                    summary_direction != str(income_delta["direction"])
+                    or summary_direction != str(expense_delta["direction"])
+                ):
+                    summary_sentence = _sentence_around(
+                        flat_text, summary_match.start(), summary_match.end()
+                    )
+                    message = (
+                        f"口径描述矛盾：文中写“财政拨款收入支出{summary_direction}”，但收入/支出同比方向不一致。"
+                    )
+                    if summary_sentence:
+                        message += f" 这段文字出现了错误：{summary_sentence}"
+                    issues.append(
+                        self._issue(
+                            message,
+                            {"page": page_idx, "pos": summary_match.start()},
+                            "warn",
+                            evidence_text=summary_sentence
+                            or _snippet(flat_text, summary_match.start(), summary_match.end()),
+                        )
+                    )
+
+        return issues
+
+
+# ============================================================================
+# WP4-D：同比基期/本期/增减额与增长百分比的确定性复算（CMM-007，预/决算通用）
+#
+# 真值（2026-09-17 独立验收真实反例，当时均未报告）：
+# - 宜川 P36：公务接待费本期 0.3 万元、比上年增加 0.3 万元，却写「增长100%」
+#   ——复算基期 0.3−0.3=0，同比百分比不存在有限定义；
+# - 文旅 P28：公务接待费本期 0.40 万元、增加 0.40 万元，「增长100%」——同理。
+# 证据链与设计口径：docs/WP4D_ZERO_BASE_20260925.md。
+#
+# 边界（不重复造轮子）：CMM-005 管"当前为0却写增加"等模板/方向异常；
+# V33-234 / BUD-111 管"显式基期+本期+百分比"复算（基期为 0 时跳过）——
+# 零基数与"本期+增减额+百分比"复算此前无人覆盖。百分比容差复用
+# ``rule_policy`` 的 portable 绝对容差（0.1 个百分点），金额侧 Decimal +
+# 显示半步长包络（compute_dynamic_envelope），不自造容差。
+# ============================================================================
+
+_CMM007_OBLIGATION_ID = "OBL-TREND-ZERO-BASE"
+
+#: 同比变化语义单元：指标 (口径后缀)? (比20XX年度)? 方向词(幅/了)? 金额 单位，
+#: 同句读单元内再接 (增长|下降|提高|降低)X%。谓词与口径词字符间容忍 PDF
+#: 软换行（宜川原文「支出决算增\n加 0.3 万元，增长 100%」）。句读（。；）
+#: 不可跨越——三数必须同属一个语义单元，禁止跨句拼接。
+_CMM007_UNIT_RE = re.compile(
+    r"(?P<ind>[一-龥（）“”]{2,30}?)\s*"
+    r"(?:支\s*出\s*决\s*算\s*数|支\s*出\s*决\s*算|决\s*算\s*数|决\s*算|支\s*出|预\s*算)?"
+    r"(?:\s*比\s*(?P<base_year>20\d{2})\s*年(?:度)?)?"
+    r"\s*(?P<verb>增\s*加|减\s*少|增\s*长|下\s*降)(?:幅|了)?\s*"
+    r"(?P<delta>\d[\d,，.]*)\s*(?P<dunit>万\s*元|亿\s*元|元)"
+    r"[^。；]{0,12}?"
+    r"(?P<pverb>增\s*长|下\s*降|提\s*高|降\s*低)(?:幅|了)?\s*(?P<pct>\d[\d,，.]*)\s*%"
+)
+
+#: 同节本期金额披露：指标 (口径后缀)? (为|是)? 金额 单位。
+_CMM007_CURRENT_RE = re.compile(
+    r"(?P<ind>[一-龥（）“”]{2,30}?)\s*"
+    r"(?:支\s*出\s*决\s*算\s*数|支\s*出\s*决\s*算|决\s*算\s*数|决\s*算|支\s*出|预\s*算)?"
+    r"(?:\s*(?:为|是))?\s*"
+    r"(?P<amt>\d[\d,，.]*)\s*(?P<aunit>万\s*元|亿\s*元|元)"
+)
+
+#: 显式基期披露：上年/上年度/20XX年度 的指标金额。
+_CMM007_EXPLICIT_PRIOR_RE = re.compile(
+    r"(?:上\s*年(?:度|同期)?|(?P<pyear>20\d{2})\s*年(?:度)?)\s*(?:的)?\s*"
+    r"(?P<ind>[一-龥（）“”]{2,30}?)\s*"
+    r"(?:支\s*出\s*决\s*算\s*数|支\s*出\s*决\s*算|决\s*算\s*数|决\s*算|支\s*出|预\s*算)?"
+    r"(?:\s*(?:为|是))?\s*"
+    r"(?P<amt>\d[\d,，.]*)\s*(?P<aunit>万\s*元|亿\s*元|元)"
+)
+
+#: 指标名归一：去时间/比较前缀（本年/比上年…）与口径后缀（支出决算/决算/
+#: 支出/预算）——身份是业务项，口径（预算/决算）是绑定槽位自己的属性。
+_CMM007_IND_PREFIX_RE = re.compile(r"^(?:比\s*)?(?:上\s*年(?:度|同期)?|本\s*年(?:度)?)+")
+_CMM007_IND_SUFFIX_RE = re.compile(
+    r"(?:支\s*出\s*决\s*算\s*数|支\s*出\s*决\s*算|决\s*算\s*数|决\s*算|支\s*出|预\s*算)$"
+)
+
+#: 上年/基期标记（本期披露候选的拒绝条件：上年口径的金额不是本期）
+_CMM007_PRIOR_MARK_RE = re.compile(r"上\s*年(?:度|同期)?|以前年度|(20\d{2})\s*年(?:度)?")
+
+_CMM007_UP_VERBS = ("增加", "增长", "提高")
+_CMM007_DOWN_VERBS = ("减少", "下降", "降低")
+
+
+def _cmm007_clean_amount(text: str) -> str:
+    return re.sub(r"[,，\s]", "", text or "")
+
+
+def _cmm007_scale(cleaned: str) -> int:
+    return len(cleaned.split(".", 1)[1]) if "." in cleaned else 0
+
+
+def _cmm007_canon(name: str) -> str:
+    """指标身份归一：去前缀/后缀后必须仍有业务项名，否则为空（拒绝绑定）。"""
+    text = _CMM007_IND_PREFIX_RE.sub("", _txt_fund_norm(name))
+    while True:
+        stripped = _CMM007_IND_SUFFIX_RE.sub("", text)
+        if stripped == text:
+            return stripped
+        text = stripped
+
+
+def _cmm007_verb_direction(verb: str) -> str:
+    normalized = re.sub(r"\s+", "", verb)
+    return "up" if normalized in _CMM007_UP_VERBS else "down"
+
+
+def _cmm007_clause_marked_prior(merged: str, start: int, year: int) -> bool:
+    """句读前缀（16 字符窗）出现上年/基期年度标记 → 该披露是基期口径。"""
+    prefix = merged[max(0, start - 16):start]
+    cut = max(prefix.rfind(ch) for ch in "。；，、：")
+    if cut >= 0:
+        prefix = prefix[cut + 1:]
+    match = _CMM007_PRIOR_MARK_RE.search(prefix)
+    if match is None:
+        return False
+    found_year = match.group(1)
+    return found_year is None or int(found_year) == year - 1
+
+
+class CMM007_ZeroBaseTrendRecompute(Rule):
+    """同比基期/本期/增减额与增长百分比的确定性复算（零基数）。
+
+    只绑定完整语义单元：同节内"指标 + 本期金额"配"（比20XX年度）增加/减少
+    X 万元，增长/下降 Y%"。增加 → 基期 = 本期 − X；减少 → 基期 = 本期 + X。
+    基期在显示精度包络内为 0 却声明有限百分比 → 正式 finding（同比百分比
+    无定义）；基期非 0 → 复算方向与百分比；显式基期与推导基期冲突 → 四元
+    矛盾 finding。完成率/占比/持平/模板残留不归本规则（CMM-005 与其它义务）。
+    """
+
+    code, severity = "CMM-007", "error"
+    desc = "同比基期/本期/增减额与增长百分比的确定性复算（零基数）"
+
+    def apply(self, doc: Document) -> List[Issue]:
+        merged, offsets = _txt_fund_merged_pages(doc)
+        if not merged.strip():
+            raise RuleDeferred(
+                self.code,
+                "未提取到正文文本，同比复算无从检查",
+                unresolved_reasons=["未提取到正文文本"],
+            )
+        sections = _nar_repeat_sections(merged, doc, offsets)
+        heading_pages = tuple(
+            {_txt_fund_page_for(offsets, start) for _, start, _ in sections}
+        )
+        year = _resolve_fiscal_year(doc, heading_pages)
+        if year is None:
+            raise RuleDeferred(
+                self.code,
+                "未能确认材料财政年度，同比期间不可确认",
+                unresolved_reasons=["未能确认材料财政年度"],
+            )
+
+        issues: List[Issue] = []
+        unresolved: List[str] = []
+        currents, priors = self._collect_amounts(merged, offsets, sections, year, unresolved)
+
+        for match in _CMM007_UNIT_RE.finditer(merged):
+            canon = _cmm007_canon(match.group("ind"))
+            section_title, section_start = _nar_repeat_section_of(sections, match.start())
+            base_year = match.group("base_year")
+            if base_year is not None and int(base_year) != year - 1:
+                continue  # 与材料年度不衔接的比较窗口：已解决的"不可比"
+            if not canon:
+                # 比较句自身无指标身份（如「比上年预算增加…」承接式）时，
+                # 继承同句读单元内唯一一个已接受本期披露的指标——只允许
+                # 同句承接，禁止跨句拼接；非空 canon 无本期披露则 fail-closed
+                canon = self._inherit_same_clause(
+                    merged, match.start(), currents, section_start
+                )
+            if not canon:
+                continue
+            key = (canon, section_start)
+            candidates = currents.get(key)
+            if not candidates:
+                continue  # 无可验证的本期金额 → fail-closed 不比
+            if not self._candidates_agree(candidates):
+                unresolved.append(
+                    f"指标「{canon}」在本节存在多个不一致的本期金额披露，"
+                    "无法确定比较基期（parse_ambiguity）"
+                )
+                continue
+            current = candidates[0]
+            delta_text = _cmm007_clean_amount(match.group("delta"))
+            delta_unit = _txt_fund_norm(match.group("dunit"))
+            delta_factor = _TXT_FUND_UNIT_TO_WAN.get(delta_unit)
+            current_factor = _TXT_FUND_UNIT_TO_WAN.get(current["unit"])
+            if delta_factor is None or current_factor is None:
+                unresolved.append(
+                    f"指标「{canon}」同比句金额单位不在归一口径内，不形成正式比较"
+                )
+                continue
+            direction = _cmm007_verb_direction(match.group("verb"))
+            delta_wan = Decimal(delta_text) * delta_factor
+            current_wan = Decimal(current["amount"]) * current_factor
+            sign = 1 if direction == "down" else -1
+            derived_prior = current_wan + sign * delta_wan
+
+            prior_candidates = priors.get(key)
+            explicit_prior = None
+            if prior_candidates:
+                if not self._candidates_agree(prior_candidates):
+                    unresolved.append(
+                        f"指标「{canon}」在本节存在多个不一致的上年基期披露，"
+                        "基期交叉验证不可完成（parse_ambiguity）"
+                    )
+                else:
+                    explicit_prior = prior_candidates[0]
+                    explicit_wan = Decimal(explicit_prior["amount"]) * _TXT_FUND_UNIT_TO_WAN.get(
+                        explicit_prior["unit"], Decimal("1")
+                    )
+                    envelope = compute_dynamic_envelope(
+                        [
+                            (current["scale"], current["unit"]),
+                            (_cmm007_scale(delta_text), delta_unit),
+                            (explicit_prior["scale"], explicit_prior["unit"]),
+                        ]
+                    )
+                    if amount_difference_exceeds_policy(abs(explicit_wan - derived_prior), envelope):
+                        issues.append(
+                            self._issue(
+                                f"同比基期交叉矛盾（{canon}）：上年披露"
+                                f" {explicit_prior['amount']} {explicit_prior['unit']}，"
+                                f"但按本期 {current['amount']} {current['unit']}、"
+                                f"{match.group('verb')}{delta_text} {delta_unit} 推导基期为"
+                                f" {_txt_fund_display(derived_prior)} 万元，四个数字"
+                                "不能同时成立，需人工复核底稿。",
+                                self._location(
+                                    sections, offsets, match, canon, current,
+                                    delta_text, delta_unit, direction, derived_prior,
+                                    year,
+                                    explicit_prior=explicit_prior["amount"],
+                                ),
+                                severity="error",
+                                evidence_text=self._evidence(
+                                    match, current, explicit_prior=explicit_prior
+                                ),
+                            )
+                        )
+                        continue
+
+            amount_envelope = compute_dynamic_envelope(
+                [(current["scale"], current["unit"]), (_cmm007_scale(delta_text), delta_unit)]
+            )
+            pct_text = _cmm007_clean_amount(match.group("pct"))
+            pct_verb = _cmm007_verb_direction(match.group("pverb"))
+
+            if abs(derived_prior) <= amount_envelope:
+                issues.append(
+                    self._issue(
+                        f"同比零基数百分比无定义（{canon}）：本期"
+                        f" {current['amount']} {current['unit']}，{match.group('verb')}"
+                        f" {delta_text} {delta_unit}，复算基期为 0，却声明"
+                        f"「{re.sub(r'[（），,]','',match.group('pverb'))}{match.group('pct')}%」"
+                        "——分母为 0，同比百分比不存在有限定义。本期金额、增减额"
+                        "与增长百分比三者不能同时成立，需人工复核底稿。",
+                        self._location(
+                            sections, offsets, match, canon, current, delta_text,
+                            delta_unit, direction, derived_prior, year, zero_base=True,
+                        ),
+                        severity="error",
+                        evidence_text=self._evidence(match, current),
+                    )
+                )
+                continue
+
+            if direction != pct_verb:
+                issues.append(
+                    self._issue(
+                        f"同比方向矛盾（{canon}）：本期 {current['amount']}"
+                        f" {current['unit']}、{match.group('verb')} {delta_text}"
+                        f" {delta_unit}，却写「{re.sub(r'[（]，,]','',match.group('pverb'))}"
+                        f"{match.group('pct')}%」——金额增减方向与百分比方向相反，"
+                        "两处披露不能同时成立，需人工复核底稿。",
+                        self._location(
+                            sections, offsets, match, canon, current, delta_text,
+                            delta_unit, direction, derived_prior, year,
+                            direction_conflict=True,
+                            recomputed=self._recompute(current_wan, derived_prior),
+                        ),
+                        severity="error",
+                        evidence_text=self._evidence(match, current),
+                    )
+                )
+                continue
+
+            recomputed = self._recompute(current_wan, derived_prior)
+            declared = Decimal(pct_text)
+            diff = abs(declared - recomputed)
+            if not percentage_difference_exceeds_policy(diff):
+                continue
+            severity = "error" if diff > Decimal("1.0") else "warn"
+            issues.append(
+                self._issue(
+                    f"增减额与同比百分比复算不一致（{canon}）：本期"
+                    f" {current['amount']} {current['unit']}、{match.group('verb')}"
+                    f" {delta_text} {delta_unit}，复算基期"
+                    f" {_txt_fund_display(derived_prior)} 万元，应为"
+                    f"{re.sub(r'[（]，,]','',match.group('pverb'))}{_txt_fund_display(recomputed)}%"
+                    f"，声明 {match.group('pct')}%，相差 {_txt_fund_display(diff)} 个百分点。"
+                    "本期金额、增减额与增长百分比三者不能同时成立，需人工复核底稿。",
+                    self._location(
+                        sections, offsets, match, canon, current, delta_text, delta_unit,
+                        direction, derived_prior, year,
+                        recomputed=_txt_fund_display(recomputed),
+                    ),
+                    severity=severity,
+                    evidence_text=self._evidence(match, current),
+                )
+            )
+
+        if unresolved:
+            reasons = list(dict.fromkeys(unresolved))
+            raise RuleDeferred(
+                self.code,
+                "；".join(reasons),
+                partial_issues=issues,
+                unresolved_reasons=reasons,
+            )
+        return issues
+
+    # ---- 内部：同节金额披露收集 ----
+
+    def _collect_amounts(
+        self,
+        merged: str,
+        offsets: List[int],
+        sections: List[Tuple[str, int, int]],
+        year: int,
+        unresolved: List[str],
+    ) -> Tuple[Dict[Tuple[str, int], List[Dict[str, Any]]], Dict[Tuple[str, int], List[Dict[str, Any]]]]:
+        currents: Dict[Tuple[str, int], List[Dict[str, Any]]] = {}
+        priors: Dict[Tuple[str, int], List[Dict[str, Any]]] = {}
+        for match in _CMM007_CURRENT_RE.finditer(merged):
+            entry = self._amount_entry(merged, offsets, sections, match)
+            if entry is None:
+                continue
+            if re.match(r"^(?:上\s*年|以前)", entry["raw_ind"]) or _cmm007_clause_marked_prior(
+                merged, match.start(), year
+            ):
+                continue  # 上年口径披露不是本期金额
+            currents.setdefault(entry["key"], []).append(entry)
+        for match in _CMM007_EXPLICIT_PRIOR_RE.finditer(merged):
+            entry = self._amount_entry(merged, offsets, sections, match)
+            if entry is None:
+                continue
+            pyear = match.group("pyear")
+            if pyear is not None and int(pyear) != year - 1:
+                continue  # 与材料年度不衔接的基期年：不作为本材料基期
+            priors.setdefault(entry["key"], []).append(entry)
+        return currents, priors
+
+    def _amount_entry(
+        self,
+        merged: str,
+        offsets: List[int],
+        sections: List[Tuple[str, int, int]],
+        match: Any,
+    ) -> Optional[Dict[str, Any]]:
+        raw_ind = match.group("ind")
+        canon = _cmm007_canon(raw_ind)
+        if not canon:
+            return None  # 归一后为空 = 纯口径/时间词，无业务项身份
+        amount = _cmm007_clean_amount(match.group("amt"))
+        unit = _txt_fund_norm(match.group("aunit"))
+        if _TXT_FUND_UNIT_TO_WAN.get(unit) is None:
+            return None
+        section_title, section_start = _nar_repeat_section_of(sections, match.start())
+        return {
+            "key": (canon, section_start),
+            "raw_ind": raw_ind,
+            "canon": canon,
+            "amount": amount,
+            "unit": unit,
+            "scale": _cmm007_scale(amount),
+            "page": _txt_fund_page_for(offsets, match.start()),
+            "section": section_title,
+            "span": re.sub(r"\s+", "", merged[match.start():match.end()]),
+            "start": match.start(),
+            "end": match.end(),
+        }
+
+    def _candidates_agree(self, candidates: List[Dict[str, Any]]) -> bool:
+        values = {
+            Decimal(item["amount"]) * _TXT_FUND_UNIT_TO_WAN.get(item["unit"], Decimal("1"))
+            for item in candidates
+        }
+        return len(values) == 1
+
+    def _inherit_same_clause(
+        self,
+        merged: str,
+        unit_start: int,
+        currents: Dict[Tuple[str, int], List[Dict[str, Any]]],
+        section_start: int,
+    ) -> str:
+        """比较句自身无指标身份时，继承同句读单元（无。；隔断）内唯一的
+        本期披露的指标名——承接式同句绑定，不跨句拼接。"""
+        clause_start = merged.rfind("。", 0, unit_start)
+        semi = merged.rfind("；", 0, unit_start)
+        clause_start = max(clause_start, semi)
+        inherited: List[str] = []
+        for key, items in currents.items():
+            if key[1] != section_start:
+                continue
+            for item in items:
+                if clause_start < item["end"] <= unit_start:
+                    inherited.append(key[0])
+                    break
+        unique = set(inherited)
+        return inherited[0] if len(unique) == 1 else ""
+
+    # ---- 内部：finding 组装 ----
+
+    def _recompute(self, current_wan: Decimal, derived_prior: Decimal) -> Decimal:
+        return abs(current_wan - derived_prior) / abs(derived_prior) * Decimal("100")
+
+    def _location(
+        self,
+        sections: List[Tuple[str, int, int]],
+        offsets: List[int],
+        match: Any,
+        canon: str,
+        current: Dict[str, Any],
+        delta_text: str,
+        delta_unit: str,
+        direction: str,
+        derived_prior: Decimal,
+        year: int,
+        zero_base: bool = False,
+        direction_conflict: bool = False,
+        recomputed: Optional[str] = None,
+        explicit_prior: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        unit_page = _txt_fund_page_for(offsets, match.start())
+        section_title, _ = _nar_repeat_section_of(sections, match.start())
+        location: Dict[str, Any] = {
+            "page": unit_page,
+            "pages": sorted({unit_page, current["page"]}),
+            "section": section_title,
+            "indicator": canon,
+            "current_amount": current["amount"],
+            "direction": re.sub(r"\s+", "", match.group("verb")),
+            "delta_amount": delta_text,
+            "delta_unit": delta_unit,
+            "derived_prior": _txt_fund_display(derived_prior),
+            "declared_percent": _cmm007_clean_amount(match.group("pct")),
+            "unit": "万元",
+            "fiscal_year": year,
+            "obligation_id": _CMM007_OBLIGATION_ID,
+            "zero_base": zero_base,
+            "direction_conflict": direction_conflict,
+            "table_refs": [
+                {
+                    "role": "增减句",
+                    "page": unit_page,
+                    "section": section_title,
+                    "span": re.sub(r"\s+", "", match.group(0)),
+                },
+                {
+                    "role": "本期披露",
+                    "page": current["page"],
+                    "section": current["section"],
+                    "span": current["span"],
+                },
+            ],
+        }
+        if recomputed is not None:
+            location["recomputed_percent"] = recomputed
+        if explicit_prior is not None:
+            location["explicit_prior"] = explicit_prior
+        return location
+
+    def _evidence(
+        self,
+        match: Any,
+        current: Dict[str, Any],
+        explicit_prior: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        lines = [
+            f"增减句：{match.group(0)}",
+            f"本期披露：{current['span']}（第{current['page']}页）",
+            f"口径：本期金额与增减额均为本年支出/预算口径，同比基期按"
+            f"{match.group('verb')}反推",
+        ]
+        if explicit_prior is not None:
+            lines.append(
+                f"上年基期披露：{explicit_prior['span']}（第{explicit_prior['page']}页）"
+            )
+        return "\n".join(lines)
+
+
+# ============================================================================
+# WP4-F：百分比写法完整性（V33-DISCLOSURE-PERCENT-UNIT，预/决算通用）
+#
+# 真值（REAL，2026-09-16 样张复核人工判定 Y08，当时系统未报告）：
+# - 宜川路街道 2025 年度决算（41 页，SHA ``f809eef2…``）P28
+#   「（二）一般公共预算财政拨款支出决算结构情况」：城乡社区支出(类)
+#   15411.43 万元，占 76.23——同枚举句其余 8 项结构占比全部带 %，
+#   唯独此项缺百分号；复算 15411.43/20218.21×100 = 76.2255 → 76.23，
+#   与文中分母（20218.21 万元）精确吻合，百分比语义三重成立。
+#   人工判定 severity「低」，system_match=miss。证据链：
+#   outputs/sample_validation_20260916/{adjudication.json,comparison.md}；
+#   文档 docs/WP4F_PERCENT_UNIT_20260926.md。
+#
+# 谓词范围（不无限扩展）：占 / 占比 / 比重 / 比例——「占」是真实 truth
+# 谓词，后三类是占比披露的强谓词形态。「率」类（完成率/执行率/增长率）
+# 不纳入：归 CMM-007 与 V33-234/V33-TREND-COMPLETION-RATE 领域，避免
+# 大面积重叠（AGENTS.md R004 任务边界）。
+# ============================================================================
+
+_WP4F_OBLIGATION_ID = "OBL-DISCLOSURE-PERCENT-UNIT"
+
+#: 谓词与数值之间的空隙：行内空白，或**恰一次**换行（PDF 软换行把「占」留在
+#: 行尾、数值换到次行行首，任务 §二十二）。空行（两个换行）不跨越——与共享
+#: merge 纪律的空行断段、跨页 fail-closed 语义对齐。
+_WP4F_GAP = r"(?:[ \t]*\n)?[ \t]*"
+
+#: 占比谓词 + 数值（page 级单通道）。复合谓词（占比/比重/比例）先于单字
+#: 「占」；「占」以负向前瞻排除「占地/占用」复合词（面积/金额语义）。谓词
+#: 与数值间容忍「为/是/达到/达」（自身也可跨一次软换行）与空隙。在页面原文
+#: 上扫描：每个匹配即一个物理 occurrence，identity = (page, start, end)。
+_WP4F_PRED_RE = re.compile(
+    r"(?P<pred>占比|比重|比例|占(?![地用]))"
+    + _WP4F_GAP
+    + r"(?:(?:为|是|达到|达)"
+    + _WP4F_GAP
+    + r")?"
+    + r"(?P<num>\d+(?:\.\d+)?)"
+)
+
+#: 数值后百分比单位在场（合规）：ASCII %、全角 ％、中文「百分之」、
+#: 「个百分点」。百分点是变动量单位而非百分比，同样视为表达完整
+#: （AGENTS.md 决算占比口径：单位在/disclosure 即不缺）。
+_WP4F_UNIT_PRESENT_RE = re.compile(r"\s*(?:%|％|‰|百\s*分\s*之|个\s*百\s*分\s*点)")
+
+#: 数值后紧跟另一数字或千分位逗号（表格提取层列错位的伪绑定形态：
+#: 财政局 2024 P21 实测「占⏎60.99 2.07% 445.69；⏎15.16%」——「占」后
+#: 的 60.99 是金额而非占比）。fail-closed 跳过，不产出确定性结论。
+_WP4F_DIGIT_RUN_RE = re.compile(r"\s*[,，]\s*\d|\s*\d")
+
+#: 数值后明确非百分比单位（金额/面积/数量/时长/计数）首字：存在单位
+#: 即不是百分比披露缺口 → 0 finding。首字覆盖（万元/亿元/平方米/亩/
+#: 公顷/人次/个数/天数/成数/折数等派生词都由首字命中）。
+_WP4F_NON_PCT_UNIT_RE = re.compile(
+    r"\s*(?:万|亿|元|平|亩|公|人|个|项|天|日|次|辆|户|件|台|名|家|处|张|所|班|床"
+    r"|支|年|月|时|分|秒|吨|升|米|里|度|间|座|栋|套|批|期|届|位|篇|部|册|幅|枚"
+    r"|号|倍|折|成|岁)"
+)
+
+#: 中文序号章节标题（**行首锚**，section 定位用）：每个 candidate 只允许
+#: 向前取自己 source_start 之前最近的标题（任务 §十二/§十三），不得借用
+#: 后文或整页最后一个章节；定位不到不伪造（None）。alternation 长词在前，
+#: 避免「…情况说明」被截断成「…情况」。
+_WP4F_SECTION_HEAD_RE = re.compile(
+    r"^(?:[一二三四五六七八九十]{1,3}\s*、|[(（][一二三四五六七八九十\d]{1,3}[)）])"
+    r"[^。；，,]{2,45}?(?:情况说明|情况|说明|分析)",
+    re.M,
+)
+
+#: 行尾谓词（跨行防线的通道归属判定用）：数字行上一非空行以占比谓词结尾，
+#: 才是旧 line-break 补扫描通道的形态。
+_WP4F_LINE_END_PRED_RE = re.compile(
+    r"(?:占比|比重|比例|占)(?:[ \t]*(?:为|是|达到|达)[ \t]*)?$"
+)
+
+#: 纯数值行（只含数字/小数点/千分位/百分号/空白/句读）：表格提取层的
+#: 表头行与数据行线性化形态（财政局 2024 P21 实测）——仅在「跨行 + 数字行
+#: 是条目形态（merge 必断段，主扫描不可能命中）+ 上一非空行尾含谓词」的
+#: line-break 通道形态下 fail-closed，不挡同行主扫描形态。
+_WP4F_PLAIN_NUMBER_LINE_RE = re.compile(r"^[\d.,，%\s；;]+$")
+
+#: 证据片段前后保留的上下文字符数。
+_WP4F_SPAN_CONTEXT = 18
+
+
+def _wp4f_norm(value: str) -> str:
+    return re.sub(r"\s+", "", value or "")
+
+
+class _Wp4fPageLine(NamedTuple):
+    """页面物理行：raw 起止偏移 + strip 后内容及其在原文中的起始偏移。"""
+
+    start: int
+    end: int
+    stripped: str
+    stripped_start: int
+
+
+def _wp4f_page_lines(page_text: str) -> List[_Wp4fPageLine]:
+    """按 keepends 切物理行并保留原文偏移（occurrence 定位与 section 回溯共用）。"""
+    lines: List[_Wp4fPageLine] = []
+    cursor = 0
+    for raw in page_text.splitlines(True):
+        start = cursor
+        cursor += len(raw)
+        stripped = raw.strip()
+        lines.append(
+            _Wp4fPageLine(
+                start=start,
+                end=cursor,
+                stripped=stripped,
+                stripped_start=start + (len(raw) - len(raw.lstrip())),
+            )
+        )
+    return lines
+
+
+class R33DisclosurePercentUnit(Rule):
+    """百分比写法完整性：占比谓词 + 数值后缺百分比单位。
+
+    在页面原文上单通道扫描（R1 的 merge 段主扫描 + line-break 补扫描双通道
+    在 R2 合并：page 级 pattern 的空隙容忍"行内空白或恰一次软换行"，其匹配
+    集与旧双通道的物理 occurrence 集合一一对应），每个匹配即一个物理
+    occurrence，identity = (page, source_start, source_end)——同页同谓词
+    同数值的不同 occurrence 各自成 finding，不会互相吞并（R2 P1 整改）。
+    后缀判定：%/％/‰/百分之/个百分点 在场 → 合规；紧跟另一数字或千分位 →
+    列错位伪绑定 fail-closed；明确非百分比单位 → 金额/面积/数量披露，0
+    finding；数值所在行尾结束（rest 为空）时向后看下一个非空行——条目形态
+    （merge 必断段）或无次行 → finding，行首数字 → 延续 skip，其余按次行
+    开头判定——精确复刻旧 merge 段内 rest 的段边界语义。跨行形态且数字行
+    是条目形态时叠加纯数值行防线（表格线性化 fail-closed，仅此通道，不挡
+    同行形态）。数值 < 1 的小数比例形态无法证明作者意图，文案只说「披露
+    口径不明确」，不得断言换算结果。76.234% 等精度问题归 V33-232，本规则
+    不重叠。
+    """
+
+    code, severity = "V33-DISCLOSURE-PERCENT-UNIT", "info"
+    desc = "百分比写法完整（不得漏百分号）"
+
+    def apply(self, doc: Document) -> List[Issue]:
+        page_texts = [str(item or "") for item in (doc.page_texts or [])]
+        if not any(text.strip() for text in page_texts):
+            raise RuleDeferred(
+                self.code,
+                "未提取到正文文本，百分比写法完整性无从检查",
+                unresolved_reasons=["未提取到正文文本"],
+            )
+        # 表达完整性规则：fiscal_year 能确认就记录，确认不了不阻塞
+        # （AGENTS.md 占比披露口径与期间计算无关，WP4-E 的年度门禁不适用）。
+        fiscal_year = _resolve_fiscal_year(doc, ())
+
+        issues: List[Issue] = []
+        for page_idx, page_text in enumerate(page_texts, start=1):
+            if not page_text.strip():
+                continue
+            lines = _wp4f_page_lines(page_text)
+            headings = [
+                (head.start(), _wp4f_norm(head.group()))
+                for head in _WP4F_SECTION_HEAD_RE.finditer(page_text)
+            ]
+            for match in _WP4F_PRED_RE.finditer(page_text):
+                issue = self._evaluate(
+                    doc, page_text, lines, headings, match, page_idx, fiscal_year
+                )
+                if issue is not None:
+                    issues.append(issue)
+        return issues
+
+    @staticmethod
+    def _section_for(
+        headings: List[Tuple[int, str]], position: int
+    ) -> Optional[str]:
+        """occurrence 之前最近的行首章节标题（严格 start < position，只向前；
+        找不到为 None，不借用后文或整页最后一个标题——任务 §十二/§十三）。"""
+        result: Optional[str] = None
+        for start, text in headings:
+            if start < position:
+                result = text
+            else:
+                break
+        return result
+
+    @staticmethod
+    def _line_at(lines: List[_Wp4fPageLine], position: int) -> int:
+        """position 所在物理行下标（lines 按 start 升序，空页不调用）。"""
+        low, high = 0, len(lines) - 1
+        while low < high:
+            mid = (low + high + 1) // 2
+            if lines[mid].start <= position:
+                low = mid
+            else:
+                high = mid - 1
+        return low
+
+    @staticmethod
+    def _next_nonempty_line(
+        lines: List[_Wp4fPageLine], index: int
+    ) -> Optional[_Wp4fPageLine]:
+        for line in lines[index + 1:]:
+            if line.stripped:
+                return line
+        return None
+
+    def _evaluate(
+        self,
+        doc: Document,
+        page_text: str,
+        lines: List[_Wp4fPageLine],
+        headings: List[Tuple[int, str]],
+        match: Any,
+        page: int,
+        fiscal_year: Optional[int],
+    ) -> Optional[Issue]:
+        num_start = match.start("num")
+        num_end = match.end("num")
+        gap_text = match.group(0)[: num_start - match.start()]
+        crossed = "\n" in gap_text
+
+        line_idx = self._line_at(lines, num_start)
+        line = lines[line_idx]
+        stripped = line.stripped
+        rest_inline = stripped[num_end - line.stripped_start:]
+
+        # 跨行 + 数字行是条目形态（merge 必断段，主扫描通道不可能命中）+
+        # 上一非空行尾含谓词 = 旧 line-break 通道形态：叠加纯数值行防线。
+        if (
+            crossed
+            and _NEW_PARAGRAPH_RE.match(stripped)
+            and _WP4F_PLAIN_NUMBER_LINE_RE.match(stripped)
+        ):
+            prev_line = next(
+                (
+                    item
+                    for item in reversed(lines[:line_idx])
+                    if item.stripped
+                ),
+                None,
+            )
+            if prev_line is not None and _WP4F_LINE_END_PRED_RE.search(
+                prev_line.stripped
+            ):
+                return None  # 表格线性化形态，fail-closed
+
+        if rest_inline.strip():
+            verdict = self._classify(rest_inline)
+        else:
+            # 数值在行尾结束：后缀语义延伸到下一个非空行的开头——
+            # 条目形态即 merge 段边界（旧段内 rest 到此为止）→ finding；
+            # 行首数字是数字串延续（列错位）→ skip；其余按次行开头判定。
+            next_line = self._next_nonempty_line(lines, line_idx)
+            if next_line is None or _NEW_PARAGRAPH_RE.match(next_line.stripped):
+                verdict = "finding"
+            elif next_line.stripped[:1].isdigit() or _WP4F_DIGIT_RUN_RE.match(
+                next_line.stripped
+            ):
+                verdict = "skip"
+            else:
+                verdict = self._classify(next_line.stripped)
+        if verdict != "finding":
+            return None
+
+        source_start = match.start()
+        source_end = match.end()
+        return self._build_issue(
+            doc,
+            span=page_text[
+                max(0, source_start - _WP4F_SPAN_CONTEXT):
+                source_end + _WP4F_SPAN_CONTEXT
+            ],
+            predicate=_wp4f_norm(match.group("pred")),
+            numeric_text=_wp4f_norm(match.group("num")),
+            page=page,
+            section=self._section_for(headings, source_start),
+            fiscal_year=fiscal_year,
+            source_start=source_start,
+            source_end=source_end,
+            line_break=crossed,
+        )
+
+    @staticmethod
+    def _classify(rest: str) -> str:
+        """数值后缀判定：compliant（百分比单位在场）/ skip（列错位伪绑定
+        或明确非百分比单位）/ finding（缺百分比单位）。"""
+        if _WP4F_UNIT_PRESENT_RE.match(rest):
+            return "compliant"  # %/％/‰/百分之/个百分点（精度问题归 V33-232）
+        if rest[:1].isdigit() or _WP4F_DIGIT_RUN_RE.match(rest):
+            return "skip"  # 数字串延续：提取层列错位伪绑定，fail-closed
+        if _WP4F_NON_PCT_UNIT_RE.match(rest):
+            return "skip"  # 明确非百分比单位：金额/面积/数量/时长披露
+        return "finding"
+
+    def _build_issue(
+        self,
+        doc: Document,
+        span: str,
+        predicate: str,
+        numeric_text: str,
+        page: int,
+        section: Optional[str],
+        fiscal_year: Optional[int],
+        source_start: int,
+        source_end: int,
+        line_break: bool,
+    ) -> Issue:
+        value = Decimal(numeric_text)
+        location: Dict[str, Any] = {
+            "page": page,
+            "pos": source_start,
+            # 物理 occurrence 身份（page_text 坐标系）：dedup / 证据定位 /
+            # section 解析共用同一身份，不再维护独立的位置推断（任务 §十八）。
+            "source_start": source_start,
+            "source_end": source_end,
+            "obligation_id": _WP4F_OBLIGATION_ID,
+            "predicate": predicate,
+            "numeric_text": numeric_text,
+            "normalized_value": numeric_text,
+            "unit_present": False,
+            "expected_unit": "percent",
+            "section": section,
+            "fiscal_year": fiscal_year,
+            "report_kind": getattr(doc, "report_kind", None),
+            "line_break": line_break,
+        }
+        if Decimal("0") <= value < Decimal("1"):
+            # 小数比例（0.7623）无法证明作者意图：既可能漏 %，也可能是
+            # 刻意的小数比例值——文案只说口径不明确，不得给出换算结果。
+            message = (
+                f"百分比披露口径不明确：原文「{span}」中数值 {numeric_text} 为"
+                " 0 与 1 之间的小数比例形态，既可能是缺少百分号的百分数，"
+                "也可能是刻意使用的小数比例值，当前披露口径不明确，请核实"
+                "原稿后统一为规范的百分比写法。"
+            )
+        else:
+            message = (
+                f"百分比单位缺失：原文「{span}」中「{predicate}{numeric_text}」"
+                f"使用了明确的占比语义，但数值 {numeric_text} 后未披露"
+                "“%/％/百分之”等百分比单位，当前口径不完整，请核实原稿并"
+                "补充正确的百分比单位。"
+            )
+        return self._issue(
+            message,
+            location,
+            evidence_text=f"发现位置：P{page}\n命中片段：{span}",
+        )
+
+
+ALL_COMMON_RULES: List[Rule] = [
+    CMM001_ThreePublicNarrativeConsistency(),
+    CMM002_TextAnomalyRule(),
+    CMM003_TocCountConsistency(),
+    CMM004_CodeMirrorConsistency(),
+    CMM005_ComparativeNarrativeLogic(),
+    CMM006_IncomeExpenseTrendConsistency(),
+    CMM007_ZeroBaseTrendRecompute(),
+    R33DisclosurePercentUnit(),
+]

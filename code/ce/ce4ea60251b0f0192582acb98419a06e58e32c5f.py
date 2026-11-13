@@ -1,0 +1,344 @@
+"""把多个保真图块的真实 OCR 片段归入同一原图物理格；金额不参与配对。"""
+
+from collections import defaultdict
+from types import SimpleNamespace
+import hashlib
+import json
+import re
+
+from ocr_service.protocol import PROTOCOL_VERSION, valid_bbox, valid_score
+from src.services.input_geometry import Affine
+from src.services.ocr_qualification import (
+    bound_response,
+    page_binding_reasons,
+    complete_first_pass_cell,
+)
+
+FRAGMENT_STITCH_VERSION = "source-bound-grid-fragments-v2-ink-coverage"
+
+
+def intersection(a, b):
+    return max(0, min(a[2], b[2]) - max(a[0], b[0])) * max(0, min(a[3], b[3]) - max(a[1], b[1]))
+
+
+def area(box):
+    return (box[2] - box[0]) * (box[3] - box[1])
+
+
+def same_visible_region(a, b):
+    small = min(area(a), area(b))
+    return (
+        small > 0
+        and intersection(a, b) / small >= 0.8
+        and abs((a[1] + a[3] - b[1] - b[3]) / 2) <= max(a[3] - a[1], b[3] - b[1]) * 0.45
+    )
+
+
+def collect_bound_fragments(artifact, grid):
+    if not grid.cells:
+        return []
+    physical = grid.cells[0].ocr_provenance["physical_grid"]
+    if physical["file_hash"] != artifact.source_file_hash:
+        return []
+    identity_keys = (
+        "version",
+        "file_hash",
+        "page",
+        "image_sha256",
+        "parent_image_sha256",
+        "pixel_to_pdf",
+    )
+    if any(
+        any(
+            cell.ocr_provenance.get("physical_grid", {}).get(key) != physical.get(key)
+            for key in identity_keys
+        )
+        for cell in grid.cells
+    ):
+        return []
+    pdf_to_grid = Affine(*physical["pixel_to_pdf"]).inverse()
+    fragments = []
+    for transform_id, transform in artifact.coordinate_transforms.items():
+        source = transform.get("ocr_response", {})
+        context = transform.get("tile_context", {})
+        if (
+            source.get("schema_version") != PROTOCOL_VERSION
+            or source.get("model_fingerprint") != artifact.ocr_model_fingerprint
+            or transform.get("physical_page") != grid.page_number
+        ):
+            continue
+        if (
+            context.get("root_image_sha256", context.get("parent_image_sha256"))
+            != physical["parent_image_sha256"]
+        ):
+            continue
+        stub = SimpleNamespace(
+            page_number=grid.page_number, coordinate_transform_id=transform_id, provenance=source
+        )
+        if page_binding_reasons(stub, artifact):
+            continue
+        bound = bound_response(source)
+        if not bound:
+            continue
+        pixel_to_pdf = Affine(*context["pixel_to_pdf"])
+        pixel_to_grid = pixel_to_pdf.then(pdf_to_grid)
+        tokens = [("block", index, block) for index, block in enumerate(bound.get("blocks", []))]
+        for table_index, table in enumerate(bound.get("tables", [])):
+            for cell in table.get("cells", []):
+                for index, fragment in enumerate(cell.get("fragments", [])):
+                    tokens.append(
+                        (
+                            "table_fragment",
+                            [table_index, cell["row_idx"], cell["col_idx"], index],
+                            fragment,
+                        )
+                    )
+        for kind, index, token in tokens:
+            bbox = valid_bbox(token.get("bbox") or token.get("render_bbox"))
+            score = valid_score(token.get("score"))
+            text = str(token.get("text") or "")
+            if not bbox or score is None or not text.strip():
+                continue
+            source_ref = {
+                "transform_id": transform_id,
+                "tile_id": context["tile_id"],
+                "input_sha256": source["input_sha256"],
+                "parent_image_sha256": context["parent_image_sha256"],
+                "root_image_sha256": context.get(
+                    "root_image_sha256", context["parent_image_sha256"]
+                ),
+                "raw_prediction_sha256": source["raw_prediction_sha256"],
+                "model_fingerprint": source["model_fingerprint"],
+                "pipeline_fingerprint": source["pipeline_fingerprint"],
+                "kind": kind,
+                "index": index,
+            }
+            fid = (
+                "ocr-fragment-"
+                + hashlib.sha256(json.dumps(source_ref, sort_keys=True).encode()).hexdigest()[:24]
+            )
+            reasons = []
+            if score < 0.98:
+                reasons.append("recognition_score_below_existing_threshold")
+            if not complete_first_pass_cell({"fragments": [{"render_bbox": bbox}]}, context):
+                reasons.append("fragment_clipped_at_tile_boundary")
+            pdf_box = pixel_to_pdf.box(bbox)
+            if any(
+                intersection(pdf_box, region) > 0
+                for region in transform.get("page_recovery", {}).get("unresolved_pdf_regions", [])
+            ):
+                reasons.append("regional_recovery_incomplete")
+            fragments.append(
+                {
+                    "fragment_id": fid,
+                    "text": text,
+                    "score": score,
+                    "render_bbox": bbox,
+                    "grid_bbox": pixel_to_grid.box(bbox),
+                    "page_bbox": pdf_box,
+                    "source": source_ref,
+                    "granularity": "fragment",
+                    "status": "qualified_fragment" if not reasons else "requires_regional_read",
+                    "reasons": reasons,
+                }
+            )
+    return fragments
+
+
+def group_projections(fragments):
+    """只按原图位置聚合重复投影；不同格/位置的同额文字始终独立。"""
+    parents = list(range(len(fragments)))
+
+    def owner(index):
+        while parents[index] != index:
+            parents[index] = parents[parents[index]]
+            index = parents[index]
+        return index
+
+    for i, a in enumerate(fragments):
+        for j in range(i + 1, len(fragments)):
+            if same_visible_region(a["grid_bbox"], fragments[j]["grid_bbox"]):
+                parents[owner(j)] = owner(i)
+    groups = defaultdict(list)
+    for i, fragment in enumerate(fragments):
+        groups[owner(i)].append(fragment)
+    results = []
+    for options in groups.values():
+        eligible = [f for f in options if f["status"] == "qualified_fragment"]
+        # 高分不是投票；两个完整合法候选冲突仍交给原图区域补读。
+        selected = max(eligible or options, key=lambda f: f["score"])
+        status = (
+            "resolved"
+            if eligible and len({f["text"] for f in eligible}) == 1
+            else "requires_regional_read"
+        )
+        results.append({"selected": selected, "alternates": options, "status": status})
+    return results
+
+
+def compose_literal(groups):
+    ordered = sorted(
+        groups, key=lambda g: (g["selected"]["grid_bbox"][1], g["selected"]["grid_bbox"][0])
+    )
+    lines = []
+    for group in ordered:
+        box = group["selected"]["grid_bbox"]
+        if (
+            not lines
+            or abs(box[1] - lines[-1][0]["selected"]["grid_bbox"][1]) > (box[3] - box[1]) * 0.35
+        ):
+            lines.append([])
+        lines[-1].append(group)
+    texts = []
+    for line in lines:
+        line.sort(key=lambda g: g["selected"]["grid_bbox"][0])
+        text = ""
+        for group in line:
+            value = group["selected"]["text"]
+            # 数字片段之间的间距可能代表两笔数；不能删除后制造一个合法金额。
+            if text and (re.search(r"\d", text) or re.search(r"\d", value)):
+                text += " "
+            text += value
+        texts.append(text)
+    return "\n".join(texts)
+
+
+def align_grid_fragments(artifact, grid):
+    assigned = defaultdict(list)
+    unowned = []
+    for fragment in collect_bound_fragments(artifact, grid):
+        box = fragment["grid_bbox"]
+        matches = [
+            cell
+            for cell in grid.cells
+            if intersection(box, cell.ocr_provenance["physical_grid"]["cell"]["bbox_px"])
+            / area(box)
+            >= 0.8
+        ]
+        if len(matches) == 1:
+            assigned[matches[0].row_idx, matches[0].col_idx].append(fragment)
+        else:
+            unowned.append({**fragment, "reason": "not_uniquely_owned_by_one_physical_cell"})
+    candidates = []
+    for cell in grid.cells:
+        groups = group_projections(assigned[cell.row_idx, cell.col_idx])
+        blank = cell.ocr_provenance["physical_grid"]["cell"]["image_blank_verified"]
+        missing_ink = uncovered_ink_pixels(cell, groups)
+        status = (
+            "resolved"
+            if groups
+            and not blank
+            and not missing_ink
+            and all(g["status"] == "resolved" for g in groups)
+            else "observed_blank"
+            if blank and not groups
+            else "requires_regional_read"
+        )
+        candidates.append(
+            {
+                "physical_source_id": f"{grid.fragment_uid}:r{cell.row_idx}c{cell.col_idx}",
+                "row_idx": cell.row_idx,
+                "col_idx": cell.col_idx,
+                "row_span": cell.row_span,
+                "col_span": cell.col_span,
+                "bbox": cell.bbox,
+                "raw_text": compose_literal(groups),
+                "status": status,
+                "fragment_groups": groups,
+                "source_relation": "image_grid_cell",
+                "version": FRAGMENT_STITCH_VERSION,
+                "uncovered_ink_pixels": missing_ink,
+            }
+        )
+    return {"cells": candidates, "unowned_fragments": unowned, "version": FRAGMENT_STITCH_VERSION}
+
+
+def uncovered_ink_pixels(cell, groups):
+    """以真实词框覆盖原图像素游程；不因一个大框命中中心就认为读全。"""
+    missing = 0.0
+    boxes = [group["selected"]["grid_bbox"] for group in groups]
+    for y, start, end in cell.ocr_provenance["physical_grid"]["cell"].get(
+        "observed_ink_runs_px", []
+    ):
+        covered = sorted(
+            (max(start, box[0] - 1), min(end, box[2] + 1))
+            for box in boxes
+            if box[1] - 1 <= y <= box[3] + 1 and box[2] + 1 > start and box[0] - 1 < end
+        )
+        cursor = start
+        for left, right in covered:
+            missing += max(0, left - cursor)
+            cursor = max(cursor, right)
+        missing += max(0, end - cursor)
+    return missing
+
+
+def grid_recovery_regions(artifact, grids):
+    """独立物理格触发补读；首轮没有片段也必须提出请求。"""
+    from src.engine.fiscal_lexeme import lex_numeric
+    from src.services.ocr_grid_reconstruction import (
+        header_paths,
+        semantic_mappings,
+        title_identity,
+        nearby_context,
+    )
+
+    requests = []
+    for grid in grids:
+        physical = grid.cells[0].ocr_provenance["physical_grid"]
+        width, height = physical.get(
+            "image_size_px", [physical["bbox_px"][2], physical["bbox_px"][3]]
+        )
+        originals = {(cell.row_idx, cell.col_idx): cell for cell in grid.cells}
+        aligned = align_grid_fragments(artifact, grid)["cells"]
+        code, _ = title_identity(nearby_context(artifact, grid))
+        depth, paths = header_paths(aligned, len(grid.rows), max(map(len, grid.rows)))
+        amount_columns = (
+            {m["source_col_idx"] for m in semantic_mappings(code, paths)}
+            if code and paths
+            else set()
+        )
+        for candidate in aligned:
+            text = candidate["raw_text"]
+            reasons = []
+            if candidate["status"] == "requires_regional_read":
+                reasons.append("physical_cell_incomplete_or_conflicting")
+            token = lex_numeric(text)
+            if (
+                token.kind == "invalid"
+                and any(c.isdigit() for c in text)
+                and not re.search(r"[\u4e00-\u9fff]", text)
+            ):
+                reasons.append("illegal_numeric_literal_in_physical_cell")
+            if (
+                candidate["col_idx"] in amount_columns
+                and depth is not None
+                and candidate["row_idx"] >= depth
+                and token.kind
+                not in {
+                    "number",
+                    "amount",
+                    "blank",
+                    "dash",
+                    "not_applicable",
+                    "placeholder",
+                }
+            ):
+                reasons.append("typed_amount_lane_contains_non_amount_literal")
+            if not reasons:
+                continue
+            source = originals[candidate["row_idx"], candidate["col_idx"]]
+            x0, y0, x1, y1 = source.ocr_provenance["physical_grid"]["cell"]["bbox_px"]
+            requests.append(
+                {
+                    "region_key": candidate["physical_source_id"],
+                    "box": [
+                        max(0, int(x0) - 4),
+                        max(0, int(y0) - 4),
+                        min(width, int(x1) + 5),
+                        min(height, int(y1) + 5),
+                    ],
+                    "reasons": reasons,
+                }
+            )
+    return requests

@@ -1,0 +1,845 @@
+"""Username/password login and admin-managed user storage."""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import hmac
+import json
+import logging
+import os
+import secrets
+import tempfile
+import threading
+import time
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
+
+_TESTING = os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes"}
+_REPO_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+_TEST_DATA_DIR = Path(tempfile.gettempdir()) / "govbudgetchecker_test_data"
+_DEFAULT_DATA_DIR = _TEST_DATA_DIR if _TESTING else _REPO_DATA_DIR
+_HASH_ALGO = "pbkdf2_sha256"
+_DEFAULT_ITERATIONS = int(os.getenv("USER_PASSWORD_ITERATIONS", "260000"))
+_DEFAULT_PASSWORD_MIN_LENGTH = int(os.getenv("USER_PASSWORD_MIN_LENGTH", "6"))
+_SESSION_TOKEN_PREFIX = "gbcs1"
+_INSECURE_DEFAULT_ADMIN_PASSWORDS = {
+    "admin",
+    "admin123",
+    "password",
+    "change_me_123",
+    "change_me_to_a_strong_secret",
+}
+
+_LOCKOUT_THRESHOLD = int(os.getenv("LOGIN_LOCKOUT_THRESHOLD", "5"))
+_LOCKOUT_DURATION = int(os.getenv("LOGIN_LOCKOUT_DURATION", "900"))
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _env_text(name: str) -> str:
+    return os.getenv(name, "").strip()
+
+
+def _allow_insecure_default_admin() -> bool:
+    return _TESTING or _env_flag("ALLOW_INSECURE_DEFAULT_ADMIN", False)
+
+
+def _testing_mode() -> bool:
+    """运行时读一次 TESTING，便于测试用 monkeypatch 打开/关闭策略。"""
+    return os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes"}
+
+
+def require_first_login_password_change() -> bool:
+    """首登强制改密是否启用（缺口 B-07）。
+
+    生产默认**开启**：默认管理员口令一定出现在部署环境变量 / compose 文件里，
+    运维、CI 日志甚至截图都可能带上它，所以必须在首次登录时换掉。
+
+    `TESTING=true` 时默认关闭，与仓库既有约定一致
+    （`GOVBUDGET_AUTH_ENABLED` 在测试下默认关闭、`ALLOW_INSECURE_DEFAULT_ADMIN`
+    在测试下默认放开），否则所有"登录后调业务接口"的既有测试都要先改一遍密码。
+    针对本策略本身的测试会显式打开开关。
+    """
+    return _env_flag("REQUIRE_FIRST_LOGIN_PASSWORD_CHANGE", not _testing_mode())
+
+
+class UserStore:
+    """File-backed user store with stateless signed session tokens."""
+
+    def __init__(
+        self,
+        users_file: Optional[Path] = None,
+        session_ttl_seconds: Optional[int] = None,
+        default_admin_username: Optional[str] = None,
+    ) -> None:
+        self._users_file = (
+            Path(users_file).resolve()
+            if users_file is not None
+            else Path(
+                os.getenv(
+                    "USER_FILE",
+                    str(
+                        Path(os.getenv("USER_DATA_DIR", str(_DEFAULT_DATA_DIR)))
+                        / "users.json"
+                    ),
+                )
+            ).resolve()
+        )
+        self._session_ttl_seconds = (
+            session_ttl_seconds
+            if session_ttl_seconds is not None
+            else int(os.getenv("USER_SESSION_TTL_SECONDS", "28800"))
+        )
+        self._password_min_length = _DEFAULT_PASSWORD_MIN_LENGTH
+        self._password_iterations = _DEFAULT_ITERATIONS
+        self._default_admin_username = (
+            default_admin_username
+            or os.getenv("DEFAULT_ADMIN_USERNAME", "admin").strip()
+            or "admin"
+        )
+        self._default_admin_password = _env_text("DEFAULT_ADMIN_PASSWORD")
+        self._legacy_fallback_password = (
+            os.getenv("DEFAULT_LEGACY_PASSWORD", "change_me_123").strip()
+            or "change_me_123"
+        )
+        self._session_secret = self._resolve_session_secret()
+
+        self._lock = threading.RLock()
+        self._users: Dict[str, Dict[str, Any]] = {}
+        self._login_failures: Dict[str, List[float]] = {}
+
+        self._ensure_data_dir()
+        self._load_users()
+
+    @staticmethod
+    def _normalize_username(username: str) -> str:
+        return username.strip().lower()
+
+    @staticmethod
+    def _validate_username(username: str) -> str:
+        text = str(username or "").strip()
+        if not text:
+            raise ValueError("username is required")
+        if len(text) > 64:
+            raise ValueError("username is too long (max 64 chars)")
+        if any(ch.isspace() for ch in text):
+            raise ValueError("username cannot contain spaces")
+        return text
+
+    def _require_password(self, password: str) -> str:
+        text = str(password or "")
+        if not text:
+            raise ValueError("password is required")
+        if len(text) > 256:
+            raise ValueError("password is too long")
+        return text
+
+    def _validate_new_password(self, password: str) -> str:
+        text = self._require_password(password)
+        if len(text) < self._password_min_length:
+            raise ValueError(
+                f"password is too short (min {self._password_min_length} chars)"
+            )
+        return text
+
+    @staticmethod
+    def _public_user(user: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "username": str(user.get("username") or ""),
+            "is_admin": bool(user.get("is_admin")),
+            "is_active": bool(user.get("is_active", True)),
+            # 历史 users.json 没有该字段时按 False 处理：既有账号不会突然被锁在改密页
+            "must_change_password": bool(user.get("must_change_password", False)),
+            "organization_ids": UserStore._normalize_organization_ids(
+                user.get("organization_ids")
+            ),
+            "created_at": float(user.get("created_at") or 0.0),
+            "updated_at": float(user.get("updated_at") or 0.0),
+        }
+
+    @staticmethod
+    def _normalize_organization_ids(value: Any) -> List[str]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            return []
+
+        result: List[str] = []
+        seen = set()
+        for item in value:
+            text = str(item or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            result.append(text)
+        return result
+
+    @staticmethod
+    def _validate_organization_ids(value: Any) -> List[str]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise ValueError("organization_ids must be a list")
+        return UserStore._normalize_organization_ids(value)
+
+    @staticmethod
+    def _coerce_session_version(value: Any) -> int:
+        try:
+            session_version = int(value)
+        except (TypeError, ValueError):
+            return 0
+        return max(session_version, 0)
+
+    @staticmethod
+    def _serialize_user(user: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "username": str(user.get("username") or ""),
+            "password_hash": str(user.get("password_hash") or ""),
+            "is_admin": bool(user.get("is_admin")),
+            "is_active": bool(user.get("is_active", True)),
+            "must_change_password": bool(user.get("must_change_password", False)),
+            "organization_ids": UserStore._normalize_organization_ids(
+                user.get("organization_ids")
+            ),
+            "created_at": float(user.get("created_at") or 0.0),
+            "updated_at": float(user.get("updated_at") or 0.0),
+            "session_version": UserStore._coerce_session_version(
+                user.get("session_version")
+            ),
+        }
+
+    @staticmethod
+    def _is_password_hash(value: str) -> bool:
+        parts = value.split("$", 3)
+        return len(parts) == 4 and parts[0] == _HASH_ALGO
+
+    def _hash_password(self, password: str) -> str:
+        salt = secrets.token_bytes(16)
+        digest = hashlib.pbkdf2_hmac(
+            "sha256",
+            password.encode("utf-8"),
+            salt,
+            self._password_iterations,
+        )
+        salt_text = base64.urlsafe_b64encode(salt).decode("ascii")
+        digest_text = base64.urlsafe_b64encode(digest).decode("ascii")
+        return f"{_HASH_ALGO}${self._password_iterations}${salt_text}${digest_text}"
+
+    def _verify_password(self, password: str, password_hash: str) -> bool:
+        if not self._is_password_hash(password_hash):
+            return False
+
+        algo, iterations_text, salt_text, digest_text = password_hash.split("$", 3)
+        if algo != _HASH_ALGO:
+            return False
+
+        try:
+            iterations = int(iterations_text)
+            # The frontend's local password-change path emits unpadded base64url,
+            # while Python's urlsafe_b64decode requires the padding to be restored.
+            # Normalize both fields so hashes written by either implementation work.
+            salt_encoded = salt_text.encode("ascii")
+            digest_encoded = digest_text.encode("ascii")
+            salt = base64.urlsafe_b64decode(
+                salt_encoded + b"=" * (-len(salt_encoded) % 4)
+            )
+            expected = base64.urlsafe_b64decode(
+                digest_encoded + b"=" * (-len(digest_encoded) % 4)
+            )
+        except Exception:
+            return False
+
+        candidate = hashlib.pbkdf2_hmac(
+            "sha256",
+            password.encode("utf-8"),
+            salt,
+            iterations,
+        )
+        return hmac.compare_digest(candidate, expected)
+
+    def _resolve_loaded_password_hash(
+        self,
+        canonical_username: str,
+        username: str,
+        raw_password_hash: str,
+        legacy_password: str,
+    ) -> Tuple[str, bool]:
+        if raw_password_hash and self._is_password_hash(raw_password_hash):
+            return raw_password_hash, False
+
+        if legacy_password:
+            password = self._require_password(legacy_password)
+            return self._hash_password(password), True
+
+        default_admin_canonical = self._normalize_username(self._default_admin_username)
+        if canonical_username == default_admin_canonical:
+            self._require_safe_default_admin_password()
+            return self._hash_password(self._default_admin_password), True
+
+        logger.warning(
+            "User '%s' has no password hash, assigning legacy fallback password.",
+            username,
+        )
+        return self._hash_password(self._legacy_fallback_password), True
+
+    def _resolve_session_secret(self) -> bytes:
+        raw_secret = (
+            os.getenv("USER_SESSION_SECRET", "").strip()
+            or os.getenv("GOVBUDGET_API_KEY", "").strip()
+        )
+        if raw_secret:
+            return raw_secret.encode("utf-8")
+
+        if _TESTING:
+            return b"test-user-session-secret"
+
+        raise RuntimeError(
+            "USER_SESSION_SECRET and GOVBUDGET_API_KEY are both empty. "
+            "Set at least one before starting the service."
+        )
+
+    @staticmethod
+    def _b64url_encode(raw: bytes) -> str:
+        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+    @staticmethod
+    def _b64url_decode(text: str) -> bytes:
+        padding = "=" * (-len(text) % 4)
+        return base64.urlsafe_b64decode((text + padding).encode("ascii"))
+
+    def _sign_session_body(self, body_text: str) -> str:
+        signature = hmac.new(
+            self._session_secret,
+            body_text.encode("ascii"),
+            hashlib.sha256,
+        ).digest()
+        return self._b64url_encode(signature)
+
+    def _build_session_token_locked(self, user: Dict[str, Any]) -> str:
+        now = int(time.time())
+        payload = {
+            "u": str(user.get("username") or ""),
+            "iat": now,
+            "exp": now + self._session_ttl_seconds,
+            "sv": self._coerce_session_version(user.get("session_version")),
+        }
+        body_text = self._b64url_encode(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
+                "utf-8"
+            )
+        )
+        signature = self._sign_session_body(body_text)
+        return f"{_SESSION_TOKEN_PREFIX}.{body_text}.{signature}"
+
+    def _parse_session_token_locked(
+        self,
+        token: str,
+        *,
+        allow_expired: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        text = str(token or "").strip()
+        if not text:
+            return None
+
+        parts = text.split(".")
+        if len(parts) != 3 or parts[0] != _SESSION_TOKEN_PREFIX:
+            return None
+
+        body_text, signature_text = parts[1], parts[2]
+        expected_signature = self._sign_session_body(body_text)
+        if not hmac.compare_digest(signature_text, expected_signature):
+            return None
+
+        try:
+            payload = json.loads(self._b64url_decode(body_text).decode("utf-8"))
+        except Exception:
+            return None
+        if not isinstance(payload, dict):
+            return None
+
+        username = str(payload.get("u") or "").strip()
+        if not username:
+            return None
+
+        try:
+            issued_at = int(payload.get("iat") or 0)
+            expires_at = int(payload.get("exp") or 0)
+        except (TypeError, ValueError):
+            return None
+        if issued_at <= 0 or expires_at <= 0 or expires_at < issued_at:
+            return None
+        if not allow_expired and expires_at <= int(time.time()):
+            return None
+
+        return {
+            "username": username,
+            "issued_at": issued_at,
+            "expires_at": expires_at,
+            "session_version": self._coerce_session_version(payload.get("sv")),
+        }
+
+    def _ensure_data_dir(self) -> None:
+        self._users_file.parent.mkdir(parents=True, exist_ok=True)
+
+    def _load_users(self) -> None:
+        with self._lock:
+            self._load_users_locked()
+
+    def _load_users_locked(self) -> None:
+        self._users = {}
+        changed = False
+
+        if self._users_file.exists():
+            try:
+                payload = json.loads(self._users_file.read_text(encoding="utf-8"))
+                rows = payload.get("users", [])
+                if isinstance(rows, list):
+                    now = time.time()
+                    for row in rows:
+                        if not isinstance(row, dict):
+                            continue
+                        username = str(row.get("username") or "").strip()
+                        canonical = self._normalize_username(username)
+                        if not canonical:
+                            continue
+                        created = float(row.get("created_at") or now)
+                        updated = float(row.get("updated_at") or created)
+
+                        raw_password_hash = str(row.get("password_hash") or "").strip()
+                        legacy_password = str(row.get("password") or "")
+                        password_hash, migrated = self._resolve_loaded_password_hash(
+                            canonical,
+                            username,
+                            raw_password_hash,
+                            legacy_password,
+                        )
+                        if migrated:
+                            changed = True
+
+                        if "session_version" not in row:
+                            changed = True
+
+                        # 口令是由本进程赋予的（默认管理员口令 / legacy 兜底口令），
+                        # 说明它一定出现在部署配置里，必须在下次登录时换掉
+                        must_change = bool(row.get("must_change_password", False))
+                        if migrated and require_first_login_password_change():
+                            must_change = True
+
+                        self._users[canonical] = {
+                            "username": username,
+                            "password_hash": password_hash,
+                            "is_admin": bool(row.get("is_admin", False)),
+                            "is_active": bool(row.get("is_active", True)),
+                            # 向后兼容：历史记录没有该字段时按 False，
+                            # 已有账号不会因为升级而突然被要求改密
+                            "must_change_password": must_change,
+                            "organization_ids": self._normalize_organization_ids(
+                                row.get("organization_ids")
+                            ),
+                            "created_at": created,
+                            "updated_at": updated,
+                            "session_version": self._coerce_session_version(
+                                row.get("session_version")
+                            ),
+                        }
+            except Exception:
+                logger.exception("Failed to load user store from %s", self._users_file)
+                self._users = {}
+
+        if self._ensure_default_admin_locked():
+            changed = True
+
+        if changed:
+            self._save_users_locked()
+
+    def _save_users_locked(self) -> None:
+        rows = [self._serialize_user(user) for user in self._users.values()]
+        rows.sort(key=lambda item: item["username"].lower())
+        payload = {
+            "users": rows,
+            "updated_at": time.time(),
+        }
+
+        tmp_path: Optional[Path] = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                dir=str(self._users_file.parent),
+                prefix=f"{self._users_file.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as tmp_file:
+                json.dump(payload, tmp_file, ensure_ascii=False, indent=2)
+                tmp_file.write("\n")
+                tmp_file.flush()
+                tmp_path = Path(tmp_file.name)
+            if tmp_path is not None:
+                tmp_path.replace(self._users_file)
+        finally:
+            if tmp_path is not None and tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass
+
+    def _ensure_default_admin_locked(self) -> bool:
+        canonical = self._normalize_username(self._default_admin_username)
+        now = time.time()
+        user = self._users.get(canonical)
+        changed = False
+
+        if user is None:
+            self._require_safe_default_admin_password()
+            self._users[canonical] = {
+                "username": self._default_admin_username,
+                "password_hash": self._hash_password(self._default_admin_password),
+                "is_admin": True,
+                "is_active": True,
+                # 首登强制改密（缺口 B-07）：播种口令来自部署环境变量，必须换掉
+                "must_change_password": require_first_login_password_change(),
+                "organization_ids": [],
+                "created_at": now,
+                "updated_at": now,
+                "session_version": 0,
+            }
+            changed = True
+            logger.info("Seeded default admin account: %s", self._default_admin_username)
+        else:
+            if not user.get("is_admin", False):
+                user["is_admin"] = True
+                changed = True
+            if not user.get("is_active", True):
+                user["is_active"] = True
+                changed = True
+            current_hash = str(user.get("password_hash") or "")
+            if not self._is_password_hash(current_hash):
+                self._require_safe_default_admin_password()
+                user["password_hash"] = self._hash_password(self._default_admin_password)
+                # 口令刚被重置成部署配置里的默认值，同样要求下次登录改掉
+                user["must_change_password"] = require_first_login_password_change()
+                changed = True
+            if "session_version" not in user:
+                user["session_version"] = 0
+                changed = True
+            if "organization_ids" not in user:
+                user["organization_ids"] = []
+                changed = True
+            if changed:
+                user["updated_at"] = now
+
+        return changed
+
+    def _require_safe_default_admin_password(self) -> None:
+        if _allow_insecure_default_admin():
+            if not self._default_admin_password:
+                self._default_admin_password = "admin123"
+            return
+
+        if not self._default_admin_password:
+            raise RuntimeError(
+                "DEFAULT_ADMIN_PASSWORD must be set before seeding the default "
+                "admin account."
+            )
+
+        if self._default_admin_password.lower() in _INSECURE_DEFAULT_ADMIN_PASSWORDS:
+            raise RuntimeError(
+                "DEFAULT_ADMIN_PASSWORD uses an insecure built-in value. "
+                "Set a strong unique password, or set "
+                "ALLOW_INSECURE_DEFAULT_ADMIN=true only for disposable local "
+                "development."
+            )
+
+    @staticmethod
+    def _bump_session_version_locked(user: Dict[str, Any]) -> None:
+        current = UserStore._coerce_session_version(user.get("session_version"))
+        user["session_version"] = current + 1
+
+    def _active_admin_count_locked(self) -> int:
+        return sum(
+            1
+            for user in self._users.values()
+            if bool(user.get("is_admin")) and bool(user.get("is_active", True))
+        )
+
+    def list_users(self) -> List[Dict[str, Any]]:
+        with self._lock:
+            self._load_users_locked()
+            users = [self._public_user(user) for user in self._users.values()]
+            users.sort(key=lambda item: item["username"].lower())
+            return users
+
+    def add_user(
+        self,
+        username: str,
+        password: str,
+        is_admin: bool = False,
+        organization_ids: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        clean_username = self._validate_username(username)
+        clean_password = self._validate_new_password(password)
+        clean_organization_ids = self._validate_organization_ids(organization_ids)
+        canonical = self._normalize_username(clean_username)
+        now = time.time()
+
+        with self._lock:
+            self._load_users_locked()
+            if canonical in self._users:
+                raise ValueError("username already exists")
+
+            self._users[canonical] = {
+                "username": clean_username,
+                "password_hash": self._hash_password(clean_password),
+                "is_admin": bool(is_admin),
+                "is_active": True,
+                # 管理员创建的账号不强制改密（本轮只覆盖默认管理员首登，见 docs）
+                "must_change_password": False,
+                "organization_ids": clean_organization_ids,
+                "created_at": now,
+                "updated_at": now,
+                "session_version": 0,
+            }
+            self._save_users_locked()
+            return self._public_user(self._users[canonical])
+
+    def update_user(
+        self,
+        username: str,
+        is_admin: Optional[bool] = None,
+        is_active: Optional[bool] = None,
+        password: Optional[str] = None,
+        organization_ids: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        canonical = self._normalize_username(self._validate_username(username))
+
+        with self._lock:
+            self._load_users_locked()
+            user = self._users.get(canonical)
+            if user is None:
+                raise KeyError("user not found")
+
+            changed = False
+            should_revoke_sessions = False
+
+            if is_admin is not None:
+                new_is_admin = bool(is_admin)
+                if bool(user.get("is_admin")) != new_is_admin:
+                    if (
+                        user.get("is_admin")
+                        and not new_is_admin
+                        and bool(user.get("is_active", True))
+                        and self._active_admin_count_locked() <= 1
+                    ):
+                        raise ValueError("at least one active admin must remain")
+                    user["is_admin"] = new_is_admin
+                    changed = True
+
+            if is_active is not None:
+                new_is_active = bool(is_active)
+                if bool(user.get("is_active", True)) != new_is_active:
+                    if (
+                        user.get("is_admin")
+                        and not new_is_active
+                        and self._active_admin_count_locked() <= 1
+                    ):
+                        raise ValueError("at least one active admin must remain")
+                    user["is_active"] = new_is_active
+                    changed = True
+                    if not new_is_active:
+                        should_revoke_sessions = True
+
+            if password is not None:
+                clean_password = self._validate_new_password(password)
+                user["password_hash"] = self._hash_password(clean_password)
+                should_revoke_sessions = True
+                changed = True
+
+            if organization_ids is not None:
+                clean_organization_ids = self._validate_organization_ids(
+                    organization_ids
+                )
+                if self._normalize_organization_ids(
+                    user.get("organization_ids")
+                ) != clean_organization_ids:
+                    user["organization_ids"] = clean_organization_ids
+                    changed = True
+
+            if changed:
+                if should_revoke_sessions:
+                    self._bump_session_version_locked(user)
+                user["updated_at"] = time.time()
+                self._save_users_locked()
+
+            return self._public_user(user)
+
+    def delete_user(self, username: str, actor_username: Optional[str] = None) -> None:
+        canonical = self._normalize_username(self._validate_username(username))
+
+        with self._lock:
+            self._load_users_locked()
+            user = self._users.get(canonical)
+            if user is None:
+                raise KeyError("user not found")
+
+            if actor_username and canonical == self._normalize_username(actor_username):
+                raise ValueError("cannot delete current login user")
+
+            if (
+                user.get("is_admin")
+                and bool(user.get("is_active", True))
+                and self._active_admin_count_locked() <= 1
+            ):
+                raise ValueError("at least one active admin must remain")
+
+            del self._users[canonical]
+            self._save_users_locked()
+
+    def _check_lockout(self, canonical_username: str) -> None:
+        """Raise PermissionError if the user account is locked out."""
+        now = time.time()
+        attempts = self._login_failures.get(canonical_username, [])
+        recent = [t for t in attempts if now - t < _LOCKOUT_DURATION]
+        if len(recent) >= _LOCKOUT_THRESHOLD:
+            remaining = int(_LOCKOUT_DURATION - (now - recent[0]))
+            raise PermissionError(
+                f"account locked due to too many failed attempts; "
+                f"try again in {remaining} seconds"
+            )
+
+    def _record_failure(self, canonical_username: str) -> None:
+        """Record a failed login attempt timestamp."""
+        now = time.time()
+        attempts = self._login_failures.get(canonical_username, [])
+        recent = [t for t in attempts if now - t < _LOCKOUT_DURATION]
+        recent.append(now)
+        self._login_failures[canonical_username] = recent
+
+    def _clear_failures(self, canonical_username: str) -> None:
+        """Clear failed login attempts after a successful login."""
+        self._login_failures.pop(canonical_username, None)
+
+    def login(self, username: str, password: str) -> Tuple[str, Dict[str, Any]]:
+        canonical = self._normalize_username(self._validate_username(username))
+        plain_password = self._require_password(password)
+
+        with self._lock:
+            self._check_lockout(canonical)
+            self._load_users_locked()
+            user = self._users.get(canonical)
+            if user is None:
+                self._record_failure(canonical)
+                raise PermissionError("invalid username or password")
+            if not bool(user.get("is_active", True)):
+                raise PermissionError("user is disabled")
+
+            password_hash = str(user.get("password_hash") or "")
+            if not self._verify_password(plain_password, password_hash):
+                self._record_failure(canonical)
+                raise PermissionError("invalid username or password")
+
+            self._clear_failures(canonical)
+            token = self._build_session_token_locked(user)
+            return token, self._public_user(user)
+
+    def change_password(
+        self,
+        username: str,
+        old_password: str,
+        new_password: str,
+    ) -> None:
+        canonical = self._normalize_username(self._validate_username(username))
+        old_plain = self._require_password(old_password)
+        new_plain = self._validate_new_password(new_password)
+
+        with self._lock:
+            self._load_users_locked()
+            user = self._users.get(canonical)
+            if user is None:
+                raise KeyError("user not found")
+            if not bool(user.get("is_active", True)):
+                raise PermissionError("user is disabled")
+
+            password_hash = str(user.get("password_hash") or "")
+            if not self._verify_password(old_plain, password_hash):
+                raise PermissionError("invalid old password")
+
+            if self._verify_password(new_plain, password_hash):
+                raise ValueError("new password must be different from old password")
+
+            user["password_hash"] = self._hash_password(new_plain)
+            # 改密完成，解除首登强制改密限制（缺口 B-07）
+            user["must_change_password"] = False
+            self._bump_session_version_locked(user)
+            user["updated_at"] = time.time()
+            self._save_users_locked()
+
+    def revoke_session(self, token: str) -> None:
+        if not token:
+            return
+
+        with self._lock:
+            payload = self._parse_session_token_locked(token, allow_expired=True)
+            if payload is None:
+                return
+
+            self._load_users_locked()
+            canonical = self._normalize_username(str(payload.get("username") or ""))
+            user = self._users.get(canonical)
+            if user is None:
+                return
+
+            current_version = self._coerce_session_version(user.get("session_version"))
+            token_version = self._coerce_session_version(payload.get("session_version"))
+            if current_version != token_version:
+                return
+
+            self._bump_session_version_locked(user)
+            user["updated_at"] = time.time()
+            self._save_users_locked()
+
+    def get_user_by_token(self, token: str) -> Optional[Dict[str, Any]]:
+        if not token:
+            return None
+
+        with self._lock:
+            payload = self._parse_session_token_locked(token)
+            if payload is None:
+                return None
+
+            self._load_users_locked()
+            canonical = self._normalize_username(str(payload.get("username") or ""))
+            user = self._users.get(canonical)
+            if user is None or not bool(user.get("is_active", True)):
+                return None
+
+            current_version = self._coerce_session_version(user.get("session_version"))
+            token_version = self._coerce_session_version(payload.get("session_version"))
+            if current_version != token_version:
+                return None
+
+            return self._public_user(user)
+
+
+_store_instance: Optional[UserStore] = None
+
+
+def get_user_store() -> UserStore:
+    """Return the process-wide user store singleton."""
+    global _store_instance
+    if _store_instance is None:
+        _store_instance = UserStore()
+    return _store_instance
+
+
+def reset_user_store() -> None:
+    """Reset singleton for tests."""
+    global _store_instance
+    _store_instance = None

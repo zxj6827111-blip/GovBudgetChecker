@@ -1,0 +1,1200 @@
+"""
+Run structured ingest against PostgreSQL without affecting legacy checks.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from dataclasses import replace
+import hashlib
+import logging
+import os
+from pathlib import Path
+import re
+from typing import Any, Dict, Iterable, List, Optional, Sequence
+
+from src.db.connection import DatabaseConnection
+from src.db.migrations import run_migrations
+from src.schemas.organization import Organization
+from src.services.fiscal_fact_materializer import FiscalFactMaterializer
+from src.services.fiscal_table_rules import NINE_TABLE_RULES
+from src.services.org_storage import get_org_storage
+from src.services.parse_artifact_store import (
+    find_cached_parse_run,
+    load_parse_artifact,
+    persist_facts_and_evidence,
+    persist_parse_artifact,
+)
+from src.services.pdf_parser import PARSER_FINGERPRINT, PDFParser
+from src.schemas.parse_artifact import ParseArtifact, ParsedTable
+from src.services.ps_schema_sync import PSSharedSchemaSync
+from src.services.table_recognizer import TableRecognizer
+from src.utils.report_year import parse_report_year
+
+logger = logging.getLogger(__name__)
+
+_DB_READY = False
+_DB_READY_LOCK: asyncio.Lock | None = None
+
+CORE_TABLES = (
+    "FIN_01_income_expenditure_total",
+    "FIN_02_income",
+    "FIN_03_expenditure",
+    "FIN_04_fiscal_grant_total",
+    "FIN_05_general_public_expenditure",
+    "FIN_06_basic_expenditure",
+    "FIN_07_three_public",
+)
+CONDITIONAL_TABLES = (
+    "FIN_08_gov_fund",
+    "FIN_09_state_capital",
+)
+
+
+def _legacy_artifact_projection(
+    artifact: ParseArtifact,
+) -> tuple[ParseArtifact, List[Dict[str, Any]]]:
+    """Select existing logical tables for the one-code legacy schema.
+
+    Keep the unified artifact and its independent instance identities intact.
+    Page-text fallbacks are discovery candidates, not a grid to overwrite a
+    resolved logical table with. Multiple genuine instances cannot be flattened
+    into one legacy table, even when their amounts happen to agree.
+    """
+    by_code: Dict[str, List[ParsedTable]] = {}
+    for table in artifact.table_fragments:
+        by_code.setdefault(table.table_code, []).append(table)
+    projected: List[ParsedTable] = []
+    review_items: List[Dict[str, Any]] = []
+    for code, tables in by_code.items():
+        candidates = [table for table in tables if table.extraction_method != "page_text_fallback"]
+        if code not in NINE_TABLE_RULES:
+            projected.extend(candidates)
+            continue
+        logical_instances = [
+            instance
+            for instance in artifact.logical_tables
+            if instance.table_code == code
+            and any(
+                table.fragment_uid in instance.fragment_uids
+                or table.fragment_uid == instance.instance_uid
+                for table in candidates
+            )
+        ]
+        conflicts = any(instance.identity_conflict for instance in logical_instances)
+        if len(candidates) == 1 and not conflicts and len(logical_instances) <= 1:
+            projected.append(candidates[0])
+            continue
+        reason = (
+            "logical_identity_conflict"
+            if conflicts
+            else "multiple_logical_instances"
+            if len(candidates) > 1 or len(logical_instances) > 1
+            else "only_page_text_candidates"
+        )
+        review_items.append(
+            {
+                "id": f"{code}:legacy_projection",
+                "type": "legacy_table_projection_unavailable",
+                "severity": "warn",
+                "table_code": code,
+                "recognition_status": "manual_review",
+                "reason": reason,
+                "page_numbers": sorted({table.page_number for table in tables}),
+                "instance_uids": [instance.instance_uid for instance in logical_instances],
+                "message": "该表存在独立实例或缺少可靠表格来源，旧表兼容口径无法安全合并，待人工复核",
+                "recommended_action": "review_logical_table_identity",
+            }
+        )
+    projected.sort(key=lambda table: (table.page_number, table.table_index, table.fragment_uid))
+    return replace(artifact, table_fragments=projected), review_items
+
+
+async def close_structured_ingest_resources() -> None:
+    global _DB_READY
+    if DatabaseConnection.is_initialized():
+        await DatabaseConnection.close()
+    _DB_READY = False
+
+
+async def ensure_structured_ingest_ready() -> bool:
+    global _DB_READY
+    if _DB_READY:
+        return True
+
+    if not (os.getenv("DATABASE_URL") or "").strip():
+        return False
+
+    global _DB_READY_LOCK
+    active_loop = asyncio.get_running_loop()
+    if _DB_READY_LOCK is None or getattr(_DB_READY_LOCK, "_loop", None) not in (None, active_loop):
+        _DB_READY_LOCK = asyncio.Lock()
+    async with _DB_READY_LOCK:
+        if _DB_READY:
+            return True
+        try:
+            await DatabaseConnection.initialize()
+            await run_migrations()
+            _DB_READY = True
+        except Exception:
+            logger.exception("Failed to initialize structured ingest database")
+            return False
+    return True
+
+
+def build_ingest_metadata(
+    *,
+    organization_id: Any = None,
+    organization_name: Any = None,
+    fiscal_year: Any = None,
+    doc_type: Any = None,
+    report_year: Any = None,
+    report_kind: Any = None,
+    checksum: Any = None,
+    document_profile: Any = None,
+) -> Dict[str, Any]:
+    """构建结构化入库的元数据。
+
+    抽成独立函数是为了让"画像到底有没有被传进来"成为**可测的事实**，
+    而不是靠读源码断言。
+
+    为什么必须把 ``document_profile`` 传进来：Slot 归属判定要靠它识别
+    "文种在不同来源间冲突""任务年度与材料实际年度不一致""材料口径"这三件事。
+    画像里本来就带着 ``conflicts`` 与被否决的候选值，只传最终选中的那个值，
+    冲突信息在进入台账之前就被丢掉了——本应停在"待人工确认"的材料
+    会被当成已确认，而且事后无从察觉。
+
+    这里复用主分析链路**已经算好的同一个** DocumentProfile，不重新解析 PDF、
+    也不在入库侧另造一套业务画像：两套画像必然漂移，而漂移的表现就是
+    "分析说是这份材料、台账说是另一份"。
+
+    ``document_profile`` 既有的**输出**字段（``canonical_nine_table`` 这类
+    结构化解析类型字符串）与本函数的**输入**参数是两回事，不要混淆。
+    """
+    payload: Dict[str, Any] = {
+        "organization_id": organization_id,
+        "organization_name": organization_name,
+        "fiscal_year": fiscal_year,
+        "doc_type": doc_type,
+        "report_year": report_year,
+        "report_kind": report_kind,
+        "checksum": checksum,
+    }
+    profile = _normalize_document_profile(document_profile)
+    if profile is not None:
+        payload["document_profile"] = profile
+    return payload
+
+
+def _normalize_document_profile(value: Any) -> Optional[Dict[str, Any]]:
+    """把画像归一为字典；None 表示"本次没有画像"。
+
+    传入无法识别的类型时抛错而不是静默丢弃：静默丢弃正是本轮要修的缺陷类型
+    ——画像没传进来不会报错，只会让台账少识别一批冲突，而且事后查不出来。
+    """
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        payload = to_dict()
+        if isinstance(payload, dict):
+            return payload
+    raise TypeError(
+        "document_profile 必须是 dict、带 to_dict() 的画像对象或 None，"
+        f"实际收到 {type(value).__name__}"
+    )
+
+
+async def run_structured_ingest(
+    job_id: str,
+    pdf_path: Path,
+    metadata: Dict[str, Any],
+    *,
+    parse_artifact: Optional["ParseArtifact"] = None,
+    parse_config_fingerprint: str = "",
+    effective_fact_context: Any = None,
+) -> Dict[str, Any]:
+    """结构化入库主链路。
+
+    顺序上有一条硬约束：**文档版本建立之后立刻分配材料槽位，然后才解析**。
+    两者回答的是不同问题——台账回答"这份材料有没有收到"，解析回答"这份材料
+    看得懂看不懂"。把分配放在末尾，等于要求解析、识别、物化全部成功材料
+    才算进台账，而解析失败的那批恰恰是最需要被台账看见的。
+
+    错误返回必须保留已经建立的 ``document_version_id`` 与 ``material_slot``：
+    没有这两个字段，调用方只能看到一个"什么都没发生"的失败，
+    无从判断材料到底进没进台账。
+
+    ZC-01（SYS-01）：``parse_artifact`` 允许调用方传入主链已生成的统一解析
+    对象——入库只消费该对象，**不再重开 PDF 解析第二遍**。未传入时先查
+    解析缓存（按原件哈希 + 解析器 + 配置指纹），命中即从统一存储重建；
+    都没有才实际解析一次并落库。无数据库时整体 skipped 的行为不变。
+    """
+    if not await ensure_structured_ingest_ready():
+        return {
+            "job_id": job_id,
+            "status": "skipped",
+            "reason": "database_unavailable",
+            "review_item_count": 0,
+            "review_items": [],
+        }
+
+    conn = None
+    # 下面这些值在 try 之外声明并逐步填充：任何一步抛错时，错误结果里仍要能
+    # 回答"是哪份材料""文档版本建了没有""槽位分到没有"。
+    org_name: Optional[str] = None
+    fiscal_year: Optional[int] = None
+    doc_type: Optional[str] = None
+    document_info: Optional[Dict[str, int]] = None
+    material_slot: Optional[Dict[str, Any]] = None
+    ingest_stage = "setup"
+    parse_run_id: Optional[int] = None
+    try:
+        conn = await DatabaseConnection.acquire()
+        checksum = metadata.get("checksum") or _sha256_file(pdf_path)
+        source_owner = metadata.get("organization_name")
+        if effective_fact_context is not None:
+            source_owner = effective_fact_context.org_name
+        if effective_fact_context is not None and not source_owner:
+            # 隔离存放键不是业务主体；事实/画像仍为 None，不能从文件名补单位。
+            org_name = f"待识别主体:{checksum[:16]}"
+            metadata = {**metadata,"organization_identity_status":"unresolved"}
+        else:
+            org_name = _normalize_org_name(source_owner, pdf_path)
+        fiscal_year = (effective_fact_context.fiscal_year if effective_fact_context is not None
+                       else _parse_year(metadata.get("report_year") or metadata.get("fiscal_year")))
+        doc_type = str((effective_fact_context.report_kind if effective_fact_context is not None else None)
+                      or metadata.get("doc_type") or metadata.get("report_kind") or "unknown")
+
+        document_info = await _ensure_document_version(
+            conn=conn,
+            org_name=org_name,
+            fiscal_year=fiscal_year,
+            doc_type=doc_type,
+            checksum=checksum,
+            storage_key=_resolve_storage_key(job_id, pdf_path, metadata),
+            storage_backend=_resolve_storage_backend(metadata),
+            original_filename=str(metadata.get("filename") or pdf_path.name),
+            file_size_bytes=_resolve_file_size(pdf_path, metadata),
+            content_type=str(metadata.get("content_type") or "application/pdf"),
+        )
+        version_id = document_info["document_version_id"]
+
+        # 材料槽位：文件版本一旦建立就立即尝试进入材料台账，**不等解析结果**。
+        #
+        # 这里的位置不能后移。台账记的是"这份材料有没有收到"，解析记的是
+        # "这份材料看不看得懂"，前者不该依赖后者；原先放在整条链路末尾，
+        # 结果是"拿到文件但解析失败"的材料在台账里根本不存在——那正是最需要
+        # 人工补录的一批，被看不见就等于被丢掉。
+        #
+        # 后续任何环节都**不得**再次调用本函数：一次分析只允许分配一次，
+        # 二次分配会把"何时进入台账"重新绑回解析是否成功。
+        # 槽位仍是旁路能力，safe_* 版本不抛异常——它失败只在结果里留下一条
+        # error 摘要，不阻断解析/识别/物化/入库主流程。
+        material_slot = await _allocate_material_slot(
+            conn=conn,
+            metadata=metadata,
+            checksum=checksum,
+            document_version_id=version_id,
+        )
+
+        # ---- ZC-01：一次解析、全程消费 ----
+        # 1) 查解析缓存（原件哈希+解析器+配置+OCR 指纹）：命中则复用既有
+        #    解析运行，既不重开 PDF 也不新建运行；
+        # 2) 调用方已带 artifact（主链产物）→ 直接消费，不重开 PDF；
+        # 3) 都没有 → 实际解析一次，并把产物写入统一存储（幂等）。
+        # 旧表由 artifact 适配写入（persist_artifact_to_legacy_tables）。
+        # RC-08：缓存键必须与"本次将要消费的解析对象"的指纹一致。
+        # 调用方已带 artifact 时以其自身 config/OCR 指纹为准（那才是这次
+        # 事实的真实来源），不能用固定参数指纹去命中旧 run——否则会把
+        # 新配置/新模型解析出的事实挂到旧 run 上，证据与版本彻底失配。
+        from src.services.fiscal_input_builder import FiscalInputBuilder
+        input_profile = FiscalInputBuilder.canonical_profile(
+            org_name=effective_fact_context.org_name if effective_fact_context is not None else org_name,
+            fiscal_year=effective_fact_context.fiscal_year if effective_fact_context is not None else fiscal_year,
+            doc_type=doc_type,
+        )
+        lookup_config_fingerprint = (
+            (parse_artifact.config_fingerprint or parse_config_fingerprint)
+            if parse_artifact is not None
+            else FiscalInputBuilder.config_identity(parse_config_fingerprint, **input_profile)
+        )
+        lookup_ocr_fingerprint = (
+            parse_artifact.ocr_model_fingerprint if parse_artifact is not None else None
+        )
+        cached_run_id = await find_cached_parse_run(
+            conn,
+            document_version_id=version_id,
+            source_file_hash=checksum,
+            parser_fingerprint=(parse_artifact.parser_fingerprint or PARSER_FINGERPRINT)
+            if parse_artifact is not None
+            else PARSER_FINGERPRINT,
+            config_fingerprint=lookup_config_fingerprint,
+            ocr_model_fingerprint=lookup_ocr_fingerprint,
+        )
+        if cached_run_id is not None:
+            # 命中即完整恢复被命中 run 的 artifact——事实物化、证据引用
+            # 全部来自同一 run 的同一份解析对象（RC-08：不旧 run 配新事实）。
+            parse_run_id = cached_run_id
+            ingest_stage = "unified_cache_readback"
+            parse_artifact = await load_parse_artifact(conn, cached_run_id)
+
+        parser = PDFParser(conn)
+        if parse_artifact is None:
+            # 缓存未命中且调用方未带产物：这是唯一一次真正打开 PDF
+            parse_artifact = FiscalInputBuilder().read_native(
+                str(pdf_path),config_fingerprint=parse_config_fingerprint,**input_profile
+            )
+        if parse_artifact.source_file_hash != checksum:
+            raise ValueError("provided checksum differs from original parse source")
+
+        if parse_run_id is None:
+            ingest_stage = "unified_artifact_write"
+            parse_run_id = await persist_parse_artifact(
+                conn,
+                parse_artifact,
+                document_version_id=version_id,
+                org_name=org_name,
+                fiscal_year=fiscal_year,
+            )
+
+        ingest_stage = "unified_artifact_readback"
+        stored_artifact = await load_parse_artifact(conn, parse_run_id)
+        if stored_artifact.to_dict() != parse_artifact.to_dict():
+            raise RuntimeError("unified artifact readback differs from complete parser output")
+
+        v2_input = bool(parse_artifact.input_versions.get("input", "").startswith("fiscal-input-v2"))
+        if v2_input:
+            # 新链只保存不可变原始解析；当前财政值随正式快照在同一事务中发布。
+            # 不能先覆写旧格和旧物化事实，再等待分析/人工校正完成。
+            instances = list(parse_artifact.logical_tables)
+            parse_result = {
+                "success": True, "tables_count": len(instances),
+                "cells_count": len(parse_artifact.cells()),
+                "unknown_tables": [t.table_code for t in parse_artifact.table_fragments if t.table_code.startswith("UNKNOWN")],
+                "legacy_projection_status": "historical_read_only",
+            }
+            materialize_result = {"facts_count": 0, "low_confidence_tables": [],
+                                  "status": "pending_snapshot_publication"}
+        else:
+            ingest_stage = "legacy_table_write"
+            legacy_artifact, legacy_review_items = _legacy_artifact_projection(parse_artifact)
+            parse_result = await parser.persist_artifact_to_legacy_tables(version_id, legacy_artifact)
+            parse_result["legacy_projection_review_items"] = legacy_review_items
+            recognizer = TableRecognizer(conn)
+            instances = await recognizer.recognize_tables(version_id)
+            await recognizer.save_table_instances(version_id, instances)
+            materialize_result = await FiscalFactMaterializer(conn).materialize(version_id)
+
+        # 统一事实：从 artifact 直接物化 FiscalFact（含身份+归一值+证据），
+        # 与旧表物化并行落库；两条路径来自同一份解析对象（不再二次解析）。
+        ingest_stage = "unified_fact_materialization"
+        fiscal_facts = _materialize_fiscal_facts_from_artifact(
+            parse_artifact,
+            org_name=effective_fact_context.org_name if effective_fact_context is not None else org_name,
+            fiscal_year=fiscal_year,
+            doc_type=doc_type,
+            file_hash=checksum,
+        )
+        if v2_input:
+            materialize_result["facts_count"] = len(fiscal_facts)
+        ingest_stage = "unified_facts_evidence_write"
+        fiscal_facts_count = await persist_facts_and_evidence(
+            conn,
+            parse_run_id=parse_run_id,
+            facts=fiscal_facts,
+            file_hash=checksum,
+        )
+        if fiscal_facts_count != len(fiscal_facts):
+            raise RuntimeError(
+                "unified facts write count does not match current materialized facts"
+            )
+        from src.services.table_import_receipt import build_table_import_receipt
+
+        if effective_fact_context is not None and effective_fact_context.file_hash != checksum:
+            raise ValueError("effective snapshot is bound to another source")
+        consumed_facts = (
+            effective_fact_context.facts if effective_fact_context is not None else fiscal_facts
+        )
+        reading_import = build_table_import_receipt(
+            parse_artifact, consumed_facts, org_name=org_name
+        )
+        reading_import["storage_roundtrip_verified"] = True
+        document_profile = _detect_document_profile(pdf_path)
+        ps_sync_summary: Dict[str, Any]
+        if v2_input:
+            ps_sync_summary = {"status": "pending_snapshot_publication", "compatibility": "v2"}
+        else:
+            try:
+                ps_sync_summary = await PSSharedSchemaSync(conn).sync(
+                    document_version_id=version_id,
+                    org_name=org_name,
+                    fiscal_year=fiscal_year,
+                    doc_type=doc_type,
+                    pdf_path=pdf_path,
+                    checksum=checksum,
+                    organization_id=_text_or_none(metadata.get("organization_id")),
+                )
+            except Exception as exc:
+                logger.exception(
+                    "PS shared schema sync failed for document_version %s",
+                    version_id,
+                )
+                ps_sync_summary = {
+                    "status": "error",
+                    "error": str(exc),
+                }
+        local_org_backfill = _backfill_local_organization_catalog(
+            org_name=org_name,
+            pdf_path=pdf_path,
+            ps_sync_summary=ps_sync_summary,
+            metadata=metadata,
+        )
+
+        review_items = _build_review_items(
+            parse_result=parse_result,
+            table_instances=instances,
+            materialize_result=materialize_result,
+            pdf_path=pdf_path,
+        )
+        for gap in reading_import["reading_quality"].get("gaps", []):
+            review_items.append(
+                {
+                    "id": gap["id"],
+                    "type": "table_reading_gap",
+                    "severity": "warn",
+                    "page_numbers": [gap["page"]],
+                    "reason": gap["reason"],
+                    "bbox": gap["bbox"],
+                    "message": f"第 {gap['page']} 页存在未完成结构化读取的表格区域，补识别尚未通过验证",
+                    "recommended_action": "inspect_original_table_reading",
+                }
+            )
+        for cell in reading_import["reading_quality"].get("unbound_money_cells", []):
+            review_items.append(
+                {
+                    "id": f"reading:unbound:{cell['source_cell_id']}",
+                    "type": "source_cell_unbound",
+                    "severity": "warn",
+                    "table_code": cell["table_code"],
+                    "page_numbers": [cell["page"]],
+                    "bbox": cell["bbox"],
+                    "reason": cell["reason"],
+                    "message": (
+                        f"第 {cell['page']} 页金额 {cell['raw_text']} 已保存，"
+                        "科目、列归属或规则准入需要复核"
+                    ),
+                    "recommended_action": "inspect_original_cell_identity",
+                }
+            )
+        recognized_codes = {instance.table_code for instance in instances}
+        missing_optional_tables = [
+            code for code in CONDITIONAL_TABLES if code not in recognized_codes
+        ]
+        payload = {
+            "job_id": job_id,
+            "status": "done" if parse_result.get("success", False) else "warning",
+            "organization_name": org_name,
+            "fiscal_year": fiscal_year,
+            "doc_type": doc_type,
+            "document_id": document_info["document_id"],
+            "document_version_id": version_id,
+            "tables_count": int(parse_result.get("tables_count") or 0),
+            "recognized_tables": len(instances),
+            "effective_fact_context": effective_fact_context.summary()
+            if effective_fact_context is not None
+            else None,
+            "facts_count": int(materialize_result.get("facts_count") or 0),
+            # 统一事实存储（ZC-01）：FiscalFact 身份+归一值+证据的落库条数
+            "unified_facts_count": int(fiscal_facts_count or 0),
+            "parse_run_id": parse_run_id,
+            "reading_import": reading_import,
+            "unified_storage": {
+                "status": "completed",
+                "artifact_status": "completed",
+                "facts_status": "completed",
+                "evidence_status": "completed",
+                "parse_run_id": parse_run_id,
+                "document_version_id": version_id,
+                "expected_facts_count": len(fiscal_facts),
+            },
+            "effective_projection_status": "pending_snapshot_publication" if v2_input else "historical_v1",
+            "parse_cache_hit": cached_run_id is not None,
+            "cache_readback": {
+                "cache_hit": cached_run_id is not None,
+                "cell_provenance_decoded": cached_run_id is not None,
+                "parse_run_id": cached_run_id,
+            },
+            "parse_cache": {
+                "hit": cached_run_id is not None,
+                "readback_completed": cached_run_id is not None,
+                "restored_cell_count": len(parse_artifact.cells())
+                if cached_run_id is not None
+                else 0,
+                "restored_ocr_provenance_cells": sum(
+                    bool(cell.ocr_provenance) for _, cell in parse_artifact.cells()
+                )
+                if cached_run_id is not None
+                else 0,
+            },
+            "unknown_tables": parse_result.get("unknown_tables") or [],
+            "missing_optional_tables": missing_optional_tables,
+            "low_confidence_tables": materialize_result.get("low_confidence_tables") or [],
+            "document_profile": document_profile,
+            "ps_sync": ps_sync_summary,
+            "material_slot": material_slot,
+            "review_item_count": len(review_items),
+            "low_confidence_item_count": sum(
+                1 for item in review_items if item.get("type") == "low_confidence_table"
+            ),
+            "review_items": review_items,
+        }
+        if local_org_backfill:
+            payload["local_org_backfill"] = local_org_backfill
+        if parse_result.get("errors"):
+            payload["errors"] = parse_result["errors"]
+        return payload
+    except Exception as exc:
+        logger.exception("Structured ingest failed for job %s", job_id)
+        error_payload: Dict[str, Any] = {
+            "job_id": job_id,
+            "status": "error",
+            "error": str(exc),
+            "ingest_stage": ingest_stage,
+            "unified_storage": {
+                "status": "error",
+                "failed_stage": ingest_stage,
+                "parse_run_id": parse_run_id,
+            },
+            "review_item_count": 1,
+            "review_items": [
+                {
+                    "id": f"{job_id}:structured_ingest_error",
+                    "type": "ingest_error",
+                    "severity": "error",
+                    "message": str(exc),
+                    "recommended_action": "check_database_and_pdf_parser",
+                }
+            ],
+        }
+        # 已经建立的上下文一律带回：文档版本与槽位一旦落库就是既成事实，
+        # 从错误结果里丢掉它们，调用方就只能看到一个"什么都没发生"的失败，
+        # 既判断不出材料有没有进台账，也做不了后续的人工补录。
+        if org_name is not None:
+            error_payload["organization_name"] = org_name
+            error_payload["fiscal_year"] = fiscal_year
+            error_payload["doc_type"] = doc_type
+        if document_info is not None:
+            error_payload["document_id"] = document_info["document_id"]
+            error_payload["document_version_id"] = document_info["document_version_id"]
+        if material_slot is not None:
+            error_payload["material_slot"] = material_slot
+        return error_payload
+    finally:
+        if conn is not None:
+            await DatabaseConnection.release(conn)
+
+
+async def _ensure_document_version(
+    conn,
+    org_name: str,
+    fiscal_year: Optional[int],
+    doc_type: str,
+    checksum: str,
+    storage_key: str,
+    storage_backend: str,
+    original_filename: str,
+    file_size_bytes: int,
+    content_type: str,
+) -> Dict[str, int]:
+    org_id = await conn.fetchval(
+        """
+        INSERT INTO org_units (org_name)
+        VALUES ($1)
+        ON CONFLICT (org_name)
+        DO UPDATE SET org_name = EXCLUDED.org_name
+        RETURNING id
+        """,
+        org_name,
+    )
+    # 冲突目标用 COALESCE(fiscal_year, -1) 表达式索引：Postgres 认为多个 NULL 互不冲突，
+    # 若沿用 (org_unit_id, fiscal_year, doc_type) 会让年份未知的文档每次都新插一行。
+    document_id = await conn.fetchval(
+        """
+        INSERT INTO fiscal_documents (org_unit_id, fiscal_year, doc_type)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (org_unit_id, COALESCE(fiscal_year, -1), doc_type)
+        DO UPDATE SET doc_type = EXCLUDED.doc_type
+        RETURNING id
+        """,
+        org_id,
+        fiscal_year,
+        doc_type,
+    )
+    version_id = await conn.fetchval(
+        """
+            INSERT INTO fiscal_document_versions (
+            document_id,
+            file_hash,
+            storage_key,
+            storage_backend,
+            original_filename,
+            file_size_bytes,
+            content_type
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (document_id, file_hash)
+            DO UPDATE SET
+                storage_key = CASE
+                    WHEN fiscal_document_versions.storage_key IS NULL
+                        OR fiscal_document_versions.storage_key = ''
+                        OR fiscal_document_versions.storage_key ~ '^(?:[A-Za-z]:)?[/\\\\]'
+                    THEN EXCLUDED.storage_key
+                    ELSE fiscal_document_versions.storage_key
+                END,
+            storage_backend = COALESCE(NULLIF(fiscal_document_versions.storage_backend, ''), EXCLUDED.storage_backend),
+            original_filename = COALESCE(NULLIF(fiscal_document_versions.original_filename, ''), EXCLUDED.original_filename),
+            file_size_bytes = GREATEST(COALESCE(fiscal_document_versions.file_size_bytes, 0), EXCLUDED.file_size_bytes),
+            content_type = COALESCE(NULLIF(fiscal_document_versions.content_type, ''), EXCLUDED.content_type)
+        RETURNING id
+        """,
+        document_id,
+        checksum,
+        storage_key,
+        storage_backend,
+        original_filename,
+        file_size_bytes,
+        content_type,
+    )
+    return {
+        "org_unit_id": int(org_id),
+        "document_id": int(document_id),
+        "document_version_id": int(version_id),
+    }
+
+
+async def _allocate_material_slot(
+    conn,
+    *,
+    metadata: Dict[str, Any],
+    checksum: str,
+    document_version_id: int,
+) -> Dict[str, Any]:
+    """把当前文档挂到材料槽位上。
+
+    独立成函数是为了让"能不能关掉"这件事显式：材料台账是新增旁路，
+    故障时运维需要一条不重新部署就能停掉它的开关。默认开启——
+    默认关闭就等于这段代码在真实环境里从不执行，那它是不是能用永远无人知道。
+    """
+    if str(os.getenv("MATERIAL_LEDGER_DISABLED") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    ):
+        return {"status": "skipped", "reason": "material_ledger_disabled"}
+
+    from src.services.material_slot_service import safe_allocate_for_document
+
+    return await safe_allocate_for_document(
+        conn,
+        metadata=metadata,
+        checksum=checksum,
+        document_version_id=document_version_id,
+    )
+
+
+def _resolve_storage_key(job_id: str, pdf_path: Path, metadata: Dict[str, Any]) -> str:
+    configured_key = str(metadata.get("storage_key") or metadata.get("saved_path") or "").strip()
+    if configured_key:
+        normalized = configured_key.replace("\\", "/")
+        if not re.match(r"^(?:[A-Za-z]:)?/", normalized):
+            return normalized.lstrip("/")
+
+    try:
+        upload_root = Path(os.getenv("UPLOAD_DIR", "uploads")).resolve()
+        return pdf_path.resolve().relative_to(upload_root).as_posix()
+    except Exception:
+        return f"{str(job_id).strip() or 'unknown'}/{pdf_path.name}"
+
+
+def _resolve_storage_backend(metadata: Dict[str, Any]) -> str:
+    return (
+        str(
+            metadata.get("storage_backend")
+            or os.getenv("DOCUMENT_STORAGE_BACKEND", "filesystem")
+            or "filesystem"
+        ).strip()
+        or "filesystem"
+    )
+
+
+def _resolve_file_size(pdf_path: Path, metadata: Dict[str, Any]) -> int:
+    try:
+        explicit_size = int(metadata.get("size") or 0)
+    except (TypeError, ValueError):
+        explicit_size = 0
+    if explicit_size > 0:
+        return explicit_size
+    try:
+        return int(pdf_path.stat().st_size)
+    except OSError:
+        return 0
+
+
+def _build_review_items(
+    parse_result: Dict[str, Any],
+    table_instances: Sequence[Any],
+    materialize_result: Dict[str, Any],
+    pdf_path: Optional[Path] = None,
+) -> List[Dict[str, Any]]:
+    review_items: List[Dict[str, Any]] = list(
+        parse_result.get("legacy_projection_review_items") or []
+    )
+    instance_by_code = {instance.table_code: instance for instance in table_instances}
+    recognized_codes = set(instance_by_code)
+    core_coverage = len(recognized_codes.intersection(CORE_TABLES))
+    missing_core = [code for code in CORE_TABLES if code not in recognized_codes]
+    facts_count = int(materialize_result.get("facts_count") or 0)
+    low_confidence_tables = list(materialize_result.get("low_confidence_tables") or [])
+    document_profile = _detect_document_profile(pdf_path)
+    skip_core_gap_review = document_profile in {"execution_budget_packet", "narrative_report"}
+    suppress_sparse_core_gap_review = _should_suppress_sparse_core_gap_review(
+        recognized_codes=recognized_codes,
+        missing_core=missing_core,
+        facts_count=facts_count,
+        document_profile=document_profile,
+    )
+    suppress_low_confidence_review = _should_suppress_isolated_low_confidence_review(
+        recognized_codes=recognized_codes,
+        missing_core=missing_core,
+        low_confidence_tables=low_confidence_tables,
+        facts_count=facts_count,
+        document_profile=document_profile,
+    )
+    skip_unknown_table_review = (
+        skip_core_gap_review
+        or suppress_sparse_core_gap_review
+        or core_coverage >= len(CORE_TABLES) - 1
+    )
+
+    if missing_core and not skip_unknown_table_review:
+        for table_code in parse_result.get("unknown_tables") or []:
+            review_items.append(
+                {
+                    "id": f"{table_code}:unknown",
+                    "type": "unknown_table",
+                    "severity": "warn",
+                    "table_code": table_code,
+                    "message": "表格未能稳定识别为九张表之一",
+                    "recommended_action": "review_table_title_and_headers",
+                }
+            )
+
+    for table_code in low_confidence_tables:
+        instance = instance_by_code.get(table_code)
+        if suppress_low_confidence_review and not getattr(instance, "source_table_code", None):
+            continue
+        # A real source-bound low-confidence table remains reviewable even
+        # when the other core tables are stable. Coverage cannot verify it.
+        review_items.append(
+            {
+                "id": f"{table_code}:low_confidence",
+                "type": "low_confidence_table",
+                "severity": "warn",
+                "table_code": table_code,
+                "confidence": round(float(getattr(instance, "confidence", 0.0) or 0.0), 4),
+                "page_number": getattr(instance, "page_number", None),
+                "message": "该表识别置信度偏低，建议只复核该表头和关键金额列",
+                "recommended_action": "review_header_and_amount_columns",
+            }
+        )
+
+    if not skip_core_gap_review and not suppress_sparse_core_gap_review:
+        for table_code in missing_core:
+            review_items.append(
+                {
+                    "id": f"{table_code}:missing",
+                    "type": "missing_core_table",
+                    "severity": "warn",
+                    "table_code": table_code,
+                    "message": "核心九表未识别到，建议核对 PDF 中的表题或分页切分",
+                    "recommended_action": "review_missing_table",
+                }
+            )
+
+    if recognized_codes and not facts_count:
+        if not _should_suppress_empty_fact_review(
+            recognized_codes=recognized_codes,
+            missing_core=missing_core,
+            low_confidence_tables=low_confidence_tables,
+            document_profile=document_profile,
+        ):
+            review_items.append(
+                {
+                    "id": "facts:none",
+                    "type": "fact_materialization_empty",
+                    "severity": "error",
+                    "message": "已识别到表格，但未成功生成结构化 facts",
+                    "recommended_action": "review_column_mappings_and_numeric_cells",
+                }
+            )
+
+    review_items.sort(
+        key=lambda item: (
+            {"error": 0, "warn": 1, "info": 2}.get(str(item.get("severity")), 9),
+            str(item.get("table_code") or item.get("id")),
+        )
+    )
+    return review_items
+
+
+def _should_suppress_sparse_core_gap_review(
+    recognized_codes: set[str],
+    missing_core: Sequence[str],
+    facts_count: int,
+    document_profile: str,
+) -> bool:
+    if document_profile != "canonical_nine_table":
+        return False
+    if facts_count <= 0:
+        return False
+    missing_core_set = set(missing_core)
+    if missing_core_set == {"FIN_02_income", "FIN_05_general_public_expenditure"}:
+        return len(recognized_codes) >= len(CORE_TABLES)
+    if len(recognized_codes) < len(CORE_TABLES) + 1:
+        return False
+    return missing_core_set in (
+        {"FIN_02_income"},
+        {"FIN_03_expenditure"},
+        {"FIN_04_fiscal_grant_total"},
+    )
+
+
+def _should_suppress_isolated_low_confidence_review(
+    recognized_codes: set[str],
+    missing_core: Sequence[str],
+    low_confidence_tables: Sequence[str],
+    facts_count: int,
+    document_profile: str,
+) -> bool:
+    if document_profile != "canonical_nine_table":
+        return False
+    if len(recognized_codes) < len(CORE_TABLES) + 1:
+        return False
+    low_confidence_set = set(low_confidence_tables)
+    if len(low_confidence_set) != 1:
+        return False
+    if not low_confidence_set.issubset({"FIN_02_income", "FIN_04_fiscal_grant_total"}):
+        return False
+    if facts_count <= 0 and low_confidence_set != {"FIN_04_fiscal_grant_total"}:
+        return False
+    return set(missing_core).issubset(
+        {"FIN_02_income", "FIN_03_expenditure", "FIN_04_fiscal_grant_total"}
+    )
+
+
+def _should_suppress_empty_fact_review(
+    recognized_codes: set[str],
+    missing_core: Sequence[str],
+    low_confidence_tables: Sequence[str],
+    document_profile: str,
+) -> bool:
+    if document_profile in {"execution_budget_packet", "narrative_report"}:
+        return True
+    if document_profile != "canonical_nine_table":
+        return False
+    if len(recognized_codes) < len(CORE_TABLES) + 1:
+        return False
+    low_confidence_set = set(low_confidence_tables)
+    if low_confidence_set != {"FIN_04_fiscal_grant_total"}:
+        return False
+    return set(missing_core).issubset(
+        {"FIN_02_income", "FIN_03_expenditure", "FIN_04_fiscal_grant_total"}
+    )
+
+
+def _detect_document_profile(pdf_path: Optional[Path]) -> str:
+    filename = str(getattr(pdf_path, "name", "") or "")
+    if not filename:
+        return "canonical_nine_table"
+    if ("预算执行和" in filename and "预算表" in filename) or (
+        "棰勭畻鎵ц鍜" in filename and "棰勭畻琛" in filename
+    ):
+        return "execution_budget_packet"
+    if (
+        "预算草案的报告" in filename
+        or ("执行情况" in filename and "草案" in filename)
+        or "棰勭畻鑽夋鐨勬姤鍛" in filename
+        or ("鎵ц鎯呭喌" in filename and "鑽夋" in filename)
+    ):
+        return "narrative_report"
+    return "canonical_nine_table"
+
+
+def _backfill_local_organization_catalog(
+    org_name: str,
+    pdf_path: Path,
+    ps_sync_summary: Optional[Dict[str, Any]],
+    metadata: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    if not isinstance(ps_sync_summary, dict):
+        return None
+    if ps_sync_summary.get("status") != "done":
+        return None
+    if str(metadata.get("organization_id") or "").strip():
+        return None
+
+    department_name = str(ps_sync_summary.get("department_name") or "").strip()
+    unit_name = str(ps_sync_summary.get("unit_name") or "").strip()
+    if not department_name or not unit_name:
+        return None
+
+    storage = get_org_storage()
+    created: List[Dict[str, str]] = []
+
+    department = _find_org_by_name_and_level(storage, department_name, "department")
+    if department is None:
+        district = _find_best_district_parent(storage, department_name)
+        department = Organization(
+            id=Organization.generate_id(
+                department_name, "department", district.id if district else None
+            ),
+            name=department_name,
+            level="department",
+            parent_id=district.id if district else None,
+            code=None,
+            keywords=_catalog_keywords(department_name),
+        )
+        storage.add(department)
+        created.append({"level": "department", "name": department_name})
+    else:
+        _merge_keywords(storage, department, _catalog_keywords(department_name))
+
+    unit = _find_org_by_name_and_level(storage, unit_name, "unit", parent_id=department.id)
+    if unit is None:
+        unit = Organization(
+            id=Organization.generate_id(unit_name, "unit", department.id),
+            name=unit_name,
+            level="unit",
+            parent_id=department.id,
+            code=None,
+            keywords=_catalog_keywords(unit_name),
+        )
+        storage.add(unit)
+        created.append({"level": "unit", "name": unit_name})
+    else:
+        _merge_keywords(storage, unit, _catalog_keywords(unit_name))
+
+    if not created:
+        return None
+    return {
+        "created": created,
+        "source": "structured_ingest_ps_sync",
+        "pdf": str(pdf_path),
+        "org_name": org_name,
+    }
+
+
+def _find_org_by_name_and_level(
+    storage,
+    name: str,
+    level: str,
+    parent_id: Optional[str] = None,
+):
+    clean_name = str(name or "").strip()
+    for org in storage.get_all():
+        if org.level != level or org.name != clean_name:
+            continue
+        if parent_id is not None and org.parent_id != parent_id:
+            continue
+        return org
+    return None
+
+
+def _find_best_district_parent(storage, department_name: str):
+    name = str(department_name or "")
+    district_name = None
+    if "普陀区" in name:
+        district_name = "普陀区"
+    elif "上海市" in name:
+        district_name = "上海市"
+    if not district_name:
+        return None
+    level = "district" if district_name.endswith("区") else "city"
+    return _find_org_by_name_and_level(storage, district_name, level)
+
+
+def _catalog_keywords(name: str) -> List[str]:
+    clean_name = str(name or "").strip()
+    variants = {clean_name}
+    for suffix in ("单位", "部门", "委员会", "人民政府", "办公室", "办事处", "执法大队"):
+        if clean_name.endswith(suffix) and len(clean_name) > len(suffix):
+            variants.add(clean_name[: -len(suffix)])
+    for bracket_open, bracket_close in (("（", "）"), ("(", ")")):
+        if bracket_open in clean_name and bracket_close in clean_name:
+            prefix, _, remainder = clean_name.partition(bracket_open)
+            alias, _, suffix = remainder.partition(bracket_close)
+            if prefix.strip():
+                variants.add(prefix.strip() + suffix.strip())
+            if alias.strip():
+                variants.add(alias.strip())
+    return sorted(item for item in variants if item)
+
+
+def _merge_keywords(storage, org, keywords: Sequence[str]) -> None:
+    merged = list(
+        dict.fromkeys(
+            [*(org.keywords or []), *[str(item) for item in keywords if str(item).strip()]]
+        )
+    )
+    if merged != list(org.keywords or []):
+        storage.update(org.id, {"keywords": merged})
+
+
+def _normalize_org_name(raw_org_name: Any, pdf_path: Path) -> str:
+    text = str(raw_org_name or "").strip()
+    if text:
+        cleaned = _strip_report_words(text)
+        return cleaned or text
+
+    raw_stem = str(pdf_path.stem or "").strip()
+    parts = [part for part in re.split(r"[_]+", raw_stem) if str(part).strip()]
+    candidates = [
+        candidate for candidate in (_strip_report_words(part) for part in parts) if candidate
+    ]
+    if not candidates:
+        fallback = _strip_report_words(raw_stem)
+        return fallback or f"未命名单位_{pdf_path.stem}"
+
+    unique_candidates = list(dict.fromkeys(candidates))
+    unique_candidates.sort(
+        key=lambda item: (
+            _org_candidate_score(item),
+            len(item),
+        ),
+        reverse=True,
+    )
+    return unique_candidates[0]
+
+
+def _strip_report_words(text: str) -> str:
+    value = str(text or "").strip()
+    value = re.sub(r"20\d{2}(?:年度|年)?", "", value)
+    value = re.sub(r"\d{2}(?:年度|年)", "", value)
+    for token in (
+        "预算执行情况和",
+        "预算执行情况",
+        "预算执行和",
+        "预算草案",
+        "单位预算公开",
+        "部门预算公开",
+        "单位预算",
+        "部门预算",
+        "区级单位",
+        "区级部门",
+        "区级",
+        "编制说明",
+        "预算表",
+        "预算",
+        "决算",
+        "报告",
+        "公开",
+        "年度",
+        "单位",
+        "部门",
+    ):
+        value = value.replace(token, "")
+    value = re.sub(r"[—\-_/]+", " ", value)
+    value = re.sub(r"\s+", " ", value)
+    value = re.sub(r"^[\s\-_（）()]+|[\s\-_（）()]+$", "", value)
+    return value
+
+
+def _org_candidate_score(name: str) -> int:
+    value = str(name or "")
+    score = 0
+    if "上海市" in value:
+        score += 3
+    if "普陀区" in value:
+        score += 3
+    if any(
+        token in value
+        for token in (
+            "中心",
+            "局",
+            "委员会",
+            "办事处",
+            "人民政府",
+            "联合会",
+            "办公室",
+            "学校",
+            "医院",
+        )
+    ):
+        score += 2
+    if any(token in value for token in ("本部", "本级")):
+        score += 1
+    return score
+
+
+def _parse_year(raw_year: Any) -> Optional[int]:
+    """解析年度，识别不到就返回 None。
+
+    这里曾经兜底 return 2000，导致无法识别年份的材料在 PostgreSQL 里被写成
+    fiscal_year=2000（缺口 B-02 / P0-03），并放大 report_id 碰撞。
+    现在直接复用与内存路径同源的权威解析实现。
+    """
+    return parse_report_year(raw_year)
+
+
+def _text_or_none(value: Any) -> Optional[str]:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file_obj:
+        for chunk in iter(lambda: file_obj.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _materialize_fiscal_facts_from_artifact(
+    artifact: "ParseArtifact",
+    *,
+    org_name: Optional[str],
+    fiscal_year: Optional[int],
+    doc_type: Optional[str],
+    file_hash: str,
+):
+    """把统一解析对象物化为 FiscalFact 列表（ZC-01 / SYS-15/16）。
+
+    实现收敛到 :mod:`src.engine.fact_context`（AC-01）：规则链与结构化入库
+    消费**同一个**事实构建实现，避免两套物化语义各自演化。每个逻辑表实例
+    独立物化：实例身份（instance_uid）+ 主体/年度 + 资金范围进入事实身份，
+    同文档同种表的不同实例不互相覆盖；跨页实例按合并视图物化，证据保留
+    各自物理页。
+    """
+    from src.services.fiscal_input_builder import FiscalInputBuilder
+
+    if file_hash != artifact.source_file_hash:
+        raise ValueError("materialization source hash mismatch")
+    context = FiscalInputBuilder().facts(
+        artifact, org_name=org_name, fiscal_year=fiscal_year, doc_type=doc_type
+    )
+    return context.facts if context is not None else []
+
+
+def _canonical_mappings_for_fragment(fragment: Any, table_code: str) -> List[Dict[str, Any]]:
+    """按表片段表头与九表规则的 measure_aliases 推导列映射（纯函数）。
+
+    委托 :mod:`src.engine.fact_context` 的同源实现（AC-01）：列映射语义只有
+    一份，规则链与入库不可能各猜各的。匹配不到的列不进入映射。
+    """
+    from src.engine.fact_context import _canonical_mappings_for_fragment as _shared
+
+    return _shared(fragment, table_code)

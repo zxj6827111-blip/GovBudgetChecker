@@ -1,0 +1,551 @@
+"""Upload endpoints."""
+
+from __future__ import annotations
+
+import logging
+import re
+from typing import Any, Dict, List, Optional, Tuple
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+
+from api import runtime
+from api.auth_utils import require_login, user_can_access_org
+from api.routes.organizations import clear_department_stats_cache
+from src.services.analysis_result_store import persist_analysis_job_snapshot
+from src.services.org_matcher import get_org_matcher
+
+router = APIRouter()
+logger = logging.getLogger(__name__)
+_MATCH_BASIS_PRIORITY = {
+    "cover_field": 2,
+    "content_fallback": 1,
+}
+_GENERIC_COVER_NAMES = {"人民政府", "政府", "办公室", "本级", "本部"}
+
+
+def _clean_optional_text(value: Optional[str]) -> Optional[str]:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _normalize_org_name(value: Any) -> str:
+    """归一化封面/组织名，只用于防止明显错绑，不用于生成组织身份。
+
+    「本级」「本部」是同一主体的两种写法（封面写本部、组织树写本级），比较前去掉。
+    """
+    name = re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", "", str(value or "")).casefold()
+    return re.sub(r"(?:本级|本部)$", "", name) or name
+
+
+def _organization_binding_conflict(
+    preflight: Dict[str, Any], organization: Optional[Dict[str, Any]]
+) -> Optional[Dict[str, str]]:
+    """检查封面组织和选定组织是否存在可证明的冲突。
+
+    没有可读封面组织名时不臆测；一旦封面给出具体名称或层级，则拒绝
+    把文件绑定到明显不同的组织，避免多个原件落进同一 report scope。
+    """
+    if not isinstance(preflight, dict) or not isinstance(organization, dict):
+        return None
+    cover_name = _normalize_org_name(preflight.get("cover_org_name"))
+    selected_name = _normalize_org_name(organization.get("name"))
+    cover_label = str(preflight.get("cover_org_label") or "")
+    scope_hint = str(preflight.get("scope_hint") or "").strip().lower()
+    level = str(organization.get("level") or "").strip().lower()
+
+    if cover_name and cover_name not in _GENERIC_COVER_NAMES and selected_name:
+        if cover_name not in selected_name and selected_name not in cover_name:
+            return {
+                "code": "organization_cover_conflict",
+                "cover_org_name": str(preflight.get("cover_org_name") or ""),
+                "selected_org_name": str(organization.get("name") or ""),
+                "message": "PDF 封面组织与所选组织不一致，已拒绝建立组织绑定。",
+            }
+    if scope_hint == "department" and level == "unit":
+        return {
+            "code": "organization_scope_conflict",
+            "cover_org_label": cover_label or "主管部门",
+            "selected_level": level,
+            "message": "PDF 标明主管部门材料，不能绑定到下属单位。",
+        }
+    if scope_hint == "unit" and level == "department":
+        return {
+            "code": "organization_scope_conflict",
+            "cover_org_label": cover_label or "预算单位",
+            "selected_level": level,
+            "message": "PDF 标明预算单位材料，不能绑定到主管部门。",
+        }
+    return None
+
+
+def _resolve_manual_org(selected_org: Optional[str]) -> Optional[dict]:
+    if not selected_org:
+        return None
+    if not runtime.ORG_AVAILABLE:
+        raise HTTPException(status_code=503, detail="organization service unavailable")
+    storage = runtime.require_org_storage()
+    org = storage.get_by_id(selected_org)
+    if org is None:
+        raise HTTPException(status_code=404, detail="organization not found")
+    return runtime.to_dict(org)
+
+
+def _serialize_match_candidate(org: Any, confidence: float, match_basis: str) -> Dict[str, Any]:
+    storage = runtime.require_org_storage()
+    department = None
+    if getattr(org, "level", "") == "department":
+        department = org
+    else:
+        parent_id = getattr(org, "parent_id", None)
+        if parent_id:
+            department = storage.get_by_id(parent_id)
+
+    return {
+        "organization_id": org.id,
+        "organization_name": org.name,
+        "level": getattr(org, "level", ""),
+        "department_id": getattr(department, "id", None),
+        "department_name": getattr(department, "name", None),
+        "confidence": round(float(confidence or 0.0), 4),
+        "match_basis": match_basis,
+    }
+
+
+def _collect_org_matches(
+    *,
+    filename: str,
+    first_page_text: str,
+    cover_org_name: str = "",
+    cover_org_label: str = "",
+    scope_hint: str = "",
+    top_n: int = 5,
+) -> List[Tuple[Any, float, str]]:
+    if not runtime.ORG_AVAILABLE:
+        return []
+
+    matcher = get_org_matcher()
+    search_requests: List[Tuple[str, str, str]] = []
+
+    if cover_org_name:
+        hint_tokens = ""
+        if scope_hint == "unit":
+            hint_tokens = "\u5355\u4f4d \u672c\u7ea7 \u533a\u7ea7\u5355\u4f4d"
+        elif scope_hint == "department":
+            hint_tokens = "\u4e3b\u7ba1\u90e8\u95e8 \u90e8\u95e8"
+        search_requests.append(
+            (
+                "cover_field",
+                cover_org_name,
+                " ".join(token for token in (cover_org_label, hint_tokens, first_page_text) if token).strip(),
+            )
+        )
+
+    search_requests.append(("content_fallback", filename, first_page_text))
+
+    ranked: Dict[str, Tuple[Any, float, str]] = {}
+    fetch_top_n = max(top_n, 5)
+    for basis, query_filename, query_text in search_requests:
+        for org, confidence in matcher.suggest_matches(
+            query_filename,
+            query_text,
+            top_n=fetch_top_n,
+        ):
+            score = float(confidence or 0.0)
+            current = ranked.get(org.id)
+            if current is None:
+                ranked[org.id] = (org, score, basis)
+                continue
+
+            current_priority = _MATCH_BASIS_PRIORITY.get(current[2], 0)
+            next_priority = _MATCH_BASIS_PRIORITY.get(basis, 0)
+            if (score, next_priority, len(getattr(org, "name", ""))) > (
+                current[1],
+                current_priority,
+                len(getattr(current[0], "name", "")),
+            ):
+                ranked[org.id] = (org, score, basis)
+
+    return sorted(
+        ranked.values(),
+        key=lambda item: (
+            float(item[1]),
+            _MATCH_BASIS_PRIORITY.get(item[2], 0),
+            len(getattr(item[0], "name", "")),
+        ),
+        reverse=True,
+    )[:top_n]
+
+
+def _inspect_document_preflight(
+    *,
+    filename: str,
+    preferred_year: Optional[str] = None,
+    doc_type: Optional[str] = None,
+    content: Optional[bytes] = None,
+    pdf_path: Optional[Any] = None,
+    top_n: int = 5,
+    include_matches: bool = True,
+) -> Dict[str, Any]:
+    page_texts: List[str] = []
+    page_count: Optional[int] = None
+    if content is not None:
+        page_texts = runtime.extract_pdf_page_texts_from_bytes(content, max_pages=3)
+        # 页数只在 content（内存字节）分支计算：这正是上传中心 preflight 请求真正
+        # 需要页数的路径。pdf_path 分支主要用于 `_auto_match_organization` 的内部
+        # 复检，那里不消费 page_count，没必要额外打开一次文件读页数。
+        page_count = runtime.get_pdf_page_count_from_bytes(content)
+    elif pdf_path is not None:
+        page_texts = runtime.extract_pdf_page_texts(pdf_path, max_pages=3)
+
+    first_page_text = page_texts[0] if page_texts else ""
+    cover = runtime.extract_cover_metadata(
+        page_texts=page_texts,
+        filename=filename,
+        preferred_year=preferred_year,
+        doc_type=doc_type,
+    )
+    report_year = cover.get("report_year")
+    report_kind = str(cover.get("report_kind") or "unknown")
+    normalized_doc_type = runtime.normalize_doc_type(
+        doc_type,
+        filename,
+        report_kind=report_kind,
+    )
+
+    current = None
+    suggestions: List[Dict[str, Any]] = []
+    matches = _collect_org_matches(
+        filename=filename,
+        first_page_text=first_page_text,
+        cover_org_name=str(cover.get("cover_org_name") or ""),
+        cover_org_label=str(cover.get("cover_org_label") or ""),
+        scope_hint=str(cover.get("scope_hint") or ""),
+        top_n=top_n,
+    ) if include_matches else []
+    # 同名的部门与单位（如「本级」单位沿用部门名）打成平手、又没有封面层级可分时，
+    # 只给候选，不自动绑定：扫描件封面读不出字时最容易把单位材料挂到部门上。
+    tied_same_name = len(matches) >= 2 and (
+        float(matches[0][1] or 0.0) == float(matches[1][1] or 0.0)
+        and matches[0][2] == matches[1][2]
+        and _normalize_org_name(getattr(matches[0][0], "name", "")) == _normalize_org_name(getattr(matches[1][0], "name", ""))
+    )
+    for index, (org, confidence, match_basis) in enumerate(matches):
+        serialized = _serialize_match_candidate(org, confidence, match_basis)
+        suggestions.append(serialized)
+        if index == 0 and float(confidence or 0.0) >= 0.6 and not tied_same_name:
+            current = serialized
+
+    return {
+        "filename": filename,
+        "report_year": report_year,
+        "fiscal_year": str(report_year) if report_year else "",
+        "doc_type": normalized_doc_type,
+        "report_kind": report_kind,
+        "cover_title": str(cover.get("cover_title") or ""),
+        "cover_org_name": str(cover.get("cover_org_name") or ""),
+        "cover_org_label": str(cover.get("cover_org_label") or ""),
+        "scope_hint": str(cover.get("scope_hint") or ""),
+        "current": current,
+        "suggestions": suggestions,
+        # UI 重建第二批 Task 5：待上传文件列表需要显示真实页数。解析失败时为
+        # None（未知），前端必须显示"—"而不是猜一个数字或干脆显示 0 页。
+        "page_count": page_count,
+    }
+
+
+def _auto_match_organization(
+    job_id: str,
+    filename: str,
+    user: Optional[Dict[str, Any]] = None,
+    preflight: Optional[Dict[str, Any]] = None,
+) -> Optional[dict]:
+    if not runtime.ORG_AVAILABLE:
+        return None
+    try:
+        pdf_path = runtime.find_first_pdf(runtime.UPLOAD_ROOT / job_id)
+        # _handle_upload 的首次 preflight 为了只解析一次上传字节默认不请求
+        # 组织候选；只有带 current/suggestions 的 preflight 才能直接用于
+        # 自动绑定，否则必须用落盘 PDF 重新执行组织匹配。
+        resolved_preflight = (
+            preflight
+            if isinstance(preflight, dict)
+            and (preflight.get("current") is not None or preflight.get("suggestions"))
+            else _inspect_document_preflight(
+                filename=filename,
+                pdf_path=pdf_path,
+            )
+        )
+        current = resolved_preflight.get("current") or {}
+        organization_id = str(current.get("organization_id") or "").strip()
+        confidence = float(current.get("confidence") or 0.0)
+        if not organization_id:
+            return None
+        conflict = _organization_binding_conflict(resolved_preflight, current)
+        if conflict is not None:
+            logger.warning(
+                "Rejecting organization auto-match for job %s: %s",
+                job_id,
+                conflict.get("code"),
+            )
+            return None
+        if user is not None and not user_can_access_org(user, organization_id):
+            logger.info(
+                "Ignoring out-of-scope automatic organization match for job %s",
+                job_id,
+            )
+            return None
+        return runtime.set_job_organization(
+            job_id,
+            organization_id,
+            match_type="auto",
+            confidence=confidence,
+        )
+    except Exception:
+        logger.exception("Failed to auto-match organization for job %s", job_id)
+        return None
+
+
+async def _inspect_upload_preflight(
+    file: UploadFile,
+    *,
+    fiscal_year: Optional[str],
+    doc_type: Optional[str],
+    include_matches: bool = False,
+) -> Dict[str, Any]:
+    """Inspect the submitted bytes once and restore the stream for storage.
+
+    The size limit is enforced while reading so an oversized body is rejected
+    before it is fully buffered in memory; only files at or below the limit
+    are parsed for cover metadata.
+    """
+    max_upload_bytes = runtime.MAX_UPLOAD_MB * 1024 * 1024
+    chunk_size = 1024 * 1024
+    parts: List[bytes] = []
+    size = 0
+    while True:
+        chunk = await file.read(chunk_size)
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > max_upload_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File exceeds {runtime.MAX_UPLOAD_MB}MB limit",
+            )
+        parts.append(chunk)
+
+    content = b"".join(parts)
+    await file.seek(0)
+    return _inspect_document_preflight(
+        filename=file.filename or "",
+        preferred_year=fiscal_year,
+        doc_type=doc_type,
+        content=content,
+        include_matches=include_matches,
+    )
+
+
+def _resolve_upload_metadata(
+    *,
+    fiscal_year: Optional[str],
+    doc_type: Optional[str],
+    preflight: Dict[str, Any],
+) -> Tuple[Optional[str], Optional[str]]:
+    """Use cover metadata by default and reject an accidental conflicting form value."""
+    detected_year = runtime.parse_report_year(preflight.get("report_year"))
+    submitted_year = runtime.parse_report_year(fiscal_year)
+    if submitted_year is not None and detected_year is not None and submitted_year != detected_year:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "report_year_conflict",
+                "submitted_year": submitted_year,
+                "detected_year": detected_year,
+                "message": "Submitted fiscal year conflicts with PDF cover metadata.",
+            },
+        )
+
+    detected_doc_type = _clean_optional_text(str(preflight.get("doc_type") or ""))
+    submitted_doc_type = runtime.normalize_doc_type(doc_type)
+    if submitted_doc_type and detected_doc_type and submitted_doc_type != detected_doc_type:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "report_type_conflict",
+                "submitted_doc_type": submitted_doc_type,
+                "detected_doc_type": detected_doc_type,
+                "message": "Submitted document type conflicts with PDF cover metadata.",
+            },
+        )
+
+    resolved_year = str(detected_year) if detected_year is not None else fiscal_year
+    return resolved_year, detected_doc_type or submitted_doc_type
+
+
+async def _handle_upload(
+    file: UploadFile,
+    *,
+    selected_org: Optional[str] = None,
+    fiscal_year: Optional[str] = None,
+    doc_type: Optional[str] = None,
+    created_by: Optional[str] = None,
+    actor: Optional[Dict[str, Any]] = None,
+) -> dict:
+    selected_org = _clean_optional_text(selected_org)
+    fiscal_year = _clean_optional_text(fiscal_year)
+    doc_type = _clean_optional_text(doc_type)
+
+    preflight = await _inspect_upload_preflight(
+        file,
+        fiscal_year=fiscal_year,
+        doc_type=doc_type,
+    )
+    fiscal_year, doc_type = _resolve_upload_metadata(
+        fiscal_year=fiscal_year,
+        doc_type=doc_type,
+        preflight=preflight,
+    )
+
+    org = _resolve_manual_org(selected_org)
+    if selected_org and actor is not None and not user_can_access_org(actor, selected_org):
+        raise HTTPException(status_code=403, detail="organization access denied")
+    conflict = _organization_binding_conflict(preflight, org)
+    if conflict is not None:
+        raise HTTPException(status_code=422, detail=conflict)
+    org_name = org["name"] if org else None
+
+    uploaded = await runtime.store_upload_file(
+        file,
+        metadata={
+            "organization_id": selected_org,
+            "organization_name": org_name,
+            "organization_match_type": "manual" if selected_org else None,
+            "organization_match_confidence": 1.0 if selected_org else None,
+            "fiscal_year": fiscal_year,
+            "doc_type": doc_type,
+            "report_year": runtime.parse_report_year(fiscal_year),
+            "report_year_source": "preflight_cover" if preflight.get("report_year") else None,
+            "report_kind": str(preflight.get("report_kind") or "unknown"),
+            "created_by": created_by,
+        },
+        persist_snapshot=False,
+    )
+
+    duplicate = runtime.find_duplicate_upload(
+        checksum=str(uploaded.get("checksum") or ""),
+        organization_id=selected_org,
+        fiscal_year=fiscal_year,
+        doc_type=doc_type,
+        exclude_job_id=str(uploaded.get("job_id") or ""),
+    )
+    if duplicate is not None:
+        runtime.cleanup_uploaded_job(str(uploaded.get("job_id") or ""))
+        duplicate_filename = str(duplicate.get("filename") or "历史文件")
+        duplicate_job_id = str(duplicate.get("job_id") or "")
+        raise HTTPException(
+            status_code=409,
+            detail=f"检测到重复上传：{duplicate_filename}（任务 {duplicate_job_id}）",
+        )
+
+    org_binding: Optional[dict] = None
+    if selected_org:
+        org_binding = runtime.set_job_organization(
+            uploaded["job_id"],
+            selected_org,
+            match_type="manual",
+            confidence=1.0,
+        )
+    else:
+        org_binding = _auto_match_organization(
+            # Re-read the stored PDF for organization matching.  The upload
+            # preflight is byte-based, while the durable file path is the
+            # canonical extraction source used by the matcher and by later
+            # re-analysis.  This keeps both paths consistent.
+            uploaded["job_id"],
+            uploaded["filename"],
+            actor,
+            preflight=preflight,
+        )
+
+    uploaded["organization_id"] = (
+        org_binding.get("organization_id") if org_binding else selected_org
+    )
+    uploaded["organization_name"] = (
+        org_binding.get("organization_name") if org_binding else org_name
+    )
+    uploaded["organization_match_type"] = (
+        org_binding.get("organization_match_type") if org_binding else None
+    )
+    uploaded["organization_match_confidence"] = (
+        org_binding.get("organization_match_confidence") if org_binding else None
+    )
+    uploaded["fiscal_year"] = fiscal_year
+    uploaded["doc_type"] = doc_type
+    uploaded["report_year"] = runtime.parse_report_year(fiscal_year)
+    uploaded["report_kind"] = str(preflight.get("report_kind") or "unknown")
+    await persist_analysis_job_snapshot(
+        runtime.get_job_status_payload(str(uploaded["job_id"])),
+    )
+    if uploaded.get("organization_id"):
+        clear_department_stats_cache()
+    return uploaded
+
+
+@router.post("/api/documents/preflight")
+async def preflight_document(
+    request: Request,
+    file: UploadFile = File(...),
+    fiscal_year: Optional[str] = Form(None),
+    doc_type: Optional[str] = Form(None),
+    api_key: str = Depends(runtime.verify_api_key),
+):
+    _ = api_key
+    require_login(request)
+    # The size limit is enforced while reading (see _inspect_upload_preflight),
+    # so an oversized body is rejected before it is fully buffered in memory.
+    # The stream is rewound after inspection for symmetric behavior with the
+    # upload path, and organization suggestions are requested here because
+    # this endpoint's purpose is preflight matching.
+    return await _inspect_upload_preflight(
+        file,
+        fiscal_year=_clean_optional_text(fiscal_year),
+        doc_type=_clean_optional_text(doc_type),
+        include_matches=True,
+    )
+
+
+@router.post("/upload")
+async def upload_pdf(
+    request: Request,
+    file: UploadFile = File(...),
+    api_key: str = Depends(runtime.verify_api_key),
+):
+    _ = api_key
+    _, _, user = require_login(request)
+    return await _handle_upload(
+        file,
+        created_by=str(user.get("username") or ""),
+        actor=user,
+    )
+
+
+@router.post("/api/documents/upload")
+async def upload_document(
+    request: Request,
+    file: UploadFile = File(...),
+    org_unit_id: Optional[str] = Form(None),
+    org_id: Optional[str] = Form(None),
+    fiscal_year: Optional[str] = Form(None),
+    doc_type: Optional[str] = Form(None),
+    api_key: str = Depends(runtime.verify_api_key),
+):
+    _ = api_key
+    _, _, user = require_login(request)
+    return await _handle_upload(
+        file,
+        selected_org=org_unit_id or org_id,
+        fiscal_year=fiscal_year,
+        doc_type=doc_type,
+        created_by=str(user.get("username") or ""),
+        actor=user,
+    )

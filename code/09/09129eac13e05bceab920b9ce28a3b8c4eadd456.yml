@@ -1,0 +1,128 @@
+# 默认无 AI 的服务栈：PostgreSQL + API + Worker + Web + 本地 OCR。
+# 先复制 .env.example 并设置强口令；OCR 离线模型须按部署说明预置到 ./models。
+
+x-app-env: &app-env
+  AI_ASSIST_ENABLED: "false"
+  AI_ASSIST_REQUIRED: "false"
+  AI_EXTRACTOR_URL: http://127.0.0.1:9009/ai/extract/v1
+  OCR_SERVICE_URL: http://ocr:9010
+  OCR_ENABLED: ${OCR_ENABLED:-true}
+  OCR_MODEL_FINGERPRINT: ${OCR_MODEL_FINGERPRINT:-}
+  OCR_EVIDENCE_ATTESTATIONS_PATH: ${OCR_EVIDENCE_ATTESTATIONS_PATH:-}
+  OCR_EVIDENCE_ATTESTATIONS_SHA256: ${OCR_EVIDENCE_ATTESTATIONS_SHA256:-}
+  UPLOAD_DIR: /app/uploads
+  DOCUMENT_STORAGE_BACKEND: filesystem
+  RULES_FILE: /app/rules/v3_3.yaml
+  GOVBUDGET_AUTH_ENABLED: "true"
+  GOVBUDGET_API_KEY: ${GOVBUDGET_API_KEY:?Set GOVBUDGET_API_KEY in .env}
+  USER_SESSION_SECRET: ${USER_SESSION_SECRET:?Set USER_SESSION_SECRET in .env}
+  DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:?Set DEFAULT_ADMIN_PASSWORD in .env}
+  DATABASE_URL: postgresql://${POSTGRES_USER:?Set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-fiscal_db}
+  PG_SCHEMA: ${PG_SCHEMA:-public}
+  READY_REQUIRE_DATABASE: "true"
+  READY_REQUIRE_AI_EXTRACTOR: "false"
+  AUDIT_LOG_PATH: /app/logs/admin-actions.jsonl
+  LOG_JSON: ${LOG_JSON:-true}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  METRICS_API_TOKEN: ${METRICS_API_TOKEN:-}
+
+x-app-volumes: &app-volumes
+  - ${HOST_DATA_DIR:-./data}:/app/data
+  - ${HOST_LOGS_DIR:-./logs}:/app/logs
+  - ${HOST_SAMPLES_DIR:-./samples}:/app/samples
+  - ${HOST_UPLOADS_DIR:-./uploads}:/app/uploads
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: fiscal_postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-fiscal_db}
+    volumes:
+      - fiscal_pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    ports:
+      - "8000:8000"
+    environment:
+      <<: *app-env
+      JOB_QUEUE_ROLE: api
+      JOB_QUEUE_INLINE_FALLBACK: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes: *app-volumes
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: ["python", "-m", "api.worker"]
+    environment:
+      <<: *app-env
+      JOB_QUEUE_ROLE: worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes: *app-volumes
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3000"
+    environment:
+      BACKEND_URL: http://backend:8000
+      GOVBUDGET_API_KEY: ${GOVBUDGET_API_KEY:?Set GOVBUDGET_API_KEY in .env}
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # 服务默认纳入无 AI 栈。OCR 必须使用本地校验过的模型包；模型缺失时
+  # /health 明确返回 models_ready=false，扫描件端点返回 503，不会联网下载。
+  ocr:
+    build:
+      context: .
+      dockerfile: Dockerfile.ocr
+    container_name: fiscal_ocr
+    ports:
+      - "127.0.0.1:9010:9010"
+    environment:
+      OCR_CPU_THREADS: "4"
+      OCR_SERVICE_PORT: "9010"
+      OCR_MODEL_MANIFEST: /models/MANIFEST.sha256
+      PADDLE_HOME: /models
+    volumes:
+      - ./models:/models:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,urllib.request; d=json.load(urllib.request.urlopen('http://localhost:9010/health', timeout=5)); assert d['models_ready']"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  fiscal_pgdata:
+    driver: local

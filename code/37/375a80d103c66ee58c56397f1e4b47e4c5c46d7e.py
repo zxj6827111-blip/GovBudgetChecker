@@ -1,0 +1,27 @@
+import json,hashlib,datetime,pymupdf
+from pathlib import Path
+out=Path('outputs/real_intake_review_20261008');truth_path=out/'numeric_truth.json';truth=json.load(open(truth_path))
+base=Path('/Users/zhangxingjin/Desktop/决算测试上海市');mapping={'上海市交通委员会':'document_01','上海市文化和旅游局':'document_05','上海市民政局':'document_06','上海市财政局':'document_08'}
+issues={n:json.load(open(out/'native'/d/'issues.json')) for n,d in mapping.items()}
+match={'NUM-T01':[7],'NUM-T02':[8],'NUM-T03':[],'NUM-T04':[13],'NUM-T05':[14],'NUM-T06':[],'NUM-T07':[],'NUM-W01':[15],'NUM-W02':[16,17],'NUM-W03':[8,11],'NUM-W04':[9,12],'NUM-W05':[7,10],'NUM-W08':[],'NUM-M01':[2],'NUM-M02':[3,6,7],'NUM-M03':[11]}
+result={'created_at':datetime.datetime.now().astimezone().isoformat(),'truth_file':str(truth_path),'truth_sha256':hashlib.sha256(truth_path.read_bytes()).hexdigest(),'scope':'冻结C线数字关系与本轮native输出对照；仅覆盖4份文档。FP疑点来自冻结后的定向反查，未回写为原始真值。','summary':{'confirmed_original_numeric_relations':16,'relations_detected':12,'relations_missed':4,'true_material_system_records':18,'duplicate_records_within_these_relations':6,'confirmed_false_positive_records':3,'pending_scope_records':7,'advisory_or_non_numeric_records_not_scored':30,'raw_system_records_in_4_documents':58,'boundary':'不可解释为全产品准确率或全材料漏报率；文旅3项经济勾稽关系同一坏表可合并为1个修复事项，民政多列关系也有关联。'},'relation_comparison':[],'false_positives':[],'pending_scope':[],'duplicate_groups':[],'function_gaps':[]}
+for x in truth['issues']:
+ n=x['organization'];ids=match[x['truth_id']]
+ matched=[{'native_record_index_0based':i,'rule':issues[n][i]['rule'],'severity':issues[n][i]['severity'],'page':issues[n][i].get('location',{}).get('page'),'message':issues[n][i]['message']} for i in ids]
+ result['relation_comparison'].append({'truth_id':x['truth_id'],'organization':n,'page':x['page'],'status':'TP' if ids else 'FN','title':x['title'],'expected':x['expected'],'actual':x['actual'],'source_truth_evidence':x['evidence'],'native_directory':str(out/'native'/mapping[n]),'matched_records':matched,'note':'系统证据跨p26-27；真值主页27，数值一致，认作命中。' if x['truth_id']=='NUM-W02' else ''})
+ if len(ids)>1:result['duplicate_groups'].append({'truth_id':x['truth_id'],'organization':n,'indexes_0based':ids,'reason':'同一数值不平关系由多个规则/重复关系条目报告；应合并证据保留最直接数值。'})
+def ev(n,p,needle):
+ d=pymupdf.open(base/(n+'.pdf'));rs=d[p-1].search_for(needle)
+ return {'page':p,'needle':needle,'bbox':[round(v,2) for v in (min(r.x0 for r in rs),min(r.y0 for r in rs),max(r.x1 for r in rs),max(r.y1 for r in rs))] if rs else None,'coordinate_system':'PDF points, top-left, x0 y0 x1 y1'}
+def fp(n,i,title,reason,expected,evidence):
+ x=issues[n][i]
+ result['false_positives'].append({'status':'FP','organization':n,'native_directory':str(out/'native'/mapping[n]),'native_record_index_0based':i,'rule':x['rule'],'severity':x['severity'],'reported_page':x.get('location',{}).get('page'),'title':title,'reported_message':x['message'],'reported_evidence':x['evidence_text'],'reason':reason,'expected':expected,'source_evidence':[ev(n,p,s) for p,s in evidence],'verification':'原件文本与原页渲染均核验','confidence':0.99,'provenance':'冻结真值后按系统输出反查发现；不是预先盲审检查点。'})
+w='上海市文化和旅游局';m='上海市民政局';t='上海市交通委员会'
+fp(w,4,'财政拨款总表续页重复累加基金本年支出汇总','系统将汇总10559.61和明细10018.79相加为20578.40；这不是互斥分项的合计关系。完整跨页政府性基金支出文化540.82加其他10018.79等于本年10559.61，末结转0，亦等于总计10559.61。','540.82+10018.79=10559.61；10559.61+0=10559.61。',[(17,'540.82'),(18,'10,018.79'),(18,'10,559.61')])
+fp(w,5,'一般公共预算表跨页20708明细漏纳续页首行','p19父20708=8925.24，p19子项2070802=781.22、2070806=1167.57、2070807=102.00，p20首行2070899=6874.45。规则仅相加p19三项2050.79，漏纳续页。','781.22+1167.57+102.00+6874.45=8925.24；差0。',[(19,'8,925.24'),(20,'6,874.45')])
+fp(m,15,'三公跨页分句将接待完成率绑定至车辆','原页p31车辆完成率65.05%；p32首行接待完成率74.40%。系统证据也同时含两值，却将74.40归到公车。','车辆166.30÷255.63×100=65.0549%，披露65.05%；接待25.52÷34.30×100=74.4023%，披露74.40%；均正确。',[(31,'65.05%'),(32,'74.40%'),(22,'255.63'),(22,'34.30')])
+for n,ids,truth_ids,note in [(t,[0,9,10,11,12],['NUM-TM1'],'表仅写预算数而说明明确年初预算，不能在未确认表预算阶段时以表作唯一分母自动定error；需追溯年初/调整后预算及分项底稿。'),(w,[13,14],['NUM-W06','NUM-W07'],'倒挂数字存在，系统正文要求复核底稿，但分类仍error。本线保守列待人工复核统计口径/坏表映射；不计确认TP或FP。')]:
+ result['pending_scope'].append({'organization':n,'truth_ids':truth_ids,'native_record_indexes_0based':ids,'note':note,'system_records':[{'index':i,'rule':issues[n][i]['rule'],'severity':issues[n][i]['severity'],'message':issues[n][i]['message']} for i in ids]})
+result['function_gaps']=[{'priority':'P1','gap':'跨页表格先合并后逐列绑定完整规则','evidence':['FP 文旅 V33-120 20708','FP 文旅 V33-005 基金汇总重复加'],'acceptance':'续页完整子项关系应可复算；汇总/合计不得回当作明细，页片段不得直接作完整表。'},{'priority':'P1','gap':'跨页句子与业务分项精准绑定','evidence':['FP 民政 V33-TREND-COMPLETION-RATE'],'acceptance':'车辆65.05%、接待74.40%各自正确绑定，单元格分母与说明阶段可追溯。'},{'priority':'P1','gap':'一般公共预算支出占比按文字声明分母检查','evidence':['FN NUM-T03'],'acceptance':'明确本年支出合计时用支出决算表全口径，使用财政拨款支出时需明确相应分母名。'},{'priority':'P1','gap':'政府性基金本年收入与说明绑定','evidence':['FN NUM-T06'],'acceptance':'基金收入234955.97与说明78656.53检出，不将项目年初预算错作整体本年收入。'},{'priority':'P2','gap':'机关运行费同比复算覆盖','evidence':['FN NUM-T07'],'acceptance':'6679.47减少335.66应4.79%，披露5.03%需报告。'},{'priority':'P2','gap':'绩效评级项目计数勾稽','evidence':['FN NUM-W08'],'acceptance':'105+21+0+1=127与自评108不能同时成立；整数计数无需金额容差。'},{'priority':'P2','gap':'重复问题合并及容差提示与错误分层','evidence':result['duplicate_groups'],'acceptance':'同一对象/年度/列/算式关系只保留一条问题；0.01至0.03万元取整信息默认作为提示，不进入错误数。'},{'priority':'P1','gap':'预算阶段不明时完成率应待复核而非强行定错','evidence':['NUM-TM1 5条本轮关联输出'],'acceptance':'先确认年初/全年/调整预算，原件没有阶段证据时提供待复核理由。'}]
+(out/'numeric_comparison.json').write_text(json.dumps(result,ensure_ascii=False,indent=2))
+print(json.dumps(result['summary'],ensure_ascii=False,indent=2))

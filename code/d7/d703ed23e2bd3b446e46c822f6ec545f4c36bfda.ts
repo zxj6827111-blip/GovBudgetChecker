@@ -1,0 +1,11 @@
+import fs from "node:fs";
+import assert from "node:assert/strict";
+import {toUiProblems} from '/Volumes/workSSD/software development/GovBudgetChecker/artifacts/shiquan-source-coverage-20261109/app/lib/uiAdapters.ts';
+import {buildCalculationGroups} from '/Volumes/workSSD/software development/GovBudgetChecker/artifacts/shiquan-source-coverage-20261109/app/app/components/review-workbench/reviewReadingAdapters.ts';
+const path=process.argv[2];
+const status=JSON.parse(fs.readFileSync(path,"utf8"));
+const problems=toUiProblems(status);
+const issue=problems.find(p=>p.ruleId==="V33-005"&&p.description.includes("basic_actual")&&p.description.includes("14206.00")&&p.description.includes("4610.99"));
+assert.ok(issue,"必须保留主样本真实基本支出列差额");
+const groups=buildCalculationGroups(issue);
+console.log(JSON.stringify({groups,refs:issue.evidenceRefs},null,2));

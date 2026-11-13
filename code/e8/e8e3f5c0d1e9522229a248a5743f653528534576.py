@@ -1,0 +1,48 @@
+"""Route registration for the FastAPI app."""
+
+from __future__ import annotations
+
+from fastapi import FastAPI
+
+from api.routes.activity import router as activity_router
+from api.routes.ai_models import router as ai_models_router
+from api.routes.analyze import router as analyze_router
+from api.routes.auth import router as auth_router
+from api.routes.config import router as config_router
+from api.routes.corrections import router as corrections_router
+from api.routes.files import router as files_router
+from api.routes.health import router as health_router
+from api.routes.jobs import router as jobs_router
+from api.routes.materials import router as materials_router
+from api.routes.metrics import router as metrics_router
+from api.routes.organizations import router as organizations_router
+from api.routes.ps_shared import router as ps_shared_router
+from api.routes.reports import router as reports_router
+from api.routes.reviews import router as reviews_router
+from api.routes.rules import router as rules_router
+from api.routes.upload import router as upload_router
+from api.routes.workflow import router as workflow_router
+from api.routes.supervision import router as supervision_router
+
+
+def register_routes(app: FastAPI) -> None:
+    """Register all API routers."""
+    app.include_router(health_router)
+    app.include_router(metrics_router)
+    app.include_router(activity_router)
+    app.include_router(auth_router)
+    app.include_router(upload_router)
+    app.include_router(config_router)
+    app.include_router(ai_models_router)
+    app.include_router(analyze_router)
+    app.include_router(jobs_router)
+    app.include_router(materials_router)
+    app.include_router(organizations_router)
+    app.include_router(ps_shared_router)
+    app.include_router(files_router)
+    app.include_router(corrections_router)
+    app.include_router(reports_router)
+    app.include_router(reviews_router)
+    app.include_router(rules_router)
+    app.include_router(workflow_router)
+    app.include_router(supervision_router)

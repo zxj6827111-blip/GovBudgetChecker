@@ -1,0 +1,659 @@
+import csv
+import io
+import json
+import zipfile
+from pathlib import Path
+from xml.etree import ElementTree as ET
+
+import pytest
+from fastapi.testclient import TestClient
+
+from api.main import app
+from api import runtime
+from scripts import run_zc07_acceptance as zc07
+
+
+def _create_pdf(path: Path, lines_per_page: list[list[str]]) -> None:
+    fitz = pytest.importorskip("fitz")
+    document = fitz.open()
+    try:
+        for lines in lines_per_page:
+            page = document.new_page()
+            y = 72
+            for line in lines:
+                page.insert_text((72, y), line, fontsize=12)
+                y += 18
+        document.save(path)
+    finally:
+        document.close()
+
+
+def _write_status(job_dir: Path, payload: dict) -> None:
+    (job_dir / "status.json").write_text(
+        json.dumps(payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def test_report_download_pdf_contains_multi_ref_labels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fitz = pytest.importorskip("fitz")
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+
+    job_id = "job-export-pdf"
+    job_dir = tmp_path / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    source_pdf = job_dir / "source.pdf"
+    _create_pdf(
+        source_pdf,
+        [
+            ["Narrative Ref", "FIELD_ALPHA 100"],
+            ["Budget Ref", "FIELD_BETA 90"],
+        ],
+    )
+
+    _write_status(
+        job_dir,
+        {
+            "job_id": job_id,
+            "status": "done",
+            "saved_path": f"{job_id}/source.pdf",
+            "result": {
+                "rule_findings": [
+                    {
+                        "id": "rule-export-1",
+                        "source": "rule",
+                        "rule_id": "TEST-EXPORT",
+                        "severity": "high",
+                        "title": "Cross-table mismatch",
+                        "message": "Cross-table mismatch",
+                        "location": {
+                            "page": 1,
+                            "pages": [1, 2],
+                            "table_refs": [
+                                {
+                                    "role": "REF-A",
+                                    "page": 1,
+                                    "section": "Narrative Ref",
+                                    "field": "FIELD_ALPHA",
+                                    "bbox": [72, 61, 150, 79],
+                                    "location_level": "exact_span",
+                                    "verification_status": "verified",
+                                },
+                                {
+                                    "role": "REF-B",
+                                    "page": 2,
+                                    "table": "Budget Ref",
+                                    "field": "FIELD_BETA",
+                                    "bbox": [72, 61, 140, 79],
+                                    "location_level": "exact_span",
+                                    "verification_status": "verified",
+                                },
+                            ],
+                        },
+                        "bbox": [72, 61, 150, 79],
+                        "location_level": "exact_span",
+                        "verification_status": "verified",
+                        "evidence": [{"page": 1, "text": "FIELD_ALPHA 100"}],
+                        "metrics": {},
+                        "tags": [],
+                    }
+                ]
+            },
+        },
+    )
+
+    client = TestClient(app)
+    response = client.get(f"/api/reports/download?job_id={job_id}")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/pdf")
+
+    with fitz.open(stream=response.content, filetype="pdf") as exported:
+        page1_text = exported[0].get_text("text")
+        page2_text = exported[1].get_text("text")
+
+    assert "REF-A" in page1_text
+    assert "REF-B" in page2_text
+    assert "TEST-EXPORT" in page1_text
+    assert "问题索引" in page1_text
+
+
+def test_report_download_json_and_csv_include_structured_location_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+
+    job_id = "job-export-structured"
+    job_dir = tmp_path / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    _create_pdf(job_dir / "source.pdf", [["Table A", "ROW_A 100"]])
+
+    _write_status(
+        job_dir,
+        {
+            "job_id": job_id,
+            "status": "done",
+            "saved_path": f"{job_id}/source.pdf",
+            "result": {
+                "rule_findings": [
+                    {
+                        "id": "rule-export-2",
+                        "source": "rule",
+                        "rule_id": "TEST-STRUCTURED",
+                        "severity": "medium",
+                        "title": "Structured location export",
+                        "message": "Structured location export",
+                        "location": {
+                            "page": 1,
+                            "pages": [1, 2],
+                            "table": "Table A",
+                            "row": "ROW_A",
+                            "field": "Field A",
+                            "code": "201999",
+                            "subject": "Subject A",
+                            "expected_name": "\u536b\u751f\u5065\u5eb7\u652f\u51fa",
+                            "actual_name": "\u533b\u7597\u536b\u751f\u4e0e\u8ba1\u5212\u751f\u80b2\u652f\u51fa",
+                            "code_level": "\u7c7b",
+                            "source_of_truth": "BUD_T5",
+                            "table_refs": [
+                                {
+                                    "role": "T1",
+                                    "page": 1,
+                                    "table": "Table A",
+                                    "row": "ROW_A",
+                                    "field": "Field A",
+                                    "bbox": [72, 61, 135, 79],
+                                    "location_level": "exact_cell",
+                                    "verification_status": "verified",
+                                }
+                            ],
+                        },
+                        "bbox": [72, 61, 135, 79],
+                        "location_level": "exact_cell",
+                        "verification_status": "verified",
+                        "evidence": [{"page": 1, "text": "ROW_A 100", "bbox": [72, 61, 135, 79], "location_level": "exact_cell", "verification_status": "verified"}],
+                        "metrics": {},
+                        "tags": [],
+                        "suggestion": "Check source values",
+                    }
+                ]
+            },
+        },
+    )
+
+    client = TestClient(app)
+
+    report_json = client.get(f"/api/reports/download?job_id={job_id}&format=json")
+    assert report_json.status_code == 200
+    payload = report_json.json()
+    issue = payload["issues"][0]
+    assert issue["severity_label"] == "中"
+    export_location = issue["export_location"]
+    assert export_location["page"] == 1
+    assert export_location["table"] == "Table A"
+    assert export_location["row"] == "ROW_A"
+    assert export_location["field"] == "Field A"
+    assert export_location["code"] == "201999"
+    assert export_location["subject"] == "Subject A"
+    assert export_location["role_summary"] == "T1/P1/表:Table A"
+    assert export_location["table_refs"][0]["bbox"] == [72.0, 61.0, 135.0, 79.0]
+
+    report_csv = client.get(f"/api/reports/download?job_id={job_id}&format=csv")
+    assert report_csv.status_code == 200
+    text = report_csv.content.decode("utf-8-sig")
+    rows = list(csv.DictReader(io.StringIO(text)))
+    assert rows
+    row = next(item for item in rows if item["record_type"] == "issue")
+    assert "规则编号" in row
+    assert "严重级别" in row
+    assert "table_refs" in row
+    assert row["rule_id"] == "TEST-STRUCTURED"
+    assert row["severity_label"] == "中"
+    assert row["严重级别"] == "中"
+    assert row["严重级别代码"] == "medium"
+    assert row["规则编号"] == "TEST-STRUCTURED"
+    assert row["table"] == "Table A"
+    assert row["表"] == "Table A"
+    assert row["row"] == "ROW_A"
+    assert row["行"] == "ROW_A"
+    assert row["field"] == "Field A"
+    assert row["字段"] == "Field A"
+    assert row["table_ref_count"] == "1"
+    assert row["evidence_role_summary"] == "T1/P1/表:Table A"
+    table_refs = json.loads(row["table_refs"])
+    assert table_refs[0]["role"] == "T1"
+    assert table_refs[0]["bbox"] == [72.0, 61.0, 135.0, 79.0]
+
+
+def test_report_download_uses_merged_issue_projection_without_double_counting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+
+    job_id = "job-export-dual-merged"
+    job_dir = tmp_path / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    _create_pdf(job_dir / "source.pdf", [["Alpha"], ["Beta"]])
+
+    rule_issue = {
+        "id": "rule-export-3",
+        "source": "rule",
+        "rule_id": "RULE-3",
+        "severity": "medium",
+        "title": "Rule issue",
+        "message": "Rule issue",
+        "location": {"page": 2},
+        "evidence": [{"page": 2, "text": "Beta"}],
+        "metrics": {},
+        "tags": [],
+    }
+    ai_issue = {
+        "id": "ai-export-1",
+        "source": "ai",
+        "rule_id": "AI-1",
+        "severity": "high",
+        "title": "AI issue",
+        "message": "AI issue",
+        "location": {"page": 1},
+        "evidence": [{"page": 1, "text": "Alpha"}],
+        "metrics": {},
+        "tags": [],
+    }
+
+    _write_status(
+        job_dir,
+        {
+            "job_id": job_id,
+            "status": "done",
+            "saved_path": f"{job_id}/source.pdf",
+            "result": {
+                "issues": {
+                    "error": [],
+                    "warn": [rule_issue],
+                    "info": [],
+                    "all": [rule_issue],
+                },
+                "ai_findings": [ai_issue],
+                "rule_findings": [rule_issue],
+                "merged": {
+                    "totals": {
+                        "ai": 1,
+                        "rule": 1,
+                        "merged": 2,
+                        "conflicts": 0,
+                        "agreements": 0,
+                    },
+                    "merged_ids": ["ai-export-1", "rule-export-3"],
+                    "conflicts": [],
+                    "agreements": [],
+                },
+            },
+        },
+    )
+
+    client = TestClient(app)
+
+    report_json = client.get(f"/api/reports/download?job_id={job_id}&format=json")
+    assert report_json.status_code == 200
+    payload = report_json.json()
+    assert payload["count"] == 2
+    assert [item["id"] for item in payload["issues"]] == ["ai-export-1", "rule-export-3"]
+
+    report_csv = client.get(f"/api/reports/download?job_id={job_id}&format=csv")
+    assert report_csv.status_code == 200
+    text = report_csv.content.decode("utf-8-sig")
+    rows = list(csv.DictReader(io.StringIO(text)))
+    issue_rows = [row for row in rows if row["record_type"] == "issue"]
+    assert len(rows) == 3
+    assert [row["rule_id"] for row in issue_rows] == ["AI-1", "RULE-3"]
+    assert [row["严重级别"] for row in issue_rows] == ["高", "中"]
+
+
+def test_report_export_includes_structured_review_item_without_fake_page(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+    job_id = "job-export-review"
+    job_dir = tmp_path / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    _create_pdf(job_dir / "source.pdf", [["Review"]])
+    _write_status(
+        job_dir,
+        {
+            "job_id": job_id,
+            "status": "done",
+            "saved_path": f"{job_id}/source.pdf",
+            "result": {"rule_findings": []},
+            "structured_ingest": {
+                "review_items": [
+                    {"id": "review-1", "type": "table", "table_code": "FIN_05", "message": "Needs review"}
+                ]
+            },
+        },
+    )
+
+    response = TestClient(app).get(f"/api/reports/download?job_id={job_id}&format=json")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["issues"] == []
+    structured_reviews = [
+        item for item in payload["review_report"]["manual_review"]
+        if item.get("record_type") == "structured_review"
+    ]
+    assert structured_reviews[0]["id"] == "review-1"
+    assert structured_reviews[0]["severity"] == "manual_review"
+    assert structured_reviews[0].get("page") is None
+
+
+def test_report_download_word_format_is_supported(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+
+    job_id = "job-export-word"
+    job_dir = tmp_path / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    _create_pdf(job_dir / "source.pdf", [["Word export source"]])
+    _write_status(
+        job_dir,
+        {
+            "job_id": job_id,
+            "status": "done",
+            "filename": "江苏省某单位2024年度部门决算.pdf",
+            "saved_path": f"{job_id}/source.pdf",
+            "result": {
+                "rule_findings": [
+                    {
+                        "id": "rule-word-1",
+                        "source": "rule",
+                        "rule_id": "DOCX-001",
+                        "severity": "medium",
+                        "title": "Word export issue",
+                        "message": "Word export issue detail",
+                        "location": {"page": 3, "section": "一般公共预算财政拨款支出决算情况说明"},
+                        "evidence": [{"page": 3, "text": "原文摘录 120%"}],
+                        "suggestion": "补充差异原因说明",
+                        "metrics": {},
+                        "tags": [],
+                    }
+                ]
+            },
+        },
+    )
+
+    client = TestClient(app)
+    response = client.get(f"/api/reports/download?job_id={job_id}&format=docx")
+
+    assert response.status_code == 200
+    assert "wordprocessingml.document" in response.headers["content-type"]
+    assert response.headers["content-disposition"].endswith(f'filename="{job_id}.docx"')
+    assert len(response.content) > 1000
+
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        names = set(archive.namelist())
+        assert "[Content_Types].xml" in names
+        assert "word/document.xml" in names
+        document_xml = archive.read("word/document.xml")
+
+    root = ET.fromstring(document_xml)
+    texts = [
+        node.text or ""
+        for node in root.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t")
+    ]
+    document_text = "\n".join(texts)
+    assert "预决算公开材料审校报告" in document_text
+    assert "江苏省某单位2024年度部门决算.pdf" in document_text
+    assert "问题总数" in document_text
+    assert "Word export issue" in document_text
+    assert "DOCX-001" in document_text
+    assert "原文摘录 120%" in document_text
+    assert "补充差异原因说明" in document_text
+
+
+def test_report_download_word_format_handles_empty_results(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+
+    job_id = "job-export-word-empty"
+    job_dir = tmp_path / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    _create_pdf(job_dir / "source.pdf", [["Word export source"]])
+    _write_status(
+        job_dir,
+        {
+            "job_id": job_id,
+            "status": "done",
+            "saved_path": f"{job_id}/source.pdf",
+            "result": {"rule_findings": []},
+        },
+    )
+
+    client = TestClient(app)
+    response = client.get(f"/api/reports/download?job_id={job_id}&format=docx")
+
+    assert response.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        document_xml = archive.read("word/document.xml")
+    root = ET.fromstring(document_xml)
+    document_text = "\n".join(
+        node.text or ""
+        for node in root.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t")
+    )
+    # ZC-00（SYS-12）：旧版结果无覆盖台账，零问题不得写"未发现明显问题"
+    assert "未发现明显问题" not in document_text
+    assert "问题列表为空" in document_text
+
+
+# ---------------------------------------------------------------------------
+# 导出必须交出"检查范围"，而不只是问题列表（plan §3/§6）
+# ---------------------------------------------------------------------------
+
+
+def test_check_scope_export_marks_legacy_records_explicitly() -> None:
+    """旧任务没有覆盖台账时，必须显示"旧版未记录"，不能显示成已检查完整。"""
+    from api.routes.reports import _build_check_scope_export
+
+    scope = _build_check_scope_export({"status": "done", "result": {"meta": {}}})
+    assert scope["check_coverage"] == "旧版未记录"
+    assert scope["unfinished_checks"] == "旧版未记录"
+    assert scope["document_profile"] == "旧版未记录"
+    assert "无法据此判断检查范围是否完整" in scope["coverage_note"]
+
+
+def test_check_scope_export_lists_unfinished_checks() -> None:
+    """新结果必须把未完成检查逐条交出，并说明"未发现问题"的适用范围。"""
+    from api.routes.reports import _build_check_scope_export
+
+    status_payload = {
+        "status": "review_required",
+        "report_kind": "final",
+        "profile_status": "resolved",
+        "conclusion_scope": "incomplete_scope",
+        "check_coverage": {
+            "catalog_version": "obligations-v2",
+            "applicable_total": 43,
+            "unresolved_total": 2,
+            "blocking_total": 2,
+            "instances": [
+                {
+                    "obligation_id": "OBL-SG-COMPLETION",
+                    "group_title": "三公经费",
+                    "title": "三公经费预算数与决算数对比及说明",
+                    "status": "not_implemented",
+                    "reason_label": "尚未实现",
+                    "detail": "该要求尚无规则实现",
+                    "basis": "AGENTS.md 决算必查勾稽 D-007",
+                    "gap_note": "缺少三公经费预算数/决算数对比与说明一致性检查",
+                },
+                {
+                    "obligation_id": "OBL-SG-TOTAL",
+                    "group_title": "三公经费",
+                    "title": "三公经费合计 = 三项分项之和",
+                    "status": "completed",
+                    "reason_label": None,
+                    "detail": "规则已全部执行并到达终态：V33-121=pass",
+                    "basis": "AGENTS.md 决算必查勾稽 D-007",
+                    "gap_note": "",
+                },
+            ],
+        },
+    }
+    scope = _build_check_scope_export(status_payload)
+    assert [item["obligation_id"] for item in scope["unfinished_checks"]] == [
+        "OBL-SG-COMPLETION"
+    ]
+    assert scope["unfinished_checks"][0]["reason_label"] == "尚未实现"
+    assert scope["conclusion_scope"] == "incomplete_scope"
+    assert "仅表示在本次已完成的检查范围内" in scope["coverage_note"]
+
+
+def test_csv_export_includes_obligation_ids_column() -> None:
+    """CSV 必须带上问题与检查义务的关联，且旧结果留空而不是填 0。"""
+    from api.routes.reports import _build_csv_row
+
+    row = _build_csv_row(
+        {
+            "id": "rule:V33-121:x",
+            "source": "rule",
+            "rule_id": "V33-121",
+            "severity": "high",
+            "title": "t",
+            "message": "m",
+            "obligation_ids": ["OBL-SG-TOTAL", "OBL-SG-ITEMS"],
+        }
+    )
+    assert row["obligation_ids"] == "OBL-SG-TOTAL; OBL-SG-ITEMS"
+    assert row["关联检查项"] == "OBL-SG-TOTAL; OBL-SG-ITEMS"
+
+    legacy = _build_csv_row(
+        {
+            "id": "rule:V33-121:y",
+            "source": "rule",
+            "rule_id": "V33-121",
+            "severity": "high",
+            "title": "t",
+            "message": "m",
+        }
+    )
+    assert legacy["obligation_ids"] == ""
+    assert legacy["关联检查项"] == ""
+
+
+def test_r5_07_actual_four_format_downloads_pass_gate_and_tampered_row_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """实际下载字节通过门禁；破坏单条 DOCX 问题语义后必须失败。"""
+    pytest.importorskip("fitz")
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", tmp_path)
+
+    job_id = "job-r5-export"
+    job_dir = tmp_path / job_id
+    job_dir.mkdir(parents=True)
+    _create_pdf(job_dir / "source.pdf", [["Source material", "R5_EVIDENCE_TOKEN"]])
+    long_reason = "R5_LONG_REASON_" + ("evidence-spans-pages-" * 180)
+    issue = {
+        "id": "issue-r5-export",
+        "rule_id": "R5-TEST",
+        "severity": "high",
+        "title": "R5_ISSUE_TITLE_TOKEN",
+        "message": "R5_MESSAGE_TOKEN",
+        "suggestion": "R5_SUGGESTION_TOKEN",
+        "page_number": 1,
+        "location": {"page": 1, "location_level": "unresolved"},
+        "location_level": "unresolved",
+        "verification_status": "unverified",
+        "check_relation_id": "R5-TEST:relation",
+        "fact_ids": ["fact-r5-export"],
+        "evidence_ids": ["evidence-r5-export"],
+        "evidence": [{
+            "page": 1,
+            "text": "R5_EVIDENCE_TOKEN",
+            "text_snippet": "R5_EVIDENCE_TOKEN",
+        }],
+    }
+    payload = {
+        "job_id": job_id,
+        "filename": "source.pdf",
+        "saved_path": f"{job_id}/source.pdf",
+        "status": "review_required",
+        "quality_status": "review_required",
+        "analysis_conclusion": "incomplete",
+        "analysis_revision": "rev-r5-export",
+        "report_kind": "budget",
+        "document_profile": {
+            "report_kind": {"value": "budget"},
+            "report_year": {"value": 2026},
+            "organization_name": {"value": "测试单位"},
+        },
+        "check_coverage": {"instances": [{
+            "obligation_id": "BUD-03",
+            "title": "预算说明核对",
+            "status": "insufficient_data",
+            "detail": long_reason,
+        }]},
+        "result": {
+            "issues": {"all": [issue]},
+            "meta": {"check_receipts": [{
+                "rule_id": "R5-TEST",
+                "sub_check_id": "R5-TEST:relation",
+                "status": "fail",
+                "formula": "table_value == narrative_value",
+                "operand_fact_ids": ["fact-r5-export"],
+                "required_fact_ids": ["fact-r5-export"],
+                "issue_refs": ["issue-r5-export"],
+                "tolerance": {"amount_wan": "0.5"},
+                "incomplete_reason": "",
+            }]},
+        },
+    }
+    _write_status(job_dir, payload)
+    client = TestClient(app)
+
+    export_paths = []
+    for export_format in ("json", "csv", "docx", "pdf"):
+        response = client.get(
+            f"/api/reports/download?job_id={job_id}&format={export_format}"
+        )
+        assert response.status_code == 200, response.text
+        export_path = tmp_path / f"actual.{export_format}"
+        export_path.write_bytes(response.content)
+        export_paths.append(export_path)
+
+    manifest = {"documents": [{
+        "doc_id": job_id,
+        "export_paths": [str(path) for path in export_paths],
+    }]}
+    gate = zc07._evaluate_export_agreement(manifest, tmp_path)
+    assert gate["status"] == "computed", gate
+    assert gate["consistent_documents"] == 1
+
+    docx_path = next(path for path in export_paths if path.suffix == ".docx")
+    tampered_path = tmp_path / "tampered.docx"
+    with zipfile.ZipFile(docx_path, "r") as source:
+        entries = {name: source.read(name) for name in source.namelist()}
+    document_xml = entries["word/document.xml"].decode("utf-8")
+    assert "R5_MESSAGE_TOKEN" in document_xml
+    entries["word/document.xml"] = document_xml.replace(
+        "R5_MESSAGE_TOKEN", "R5_TAMPERED_MESSAGE"
+    ).encode("utf-8")
+    with zipfile.ZipFile(tampered_path, "w", compression=zipfile.ZIP_DEFLATED) as target:
+        for name, content in entries.items():
+            target.writestr(name, content)
+    tampered_manifest = {
+        "documents": [{
+            "doc_id": job_id,
+            "export_paths": [
+                str(tampered_path if path.suffix == ".docx" else path)
+                for path in export_paths
+            ],
+        }]
+    }
+    rejected = zc07._evaluate_export_agreement(tampered_manifest, tmp_path)
+    assert rejected["status"] == "not_computable"
+    assert "缺少 1 项 canonical 可见语义字段" in rejected["reason"]

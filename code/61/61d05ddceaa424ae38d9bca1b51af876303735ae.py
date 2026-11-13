@@ -1,0 +1,1095 @@
+"""Persist analysis job snapshots into PostgreSQL."""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime, timezone
+import hashlib
+import json
+import logging
+import os
+from pathlib import Path
+import re
+import time
+from typing import Any, Dict, List, Optional
+
+from src.db.connection import DatabaseConnection
+from src.db.migrations import run_migrations
+from src.schemas.issues import ACTIVE_JOB_STATUSES, normalize_job_status
+from src.services import review_slot_sync
+from src.services.document_profile_resolver import resolve_document_profile
+
+logger = logging.getLogger(__name__)
+
+_DB_READY = False
+_DB_READY_LOCK: asyncio.Lock | None = None
+_ACTIVE_JOB_STATUSES = {"queued", "processing", "running"}
+_UUIDISH_FILENAME_RE = re.compile(r"^[0-9a-f]{24,}\.pdf$", re.I)
+_PERSISTENCE_RETRY_DELAYS = (0.0, 0.2, 0.5)
+_POSTGRES_INTEGER_MAX = 2_147_483_647
+_PERSISTENCE_FILENAME = "persistence.json"
+
+
+def _record_persistence_state(job_uuid: str, status: str, error: str = "") -> None:
+    """Expose file/database synchronization state without changing job status."""
+    job_dir = Path(os.getenv("UPLOAD_DIR", "uploads")).resolve() / job_uuid
+    if not job_dir.is_dir():
+        return
+    target = job_dir / _PERSISTENCE_FILENAME
+    temp = target.with_suffix(".json.tmp")
+    payload = {
+        "status": status,
+        "last_attempt_ts": time.time(),
+        "error": error or None,
+    }
+    try:
+        temp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        temp.replace(target)
+    except Exception:
+        logger.exception("Failed to record persistence state for job %s", job_uuid)
+
+
+async def ensure_analysis_persistence_ready() -> bool:
+    """Initialize PostgreSQL access for analysis result persistence."""
+    global _DB_READY
+
+    if _DB_READY and DatabaseConnection.is_initialized():
+        return True
+    if not (os.getenv("DATABASE_URL") or "").strip():
+        return False
+
+    global _DB_READY_LOCK
+    # TestClient and development reloads may create a fresh event loop after
+    # the previous one is closed.  asyncio primitives cannot be reused across
+    # loops, so create the initialization lock lazily for the active loop.
+    active_loop = asyncio.get_running_loop()
+    if _DB_READY_LOCK is None or getattr(_DB_READY_LOCK, "_loop", None) not in (None, active_loop):
+        _DB_READY_LOCK = asyncio.Lock()
+
+    async with _DB_READY_LOCK:
+        if _DB_READY and DatabaseConnection.is_initialized():
+            return True
+        try:
+            await DatabaseConnection.initialize()
+            await run_migrations()
+            _DB_READY = True
+        except Exception:
+            logger.exception("Failed to initialize analysis result persistence")
+            _DB_READY = False
+            return False
+    return True
+
+
+async def persist_analysis_job_snapshot(
+    payload: Dict[str, Any],
+    *,
+    include_results: bool = False,
+) -> bool:
+    """Best-effort persistence for file-backed job snapshots."""
+    if not isinstance(payload, dict):
+        return False
+
+    job_uuid = str(payload.get("job_id") or "").strip()
+    if not job_uuid:
+        return False
+
+    if not (os.getenv("DATABASE_URL") or "").strip():
+        _record_persistence_state(job_uuid, "disabled", "DATABASE_URL is not configured")
+        return False
+    last_error = "analysis result database unavailable"
+    for attempt, delay in enumerate(_PERSISTENCE_RETRY_DELAYS, start=1):
+        if delay:
+            await asyncio.sleep(delay)
+        conn = None
+        try:
+            if not await ensure_analysis_persistence_ready():
+                continue
+            conn = await DatabaseConnection.acquire()
+            async with conn.transaction():
+                job_db_id = await _upsert_analysis_job(
+                    conn,
+                    payload,
+                    result_fingerprint=(
+                        compute_analysis_result_fingerprint(payload) if include_results else None
+                    ),
+                )
+                status = str(payload.get("status") or "").strip().lower()
+                if include_results:
+                    await _upsert_analysis_result(conn, job_db_id, payload)
+                    binding = ((payload.get("result") or {}).get("meta") or {}).get("fact_snapshot") or {}
+                    if binding.get("compatibility") == "v2":
+                        from src.services.analysis_fact_snapshot import read_candidate, persist_fact_snapshot
+                        candidate = Path(os.getenv("UPLOAD_DIR", "uploads")) / job_uuid / "pending_fact_publication.json"
+                        staged_payload, staged_snapshot = read_candidate(candidate)
+                        if staged_payload != payload:
+                            raise ValueError("result differs from immutable staged publication")
+                        for field in ("checksum", "file_hash"):
+                            if payload.get(field) and payload[field] != staged_snapshot.summary()["source_file_hash"]:
+                                raise ValueError("published job source differs from bound fact snapshot")
+
+                        await persist_fact_snapshot(conn,job_db_id,staged_snapshot)
+                        from src.services.effective_fact_projection import publish_effective_projection
+                        await publish_effective_projection(conn, staged_snapshot, payload)
+                elif status in _ACTIVE_JOB_STATUSES and not await conn.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM analysis_fact_snapshots WHERE job_id=$1)", job_db_id
+                ):
+                    await conn.execute("DELETE FROM analysis_results WHERE job_id = $1", job_db_id)
+                    # 作业被重置为"待跑/在跑"：分析结果被作废，同时清掉结果指纹。
+                    # 这样**下一次真正落库的结果**必定递增分析代际——哪怕它与上一代
+                    # 逐字相同。重新分析意味着"请重新看这一次的分析"，而不是
+                    # "看一份看起来一样的旧结论"（详见 migration 0020 的注释）。
+                    await conn.execute(
+                        "UPDATE analysis_jobs SET analysis_result_fingerprint = NULL, "
+                        "updated_at = NOW() WHERE id = $1",
+                        job_db_id,
+                    )
+                await _backfill_structured_document_version_metadata(conn, payload)
+            _record_persistence_state(job_uuid, "synced")
+            # 结果刚落库时把槽位的复核状态接线到"待人工复核 / 已完成复核"。
+            # 放在主事务**之外**（独立事务 + 吞异常）：槽位与复核是旁路能力，
+            # 其故障不允许让"分析结果写库"失败（与 safe_allocate_for_document 同一条纪律）。
+            # 但它必须在这里——这是"分析真正跑完"的唯一事件点，WP1 预置的
+            # review_required 状态此前没有任何路径会写出来。
+            if include_results:
+                await review_slot_sync.best_effort_sync_slot_review_state(conn, job_uuid)
+            return True
+        except Exception as exc:
+            last_error = str(exc) or exc.__class__.__name__
+            logger.warning(
+                "Analysis snapshot persistence attempt %s/%s failed for job %s",
+                attempt,
+                len(_PERSISTENCE_RETRY_DELAYS),
+                job_uuid,
+                exc_info=True,
+            )
+        finally:
+            if conn is not None:
+                await DatabaseConnection.release(conn)
+
+    _record_persistence_state(job_uuid, "pending_retry", last_error)
+    return False
+
+
+async def sync_pending_analysis_snapshots(
+    upload_root: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Replay only snapshots marked for persistence retry after a DB outage."""
+    root = (upload_root or Path(os.getenv("UPLOAD_DIR", "uploads"))).resolve()
+    summary: Dict[str, Any] = {
+        "scanned": 0,
+        "pending": 0,
+        "synced": 0,
+        "failed": 0,
+        "failed_job_ids": [],
+    }
+    if not root.is_dir():
+        return summary
+
+    for job_dir in root.iterdir():
+        if not job_dir.is_dir() or job_dir.name.startswith("."):
+            continue
+        summary["scanned"] += 1
+        persistence = _read_json_file(job_dir / _PERSISTENCE_FILENAME)
+        if str(persistence.get("status") or "").strip() != "pending_retry":
+            continue
+        summary["pending"] += 1
+        candidate_path = job_dir / "pending_fact_publication.json"
+        if candidate_path.is_file():
+            from src.services.analysis_fact_snapshot import read_candidate
+            try:
+                payload, _ = read_candidate(candidate_path)
+            except (ValueError, KeyError, OSError):
+                summary["failed"] += 1
+                summary["failed_job_ids"].append(job_dir.name)
+                continue
+        else:
+            payload = _read_json_file(job_dir / "status.json")
+        if not payload:
+            summary["failed"] += 1
+            summary["failed_job_ids"].append(job_dir.name)
+            continue
+        payload.setdefault("job_id", job_dir.name)
+        include_results = isinstance(payload.get("result"), dict)
+        if await persist_analysis_job_snapshot(payload, include_results=include_results):
+            if candidate_path.is_file():
+                from api import runtime
+                _, snapshot = read_candidate(candidate_path)
+                runtime.write_json_file(job_dir / "fact_context.json",snapshot.to_dict()["effective_context"])
+                runtime.write_analysis_revision_snapshot(job_dir,payload)
+                runtime.write_json_file(job_dir / "status.json",payload)
+            summary["synced"] += 1
+        else:
+            summary["failed"] += 1
+            summary["failed_job_ids"].append(str(payload.get("job_id") or job_dir.name))
+    return summary
+
+
+async def _upsert_analysis_job(
+    conn, payload: Dict[str, Any], *, result_fingerprint: Optional[str] = None
+) -> int:
+    """写入作业快照，并维护分析代际。
+
+    ``result_fingerprint`` 非空表示"这次调用同时带来了一个分析结果"，
+    它驱动的递增规则是：
+
+    - 库里指纹为空（从未落过结果，或作业刚被重置）→ 递增 ⇒ 新的一代；
+    - 库里指纹与本次不同 → 递增 ⇒ 新的一代；
+    - 相同 → **不递增** ⇒ 这是同一个结果的重复落库 / 断线重放。
+
+    为什么不能只按"没有结果行"判断：重新分析完全可能产出与上一代逐字相同的
+    结果，而那也必须换代。把"重置时清指纹"与"落库时比指纹"合起来，
+    就同时满足了两件事：重新分析一定换代、纯重放一定不换代。
+
+    **首次 INSERT 也走同一条规则**：``analysis_revision`` 的初值由
+    "这次有没有带结果"决定（无结果 0 / 有结果 1），而不是无条件写 0。
+    真实场景：上传时数据库不可用 → 初始的 queued 快照没入库 →
+    分析跑完后数据库已恢复 → **第一次**成功写库就是带结果的 completed 快照。
+    无条件写 0 会造出"``analysis_revision = 0`` 且指纹非空"的行，
+    与迁移自己定义的语义（0 = 尚无任何分析结果落库）直接冲突；
+    这种行下一次落库会从 0 跳到 1，看起来像是"换了一代"。
+    """
+    # 初值：带结果进来就是第 1 代；不带结果（queued/processing 快照）才是 0。
+    initial_revision = 1 if result_fingerprint is not None else 0
+    metadata = _build_job_metadata(payload)
+    organization_fk = await _resolve_organization_fk(conn, payload.get("organization_id"))
+    status = str(payload.get("status") or "pending").strip() or "pending"
+    mode = str(payload.get("mode") or "legacy").strip() or "legacy"
+    started_at = _resolve_started_at(payload)
+    completed_at = _resolve_completed_at(payload)
+    error_message = _resolve_error_message(payload)
+
+    return int(
+        await conn.fetchval(
+            """
+            INSERT INTO analysis_jobs (
+                job_uuid,
+                filename,
+                file_hash,
+                organization_id,
+                status,
+                mode,
+                started_at,
+                completed_at,
+                error_message,
+                metadata,
+                analysis_revision,
+                analysis_result_fingerprint
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12)
+            ON CONFLICT (job_uuid)
+            DO UPDATE SET
+                filename = CASE
+                    WHEN EXCLUDED.filename <> '' THEN EXCLUDED.filename
+                    ELSE analysis_jobs.filename
+                END,
+                file_hash = CASE
+                    WHEN EXCLUDED.file_hash <> '' THEN EXCLUDED.file_hash
+                    ELSE analysis_jobs.file_hash
+                END,
+                organization_id = COALESCE(EXCLUDED.organization_id, analysis_jobs.organization_id),
+                status = EXCLUDED.status,
+                mode = EXCLUDED.mode,
+                started_at = COALESCE(analysis_jobs.started_at, EXCLUDED.started_at),
+                completed_at = COALESCE(EXCLUDED.completed_at, analysis_jobs.completed_at),
+                error_message = EXCLUDED.error_message,
+                metadata = COALESCE(analysis_jobs.metadata, '{}'::jsonb) || EXCLUDED.metadata,
+                -- 分析代际：只有"带来新结果"的落库才递增。本次没带结果
+                -- （进度更新、错误快照、metadata 修复）时保持原值——
+                -- 状态重放与补偿写库绝不能让人工复核无意义地失效。
+                analysis_revision = CASE
+                    WHEN EXCLUDED.analysis_result_fingerprint IS NULL
+                        THEN analysis_jobs.analysis_revision
+                    WHEN analysis_jobs.analysis_result_fingerprint IS NULL
+                        THEN analysis_jobs.analysis_revision + 1
+                    WHEN analysis_jobs.analysis_result_fingerprint
+                         IS DISTINCT FROM EXCLUDED.analysis_result_fingerprint
+                        THEN analysis_jobs.analysis_revision + 1
+                    ELSE analysis_jobs.analysis_revision
+                END,
+                analysis_result_fingerprint = CASE
+                    WHEN EXCLUDED.analysis_result_fingerprint IS NULL
+                        THEN analysis_jobs.analysis_result_fingerprint
+                    ELSE EXCLUDED.analysis_result_fingerprint
+                END,
+                updated_at = NOW()
+            RETURNING id
+            """,
+            str(payload.get("job_id") or "").strip(),
+            _resolve_filename(payload),
+            str(payload.get("checksum") or payload.get("file_hash") or "").strip(),
+            organization_fk,
+            status,
+            mode,
+            started_at,
+            completed_at,
+            error_message,
+            _to_json(metadata),
+            initial_revision,
+            result_fingerprint,
+        )
+    )
+
+
+#: 分析结果指纹覆盖的内容。刻意**不含** progress / ts / message / elapsed_ms
+#: 这类每次都变的字段：指纹回答的是"被复核的分析内容是不是同一份"，
+#: 而不是"字节是不是同一份"。把它做得太宽会让每次进度更新都换代，
+#: 让人工复核被无意义地反复作废。
+_RESULT_FINGERPRINT_KEYS = ("ai_findings", "rule_findings", "merged")
+
+
+def compute_analysis_result_fingerprint(payload: Dict[str, Any]) -> str:
+    """算出本次落库分析结果的内容指纹（sha256）。
+
+    只覆盖 ``ai_findings`` / ``rule_findings`` / ``merged`` 与
+    ``meta.obligation_coverage``：它们共同决定"这次分析的结论与检查覆盖是什么"。
+    """
+    result_payload = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+    meta = result_payload.get("meta") if isinstance(result_payload.get("meta"), dict) else {}
+    content: Dict[str, Any] = {}
+    for key in _RESULT_FINGERPRINT_KEYS:
+        value = result_payload.get(key, payload.get(key))
+        content[key] = value if value is not None else None
+    content["obligation_coverage"] = meta.get("obligation_coverage")
+    binding = meta.get("fact_snapshot")
+    if isinstance(binding, dict) and binding.get("compatibility") == "v2":
+        # 金额/身份改变而问题清单相同时，仍是一份新的有效事实版本。
+        content["fact_snapshot"] = binding
+
+    canonical = json.dumps(content, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+async def _upsert_analysis_result(conn, job_db_id: int, payload: Dict[str, Any]) -> None:
+    result_payload = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+
+    ai_findings = _normalize_list(
+        result_payload.get("ai_findings", payload.get("ai_findings"))
+    )
+    rule_findings = _normalize_list(
+        result_payload.get("rule_findings", payload.get("rule_findings"))
+    )
+    merged_result = _normalize_dict(
+        result_payload.get("merged", payload.get("merged"))
+    )
+
+    if not ai_findings and not rule_findings:
+        legacy_issues = _flatten_legacy_issues(result_payload.get("issues", payload.get("issues")))
+        if legacy_issues:
+            rule_findings = legacy_issues
+
+    await conn.execute(
+        """
+        INSERT INTO analysis_results (
+            job_id,
+            ai_findings,
+            rule_findings,
+            merged_result,
+            raw_response
+        )
+        VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5::jsonb)
+        ON CONFLICT (job_id)
+        DO UPDATE SET
+            ai_findings = EXCLUDED.ai_findings,
+            rule_findings = EXCLUDED.rule_findings,
+            merged_result = EXCLUDED.merged_result,
+            raw_response = EXCLUDED.raw_response
+        """,
+        job_db_id,
+        _to_json(ai_findings),
+        _to_json(rule_findings),
+        _to_json(merged_result),
+        _to_json(payload),
+    )
+
+
+async def _backfill_structured_document_version_metadata(conn, payload: Dict[str, Any]) -> None:
+    """Repair legacy version metadata when a job already knows its version id.
+
+    Older structured-ingest rows kept an absolute local path and often omitted
+    the original filename.  A historical job snapshot is the authoritative
+    source for those transport fields; this update deliberately does not touch
+    organization, year, document type, parsed facts, or review results.
+    """
+    structured = payload.get("structured_ingest")
+    if not isinstance(structured, dict):
+        return
+    try:
+        version_id = int(structured.get("document_version_id") or 0)
+    except (TypeError, ValueError):
+        return
+    if version_id <= 0:
+        return
+
+    filename = _resolve_filename(payload)
+    storage_key = _normalize_storage_key(payload, filename)
+    if not storage_key:
+        return
+    try:
+        file_size = max(0, int(payload.get("size") or 0))
+    except (TypeError, ValueError):
+        file_size = 0
+    storage_backend = str(payload.get("storage_backend") or "filesystem").strip() or "filesystem"
+    content_type = str(payload.get("content_type") or "application/pdf").strip() or "application/pdf"
+
+    await conn.execute(
+        """
+        UPDATE fiscal_document_versions
+        SET
+            storage_key = CASE
+                WHEN storage_key IS NULL OR storage_key = ''
+                    OR storage_key ~ '^(?:[A-Za-z]:)?[/\\\\]'
+                THEN $2 ELSE storage_key
+            END,
+            storage_backend = CASE
+                WHEN storage_backend IS NULL OR storage_backend = '' THEN $3
+                ELSE storage_backend
+            END,
+            original_filename = CASE
+                WHEN original_filename IS NULL OR original_filename = ''
+                    OR original_filename ~ '^[0-9a-f]{24,}\\.pdf$'
+                THEN $4 ELSE original_filename
+            END,
+            file_size_bytes = CASE
+                WHEN COALESCE(file_size_bytes, 0) <= 0 THEN $5
+                ELSE file_size_bytes
+            END,
+            content_type = CASE
+                WHEN content_type IS NULL OR content_type = '' THEN $6
+                ELSE content_type
+            END
+        WHERE id = $1
+        """,
+        version_id,
+        storage_key,
+        storage_backend,
+        filename,
+        file_size,
+        content_type,
+    )
+
+
+def _normalize_storage_key(payload: Dict[str, Any], filename: str) -> str:
+    configured = str(payload.get("storage_key") or payload.get("saved_path") or "").strip()
+    normalized = configured.replace("\\", "/")
+    job_uuid = str(payload.get("job_id") or "").strip()
+    if normalized and not re.match(r"^(?:[A-Za-z]:)?/", normalized):
+        return normalized.lstrip("/")
+    if job_uuid and filename:
+        return f"{job_uuid}/{filename}"
+    return ""
+
+
+def _read_json_file(path: Path) -> Dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _build_job_metadata(payload: Dict[str, Any]) -> Dict[str, Any]:
+    metadata: Dict[str, Any] = {}
+    for key in (
+        "organization_id",
+        "organization_name",
+        "organization_match_type",
+        "organization_match_confidence",
+        "size",
+        "page_count",
+        "saved_path",
+        "storage_key",
+        "storage_backend",
+        "content_type",
+        "fiscal_year",
+        "doc_type",
+        "report_year",
+        "report_kind",
+        "use_local_rules",
+        "use_ai_assist",
+        "progress",
+        "stage",
+    ):
+        value = payload.get(key)
+        if value is not None:
+            metadata[key] = value
+
+    structured_ingest = payload.get("structured_ingest")
+    if isinstance(structured_ingest, dict) and structured_ingest:
+        metadata["structured_ingest"] = structured_ingest
+
+    result_payload = payload.get("result")
+    if isinstance(result_payload, dict):
+        result_meta = result_payload.get("meta")
+        if isinstance(result_meta, dict) and result_meta:
+            metadata["result_meta"] = result_meta
+
+    return metadata
+
+
+async def _resolve_organization_fk(conn, raw_value: Any) -> Optional[int]:
+    try:
+        organization_id = int(str(raw_value).strip())
+    except Exception:
+        return None
+
+    if organization_id <= 0:
+        return None
+
+    # ``organizations.id`` is a PostgreSQL INTEGER. Historical imports may
+    # carry external organization identifiers that are larger; retain those
+    # values in job metadata but do not bind them as this table's foreign key.
+    if organization_id > _POSTGRES_INTEGER_MAX:
+        return None
+
+    exists = await conn.fetchval(
+        "SELECT id FROM organizations WHERE id = $1 LIMIT 1",
+        organization_id,
+    )
+    return int(exists) if exists is not None else None
+
+
+def _resolve_filename(payload: Dict[str, Any]) -> str:
+    filename = str(payload.get("filename") or "").strip()
+    job_uuid = str(payload.get("job_id") or "").strip()
+    if filename and not _looks_like_job_uuid_filename(filename, job_uuid):
+        return filename
+
+    saved_path = str(payload.get("saved_path") or "").strip()
+    if saved_path:
+        return saved_path.replace("\\", "/").rsplit("/", 1)[-1]
+
+    uploaded_filename = _resolve_uploaded_pdf_name(job_uuid)
+    if uploaded_filename:
+        return uploaded_filename
+
+    job_id = job_uuid or "analysis"
+    return f"{job_id}.pdf"
+
+
+def _resolve_started_at(payload: Dict[str, Any]) -> Optional[datetime]:
+    result_payload = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+    result_meta = result_payload.get("meta") if isinstance(result_payload.get("meta"), dict) else {}
+    for raw in (
+        result_meta.get("started_at"),
+        payload.get("job_created_at"),
+        payload.get("version_created_at"),
+        payload.get("ts"),
+    ):
+        parsed = _parse_timestamp(raw)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _resolve_completed_at(payload: Dict[str, Any]) -> Optional[datetime]:
+    # review_required / degraded 同样是"分析已跑完"的终态，必须落 completed_at，
+    # 否则新增门禁态的任务在库里会一直看起来没结束。
+    status = normalize_job_status(payload.get("status"))
+    if status is None or status in ACTIVE_JOB_STATUSES:
+        return None
+
+    result_payload = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+    result_meta = result_payload.get("meta") if isinstance(result_payload.get("meta"), dict) else {}
+    for raw in (
+        result_meta.get("finished_at"),
+        payload.get("completed_at"),
+        payload.get("ts"),
+    ):
+        parsed = _parse_timestamp(raw)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _resolve_error_message(payload: Dict[str, Any]) -> Optional[str]:
+    for raw in (
+        payload.get("error"),
+        payload.get("error_message"),
+    ):
+        text = str(raw or "").strip()
+        if text:
+            return text
+    return None
+
+
+def _flatten_legacy_issues(raw: Any) -> List[Dict[str, Any]]:
+    if isinstance(raw, list):
+        return [item for item in raw if isinstance(item, dict)]
+    if not isinstance(raw, dict):
+        return []
+
+    flattened: List[Dict[str, Any]] = []
+    for key in ("all", "error", "warn", "info"):
+        value = raw.get(key)
+        if not isinstance(value, list):
+            continue
+        flattened.extend(item for item in value if isinstance(item, dict))
+
+    seen_ids = set()
+    deduped: List[Dict[str, Any]] = []
+    for item in flattened:
+        issue_id = str(item.get("id") or "").strip()
+        if issue_id:
+            if issue_id in seen_ids:
+                continue
+            seen_ids.add(issue_id)
+        deduped.append(item)
+    return deduped
+
+
+def _normalize_list(raw: Any) -> List[Any]:
+    value = _coerce_json_value(raw)
+    return value if isinstance(value, list) else []
+
+
+def _normalize_dict(raw: Any) -> Dict[str, Any]:
+    value = _coerce_json_value(raw)
+    return value if isinstance(value, dict) else {}
+
+
+def _coerce_json_value(raw: Any) -> Any:
+    if isinstance(raw, (list, dict)):
+        return raw
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return raw
+        try:
+            return json.loads(text)
+        except Exception:
+            return raw
+    return raw
+
+
+def _parse_timestamp(raw: Any) -> Optional[datetime]:
+    try:
+        value = float(raw)
+    except Exception:
+        return None
+    if value <= 0:
+        return None
+    return datetime.fromtimestamp(value, tz=timezone.utc)
+
+
+def _to_json(payload: Any) -> str:
+    return json.dumps(payload, ensure_ascii=False, default=str)
+
+
+async def list_persisted_analysis_jobs(
+    *,
+    limit: int = 50,
+    offset: int = 0,
+    search: str = "",
+    status: str = "",
+    mode: str = "",
+) -> Dict[str, Any]:
+    """Return paginated persisted analysis job summaries."""
+    normalized_limit = min(max(int(limit or 50), 1), 200)
+    normalized_offset = max(int(offset or 0), 0)
+    normalized_search = str(search or "").strip()
+    normalized_status = str(status or "").strip().lower()
+    normalized_mode = str(mode or "").strip().lower()
+
+    if not await ensure_analysis_persistence_ready():
+        return {
+            "available": False,
+            "items": [],
+            "total": 0,
+            "limit": normalized_limit,
+            "offset": normalized_offset,
+            "summary": {
+                "total": 0,
+                "done": 0,
+                "processing": 0,
+                "queued": 0,
+                "error": 0,
+                "ai_findings_total": 0,
+                "rule_findings_total": 0,
+            },
+            "detail": "database unavailable",
+        }
+
+    conn = None
+    try:
+        conn = await DatabaseConnection.acquire()
+        where_sql, args = _build_job_filters(
+            search=normalized_search,
+            status=normalized_status,
+            mode=normalized_mode,
+        )
+
+        summary = await conn.fetchrow(
+            f"""
+            SELECT
+                COUNT(*) AS total,
+                COALESCE(SUM(CASE WHEN j.status = 'done' THEN 1 ELSE 0 END), 0) AS done,
+                COALESCE(SUM(CASE WHEN j.status IN ('processing', 'running') THEN 1 ELSE 0 END), 0) AS processing,
+                COALESCE(SUM(CASE WHEN j.status = 'queued' THEN 1 ELSE 0 END), 0) AS queued,
+                COALESCE(SUM(CASE WHEN j.status IN ('error', 'failed') THEN 1 ELSE 0 END), 0) AS error,
+                COALESCE(SUM(COALESCE(jsonb_array_length(r.ai_findings), 0)), 0) AS ai_findings_total,
+                COALESCE(SUM(COALESCE(jsonb_array_length(r.rule_findings), 0)), 0) AS rule_findings_total
+            FROM analysis_jobs j
+            LEFT JOIN analysis_results r ON r.job_id = j.id
+            {where_sql}
+            """,
+            *args,
+        )
+
+        list_args = [*args, normalized_limit, normalized_offset]
+        rows = await conn.fetch(
+            f"""
+            SELECT
+                j.id,
+                j.job_uuid,
+                j.filename,
+                j.file_hash,
+                j.status,
+                j.mode,
+                j.started_at,
+                j.completed_at,
+                j.error_message,
+                j.metadata,
+                j.created_at,
+                j.updated_at,
+                COALESCE(jsonb_array_length(r.ai_findings), 0) AS ai_findings_count,
+                COALESCE(jsonb_array_length(r.rule_findings), 0) AS rule_findings_count,
+                COALESCE(
+                    NULLIF(r.merged_result -> 'totals' ->> 'merged', '')::INTEGER,
+                    COALESCE(jsonb_array_length(r.ai_findings), 0) + COALESCE(jsonb_array_length(r.rule_findings), 0)
+                ) AS merged_findings_count,
+                r.id IS NOT NULL AS has_results
+            FROM analysis_jobs j
+            LEFT JOIN analysis_results r ON r.job_id = j.id
+            {where_sql}
+            ORDER BY COALESCE(j.completed_at, j.started_at, j.updated_at, j.created_at) DESC, j.id DESC
+            LIMIT ${len(args) + 1}
+            OFFSET ${len(args) + 2}
+            """,
+            *list_args,
+        )
+
+        return {
+            "available": True,
+            "items": [_serialize_job_summary_row(row) for row in rows],
+            "total": int(summary["total"] or 0) if summary else 0,
+            "limit": normalized_limit,
+            "offset": normalized_offset,
+            "summary": {
+                "total": int(summary["total"] or 0) if summary else 0,
+                "done": int(summary["done"] or 0) if summary else 0,
+                "processing": int(summary["processing"] or 0) if summary else 0,
+                "queued": int(summary["queued"] or 0) if summary else 0,
+                "error": int(summary["error"] or 0) if summary else 0,
+                "ai_findings_total": int(summary["ai_findings_total"] or 0) if summary else 0,
+                "rule_findings_total": int(summary["rule_findings_total"] or 0) if summary else 0,
+            },
+            "filters": {
+                "search": normalized_search,
+                "status": normalized_status,
+                "mode": normalized_mode,
+            },
+        }
+    finally:
+        if conn is not None:
+            await DatabaseConnection.release(conn)
+
+
+async def get_persisted_analysis_job_detail(job_uuid: str) -> Optional[Dict[str, Any]]:
+    """Return persisted analysis job detail by job uuid."""
+    normalized_job_uuid = str(job_uuid or "").strip()
+    if not normalized_job_uuid:
+        return None
+
+    if not await ensure_analysis_persistence_ready():
+        return {
+            "available": False,
+            "job_uuid": normalized_job_uuid,
+            "detail": "database unavailable",
+        }
+
+    conn = None
+    try:
+        conn = await DatabaseConnection.acquire()
+        row = await conn.fetchrow(
+            """
+            SELECT
+                j.id,
+                j.job_uuid,
+                j.filename,
+                j.file_hash,
+                j.status,
+                j.mode,
+                j.started_at,
+                j.completed_at,
+                j.error_message,
+                j.metadata,
+                j.created_at,
+                j.updated_at,
+                COALESCE(jsonb_array_length(r.ai_findings), 0) AS ai_findings_count,
+                COALESCE(jsonb_array_length(r.rule_findings), 0) AS rule_findings_count,
+                COALESCE(
+                    NULLIF(r.merged_result -> 'totals' ->> 'merged', '')::INTEGER,
+                    COALESCE(jsonb_array_length(r.ai_findings), 0) + COALESCE(jsonb_array_length(r.rule_findings), 0)
+                ) AS merged_findings_count,
+                r.ai_findings,
+                r.rule_findings,
+                r.merged_result,
+                r.raw_response
+            FROM analysis_jobs j
+            LEFT JOIN analysis_results r ON r.job_id = j.id
+            WHERE j.job_uuid = $1
+            LIMIT 1
+            """,
+            normalized_job_uuid,
+        )
+        if row is None:
+            return None
+
+        payload = _serialize_job_summary_row(row)
+        metadata = _normalize_dict(row.get("metadata"))
+        payload.update(
+            {
+                "available": True,
+                "ai_findings": _normalize_list(row.get("ai_findings")),
+                "rule_findings": _normalize_list(row.get("rule_findings")),
+                "merged_result": _normalize_dict(row.get("merged_result")),
+                "raw_response": _normalize_dict(row.get("raw_response")),
+                "structured_ingest": _normalize_dict(metadata.get("structured_ingest")),
+                "result_meta": _normalize_dict(metadata.get("result_meta")),
+            }
+        )
+        result_meta = ((payload["raw_response"].get("result") or {}).get("meta") or {})
+        binding = result_meta.get("fact_snapshot") or {}
+        if binding.get("snapshot_version") == "analysis-fact-snapshot-v1":
+            from src.services.analysis_fact_snapshot import read_bound_snapshot
+            snapshot = await read_bound_snapshot(conn, job_db_id=row["id"],
+                revision_id=payload["raw_response"].get("analysis_revision"), expected=binding)
+            payload["fact_snapshot"] = {**snapshot.summary(), "compatibility":"validated_v2"}
+        else:
+            payload["fact_snapshot"] = {"compatibility":"historical_read_only"}
+        return payload
+    finally:
+        if conn is not None:
+            await DatabaseConnection.release(conn)
+
+
+def _build_job_filters(
+    *,
+    search: str,
+    status: str,
+    mode: str,
+) -> tuple[str, List[Any]]:
+    clauses: List[str] = []
+    args: List[Any] = []
+
+    if search:
+        args.append(f"%{search}%")
+        idx = len(args)
+        clauses.append(
+            f"""(
+                j.job_uuid ILIKE ${idx}
+                OR j.filename ILIKE ${idx}
+                OR COALESCE(j.metadata ->> 'organization_name', '') ILIKE ${idx}
+            )"""
+        )
+
+    if status:
+        args.append(status)
+        clauses.append(f"LOWER(j.status) = ${len(args)}")
+
+    if mode:
+        args.append(mode)
+        clauses.append(f"LOWER(j.mode) = ${len(args)}")
+
+    if not clauses:
+        return "", args
+    return "WHERE " + " AND ".join(clauses), args
+
+
+def _serialize_job_summary_row(row: Any) -> Dict[str, Any]:
+    metadata = _normalize_dict(row.get("metadata"))
+    structured_ingest = _normalize_dict(metadata.get("structured_ingest"))
+    result_meta = _normalize_dict(metadata.get("result_meta"))
+    elapsed_ms = _normalize_dict(result_meta.get("elapsed_ms"))
+    job_uuid = str(row.get("job_uuid") or "")
+    resolved_filename = _resolve_effective_filename(job_uuid, row.get("filename"))
+    organization_name = str(metadata.get("organization_name") or "")
+    report_year = metadata.get("report_year")
+    doc_type = str(metadata.get("doc_type") or "")
+    report_kind = str(metadata.get("report_kind") or "")
+    display_title, display_subtitle = _build_display_labels(
+        job_uuid=job_uuid,
+        filename=resolved_filename,
+        organization_name=organization_name,
+        report_year=report_year,
+        doc_type=doc_type,
+        report_kind=report_kind,
+    )
+
+    return {
+        "job_uuid": job_uuid,
+        "filename": resolved_filename,
+        "file_hash": str(row.get("file_hash") or ""),
+        "status": str(row.get("status") or ""),
+        "mode": str(row.get("mode") or ""),
+        "started_at": _serialize_datetime(row.get("started_at")),
+        "completed_at": _serialize_datetime(row.get("completed_at")),
+        "created_at": _serialize_datetime(row.get("created_at")),
+        "updated_at": _serialize_datetime(row.get("updated_at")),
+        "error_message": str(row.get("error_message") or ""),
+        "organization_name": organization_name,
+        "organization_id": metadata.get("organization_id"),
+        "report_year": report_year,
+        "doc_type": doc_type,
+        "report_kind": report_kind,
+        "display_title": display_title,
+        "display_subtitle": display_subtitle,
+        "use_local_rules": bool(metadata.get("use_local_rules")),
+        "use_ai_assist": bool(metadata.get("use_ai_assist")),
+        "stage": str(metadata.get("stage") or ""),
+        "progress": metadata.get("progress"),
+        "ai_findings_count": int(row.get("ai_findings_count") or 0),
+        "rule_findings_count": int(row.get("rule_findings_count") or 0),
+        "merged_findings_count": int(row.get("merged_findings_count") or 0),
+        "has_results": bool(row.get("has_results")),
+        "structured_ingest_status": str(structured_ingest.get("status") or ""),
+        "structured_document_version_id": structured_ingest.get("document_version_id"),
+        "structured_report_id": _normalize_dict(structured_ingest.get("ps_sync")).get("report_id"),
+        "elapsed_total_ms": elapsed_ms.get("total"),
+    }
+
+
+def _serialize_datetime(value: Any) -> Optional[str]:
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc).isoformat()
+    return None
+
+
+def _resolve_effective_filename(job_uuid: str, raw_filename: Any) -> str:
+    filename = str(raw_filename or "").strip()
+    if filename and not _looks_like_job_uuid_filename(filename, job_uuid):
+        return filename
+
+    uploaded_filename = _resolve_uploaded_pdf_name(job_uuid)
+    if uploaded_filename:
+        return uploaded_filename
+    return filename
+
+
+def _resolve_uploaded_pdf_name(job_uuid: str) -> str:
+    normalized_job_uuid = str(job_uuid or "").strip()
+    if not normalized_job_uuid:
+        return ""
+
+    upload_root = Path(os.getenv("UPLOAD_DIR", "uploads")).resolve()
+    job_dir = upload_root / normalized_job_uuid
+    try:
+        # 与 API/回放共用 status.json 指向的 canonical PDF；多 PDF 无法
+        # 唯一确认原件时不按字母序猜，宁可退回数据库已有文件名。
+        from api import runtime as upload_runtime
+
+        return upload_runtime.find_first_pdf(job_dir).name
+    except (FileNotFoundError, ValueError, OSError):
+        return ""
+
+
+def _looks_like_job_uuid_filename(filename: str, job_uuid: str) -> bool:
+    normalized_filename = str(filename or "").strip()
+    normalized_job_uuid = str(job_uuid or "").strip()
+    if not normalized_filename:
+        return False
+
+    stem = Path(normalized_filename).stem.strip().lower()
+    if normalized_job_uuid and stem == normalized_job_uuid.lower():
+        return True
+    return bool(_UUIDISH_FILENAME_RE.fullmatch(normalized_filename))
+
+
+def _build_display_labels(
+    *,
+    job_uuid: str,
+    filename: str,
+    organization_name: str,
+    report_year: Any,
+    doc_type: str,
+    report_kind: str,
+) -> tuple[str, str]:
+    year_label = _format_report_year_label(report_year)
+    kind = _normalize_report_kind(doc_type, report_kind, filename)
+    kind_label = _report_kind_label(kind)
+    cleaned_filename = str(filename or "").strip()
+
+    if organization_name:
+        title = organization_name
+        if year_label and kind_label:
+            title = f"{organization_name}{year_label}{kind_label}"
+        elif year_label:
+            title = f"{organization_name}{year_label}"
+        elif kind_label and kind != "unknown":
+            title = f"{organization_name}{kind_label}"
+        subtitle = cleaned_filename or job_uuid
+        return title, subtitle
+
+    humanized_filename = _humanize_filename(cleaned_filename)
+    if humanized_filename:
+        subtitle_parts = [part for part in (year_label, kind_label if kind_label else "", cleaned_filename) if part]
+        return humanized_filename, " / ".join(_dedupe_strings(subtitle_parts))
+
+    fallback_title = cleaned_filename or job_uuid
+    subtitle_parts = [part for part in (year_label, kind_label if kind_label else "", job_uuid) if part]
+    return fallback_title, " / ".join(_dedupe_strings(subtitle_parts))
+
+
+def _format_report_year_label(value: Any) -> str:
+    try:
+        year = int(str(value).strip())
+    except Exception:
+        return ""
+    if year <= 0:
+        return ""
+    return f"{year}年"
+
+
+def _normalize_report_kind(doc_type: str, report_kind: str, filename: str) -> str:
+    """结果存储侧的文种归一（收敛到唯一解析器）。
+
+    此前这里是又一份独立实现：把 ``doc_type`` 与 ``filename`` 拼成一串再做
+    预算优先判断，于是"用户选了决算、文件名带预算"会静默记成预算，与规则
+    路由的判定可能不一致。现在统一走画像解析器，取值口径与规则执行一致。
+    """
+    explicit = str(report_kind or "").strip().lower()
+    if explicit in {"budget", "final"}:
+        return explicit
+    return resolve_document_profile(doc_type=doc_type, filename=filename).kind
+
+
+def _report_kind_label(kind: str) -> str:
+    if kind == "budget":
+        return "部门预算"
+    if kind == "final":
+        return "部门决算"
+    return "报告"
+
+
+def _humanize_filename(filename: str) -> str:
+    text = Path(str(filename or "").strip()).stem.strip()
+    if not text:
+        return ""
+    text = re.sub(r"[_\-]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _dedupe_strings(items: List[str]) -> List[str]:
+    deduped: List[str] = []
+    seen = set()
+    for item in items:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        key = text.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(text)
+    return deduped
