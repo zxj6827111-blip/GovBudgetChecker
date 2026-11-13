@@ -15,6 +15,9 @@ from .fact_context import (
 )
 
 TABLE_CODE = "FIN_07_three_public"
+# 扫描件常把“置”识别成形近字（如 U+81F5）；只在主体识别时归一，不触碰原文。
+# 全部为单字符映射，归一后下标与原串一一对应，可安全回映射页码/片段。
+_SUBJECT_OCR_MAP = str.maketrans({"臵": "置", "罝": "置"})
 _SUBJECT = re.compile(
     r"(?P<vehicle_purchase_operation>公务用车购置及运行(?:维护)?费?)"
     r"|(?P<vehicle_purchase>公务用车购置费?)"
@@ -33,7 +36,7 @@ LABELS = {
 def subject_before(text: str) -> tuple[str | None, int]:
     # Map normalized characters back to the original excerpt for exact quotes.
     positions = [i for i, ch in enumerate(text) if not ch.isspace()]
-    compact = "".join(text[i] for i in positions)
+    compact = "".join(text[i] for i in positions).translate(_SUBJECT_OCR_MAP)
     matches = list(_SUBJECT.finditer(compact))
     if not matches:
         return None, 0
