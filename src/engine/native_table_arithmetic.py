@@ -211,7 +211,28 @@ def select(doc, facts, indicator, *, code=None, name=None, stage='决算', allow
                 unique.setdefault(
                     (fact.subject_code, fact.indicator, str(fact.raw_value),
                      str(fact.normalized_value), fact.unit), fact)
-            candidates = list(unique.values())
+            kept = list(unique.values())
+            # C5（2026-11-14 复验）：同码同值重复行合并为同一业务行时，被合并
+            # 的重复原格证据随保留事实留痕（双侧可回原件）；异值收敛仍 >1，
+            # 走下方"不唯一"拒绝。留痕只记录原件格身份，不改写任何金额。
+            if len(kept) == 1 and len(candidates) > 1:
+                kept_fact = kept[0]
+                extra = getattr(kept_fact, 'extra_dims', None)
+                if isinstance(extra, dict):
+                    traces = extra.setdefault('same_value_duplicate_cells', [])
+                    for duplicate in candidates:
+                        if duplicate is kept_fact:
+                            continue
+                        for ref in (duplicate.extra_dims or {}).get('evidence_refs', []):
+                            if isinstance(ref, dict) and ref.get('source_cell_id'):
+                                traces.append({
+                                    'source_cell_id': ref.get('source_cell_id'),
+                                    'physical_page': ref.get('physical_page'),
+                                    'quote': ref.get('quote'),
+                                    'file_hash': ref.get('file_hash'),
+                                    'basis': 'same_object_same_value_duplicate_row',
+                                })
+            candidates = kept
     if len(candidates) != 1:
         if not candidates and allow_native_blank and facts:
             term = blank_term(doc, facts[0].table_code, indicator, code=code,

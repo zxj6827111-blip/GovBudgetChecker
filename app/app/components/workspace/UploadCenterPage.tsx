@@ -38,7 +38,7 @@
 
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button, SectionTitle } from "@/components/ui";
 import { AIAnalysisOptions, useAIAnalysisOptions } from "@/components/AIAnalysisOptions";
@@ -49,6 +49,7 @@ import { AttributionWizardPanel, type AttributionSelection } from "./Attribution
 import { UploadBatchPresets, type BatchPresetValues } from "./UploadBatchPresets";
 import { UploadDropzone } from "./UploadDropzone";
 import { UploadFileList, type UploadFileEntry } from "./UploadFileList";
+import { useOrgValidationLifecycle } from "./useOrgValidationLifecycle";
 import {
   ANALYZE_START_REQUEST_BODY,
   UPLOAD_CONCURRENCY,
@@ -151,44 +152,63 @@ export function UploadCenterPage() {
     };
   }, []);
 
-  const runPreflight = useCallback(async (entryId: string, file: File, selectedOrgId?: string) => {
-    try {
-      const formData = new FormData();
-      formData.set("file", file);
-      // 机构归属整改：带所选组织复核的预检与最终提交共用同一冲突判断，
-      // 有冲突时 selected_org_validation.ok=false，徽章不得显示"校验通过"。
-      if (selectedOrgId) {
-        formData.set("selected_org_id", selectedOrgId);
-      }
-      const response = await fetch("/api/documents/preflight", { method: "POST", body: formData });
-      if (!response.ok) {
+  /** 前置修复 1：保存单文件补齐值——只记录覆盖，不直接修改 preflightResults，
+   *  真正的"有效 preflight"由 effectivePreflightFor() 在渲染/提交时统一计算，
+   *  避免"原始识别结果"与"人工补齐值"两份数据源互相覆盖后无法区分。 */
+  const handleManualConfirm = useCallback((entryId: string, override: ManualConfirmationOverride) => {
+    setManualOverrides((prev) => ({ ...prev, [entryId]: override }));
+  }, []);
+
+  /** 机构归属整改：人工补齐/批量预设/归属向导指定的组织生效时，带
+   *  selected_org_id 复核预检（与最终提交同一冲突判断）。有冲突的文件
+   *  selected_org_validation.ok=false，徽章不得显示"校验通过"——不能只
+   *  因字段齐全就放行。复核请求按（文件、组织）去重；换选组织后旧结论
+   *  不再匹配，自动重新复核。 */
+  const effectivePresetOrgId = mode === "attribution"
+    ? attribution.unitId || attribution.departmentId
+    : presets.organizationId;
+  /** C4：每个文件的当前有效复核目标（单文件人工覆盖优先，其次批量预设）。
+   *  没有批量预设时单文件人工选择同样必须复核。 */
+  const orgValidationTargets = useMemo(() => {
+    const targets: Record<string, string | undefined> = {};
+    for (const entry of entries) {
+      targets[entry.id] = manualOverrides[entry.id]?.organizationId || effectivePresetOrgId || undefined;
+    }
+    return targets;
+  }, [effectivePresetOrgId, entries, manualOverrides]);
+  /** C4（2026-11-14 复验）：预检请求生命周期——请求身份（代次）与当前目标
+   *  一致校验、过期响应丢弃、失败有限自动重试、换选/移除清理。 */
+  const handlePreflightResult = useCallback(
+    (entryId: string,
+     result:
+       | { kind: "success"; payload: PreflightResponseLike & { page_count?: number | null } }
+       | { kind: "failure" }) => {
+      if (result.kind === "success") {
+        setPreflightResults((prev) => ({ ...prev, [entryId]: result.payload }));
+        const status = derivePreflightStatus(result.payload);
         setEntries((prev) =>
           prev.map((entry) =>
             entry.id === entryId
-              ? { ...entry, status: "failed", errorMessage: "首页识别请求失败" }
+              ? { ...entry, status, pageCount: result.payload.page_count ?? null, errorMessage: undefined }
               : entry,
           ),
         );
         return;
       }
-      const payload = (await response.json()) as PreflightResponseLike & { page_count?: number | null };
-      setPreflightResults((prev) => ({ ...prev, [entryId]: payload }));
-      const status = derivePreflightStatus(payload);
-      setEntries((prev) =>
-        prev.map((entry) =>
-          entry.id === entryId
-            ? { ...entry, status, pageCount: payload.page_count ?? null, errorMessage: undefined }
-            : entry,
-        ),
-      );
-    } catch {
       setEntries((prev) =>
         prev.map((entry) =>
           entry.id === entryId ? { ...entry, status: "failed", errorMessage: "首页识别请求失败" } : entry,
         ),
       );
-    }
-  }, []);
+    },
+    [],
+  );
+  const { runPreflight, forgetEntry } = useOrgValidationLifecycle({
+    entries,
+    targets: orgValidationTargets,
+    preflightResults,
+    onResult: handlePreflightResult,
+  });
 
   const handleFilesSelected = useCallback(
     (files: File[]) => {
@@ -210,6 +230,9 @@ export function UploadCenterPage() {
   );
 
   const handleRemoveEntry = useCallback((id: string) => {
+    // C4：移除文件同时清理复核生命周期状态（在途/失败台账），并使该条目
+    // 一切迟到响应作废——删除后旧响应不得再写入任何结果。
+    forgetEntry(id);
     setEntries((prev) => prev.filter((entry) => entry.id !== id));
     setPreflightResults((prev) => {
       const next = { ...prev };
@@ -221,45 +244,8 @@ export function UploadCenterPage() {
       delete next[id];
       return next;
     });
-  }, []);
+  }, [forgetEntry]);
 
-  /** 前置修复 1：保存单文件补齐值——只记录覆盖，不直接修改 preflightResults，
-   *  真正的"有效 preflight"由 effectivePreflightFor() 在渲染/提交时统一计算，
-   *  避免"原始识别结果"与"人工补齐值"两份数据源互相覆盖后无法区分。 */
-  const handleManualConfirm = useCallback((entryId: string, override: ManualConfirmationOverride) => {
-    setManualOverrides((prev) => ({ ...prev, [entryId]: override }));
-  }, []);
-
-  /** 机构归属整改：人工补齐/批量预设/归属向导指定的组织生效时，带
-   *  selected_org_id 复核预检（与最终提交同一冲突判断）。有冲突的文件
-   *  selected_org_validation.ok=false，徽章不得显示"校验通过"——不能只
-   *  因字段齐全就放行。复核请求按（文件、组织）去重；换选组织后旧结论
-   *  不再匹配，自动重新复核。 */
-  const effectivePresetOrgId = mode === "attribution"
-    ? attribution.unitId || attribution.departmentId
-    : presets.organizationId;
-  const orgValidationInFlightRef = useRef<Record<string, string>>({});
-  useEffect(() => {
-    // R6：按每个文件的**有效选择**（单文件人工覆盖优先，其次批量预设）确定
-    // 复核目标——没有批量预设时，单文件人工选择同样必须带 selected_org_id
-    // 复核，不得因 effectivePresetOrgId 为空而跳过。校验中/失败/过期（目标
-    // 组织与已有复核结论不一致）都不能显示"校验通过"（适配层据
-    // selected_org_validation 与 organization_source 判定）；响应乱序由
-    // in-flight 去重 + 目标一致校验兜底，失败后目标未变仍会再次触发。
-    for (const entry of entries) {
-      const overrideOrg = manualOverrides[entry.id]?.organizationId;
-      const targetOrg = overrideOrg || effectivePresetOrgId;
-      if (!targetOrg || orgValidationInFlightRef.current[entry.id] === targetOrg) {
-        continue;
-      }
-      if (preflightResults[entry.id]?.selected_org_validation?.selected_org_id === targetOrg) {
-        orgValidationInFlightRef.current[entry.id] = targetOrg;
-        continue;
-      }
-      orgValidationInFlightRef.current[entry.id] = targetOrg;
-      void runPreflight(entry.id, entry.file, targetOrg);
-    }
-  }, [effectivePresetOrgId, entries, manualOverrides, preflightResults, runPreflight]);
 
   /** 计算某个文件"补齐后的有效 preflight"：先叠加批量预设，再叠加该文件的单文件
    *  人工覆盖（单文件覆盖优先级更高——用户专门为这个文件填的值，不应该被批量预设
@@ -520,6 +506,12 @@ export function UploadCenterPage() {
       // 上传成功的条目移出待上传列表（任务已存在，重复提交会造成重复上传）；
       // 上传失败的条目保留，用户修正后可直接重试。
       const failedEntryIds = new Set(summary.failedEntryIds);
+      // C4：成功提交的条目同步清理复核生命周期状态，使迟到响应作废。
+      for (const entry of entries) {
+        if (!failedEntryIds.has(entry.id)) {
+          forgetEntry(entry.id);
+        }
+      }
       setEntries((prev) => prev.filter((entry) => failedEntryIds.has(entry.id)));
       setPreflightResults((prev) => {
         const next: typeof prev = {};
@@ -554,7 +546,7 @@ export function UploadCenterPage() {
     } finally {
       setIsSubmitting(false);
     }
-  }, [attribution, effectivePreflightFor, entries, maxUploadMb, mode, presets, aiOptions.enabled, aiOptions.profileId, router]);
+  }, [attribution, effectivePreflightFor, entries, forgetEntry, maxUploadMb, mode, presets, aiOptions.enabled, aiOptions.profileId, router]);
 
   return (
     <div className="p-8" data-testid="gbc-upload-center-page">

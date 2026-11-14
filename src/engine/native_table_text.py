@@ -323,7 +323,12 @@ def check_income_structure(rule, doc):
             continue
         label = match.group('label')
         seen.add(label)
-        fact, error = select(doc, facts, labels[label], code='total')
+        # C5（2026-11-14 复验）：原件合计行对应格经网格认证为真空白时，按已
+        # 确认政策生成带来源的空白观测操作数参与核对（blank_term 的行/列/格
+        # 身份与原格认证门槛全部保持）；横线/无/识别不清/缺失格一律不在此列，
+        # 仍按取数不足处理。说明写 0 时由 compare 的空白路径判 not_applicable，
+        # 说明写非 0 时保留 insufficient_data 阻断，不用正文 0 反填表格。
+        fact, error = select(doc, facts, labels[label], code='total', allow_native_blank=True)
         key = f'income:text:{labels[label]}:{match.start()}'
         if error:
             unresolved.append(error)
