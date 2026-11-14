@@ -862,6 +862,39 @@ def _native_name_variant_code(doc, facts, name, width, parent, paths, aliases):
     return code
 
 
+def _cell_refs_on_current_original(doc, refs):
+    """C3/C1（2026-11-14 复验）：原格引用必须绑定当前原件。
+
+    文件哈希与解析批次一致、源格真实存在于当前解析产物（复用证据装订同一
+    口径的原格目录）、格原文与引用逐字一致且页码相符。无解析产物或任一
+    引用不合格返回 False——缺失资格不得升级可信身份，也不能冒充原格证据。
+    """
+    from src.services.rule_source_binding import _current_cell_catalog
+    artifact = getattr(doc, 'parse_artifact', None)
+    context = getattr(doc, 'fact_context', None)
+    if artifact is None or context is None or not refs:
+        return False
+    file_hash = str(getattr(context, 'file_hash', '') or '')
+    if (not file_hash
+            or str(getattr(artifact, 'source_file_hash', '') or '') != file_hash
+            or str(getattr(context, 'parse_run_uid', '') or '')
+            != str(getattr(artifact, 'parse_run_uid', '') or '')):
+        return False
+    cells, conflicting = _current_cell_catalog(artifact)
+    for ref in refs:
+        if not isinstance(ref, dict):
+            return False
+        cell = cells.get(ref.get('source_cell_id'))
+        quote = str(ref.get('quote') or ref.get('grid_raw_text')
+                    or ref.get('recovered_text') or '')
+        if (cell is None or str(ref.get('file_hash') or '') != file_hash
+                or ref.get('source_cell_id') in conflicting
+                or not quote.strip() or cell.raw_text != quote
+                or ref.get('physical_page') != cell.page_number):
+            return False
+    return True
+
+
 def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
     paths = hierarchy_paths({str(f.subject_code) for f in facts
                              if str(f.subject_code or '').isdigit()})
@@ -940,6 +973,9 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
             return _truncated_name_source(doc, truncated[anchor_code], item, siblings) is not None
         return False
 
+    def _refs_on_current_original(refs):
+        return _cell_refs_on_current_original(doc, refs)
+
     def bind_leaf_via_cross_table_code():
         # D2 统一身份绑定：目标表项名与说明名逐字不一致（如表内中间漏字）时，
         # 用同一份材料其他原表打印的「编码＋完整名称」定位编码，再按编码在
@@ -969,13 +1005,24 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
                 continue
             if getattr(f, 'fiscal_year', None) != getattr(context, 'fiscal_year', None):
                 continue
-            if getattr(f, 'budget_stage', None) not in (None, '决算'):
+            # C3：非决算阶段（含未识别）与跨期（年初等）行不充当本年身份证明。
+            if getattr(f, 'budget_stage', None) != '决算':
                 continue
-            if str(getattr(f, 'recognition_status', '') or '') in ('ambiguous', 'low_confidence', 'missing'):
+            if getattr(f, 'period', None) not in (None, '本年'):
+                continue
+            if str(getattr(f, 'recognition_status', '') or '') in (
+                    'ambiguous', 'low_confidence', 'missing', 'observed_blank', 'rejected'):
                 continue
             anchor_refs = list((getattr(f, 'extra_dims', None) or {}).get('evidence_refs') or [])
             if not any(ref.get('physical_page') and ref.get('source_cell_id') for ref in anchor_refs):
                 continue  # 无原件可回溯证据的事实不能作身份证明
+            # C3：引用必须真实落在当前原件上（换文件哈希/不存在的源格一律拒绝）。
+            if not _refs_on_current_original(anchor_refs):
+                continue
+            row_sources = list((getattr(f, 'extra_dims', None) or {})
+                               .get('row_identity_sources') or [])
+            if row_sources and not _refs_on_current_original(row_sources):
+                continue  # 编码原格引用同样必须处于当前原件
             anchors.setdefault(code, []).append(f)
         if len(anchors) != 1:
             return None
@@ -1042,6 +1089,10 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
         if error or fact is None:
             return fact, error
         if aliases is not None:
+            # C1（2026-11-14 复验）：异常编码发现必须以**编码原格**为证据——
+            # row_identity_sources 才携带编码格（原格ID/原字节/物理页），
+            # 金额格 evidence_refs（r..c2）不是编码证据，不能冒充编码原格引文。
+            extra = getattr(fact, 'extra_dims', None) or {}
             aliases.append({
                 'role': 'code_length_anomaly_binding',
                 'subject_code': anomaly_code,
@@ -1050,11 +1101,14 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
                 'table_name': fact.subject_name,
                 'table_code': getattr(fact, 'table_code', ''),
                 'table_page': sorted({ref.get('physical_page') for ref in
-                                      ((getattr(fact, 'extra_dims', None) or {}).get('evidence_refs') or [])
+                                      (extra.get('evidence_refs') or [])
                                       if ref.get('physical_page')}),
-                'source_refs': [ref for ref in
-                                ((getattr(fact, 'extra_dims', None) or {}).get('evidence_refs') or [])
-                                if ref.get('physical_page') and ref.get('source_cell_id')],
+                'amount_cell_refs': [ref for ref in (extra.get('evidence_refs') or [])
+                                     if ref.get('physical_page') and ref.get('source_cell_id')],
+                'code_cell_refs': [ref for ref in (extra.get('row_identity_sources') or [])
+                                   if ref.get('physical_page') and ref.get('source_cell_id')
+                                   and str(ref.get('grid_raw_text') or ref.get('recovered_text')
+                                           or '').strip()],
                 'fact_uid': fact.fact_uid,
                 'raw_code_bytes': str(getattr(fact, 'subject_code', '') or ''),
                 'basis': 'printed_kuan_prefix_plus_exact_unique_name',
@@ -1399,10 +1453,55 @@ def check_function_disclosures(rule, doc):
                              and a.get('role') == 'code_length_anomaly_binding'), None)
         if anomaly_hint and not error:
             # R8：编码异常发现必须完成原件证据交付——异常编码原格（物理页/
-            # 源格标识/原字节）、对应事实标识与说明侧位置一并携带，接受独立
-            # 原件证据校验，不再是无页码的未验证提示。
-            source_refs = list(anomaly_hint.get('source_refs') or [])
-            table_pages = sorted({ref['page'] for ref in source_refs})
+            # 源格标识/原字节/bbox/文件与解析批次）、对应事实标识与说明侧位置
+            # 一并携带，接受独立原件证据校验，不再是无页码的未验证提示。
+            # C1（2026-11-14 复验）：evidence_refs 契约键是 physical_page，
+            # 直接取不存在的 'page' 会 KeyError（救助任务 V33-222 真实崩溃）；
+            # 且证据必须是编码原格（row_identity_sources），金额格不是编码证据，
+            # 引文只用该格自己的原文，不拼贴"编码＋名称"冒充原格引文。
+            context = getattr(doc, 'fact_context', None)
+
+            def _bbox_of(ref):
+                for source in (ref.get('native_text_sources') or []):
+                    if isinstance(source, dict) and source.get('bbox'):
+                        return list(source['bbox'])
+                return None
+
+            def _certified(refs):
+                return refs and _cell_refs_on_current_original(doc, refs)
+
+            code_cell_refs = list(anomaly_hint.get('code_cell_refs') or [])
+            amount_cell_refs = list(anomaly_hint.get('amount_cell_refs') or [])
+            code_certified = _certified(code_cell_refs)
+            table_refs = []
+            evidence_quote = ''
+            if code_certified:
+                # 编码原格可认证：引文=该格原文（grid_raw_text），带原格ID/bbox/页码。
+                table_refs = [
+                    {'role': '异常编码原格', 'page': ref.get('physical_page'),
+                     'physical_page': ref.get('physical_page'),
+                     'source_cell_id': ref.get('source_cell_id'),
+                     'span': str(ref.get('grid_raw_text') or ref.get('recovered_text') or ''),
+                     'raw_code': anomaly_hint.get('raw_code_bytes'),
+                     'file_hash': ref.get('file_hash'),
+                     'parse_run_uid': getattr(context, 'parse_run_uid', None),
+                     **({'bbox': bbox} if (bbox := _bbox_of(ref)) else {})}
+                    for ref in code_cell_refs]
+                evidence_quote = next(
+                    (ref['span'] for ref in table_refs if ref.get('span')), '')
+            else:
+                # 编码原格缺失或不可认证：不声称编码原格证据，退回到页码定位并
+                # 如实登记缺口；发现本身不静默吞掉，由证据门按未核验处理。
+                table_refs = [
+                    {'role': '金额格（编码原格证据缺失）', 'page': ref.get('physical_page'),
+                     'source_cell_id': ref.get('source_cell_id'),
+                     'span': str(ref.get('quote') or '')}
+                    for ref in amount_cell_refs if str(ref.get('quote') or '').strip()]
+                evidence_quote = next(
+                    (ref['span'] for ref in table_refs if ref.get('span')), '')
+            table_pages = sorted({ref.get('physical_page') for ref in
+                                  (code_cell_refs + amount_cell_refs)
+                                  if ref.get('physical_page')})
             narrative_page = _name_difference_hint(doc, item)
             location = {
                 'subject_code': anomaly_hint['subject_code'],
@@ -1411,12 +1510,10 @@ def check_function_disclosures(rule, doc):
                 'table_name': anomaly_hint['table_name'],
                 'table_code': anomaly_hint.get('table_code') or '',
                 'name_kind': 'code_length_anomaly',
-                'table_refs': [
-                    {'role': '异常编码原格', 'page': ref.get('physical_page'),
-                     'source_cell_id': ref.get('source_cell_id'),
-                     'raw_code': anomaly_hint.get('raw_code_bytes'),
-                     'quote': f"{anomaly_hint.get('raw_code_bytes')} {anomaly_hint.get('table_name')}"}
-                    for ref in source_refs],
+                'code_cell_evidence': 'certified' if code_certified else 'unavailable',
+                'file_hash': getattr(context, 'file_hash', None),
+                'parse_run_uid': getattr(context, 'parse_run_uid', None),
+                'table_refs': table_refs,
                 **({'page': table_pages[0], 'pages': table_pages} if table_pages else {}),
                 **({'page': narrative_page} if narrative_page and not table_pages else {}),
             }
@@ -1427,8 +1524,9 @@ def check_function_disclosures(rule, doc):
                 "请核对原件编码是否多字，修正编码后与本说明一致。",
                 location,
                 'warn',
-                evidence_text=(f"异常编码原字节：{anomaly_hint.get('raw_code_bytes')}；"
-                               f"表内名称：{anomaly_hint.get('table_name')}"),
+                # C1：evidence_text 只能是真实原格引文（编码格原文），拼接描述
+                # 不能当原文——证据门会逐字核验引文是否落在所称页面。
+                evidence_text=evidence_quote,
                 fact_ids=[anomaly_hint.get('fact_uid')] if anomaly_hint.get('fact_uid') else [],
                 check_relation_id=f'{rule.code}:general:text:item:{item.start()}:code_anomaly',
             ))
@@ -1563,6 +1661,30 @@ _FUND_HIERARCHY_LABEL = re.compile(
     r'(?P<klass>[\u4e00-\u9fff（）()0-9]{2,60}[（(]类[）)])'
     r'(?P<kuan>[\u4e00-\u9fff（）()0-9]{2,60}[（(]款[）)])'
     r'(?P<xiang>[\u4e00-\u9fff（）()0-9]{2,60}[（(]项[）)])')
+# C2（2026-11-14 复验）：声明身份范围边界——编号条目起点。声明只能借用
+# 同一条目内且位于其前的身份标签；跨新编号（"2、"）、跨中文序号条目即换对象，
+# 不得再借上一条的标签。金额中的小数点不会命中（后瞻要求非数字）。
+_FUND_ITEM_HEAD = re.compile(
+    r'\d{1,3}[、．]|\d{1,3}\.(?=\D)'
+    r'|[（(][一二三四五六七八九十百]{1,3}[）)]'
+    r'|[一二三四五六七八九十百]{1,3}[、．]')
+
+
+def _resolve_klass_against_table(klass, hierarchy):
+    """类名可能被叙述性定语粘连（"同一项目城乡社区支出（类）"）。
+
+    只接受与表内已打印类级行名称（3位码行）唯一对齐的后缀，不做模糊近似；
+    对不齐或对出多个不同类名时保持原文（由逐级匹配失败拒绝绑定）。
+    """
+    known = {name for code, name in hierarchy.items()
+             if len(code) == 3 and name}
+    if not known or klass in known:
+        return klass
+    suffixes = {klass[index:] for index in range(1, len(klass))
+                if klass[index:] in known}
+    if len(suffixes) == 1:
+        return next(iter(suffixes))
+    return klass
 
 
 def _derive_fund_total_from_bound_items(rule, doc, text, begin, end, title, item_claims):
@@ -1608,13 +1730,23 @@ def _derive_fund_total_from_bound_items(rule, doc, text, begin, end, title, item
             hierarchy.setdefault(code, name)
 
     bound_by_code: dict = {}
+    used_labels: set = set()
     for claim in item_claims:
-        head = text.compact[max(begin, claim.start() - 400):claim.start()]
-        labels = list(_FUND_HIERARCHY_LABEL.finditer(head))
-        if not labels:
-            return abort('存在未伴随完整「（类）（款）（项）」身份标签的支出决算声明，'
+        # C2（2026-11-14 复验）：每条声明先独立证实对象——身份标签必须属于
+        # 声明所在的**同一条目**（最近一个编号条目起点之后），并取该范围内
+        # 距声明最近的未被先前声明占用的标签。跨新编号（"2、另一项目…"）、
+        # 跨条目或标签已被前一声明占用的，都不得借身份。finditer 带 pos/endpos
+        # 时 match.start() 是全文绝对偏移，不再有切片内偏移误当全文偏移的问题。
+        scope_start = begin
+        for marker in _FUND_ITEM_HEAD.finditer(text.compact, begin, claim.start()):
+            scope_start = marker.end()
+        labels = list(_FUND_HIERARCHY_LABEL.finditer(
+            text.compact, scope_start, claim.start()))
+        label = labels[-1] if labels else None
+        if label is None or label.start() in used_labels:
+            return abort('存在未伴随自身完整「（类）（款）（项）」身份标签的支出决算声明，'
                          '无法证明其业务对象，不参与总额推导')
-        label = labels[-1]
+        used_labels.add(label.start())
         # 期间锚：声明前缀或身份标签出现异年（如 2024年度…）→ 拒绝该声明。
         context_head = text.compact[max(begin, label.start() - 60):claim.end()]
         fiscal_year = getattr(getattr(doc, 'fact_context', None), 'fiscal_year', None)
@@ -1625,7 +1757,8 @@ def _derive_fund_total_from_bound_items(rule, doc, text, begin, end, title, item
         guard_error = _guard(doc, text, begin, label.start(), claim.end())
         if guard_error:
             return abort(f'声明上下文守卫未通过：{guard_error}')
-        klass = literal(re.sub(r'[（(]类[）)]$', '', label.group('klass')))
+        klass = _resolve_klass_against_table(
+            literal(re.sub(r'[（(]类[）)]$', '', label.group('klass'))), hierarchy)
         kuan = literal(re.sub(r'[（(]款[）)]$', '', label.group('kuan')))
         xiang = literal(re.sub(r'[（(]项[）)]$', '', label.group('xiang')))
         item, match_error = _txt_fund_match_item(
