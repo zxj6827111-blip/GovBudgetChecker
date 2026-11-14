@@ -153,23 +153,31 @@ def decide_auto_binding(
         return defer("evidence_conflict", "明确的部门汇总与单位/本级原件证据冲突")
 
     eligible = [org for org in directory if _field(org, "level") in {"department", "unit"}]
-    # 「部门名（本级）」是本级口径对所属部门的指代（conflict 检查里同一规则的
-    # 种子侧）：原件写「甲局（本级）」时，把甲局部门纳入候选，走
-    # departments→related→verified 组合路径绑定其本级单位；不改变名称等价
-    # 语义——裸名与「（本级）」名仍不等价，绑定只发生在范围明确的前提下。
     matches = [
         org
         for org in eligible
         if any(
             identity_index.compare(item["text"], organization_name(org)).equivalent
-            or (
-                _field(org, "level") == "department"
-                and identity_name(item["text"])
-                == identity_name(organization_name(org)) + "(本级)"
-            )
             for item in evidence
         )
     ]
+    # 「部门名（本级）」是本级口径对所属部门的指代（conflict 检查里同一规则的
+    # 种子侧）：目录没有任何与证据直接等价的候选时（如封面「甲局（本级）」、
+    # 目录只有甲局部门与同名无后缀 unit 子记录），把甲局部门纳入候选，走
+    # departments→related→verified 组合路径绑定其本级单位；不改变名称等价
+    # 语义——裸名与「（本级）」名仍不等价，绑定只发生在范围明确的前提下，
+    # 且目录里已有带「（本级）」后缀的单位可等价命中时不启用（保持 cover_field 口径）。
+    if not matches:
+        matches = [
+            org
+            for org in eligible
+            if _field(org, "level") == "department"
+            and any(
+                identity_name(item["text"])
+                == identity_name(organization_name(org)) + "(本级)"
+                for item in evidence
+            )
+        ]
     audit["name_comparisons"] = [
         {"source": item["source"], "page": item["page"], "text": item["text"],
          "candidate_id": _field(org, "id"), "candidate_name": organization_name(org),
