@@ -84,6 +84,9 @@ _FUND_EXPENDITURE = re.compile(
 _BARE_EXPENDITURE = re.compile(
     rf'[，,](?:本年)?支出(?:合计|决算(?:数)?)?(?:为|是)?'
     rf'(?P<amount>{_NUMBER})(?P<unit>{_UNIT})')
+# 说明逐项条目的决算金额声明（无基金标签前缀）：「……（项）……支出决算为 N 万元」。
+_FUND_ITEM_DECISION = re.compile(
+    rf'支出决算(?:数)?(?:为|是)?(?P<amount>{_NUMBER})(?P<unit>{_UNIT})')
 _SELF_COUNT = re.compile(
     r'(?:绩效自评(?:的)?(?:20\d{2}年度)?项目|'
     r'(?:开展|组织)?(?:项目支出)?绩效自评(?:项目)?(?:共|涉及)?)'
@@ -896,12 +899,53 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
                 return None, error
         return select(doc, facts, 'total_actual', code=leaf_code)
 
+    def _fact_identity_matches_context(fact):
+        """绑定前核验事实与文档身份一致（年份/主体/资金/阶段），不依赖 select 内部。"""
+        context = getattr(doc, 'fact_context', None)
+        if context is None:
+            return False
+        if getattr(fact, 'org_name', None) != getattr(context, 'org_name', None):
+            return False
+        if getattr(fact, 'fiscal_year', None) != getattr(context, 'fiscal_year', None):
+            return False
+        for field in ('fund_scope', 'budget_stage'):
+            expected = getattr(context, field, None)
+            if expected is not None and getattr(fact, field, None) != expected:
+                return False
+        return True
+
+    def _truncation_ambiguity_guard(anchor_code):
+        """目标表自身的截断候选不得构成歧义或冲突（D2 交叉证据不越权）。
+
+        - 无截断候选：放行（如福利院「事业单离退休」非前缀截断）；
+        - 唯一截断候选且即锚定行：须通过原格物理认证（网格名与事实名一致）；
+        - 其余（多候选 / 候选非锚定行 / 物理认证失败）：拒绝绑定。
+        """
+        def literal(value):
+            return re.sub(r'\s+', '', str(value or ''))
+
+        requested = literal(item['xiang'])
+        truncated = {}
+        for f in facts:
+            code = str(f.subject_code or '')
+            raw = literal(f.subject_name)
+            if (getattr(f, 'indicator', '') != 'total_actual' or len(paths.get(code, '')) != 7
+                    or not paths[code].startswith(parent) or len(raw) < 8
+                    or raw == requested or not requested.startswith(raw)):
+                continue
+            truncated.setdefault(code, f)
+        if not truncated:
+            return True
+        if len(truncated) == 1 and next(iter(truncated)) == anchor_code:
+            return _truncated_name_source(doc, truncated[anchor_code], item, siblings) is not None
+        return False
+
     def bind_leaf_via_cross_table_code():
         # D2 统一身份绑定：目标表项名与说明名逐字不一致（如表内中间漏字）时，
         # 用同一份材料其他原表打印的「编码＋完整名称」定位编码，再按编码在
         # 目标表内唯一定位行。同名对应多个不同编码、编码在目标表内不唯一、
-        # 或与已绑定的类/款前缀不符时一律放弃；名称差异仍由 V33-227 按原文
-        # 独立报告，金额核对不吞名称问题，名称问题也不阻断金额核对。
+        # 与已绑定的类/款前缀不符、或目标表自身存在截断歧义/名称冲突时
+        # 一律放弃；名称差异仍由 V33-227 按原文独立报告。
         requested = _name(item['xiang'])
         if not requested or not facts:
             return None
@@ -923,6 +967,8 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
         anchor_code = next(iter(anchors))
         if not paths.get(anchor_code, '').startswith(parent):
             return None  # 锚编码不在已绑定的类/款链下：同名跨款，不绑
+        if not _truncation_ambiguity_guard(anchor_code):
+            return None
         target_rows = [f for f in facts if str(f.subject_code) == anchor_code]
         if not target_rows:
             return None
@@ -933,6 +979,8 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
         fact, error = select(doc, facts, 'total_actual', code=anchor_code, allow_native_blank=True)
         if error or fact is None:
             return fact, error
+        if not _fact_identity_matches_context(fact):
+            return None
         if aliases is not None:
             anchor_refs = []
             for f in anchors[anchor_code]:
@@ -947,6 +995,45 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
                 'anchor_tables': sorted({getattr(f, 'table_code', '') for f in anchors[anchor_code]}),
                 'anchor_names': sorted({_name(f.subject_name) for f in anchors[anchor_code]}),
                 'basis': 'same_document_printed_code_with_exact_name',
+            })
+        return fact, error
+
+    def bind_leaf_via_code_anomaly():
+        # D2 编码位数异常绑定：表内编码位数异常（如 8 位，原件多印一位）导致
+        # 编码不在规范层级内、项级候选为空时，若身份可由独立证据链唯一证明
+        # ——8 位编码的 5 位款级前缀与已绑定款链一致、该前缀是同表已打印的
+        # 款级行、项名与说明逐字相等且唯一（物化层已按此锚定解除
+        # low_confidence）——则按该链绑定金额；编码异常由调用方单独报告。
+        # 多候选、前缀不符或未锚定时一律放弃（fail-closed）。
+        requested = _name(item['xiang'])
+        if not requested:
+            return None
+        anchored = {}
+        for f in facts:
+            code = str(f.subject_code or '')
+            if not re.fullmatch(r'\d{8}', code):
+                continue
+            if (f.extra_dims or {}).get('code_length_anomaly') is not True:
+                continue
+            if paths.get(code[:5], '') != parent:
+                continue
+            if _name(f.subject_name) != requested:
+                continue
+            anchored.setdefault(code, f)
+        if len(anchored) != 1:
+            return None
+        anomaly_code = next(iter(anchored))
+        fact, error = select(doc, facts, 'total_actual', code=anomaly_code, allow_native_blank=True)
+        if error or fact is None:
+            return fact, error
+        if aliases is not None:
+            aliases.append({
+                'role': 'code_length_anomaly_binding',
+                'subject_code': anomaly_code,
+                'kuan_prefix_code': anomaly_code[:5],
+                'narrative_name': item['xiang'],
+                'table_name': fact.subject_name,
+                'basis': 'printed_kuan_prefix_plus_exact_unique_name',
             })
         return fact, error
 
@@ -1082,6 +1169,9 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
                 anchored = bind_leaf_via_cross_table_code()
                 if anchored is not None:
                     return anchored
+                anomaly_bound = bind_leaf_via_code_anomaly()
+                if anomaly_bound is not None:
+                    return anomaly_bound
             level = {'klass': '类', 'kuan': '款', 'xiang': '项'}[group]
             if not candidates:
                 # 仅解释原文差异，不把近似名称或相同金额升级为同一科目身份。
@@ -1279,6 +1369,25 @@ def check_function_disclosures(rule, doc):
                 evidence_text=name_hint['narrative_name'],
                 check_relation_id=f'{rule.code}:general:text:item:{item.start()}:klass_name',
             ))
+        # D2：编码位数异常（原件多印一位）按独立身份链绑定金额后，异常本身
+        # 必须按原文单独报告——不吞进金额核对结果，也不用相似度猜正码。
+        anomaly_hint = next((a for a in aliases if isinstance(a, dict)
+                             and a.get('role') == 'code_length_anomaly_binding'), None)
+        if anomaly_hint and not error:
+            issues.append(rule._issue(
+                f"说明第{_name_difference_hint(doc, item) or '?'}页项“{anomaly_hint['narrative_name']}”"
+                f"对应表内编码 {anomaly_hint['subject_code']}（位数异常，规范为7位）："
+                "按其5位款级前缀（同表已打印款级行）＋逐字项名唯一绑定金额；"
+                "请核对原件编码是否多字，修正编码后与本说明一致。",
+                {'subject_code': anomaly_hint['subject_code'],
+                 'kuan_prefix_code': anomaly_hint['kuan_prefix_code'],
+                 'narrative_name': anomaly_hint['narrative_name'],
+                 'table_name': anomaly_hint['table_name'],
+                 'name_kind': 'code_length_anomaly'},
+                'warn',
+                evidence_text=str(anomaly_hint['table_name'] or ''),
+                check_relation_id=f'{rule.code}:general:text:item:{item.start()}:code_anomaly',
+            ))
         # 博物馆、图书馆等 are literal fiscal subjects, not publisher names.
         # Their hierarchy is already validated above; only the declaration
         # prefix can introduce a foreign owner or year for this item.
@@ -1428,6 +1537,29 @@ def check_fund_totals(rule, doc):
             receipt(rule, doc, 'fund:text:empty', [], status='not_applicable',
                     formula='explicit no government fund activity')
             return []
+        # D3/C-10：说明逐项列示（每项「支出决算为 N 万元」）而无总额句时，
+        # 总额按该节已列项决算数之和推导并与表内合计比对；推导依据写进
+        # formula，不冒充显式披露。逐项声明也不存在时保持取数不足（说明
+        # 读取范围已完整，总额句与逐项句均缺失属披露不完整，由上游义务
+        # 结构单独呈现）。
+        item_claims = list(_FUND_ITEM_DECISION.finditer(text.compact, begin, end))
+        if item_claims:
+            facts, reason = table_facts(doc, FUND)
+            if not reason:
+                derived_value, operands, note = _fund_total_from_classes(doc, facts)
+                if derived_value is not None:
+                    item_sum = sum(
+                        (_wan(claim.group('amount'), claim.group('unit')) for claim in item_claims),
+                        Decimal('0'),
+                    )
+                    key = 'fund:text:total:derived_from_items'
+                    issues = _amount_from_derived(
+                        rule, doc, text, item_claims[0].start(), item_claims[-1].end(),
+                        str(item_sum), '万元', (derived_value, operands, note), key,
+                        '政府性基金本年支出（逐项之和）', title,
+                        derived_from='item_rows',
+                        basis='该节已列项支出决算数之和')
+                    return issues
         return finish(rule, [], ['政府性基金说明未识别到明确的本年总收入或总支出金额'])
     facts, reason = table_facts(doc, FUND)
     if reason:

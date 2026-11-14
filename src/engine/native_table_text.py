@@ -339,8 +339,22 @@ def check_three_public_details(rule, doc, *, require_vehicle_details=True, check
             at += 2
         match = pattern.match(text.compact, at, end)
         absence = re.search(r'(?:无|没有|未发生)$', text.compact[max(detail_begin, subject.start() - 4):subject.start()])
-        absent = absence is not None and (at == end or text.compact[at] in '。；;，,')
-        statement_end = at if absent else (match.end() if match else at)
+        # 后置无支出句式（如「因公出国（境）费无支出无预算」）：AGENTS.md 三公
+        # 专项与 D-010 口径——写明未发生视为已披露。紧随主体词、不含金额的
+        # 无支出/未发生短语与前置无表达同等对待；短语必须以句界收尾，防止
+        # 把后续金额吞进无支出声明。
+        post_absence = (re.match(r'(?:无|没有|未)(?:相应)?(?:支出|发生|安排)(?:无(?:相应)?预算|预算)?',
+                                 text.compact[at:]) if at < end else None)
+        post_absence_end = at + post_absence.end() if post_absence else None
+        absent = (
+            (absence is not None and (at == end or text.compact[at] in '。；;，,'))
+            or (post_absence is not None
+                and (post_absence_end == end or text.compact[post_absence_end] in '。；;，,、'))
+        )
+        statement_end = (post_absence_end if post_absence else at) if absent else (match.end() if match else at)
+        # 前置无表达的“无/没有”词长度；后置无支出句式时前缀长度为 0
+        #（声明从主体词起，无支出短语已含在 statement_end 范围内）。
+        absence_prefix_len = len(absence.group()) if absence is not None else 0
         if (not match and not absent) or context_guard(doc, text.compact, subject.start(), statement_end):
             continue
         seen.add(indicator)
@@ -352,12 +366,12 @@ def check_three_public_details(rule, doc, *, require_vehicle_details=True, check
             receipt(rule, doc, key, [], status='insufficient_data', formula='text = table', reason=error)
             continue
         if indicator == 'vehicle_purchase_operation' and value == 0 and fact.normalized_value == 0:
-            start = subject.start() - len(absence.group()) if absent else subject.start()
+            start = subject.start() - absence_prefix_len if absent else subject.start()
             zero_vehicle_sources = [{**ref, 'file_hash': doc.fact_context.file_hash}
                                     for ref in text.refs(start, statement_end, '明确公务用车分项无支出')]
         if isinstance(fact, NativeBlankTerm) and (value == 0 or not independent_blank_zero(doc, fact)):
             if value == 0:
-                start = subject.start() - len(absence.group()) if absent else subject.start()
+                start = subject.start() - absence_prefix_len if absent else subject.start()
                 sources = [{**ref, 'file_hash': doc.fact_context.file_hash}
                            for ref in text.refs(start, statement_end, '明确无此项说明')]
                 receipt(rule, doc, key, [fact], status='not_applicable', formula='明确无此项说明与原件空白格一致',
@@ -367,7 +381,7 @@ def check_three_public_details(rule, doc, *, require_vehicle_details=True, check
                 unresolved.append(reason)
                 receipt(rule, doc, key, [fact], status='insufficient_data', formula='text = table', reason=reason)
             continue
-        statement_start = subject.start() - len(absence.group()) if absent else subject.start()
+        statement_start = subject.start() - absence_prefix_len if absent else subject.start()
         stated.setdefault(indicator, (value, statement_start, statement_end))
         issues.extend(compare(rule, doc, text, statement_start, statement_end, value, fact, key, LABELS[indicator], title))
     required = (('overseas', 'vehicle_purchase', 'vehicle_operation', 'reception')

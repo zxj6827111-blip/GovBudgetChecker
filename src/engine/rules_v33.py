@@ -9159,6 +9159,10 @@ class R33220_Narrative3_T3(Rule):
                 idx_project = find_column_index(str_hrow, ["项目支出"])
             if idx_total is None:
                 idx_total = find_column_index(str_hrow, ["本年支出合计"])
+            if idx_total is None:
+                # 区级模板的支出决算表合计列只印「合计」；排除分项列避免错配。
+                idx_total = find_column_index(
+                    str_hrow, ["合计"], exclude_keys=["基本支出", "项目支出", "人员", "公用"])
             if idx_basic is not None and idx_project is not None:
                 break
 
@@ -12839,11 +12843,21 @@ def _txt_fund_bind_statements(
         amount_text = re.sub(r"[,，\s]", "", amount_text)
         unit = _txt_fund_norm(unit)
         if not any(pos < m.start() for pos in markers):
-            blocked.append(
-                f"说明句「{label}…」未落在「支出具体情况如下」支出明细段内，"
-                "支出决算口径不可确认"
+            # 格式变体（D2）：章节内没有任何「支出具体情况如下」变体标记，且
+            # 本句是紧邻的编号条目（1、/（1）…）时，整节即支出明细段——编号
+            # ＋完整三级类款项身份本身构成明细段边界。已有标记但本句落在标记
+            # 之前的，维持原 fail-closed（可能落在收入/同比段）。
+            section_is_detail = (
+                not markers
+                and re.search(r'(?:^|[。；：！？\n])(?:\d{1,2}[、.．]|[（(]\d{1,2}[）)])\s*$',
+                              body[max(0, m.start() - 12):m.start()])
             )
-            continue
+            if not section_is_detail:
+                blocked.append(
+                    f"说明句「{label}…」未落在「支出具体情况如下」支出明细段内，"
+                    "支出决算口径不可确认"
+                )
+                continue
         # 期间锚：句读边界截出的前缀**或项名本身**出现异年 → 不跨期绑定。
         # 项名可能自带年份前缀（「2024年度住房保障支出（类）」——年份被名称段
         # 吸收时前缀检查扫不到，必须两处都查）。
