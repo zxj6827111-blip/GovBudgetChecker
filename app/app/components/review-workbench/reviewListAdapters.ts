@@ -68,7 +68,7 @@ export function safeReviewReturnPath(value: string | null | undefined): string {
   if (!value?.startsWith("/") || value.startsWith("//") || value.includes("\\")) return "/review";
   try {
     const url = new URL(value, "http://gbc.local");
-    if (url.origin !== "http://gbc.local" || !/^\/(review|queue|materials|reports|history|workbench|archive)(\/|$)/.test(url.pathname)) return "/review";
+    if (url.origin !== "http://gbc.local" || !/^\/(review|queue|materials|reports|history|workbench|archive|department)(\/|$)/.test(url.pathname)) return "/review";
     if (url.pathname === "/review") { url.searchParams.delete("job"); url.searchParams.delete("returnTo"); }
     return `${url.pathname}${url.search}`;
   } catch { return "/review"; }

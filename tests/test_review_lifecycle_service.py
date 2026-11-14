@@ -375,16 +375,16 @@ def test_gate_blocks_when_analysis_not_completed():
     assert "analysis_not_completed" in _codes(state)
 
 
-def test_gate_blocks_on_identity_and_caliber():
+def test_gate_does_not_block_on_identity_and_caliber():
     identity = _state(
         active=_session(), slot_row=_slot_row(fiscal_year=None), coverage_available=True
     )
-    assert "identity_unresolved" in _codes(identity)
+    assert "identity_unresolved" not in _codes(identity)
 
     caliber = _state(
         active=_session(), slot_row=_slot_row(caliber_conflict_candidate="summary")
     )
-    assert "caliber_conflict" in _codes(caliber)
+    assert "caliber_conflict" not in _codes(caliber)
 
 
 @pytest.mark.parametrize(
@@ -412,10 +412,10 @@ def test_gate_issue_resolution_matrix(decisions, expected):
     assert _codes(state) == expected
 
 
-def test_gate_blocks_on_unavailable_coverage():
-    """§四十六：未知不得当成零阻塞。"""
+def test_gate_does_not_block_on_unavailable_coverage():
+    """内部覆盖台账不可用仅作参考，不再阻断人工完成复核。"""
     state = _state(active=_session(), coverage_available=False, coverage_blocking_total=None)
-    assert _codes(state) == ["coverage_unavailable"]
+    assert _codes(state) == []
 
 
 def _obligation_item(
@@ -452,7 +452,7 @@ def _decision(decision: str, *, revision: int = 1, reviewer: str = "r") -> Dict[
     }
 
 
-def test_gate_blocks_on_blocking_obligations_with_count():
+def test_gate_does_not_block_on_blocking_obligations():
     items = [_obligation_item("OBL-1"), _obligation_item("OBL-2")]
     state = _state(
         active=_session(),
@@ -461,12 +461,12 @@ def test_gate_blocks_on_blocking_obligations_with_count():
         coverage_items=items,
     )
     gate = review_lifecycle_service.evaluate_completion_gate(state)
-    assert [item.code for item in gate.blockers] == ["blocking_obligations"]
-    assert gate.blockers[0].count == 2
+    assert gate.can_complete is True
+    assert gate.blockers == []
 
 
-def test_gate_counts_only_unhandled_obligations():
-    """WP3-B：verified_ok / verified_issue / not_applicable 视为已处理，pending 继续阻塞。"""
+def test_gate_ignores_unhandled_obligations_while_preserving_counts():
+    """未自动核对义务移入参考区，不阻断完成门禁。"""
     items = [
         _obligation_item("OBL-1"),
         _obligation_item("OBL-2"),
@@ -477,7 +477,6 @@ def test_gate_counts_only_unhandled_obligations():
         "OBL-1": _decision("verified_ok"),
         "OBL-2": _decision("verified_issue"),
         "OBL-3": _decision("not_applicable"),
-        # OBL-4 没有任何记录 → 仍然待处理
     }
     state = _state(
         active=_session(),
@@ -487,9 +486,9 @@ def test_gate_counts_only_unhandled_obligations():
         obligation_decisions=decisions,
     )
     gate = review_lifecycle_service.evaluate_completion_gate(state)
-    assert [item.code for item in gate.blockers] == ["blocking_obligations"]
-    assert gate.blockers[0].count == 1
-    assert not gate.can_complete
+    assert gate.can_complete is True
+    assert [item.code for item in gate.blockers] == []
+    assert len(review_lifecycle_service._unhandled_obligations(state)) == 1
 
 
 def test_gate_passes_when_all_blocking_obligations_handled():
@@ -553,18 +552,18 @@ def test_obligation_covered_by_same_finding_is_not_a_duplicate_todo():
     assert [entry.obligation_id for entry in block.items] == [item.obligation_id]
     assert block.pending_total == 1
     assert block.covered_total == 0
-    # 问题本身仍按问题流程处理：pending_findings 与 blocking_obligations 同时存在。
+    # 问题本身仍按问题流程处理：仅检出问题（pending_findings）阻塞完成门禁。
     codes = [blocker.code for blocker in review_lifecycle_service.evaluate_completion_gate(state).blockers]
-    assert "blocking_obligations" in codes
+    assert "blocking_obligations" not in codes
     assert "pending_findings" in codes
 
 
-def test_gate_treats_explicit_pending_and_unknown_decisions_as_blocking():
-    """显式 pending 与拼错的决定值都不能静默放行（与问题决定同一纪律）。"""
+def test_gate_does_not_block_on_pending_obligation_decisions():
+    """内部未完成义务不再阻塞完成门禁，只保留 pending count 供参考。"""
     items = [_obligation_item("OBL-1"), _obligation_item("OBL-2"), _obligation_item("OBL-3")]
     decisions = {
         "OBL-1": _decision("pending"),
-        "OBL-2": _decision("approved"),  # 未知值 → 照样阻塞
+        "OBL-2": _decision("approved"),
         "OBL-3": _decision("verified_ok"),
     }
     state = _state(
@@ -575,8 +574,8 @@ def test_gate_treats_explicit_pending_and_unknown_decisions_as_blocking():
         obligation_decisions=decisions,
     )
     gate = review_lifecycle_service.evaluate_completion_gate(state)
-    assert [item.code for item in gate.blockers] == ["blocking_obligations"]
-    assert gate.blockers[0].count == 2
+    assert gate.can_complete is True
+    assert gate.blockers == []
 
 
 def test_gate_ignores_decisions_for_non_blocking_obligations():
@@ -616,7 +615,7 @@ def test_blocker_order_puts_stale_facts_before_content():
         coverage_blocking_total=None,
         slot_row=_slot_row(fiscal_year=None),
     )
-    assert _codes(state)[:2] == ["document_version_changed", "identity_unresolved"]
+    assert _codes(state)[:2] == ["document_version_changed", "pending_findings"]
 
 
 # ==== 开启门禁 ==============================================================

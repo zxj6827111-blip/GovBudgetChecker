@@ -185,3 +185,23 @@ def test_heading_naming_another_directory_org_still_blocks_binding():
     result = decide(pages, directory)
     assert result["decision"] == "needs_confirmation"
     assert code(result) == "evidence_conflict"
+
+
+def test_putuo_multi_badge_and_party_prefix_variants_bind_cleanly():
+    """多牌合署、中共/中国共产党前缀与省市前缀省略（上海/上海市）在原件口径一致时应自动绑定。"""
+    multi_org = org("上海市普陀区人民政府长风新村街道办事处（社区管理办公室）", "department", "d-cf")
+    r1 = decide(
+        ["上海市普陀区长风新村街道办事处\n2025年度部门决算"],
+        [multi_org],
+    )
+    assert r1["decision"] == "bound"
+    assert r1["organization_id"] == "d-cf"
+
+    party_org = org("中国共产党上海市普陀区委员会宣传部", "department", "d-xcb")
+    r2 = decide(
+        ["中共上海市普陀区委宣传部\n2025年度部门决算"],
+        [party_org],
+    )
+    assert r2["decision"] == "bound"
+    assert r2["organization_id"] == "d-xcb"
+

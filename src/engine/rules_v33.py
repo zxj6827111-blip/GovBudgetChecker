@@ -2163,6 +2163,8 @@ def _make_location_ref(
     code: Optional[str] = None,
     subject: Optional[str] = None,
     value: Optional[float] = None,
+    span: Optional[str] = None,
+    context: Optional[str] = None,
 ) -> Dict[str, Any]:
     ref: Dict[str, Any] = {}
     if role:
@@ -2185,6 +2187,10 @@ def _make_location_ref(
         ref["subject"] = subject
     if value is not None:
         ref["value"] = value
+    if span:
+        ref["span"] = span
+    if context:
+        ref["context"] = context
     return ref
 
 
@@ -8274,13 +8280,9 @@ class R33221_Narrative4_T4(Rule):
         _ensure_table_anchors(doc)
         narrative_total = 0.0
         narrative_page: Optional[int] = None
+        narrative_span: Optional[str] = None
         for pidx, txt in enumerate(doc.page_texts):
             if "财政拨款" in txt and ("总体情况" in txt or "收入支出决算" in txt):
-                # 优先取「财政拨款…总计」：同页可能先出现说明一的「收入支出总计」（含年初
-                # 结转、另一口径，文旅局样张为 26,591.08），直接用首个匹配会把另一口径
-                # 当成财政拨款总计。取不到再退回通用模式（兼容不写"财政拨款"前缀的文档）。
-                # 「总\s*计」「增\s*加」等均容忍软换行空白——PDF 常把"总计增/加"拆在两行，
-                # 否则负向断言失效、又会把**增加额**当成总计（文旅局样张 8,487.88）。
                 total_match = re.search(
                     r'财政拨款[收入支出]*总\s*计(?!\s*(?:增\s*加|减\s*少|下\s*降|增\s*长))[^0-9]{0,12}(\d[\d,]*(?:\.\d+)?)\s*万元',
                     txt,
@@ -8293,6 +8295,7 @@ class R33221_Narrative4_T4(Rule):
                 if total_match:
                     narrative_total = float(total_match.group(1).replace(",", ""))
                     narrative_page = pidx + 1
+                    narrative_span = total_match.group(0)
 
         if getattr(doc, "parse_artifact", None) is not None:
             scope = _final_section_scope(doc, ("财政拨款收入支出决算总体情况说明",))
@@ -8301,6 +8304,16 @@ class R33221_Narrative4_T4(Rule):
                 raise RuleDeferred(self.code, detail="说明4章节未披露可绑定的财政拨款总计金额")
             narrative_total = value
             narrative_page = _find_text_page_after(doc, "财政拨款收入支出决算总体情况说明")
+            scope_match = re.search(
+                r'(?:财政拨款)?[收入支出]*总\s*计(?!\s*(?:增\s*加|减\s*少|下\s*降|增\s*长))[^0-9]{0,12}\d[\d,]*(?:\.\d+)?\s*万元',
+                scope or "",
+            )
+            if scope_match:
+                narrative_span = scope_match.group(0)
+                norm_span = re.sub(r"\s+", "", narrative_span)
+                matched_pages = [pi + 1 for pi, pt in enumerate(doc.page_texts) if norm_span in re.sub(r"\s+", "", pt or "")]
+                if len(matched_pages) == 1:
+                    narrative_page = matched_pages[0]
 
         t4_page = _get_first_anchor_page(doc, "财政拨款收入支出决算总表")
         t4_rows = _get_table_rows(doc, "财政拨款收入支出决算总表")
@@ -8322,6 +8335,7 @@ class R33221_Narrative4_T4(Rule):
                         section="说明4（财政拨款总体情况）",
                         field="财政拨款总计",
                         value=narrative_total,
+                        span=narrative_span,
                     ),
                     _make_location_ref(
                         role="T4",
@@ -8339,7 +8353,7 @@ class R33221_Narrative4_T4(Rule):
                 issues.append(self._issue(
                     f"说明4↔T4总计不一致：说明={narrative_total:.2f}, T4={t4_total:.2f}",
                     location, "warn",
-                    evidence_text=f"文档说明(财政拨款总计)：{narrative_total}\n表4(总表) 总计：{t4_total}"
+                    evidence_text=narrative_span or f"文档说明(财政拨款总计)：{narrative_total}\n表4(总表) 总计：{t4_total}"
                 ))
         return issues
 
@@ -8452,7 +8466,8 @@ class R33222_Narrative5_T5(Rule):
         )
         if total_match:
             nar_total = float(total_match.group(1).replace(",", "").replace("，", ""))
-            quote = re.sub(r"\s+", "", total_match.group())
+            raw_span = total_match.group(0)
+            quote = re.sub(r"\s+", "", raw_span)
             source_pages = [index + 1 for index, text in enumerate(doc.page_texts)
                             if quote in re.sub(r"\s+", "", text or "")]
             if t5_total > 0.01 and _amount_mismatch(nar_total, t5_total):
@@ -8463,6 +8478,7 @@ class R33222_Narrative5_T5(Rule):
                         section="说明5（一般公共预算支出）",
                         field="支出总额",
                         value=nar_total,
+                        span=raw_span,
                     ),
                     _make_location_ref(
                         role="T5",
@@ -8481,7 +8497,7 @@ class R33222_Narrative5_T5(Rule):
                 issues.append(self._issue(
                     f"说明5↔T5支出总额不一致：说明={nar_total:.2f}, T5={t5_total:.2f}",
                     location, "warn",
-                    evidence_text=f"文档说明(一般公共预算支出)：{nar_total}\n表5(支出表) 合计：{t5_total}"
+                    evidence_text=raw_span or f"文档说明(一般公共预算支出)：{nar_total}\n表5(支出表) 合计：{t5_total}"
                 ))
 
         # 校验类级科目
@@ -9048,6 +9064,10 @@ class R33220_Narrative3_T3(Rule):
         merged_text = merge_page_texts(doc.page_texts)
         nar_basic: Optional[StrictValue] = None
         nar_project: Optional[StrictValue] = None
+        nar_basic_span: Optional[str] = None
+        nar_project_span: Optional[str] = None
+        nar_basic_page: Optional[int] = None
+        nar_project_page: Optional[int] = None
         narrative_page: Optional[int] = None
 
         for title, body, _offset in split_numbered_sections(merged_text):
@@ -9066,6 +9086,11 @@ class R33220_Narrative3_T3(Rule):
                             scale_digits=scale_b,
                             unit=unit_b,
                         )
+                        nar_basic_span = clause
+                        norm_clause = re.sub(r"\s+", "", clause)[:24]
+                        matched_b = [pi + 1 for pi, pt in enumerate(doc.page_texts) if norm_clause and norm_clause in re.sub(r"\s+", "", pt or "")]
+                        if len(matched_b) == 1:
+                            nar_basic_page = matched_b[0]
                 if nar_project is None and "项目支出" in clause:
                     res_p = _extract_amount_from_segment(clause, ["项目支出"])
                     if res_p:
@@ -9077,6 +9102,11 @@ class R33220_Narrative3_T3(Rule):
                             scale_digits=scale_p,
                             unit=unit_p,
                         )
+                        nar_project_span = clause
+                        norm_clause = re.sub(r"\s+", "", clause)[:24]
+                        matched_p = [pi + 1 for pi, pt in enumerate(doc.page_texts) if norm_clause and norm_clause in re.sub(r"\s+", "", pt or "")]
+                        if len(matched_p) == 1:
+                            nar_project_page = matched_p[0]
             if nar_basic is not None or nar_project is not None:
                 title_key = re.sub(r"\s+", "", title)[:18]
                 for pi, page_text in enumerate(doc.page_texts):
@@ -9191,10 +9221,11 @@ class R33220_Narrative3_T3(Rule):
                     location = _make_issue_location(
                         _make_location_ref(
                             role="说明3",
-                            page=narrative_page,
+                            page=nar_basic_page or narrative_page,
                             section="说明3（支出决算情况）",
                             field="基本支出",
                             value=float(n_basic_dec),
+                            span=nar_basic_span,
                         ),
                         _make_location_ref(
                             role="T3",
@@ -9214,7 +9245,7 @@ class R33220_Narrative3_T3(Rule):
                         {**location,
                          **({"native_blank_sources": [blank_obs_basic]} if blank_obs_basic else {})},
                         "warn",
-                        evidence_text=f"文档说明(基本支出)：{n_basic_dec:.{max_scale_b}f}; 表3基本支出：{t_basic_dec:.{max_scale_b}f}"
+                        evidence_text=nar_basic_span or f"文档说明(基本支出)：{n_basic_dec:.{max_scale_b}f}; 表3基本支出：{t_basic_dec:.{max_scale_b}f}"
                     ))
             else:
                 unresolved_reasons.append(f"T3基本支出列取数未完成: {table_basic.reason or '非有效数值'}")
@@ -9241,10 +9272,11 @@ class R33220_Narrative3_T3(Rule):
                     location = _make_issue_location(
                         _make_location_ref(
                             role="说明3",
-                            page=narrative_page,
+                            page=nar_project_page or narrative_page,
                             section="说明3（支出决算情况）",
                             field="项目支出",
                             value=float(n_proj_dec),
+                            span=nar_project_span,
                         ),
                         _make_location_ref(
                             role="T3",
@@ -9264,7 +9296,7 @@ class R33220_Narrative3_T3(Rule):
                         {**location,
                          **({"native_blank_sources": [blank_obs_project]} if blank_obs_project else {})},
                         "warn",
-                        evidence_text=f"文档说明(项目支出)：{n_proj_dec:.{max_scale_p}f}; 表3项目支出：{t_proj_dec:.{max_scale_p}f}"
+                        evidence_text=nar_project_span or f"文档说明(项目支出)：{n_proj_dec:.{max_scale_p}f}; 表3项目支出：{t_proj_dec:.{max_scale_p}f}"
                     ))
             else:
                 unresolved_reasons.append(f"T3项目支出列取数未完成: {table_project.reason or '非有效数值'}")
@@ -9666,6 +9698,8 @@ class R33226_Narrative2_T2(Rule):
         
         # 提取各项金额（金额允许千分位：石泉样张 "19,044.27万元"）
         nar_vals = {}
+        nar_spans: Dict[str, str] = {}
+        nar_pages: Dict[str, Optional[int]] = {}
         for k, _ in key_map.items():
             # 正则：关键词 ... 数字 ... 万元
             # 兼容 "财政拨款收入为 100 万元" 或 "财政拨款收入 100 万元"
@@ -9676,6 +9710,10 @@ class R33226_Narrative2_T2(Rule):
             )
             if m:
                 nar_vals[k] = float(m.group(1).replace(",", ""))
+                nar_spans[k] = m.group(0)
+                norm_s = re.sub(r"\s+", "", m.group(0))
+                matched = [pi + 1 for pi, pt in enumerate(doc.page_texts) if norm_s and norm_s in re.sub(r"\s+", "", pt or "")]
+                nar_pages[k] = matched[0] if len(matched) == 1 else narrative_page
         
         if not nar_vals:
             raise RuleDeferred(
@@ -9720,13 +9758,16 @@ class R33226_Narrative2_T2(Rule):
                 # 强校验：表中必须有这个数 (容差 0.01)
                 found = any(abs(val - v) <= 0.01 for val in t2_row_vals)
                 if not found:
+                    item_span = nar_spans.get(k)
+                    item_page = nar_pages.get(k) or narrative_page
                     location = _make_issue_location(
                         _make_location_ref(
                             role="说明2",
-                            page=narrative_page,
+                            page=item_page,
                             section="说明2（收入结构）",
                             field=k,
                             value=v,
+                            span=item_span,
                         ),
                         _make_location_ref(
                             role="T2",
@@ -9743,7 +9784,7 @@ class R33226_Narrative2_T2(Rule):
                     issues.append(self._issue(
                          f"说明2↔T2{k}不一致：说明={v:.2f}, T2合计行未找到对应值",
                          location, "warn",
-                         evidence_text=f"文档说明({k})：{v}\n表2合计行数据：{t2_row_vals}"
+                         evidence_text=item_span or f"文档说明({k})：{v}\n表2合计行数据：{t2_row_vals}"
                     ))
         
         return issues
@@ -9761,12 +9802,14 @@ class R33225_Narrative1_T1(Rule):
         _ensure_table_anchors(doc)
         narrative_total = 0.0
         narrative_page: Optional[int] = None
+        narrative_span: Optional[str] = None
         for pidx, txt in enumerate(doc.page_texts):
             if "收入支出决算" in txt and "总体情况" in txt:
                 total_match = re.search(r'收入支出总计[^\d]*(\d+\.?\d*)\s*万元', txt)
                 if total_match:
                     narrative_total = float(total_match.group(1))
                     narrative_page = pidx + 1
+                    narrative_span = total_match.group(0)
                     break
         
         # 只要找到了匹配项（即使是0），且T1有数据，就应该校验
@@ -9792,6 +9835,7 @@ class R33225_Narrative1_T1(Rule):
                             section="说明1（总体情况）",
                             field="收入支出总计",
                             value=narrative_total,
+                            span=narrative_span,
                         ),
                         _make_location_ref(
                             role="T1",
@@ -9809,7 +9853,7 @@ class R33225_Narrative1_T1(Rule):
                     issues.append(self._issue(
                         f"说明1↔T1总计不一致：说明={narrative_total:.2f}, T1={t1_total:.2f}",
                         location, "warn",
-                        evidence_text=f"文档说明(收入支出决算总计)：{narrative_total}\n表1(总表) 总计：{t1_total}"
+                        evidence_text=narrative_span or f"文档说明(收入支出决算总计)：{narrative_total}\n表1(总表) 总计：{t1_total}"
                     ))
         return issues
 

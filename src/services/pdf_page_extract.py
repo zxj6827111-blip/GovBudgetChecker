@@ -237,6 +237,15 @@ def is_visible_char(obj: Dict[str, Any], page_height: float) -> bool:
     return top_v >= 0 and bottom_v <= page_height
 
 
+def _rejoin_wrapped_decimals(text: str) -> str:
+    """将因窄栏换行或基线偏移被拆断的数字小数片段（如 '4,235.8\\n2'）重新拼接为完整数字。"""
+    if not text:
+        return ""
+    text = re.sub(r"(?<=\d\.)\s*\n\s*(?=\d{1,2}(?!\d|\.))", "", text)
+    text = re.sub(r"(?<=\d\.\d)\s*\n\s*(?=\d(?!\d|\.))", "", text)
+    return text
+
+
 def extract_visible_text_from_page(page: Any) -> str:
     raw_text = page.extract_text() or ""
     try:
@@ -244,7 +253,7 @@ def extract_visible_text_from_page(page: Any) -> str:
         filtered_page = page.filter(lambda obj, h=page_height: is_visible_char(obj, h))
         filtered_text = filtered_page.extract_text() or ""
         if filtered_text.strip():
-            return filtered_text
+            return _rejoin_wrapped_decimals(filtered_text)
     except Exception:
         pass
-    return raw_text
+    return _rejoin_wrapped_decimals(raw_text)

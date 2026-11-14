@@ -836,8 +836,14 @@ async def confirm_material_dimensions(job_id:str,body:MaterialDimensionsRequest,
 
 
 # ---------------------------------------------------------------------------
-# D4：整份确认门禁与报告三分类（读取接口；confirm_report 写侧默认关闭）
+# D4：整份确认门禁与报告三分类（默认开启，可通过 GOVBUDGET_CONFIRM_REPORT_ENABLED=false 关闭）
 # ---------------------------------------------------------------------------
+
+
+def _confirm_report_enabled() -> bool:
+    raw = str(os.getenv("GOVBUDGET_CONFIRM_REPORT_ENABLED") or "true").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
 
 @router.get("/api/jobs/{job_id}/report-confirmation")
 async def get_report_confirmation(job_id: str, request: Request):
@@ -856,9 +862,7 @@ async def get_report_confirmation(job_id: str, request: Request):
     )
     from api import runtime
 
-    enabled = str(os.getenv("GOVBUDGET_CONFIRM_REPORT_ENABLED") or "").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
+    enabled = _confirm_report_enabled()
     job_dir = runtime.UPLOAD_ROOT / str(job_id)
 
     def _read():
@@ -893,9 +897,7 @@ async def confirm_report(job_id: str, body: ConfirmReportRequest, request: Reque
     _, _, user, _initial_payload = require_job_access(request, job_id)
     from src.services.report_confirmation_gate import confirm_report_atomic
 
-    enabled = str(os.getenv("GOVBUDGET_CONFIRM_REPORT_ENABLED") or "").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
+    enabled = _confirm_report_enabled()
     result = await run_in_threadpool(
         lambda: confirm_report_atomic(
             job_id,

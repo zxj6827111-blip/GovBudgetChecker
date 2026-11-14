@@ -45,7 +45,7 @@ class DatabaseConnection:
             url,
             min_size=2,
             max_size=10,
-            command_timeout=60
+            command_timeout=180
         )
         
         # Initialize schema on first connection

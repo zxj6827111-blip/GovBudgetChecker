@@ -77,14 +77,23 @@ def client(monkeypatch, tmp_path):
         yield test_client
 
 
-def test_write_disabled_by_default(client):
-    response = client.post(
+def test_write_enabled_by_default_and_can_disable(client, monkeypatch):
+    monkeypatch.setenv("GOVBUDGET_CONFIRM_REPORT_ENABLED", "0")
+    disabled_resp = client.post(
         f"/api/jobs/{JOB}/confirm-report",
         json={"expected_analysis_revision": "rev-current",
-              "idempotency_key": "key-12345678"},
+              "idempotency_key": "key-disabled-1"},
     )
-    assert response.status_code == 403
-    assert response.json()["detail"] == "CONFIRM_REPORT_DISABLED"
+    assert disabled_resp.status_code == 403
+    assert disabled_resp.json()["detail"] == "CONFIRM_REPORT_DISABLED"
+
+    monkeypatch.delenv("GOVBUDGET_CONFIRM_REPORT_ENABLED", raising=False)
+    enabled_resp = client.post(
+        f"/api/jobs/{JOB}/confirm-report",
+        json={"expected_analysis_revision": "rev-current",
+              "idempotency_key": "key-enabled-1"},
+    )
+    assert enabled_resp.status_code == 200
 
 
 def test_missing_version_or_key_is_422(client):

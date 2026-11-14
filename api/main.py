@@ -2356,7 +2356,9 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             from src.services.recognition_metrics import recognition_state
             result['meta']['recognition_state']=recognition_state(parse_artifact_obj,structured_ingest_summary.get('fact_snapshot'),fact_context_obj)
         if os.getenv("DATABASE_URL") and structured_ingest_summary.get("status") in {"error", "skipped"}:
-            raise RuntimeError("trusted_ingest_not_committed: " + str(structured_ingest_summary.get("error") or structured_ingest_summary.get("reason")))
+            stage = structured_ingest_summary.get("ingest_stage") or "unknown"
+            detail = structured_ingest_summary.get("error") or structured_ingest_summary.get("reason") or "unknown_error"
+            raise RuntimeError(f"trusted_ingest_not_committed (stage={stage}): {detail}")
         if ocr_summary is not None:
             # ZC-02：OCR 摘要（页级状态、低分块计数、原生/OCR 冲突）如实落账
             result["meta"]["ocr"] = ocr_summary

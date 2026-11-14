@@ -3,8 +3,10 @@
 import type { Route } from "next";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Download, RefreshCw, FileText, Link2 } from "lucide-react";
+
+import { ReviewWorkbenchPage } from "@/components/review-workbench/ReviewWorkbenchPage";
 
 import AssociateDialog from "@/components/AssociateDialog";
 import { AiScopeBanner } from "@/components/AiScopeBanner";
@@ -78,6 +80,38 @@ const DECISION_STATUS_LABELS: Record<string, string> = {
 
 export default function TaskDetail() {
   const { job_id } = useParams<{ job_id: string }>();
+  const [selectedRevision] = useState(() =>
+    typeof window === "undefined"
+      ? ""
+      : new URLSearchParams(window.location.search).get("analysis_revision") ?? "",
+  );
+
+  if (!selectedRevision) {
+    return (
+      <Suspense
+        fallback={
+          <div className="flex h-full items-center justify-center">
+            <span className="text-sm text-slate-500">正在加载…</span>
+          </div>
+        }
+      >
+        <div className="h-screen overflow-hidden">
+          <ReviewWorkbenchPage key={job_id} initialJobId={job_id} />
+        </div>
+      </Suspense>
+    );
+  }
+
+  return <LegacyRevisionTaskDetail jobId={job_id} initialRevision={selectedRevision} />;
+}
+
+function LegacyRevisionTaskDetail({
+  jobId: job_id,
+  initialRevision,
+}: {
+  jobId: string;
+  initialRevision: string;
+}) {
   const router = useRouter();
   const aiOptions = useAIAnalysisOptions();
   const [task, setTask] = useState<Task | null>(null);
@@ -98,7 +132,7 @@ export default function TaskDetail() {
   const [problemCategory, setProblemCategory] = useState("全部");
   const [highRiskOnly, setHighRiskOnly] = useState(false);
   const [ignoringProblemId, setIgnoringProblemId] = useState<string | null>(null);
-  const [selectedRevision, setSelectedRevision] = useState(() => typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("analysis_revision") ?? "");
+  const [selectedRevision, setSelectedRevision] = useState(initialRevision);
   const [revisions, setRevisions] = useState<Array<{revision_id: string; is_current: boolean; state: string}>>([]);
   const [historyDecisions, setHistoryDecisions] = useState<RevisionDecisionRecord[]>([]);
 

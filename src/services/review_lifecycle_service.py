@@ -641,11 +641,7 @@ def unhandled_coverage_obligations(
 
 
 def evaluate_start_gate(state: ReviewState) -> CompletionGate:
-    """开复核门禁（§三十）。
-
-    条件不满足时**不创建会话**，返回带 reason 的 409，而不是"先建一条再让
-    完成门禁拦住"——那样会留下一条钉在不可复核事实上的活动会话。
-    """
+    """开复核门禁（§三十）：只要求当前分析存在且已完成。"""
     blockers: List[ReviewBlocker] = []
 
     if (
@@ -657,21 +653,12 @@ def evaluate_start_gate(state: ReviewState) -> CompletionGate:
         blockers.append(ReviewBlocker(code=BLOCKER_ANALYSIS_UNAVAILABLE))
     elif not state.analysis.completed:
         blockers.append(ReviewBlocker(code=BLOCKER_ANALYSIS_NOT_COMPLETED))
-    if not _slot_identity_resolved(state.slot_row):
-        blockers.append(ReviewBlocker(code=BLOCKER_IDENTITY_UNRESOLVED))
-    if state.slot_row.get("caliber_conflict_candidate"):
-        blockers.append(ReviewBlocker(code=BLOCKER_CALIBER_CONFLICT))
 
     return CompletionGate(can_complete=not blockers, blockers=blockers)
 
 
 def evaluate_completion_gate(state: ReviewState) -> CompletionGate:
-    """完成门禁（§三十四）：服务端重新计算全部条件，前端 disabled 不作数。
-
-    顺序是固定的：先后回答"我看到的事实还是不是会话开始时的那些"，
-    再回答"内容本身是否允许收口"。这样当两者同时不成立时，用户先看到
-    "材料/分析已更新，请重新复核"——那才是他真正要做的动作。
-    """
+    """完成门禁：只校验版本一致性、分析完成与系统检出问题的处理状态。"""
     blockers: List[ReviewBlocker] = []
 
     active = state.active_session
@@ -683,8 +670,6 @@ def evaluate_completion_gate(state: ReviewState) -> CompletionGate:
         elif state.basis_token and active.get("analysis_basis_token") != state.basis_token:
             blockers.append(ReviewBlocker(code=BLOCKER_ANALYSIS_BASIS_CHANGED))
     elif state.completed_session is None:
-        # 既没有活动会话，也没有"当前代际上已完成"的会话：还没开始复核。
-        # 完成复核必须先有一个会话——"没有问题"不等于"人已经确认过"（§八十二）。
         blockers.append(ReviewBlocker(code=BLOCKER_REVIEW_NOT_STARTED))
 
     if state.analysis.job_uuid is None:
@@ -692,28 +677,7 @@ def evaluate_completion_gate(state: ReviewState) -> CompletionGate:
     elif not state.analysis.completed:
         blockers.append(ReviewBlocker(code=BLOCKER_ANALYSIS_NOT_COMPLETED))
 
-    if not _slot_identity_resolved(state.slot_row):
-        blockers.append(ReviewBlocker(code=BLOCKER_IDENTITY_UNRESOLVED))
-    if state.slot_row.get("caliber_conflict_candidate"):
-        blockers.append(ReviewBlocker(code=BLOCKER_CALIBER_CONFLICT))
-
     blockers.extend(_problem_blockers(state.problems, state.decisions))
-
-    if not state.coverage_available:
-        # "没有覆盖记录"与"覆盖完整"在数字上不能长得一样。
-        # WP3-B 起这里**也不许**用人工补核绕过：覆盖不可用意味着"没有账本
-        # 可表态"，只能回到分析侧修数据（任务书 §十二：禁止自动 not_applicable）。
-        blockers.append(ReviewBlocker(code=BLOCKER_COVERAGE_UNAVAILABLE))
-    else:
-        # WP3-B 之后："阻塞义务存在"本身不再直接卡死完成门禁，卡的是
-        # "存在**未处理**的阻塞义务"。人工在**当前复核会话**上逐条补核
-        # （verified_ok / verified_issue / not_applicable）即可放行；
-        # pending / 无记录 / 未知决定值继续阻塞。
-        unhandled = _unhandled_obligations(state)
-        if unhandled:
-            blockers.append(
-                ReviewBlocker(code=BLOCKER_BLOCKING_OBLIGATIONS, count=len(unhandled))
-            )
 
     return CompletionGate(can_complete=not blockers, blockers=blockers)
 
@@ -1315,6 +1279,30 @@ async def complete_review(
             # 当前代际上已完成：幂等返回。**不**新建第二条完成记录、不新增审计。
             outcome = _mutation_data(state, state.completed_session, gate_override=True)
         else:
+            if active is None and evaluate_start_gate(state).can_complete:
+                await _invalidate_stale_sessions(conn, state, effects=effects, actor=actor)
+                created = await _insert_session_resilient(
+                    conn, state, effects=effects, actor=actor
+                )
+                if created is not None:
+                    state.active_session = created
+                    active = created
+                    effects.audits.append(
+                        _audit_event(
+                            actor,
+                            "review.start",
+                            "success",
+                            state,
+                            review_session_id=str(created.get("review_session_id") or ""),
+                        )
+                    )
+                else:
+                    existing = await review_session_store.get_active_session(
+                        conn, state.slot_id
+                    )
+                    if existing is not None:
+                        state.active_session = existing
+                        active = existing
             gate = evaluate_completion_gate(state)
             if not gate.can_complete:
                 # 把"为什么不能完成"原样回给前端：409 本身不是业务原因。

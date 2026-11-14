@@ -282,7 +282,6 @@ export function UploadCenterPage() {
     (aiOptions.capabilities !== null || Boolean(aiOptions.error)) &&
     entries.length > 0 &&
     uploadLimitViolations.size === 0 &&
-    !hasUnresolvedConfirmation &&
     effectiveEntries.every((entry) => entry.status !== "pending_preflight" && entry.status !== "failed") &&
     (mode === "basic" || attributionValidation.isComplete);
 
@@ -590,14 +589,13 @@ export function UploadCenterPage() {
             className="rounded-md border border-warning-200 bg-warning-50 px-4 py-3 text-xs text-warning-700"
             data-testid="gbc-upload-preanalysis-banner"
           >
-            <div className="font-semibold text-warning-700">分析前确认</div>
+            <div className="font-semibold text-warning-700">自动归档与元数据识别</div>
             <p className="mt-1">
-              系统不会把无法识别的年份写成默认值。低置信度元数据将在任务进入规则分析前要求人工确认。
+              系统将按 PDF 原件自动识别单位、年度、文种与口径并直接入队分析；若新单位尚未收录，提交时会自动建档绑定。
             </p>
             {hasUnresolvedConfirmation ? (
               <p className="mt-2 font-medium text-warning-700" data-testid="gbc-upload-confirmation-blocking-notice">
-                还有 {effectiveEntries.filter((entry) => entry.status === "needs_confirmation").length} 个文件需要确认后才能开始分析——
-                在左侧填写批量预设，或点击文件右侧「确认归属」或「补齐」逐个确认信息。
+                有 {effectiveEntries.filter((entry) => entry.status === "needs_confirmation").length} 个文件为新单位或待补齐项，可直接点击下方按钮提交由系统自动建档绑定，也可点击右侧「确认归属 / 补齐」微调。
               </p>
             ) : null}
           </div>

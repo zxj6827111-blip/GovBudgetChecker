@@ -1656,6 +1656,45 @@ async def update_issue(
     return next_state
 
 
+async def batch_update_issues(
+    user: Dict[str, Any],
+    *,
+    job_id: str,
+    issue_ids: Any,
+    status: str,
+    note: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Batch update decisions for multiple issues on one job under a single lock."""
+    normalized_job_id = str(job_id or "").strip()
+    normalized_ids = list(dict.fromkeys(_strings(issue_ids)))
+    normalized_status = str(status or "").strip()
+    if not normalized_job_id or not normalized_ids:
+        raise HTTPException(status_code=400, detail="job_id and issue_ids are required")
+    if normalized_status not in _VALID_STATUSES:
+        raise HTTPException(status_code=400, detail="invalid workflow status")
+
+    actor = str(user.get("username") or user.get("user_id") or user.get("id") or "").strip() or None
+    with _state_lock():
+        state = _read_state()
+        _require_issue_mutable(state, normalized_job_id)
+        _migrate_legacy_ignored_locked(state, normalized_job_id)
+        for issue_id in normalized_ids:
+            payload, issue, resolved_from = _job_issue_and_alias(user, normalized_job_id, issue_id)
+            record = _decision_record(
+                payload,
+                issue,
+                status=normalized_status,
+                actor=actor,
+                note=note,
+                resolved_from_issue_id=resolved_from,
+            )
+            _record_decision(state, record)
+        next_state = _write_state(state)
+        runtime.invalidate_job_summary_cache(normalized_job_id)
+    await persist_workflow_state(next_state)
+    return next_state
+
+
 async def create_package(
     user: Dict[str, Any],
     *,

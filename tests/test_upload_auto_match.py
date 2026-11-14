@@ -746,3 +746,41 @@ def test_upload_can_enqueue_analysis_in_same_request(tmp_path: Path, monkeypatch
             },
         )
     ]
+
+
+def test_unknown_org_upload_auto_registers_and_binds_without_blocking(
+    tmp_path: Path, monkeypatch
+):
+    """组织库未收录的新单位 PDF 上传时，直接按原件单位名建档绑定，不阻断入队。"""
+    _patch_runtime_state(tmp_path, monkeypatch)
+    client = TestClient(app)
+
+    monkeypatch.setattr(
+        runtime,
+        "extract_pdf_page_texts",
+        lambda path, max_pages=8: ["上海市普陀区新设测试中心\n2025年度单位预算"],
+    )
+    upload = client.post(
+        "/api/documents/upload",
+        headers=_headers(),
+        files={
+            "file": (
+                "上海市普陀区新设测试中心2025年预算公开.pdf",
+                io.BytesIO(_pdf_bytes()),
+                "application/pdf",
+            )
+        },
+    )
+    assert upload.status_code == 200, upload.text
+    payload = upload.json()
+    org_id = payload["organization_id"]
+    assert org_id
+    assert payload["organization_name"] == "上海市普陀区新设测试中心（本级）"
+    assert payload["organization_match_type"] == "auto_registered"
+
+    storage = runtime.require_org_storage()
+    created_org = storage.get_by_id(org_id)
+    assert created_org is not None
+    assert created_org.name == "上海市普陀区新设测试中心（本级）"
+    assert created_org.level == "unit"
+

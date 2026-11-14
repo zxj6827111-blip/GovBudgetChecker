@@ -88,12 +88,16 @@ def test_structured_next_action_beats_wording():
     assert not any("字段映射" in str(a.get("detail")) for a in ambiguities)
 
 
-def test_obligation_failure_statuses_block_gate():
+def test_obligation_failure_statuses_are_recorded_nonblocking():
     report = build_report_confirmation(_status())
     system = report["categories"]["system_incomplete"]
-    statuses = {s["reason"] for s in system}
-    assert "obligation_ai_not_run" in statuses
-    assert "obligation_execution_error" in statuses  # 非白名单状态同样受门禁
+    by_rule = {s["rule_id"]: s for s in system}
+    assert by_rule["OBL-AI"]["reason"] == "obligation_ai_not_run"
+    assert by_rule["OBL-AI"]["blocking"] is False
+    assert by_rule["OBL-UNKNOWN"]["reason"] == "obligation_execution_error"
+    assert by_rule["OBL-UNKNOWN"]["blocking"] is False
+    # Only the evidence_delivery_failed finding (issue-3) remains blocking.
+    assert report["gate"]["blocking_system_incomplete"] == 1
     assert report["gate"]["can_confirm_whole_report"] is False
 
 
@@ -124,11 +128,12 @@ def test_clean_report_allows_confirmed_only_scope():
     assert decision == {"allowed": True, "code": "OK"}
 
 
-def test_default_off_and_revision_binding():
+def test_default_on_and_explicit_disable_with_revision_binding():
     report = build_report_confirmation(_status())
-    decision = confirm_report_allowed(report, report["analysis_revision"])
+    assert report["confirm_report_enabled"] is True
+    disabled = build_report_confirmation(_status(), confirm_report_enabled=False)
+    decision = confirm_report_allowed(disabled, disabled["analysis_revision"])
     assert decision == {"allowed": False, "code": "CONFIRM_REPORT_DISABLED"}
-    # 版本漂移检查用干净门禁（系统未完成优先于版本比较，见 confirm_report_allowed）
     clean = _status()
     clean["result"]["rule_findings"] = [
         {"id": "issue-1", "rule_id": "V33-243", "severity": "high", "message": "x",
@@ -172,24 +177,25 @@ def test_nonblocking_ai_not_run_visible_but_not_blocking():
     assert [c["id"] for c in report["categories"]["confirmed_material_issues"]] == ["issue-1"]
 
 
-def test_blocking_obligation_still_blocks_even_with_clean_findings():
+def test_blocking_obligation_visible_as_nonblocking_with_clean_findings():
     status = _clean_with_instances([
         {"obligation_id": "OBL-TXT-T5", "status": "insufficient_data", "blocks_gate": True},
     ])
     report = build_report_confirmation(status, confirm_report_enabled=True)
-    assert report["gate"]["can_confirm_whole_report"] is False
-    assert report["gate"]["blocking_system_incomplete"] == 1
-    assert confirm_report_allowed(report, "rev-1")["code"] == "SYSTEM_INCOMPLETE"
+    assert report["gate"]["can_confirm_whole_report"] is True
+    assert report["gate"]["blocking_system_incomplete"] == 0
+    assert report["gate"]["nonblocking_system_incomplete"] == 1
+    assert confirm_report_allowed(report, "rev-1")["code"] == "OK"
 
 
-def test_legacy_instance_without_blocks_gate_is_conservative():
-    """旧快照缺 blocks_gate 字段：按阻塞处理，不因缺字段放行。"""
+def test_legacy_instance_without_blocks_gate_does_not_block():
+    """旧快照未完成义务放入非阻塞参考明细，允许人工确认报告。"""
     status = _clean_with_instances([
         {"obligation_id": "OBL-LEGACY", "status": "ai_not_run"},
     ])
     report = build_report_confirmation(status, confirm_report_enabled=True)
-    assert report["gate"]["can_confirm_whole_report"] is False
-    assert report["categories"]["system_incomplete"][0]["blocking"] is True
+    assert report["gate"]["can_confirm_whole_report"] is True
+    assert report["categories"]["system_incomplete"][0]["blocking"] is False
 
 
 def test_concurrent_same_key_append_leaves_single_record(monkeypatch, tmp_path):

@@ -482,7 +482,7 @@ async def run_structured_ingest(
             )
             ps_sync_summary = {
                 "status": "error",
-                "error": str(exc),
+                "error": f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__,
             }
         local_org_backfill = None if (candidate_only or analysis_revision) else _backfill_local_organization_catalog(
             org_name=org_name,
@@ -552,10 +552,11 @@ async def run_structured_ingest(
             await storage_tx.rollback()
             storage_tx = None
         logger.exception("Structured ingest failed for job %s", job_id)
+        err_desc = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
         error_payload: Dict[str, Any] = {
             "job_id": job_id,
             "status": "error",
-            "error": str(exc),
+            "error": err_desc,
             "ingest_stage": ingest_stage,
             "unified_storage": {"status": "error", "failed_stage": ingest_stage,
                                 "parse_run_id": parse_run_id},
@@ -565,7 +566,7 @@ async def run_structured_ingest(
                     "id": f"{job_id}:structured_ingest_error",
                     "type": "ingest_error",
                     "severity": "error",
-                    "message": str(exc),
+                    "message": err_desc,
                     "recommended_action": "check_database_and_pdf_parser",
                 }
             ],

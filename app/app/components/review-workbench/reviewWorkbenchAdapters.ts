@@ -334,8 +334,9 @@ export function problemReviewKind(problem: Problem): "issue" | "tip" | "manual_r
 }
 
 export function isFormalProblem(problem: Problem): boolean {
-  // 补核义务由服务端完成门禁逐条要求人工结论，与结构化待复核项一样恒为必须处理。
-  if (problem.source === "structured_ingest" || problem.source === "obligation") return true;
+  // 「未能自动核对」移入参考区，不阻断完成复核。
+  if (problem.source === "obligation") return false;
+  if (problem.source === "structured_ingest") return true;
   // Match backend evidence_guard.is_formal_finding: source identity affects
   // whether the row is a verified issue or a review candidate, but a human
   // decision still participates in the workflow unless evidence was explicitly

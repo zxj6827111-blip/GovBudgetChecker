@@ -392,3 +392,23 @@ def test_target_disclosed_empty_requires_original_disclosure():
     assert _target_disclosed_empty(doc, "FIN_08_gov_fund") is True
     doc.page_texts = ["政府性基金预算财政拨款收入支出决算表"]
     assert _target_disclosed_empty(doc, "FIN_08_gov_fund") is False
+
+
+def test_rejoin_wrapped_decimals_and_fin04_paired_headers():
+    from src.services.fiscal_column_identity import canonical_column_mappings
+    from src.services.pdf_page_extract import _rejoin_wrapped_decimals
+
+    assert _rejoin_wrapped_decimals("收入合计4,235.8\n2万元") == "收入合计4,235.82万元"
+    assert _rejoin_wrapped_decimals("本年支出100.\n05万元") == "本年支出100.05万元"
+
+    table = grid([
+        ["项目", "财政拨款收入", "项目", "财政拨款支出", "", "", ""],
+        ["", "预算数", "", "合计", "一般公共预算", "政府性基金", "国有资本经营"],
+        ["财政拨款收入合计", "100.00", "支出合计", "100.00", "100.00", "0.00", "0.00"],
+    ], [0, 30, 60, 90, 120, 150, 180, 210], uid="fin04-paired", page=1,
+        code="FIN_04_fiscal_grant_total", headers=2, confidence=.99, unit="万元")
+    rule = SimpleNamespace(code="FIN_04_fiscal_grant_total", measure_aliases={}, leaf_aliases={})
+    mapped = {m["canonical_measure"]: m["source_col_idx"] for m in canonical_column_mappings(table, rule)}
+    assert mapped["income_actual"] == 1
+    assert mapped["expenditure_actual"] == 3
+

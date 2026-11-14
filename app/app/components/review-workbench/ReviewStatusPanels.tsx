@@ -148,11 +148,8 @@ export function ReviewInfoPanel({
     if (focusSection === "ai") aiSectionRef.current?.scrollIntoView({ block: "start" });
   }, [focusSection]);
   const handled = progress.confirmed + progress.ignored + progress.inPackage;
-  const obligationHandled = progress.obligationTotal !== null && progress.obligationPending !== null
-    ? progress.obligationTotal - progress.obligationPending : null;
-  // 补核已并入「必须处理」：标题给合计，括号里再分问题与未能自动核对两类。
-  const requiredHandled = handled + (obligationHandled ?? 0);
-  const requiredAll = progress.requiredTotal + (progress.obligationTotal ?? 0);
+  const requiredHandled = handled;
+  const requiredAll = progress.requiredTotal;
   return (
     <div
       className="absolute inset-0 z-40 flex flex-col bg-white"
@@ -169,7 +166,7 @@ export function ReviewInfoPanel({
         <section className={SECTION} data-testid="gbc-review-info-progress">
           <h3 className={HEADING}>
             人工复核：必须处理 {requiredHandled}/{requiredAll}
-            {obligationHandled !== null && progress.obligationTotal ? `（问题 ${handled}/${progress.requiredTotal} · 未能自动核对 ${obligationHandled}/${progress.obligationTotal}）` : ""}
+            {progress.obligationTotal ? `（另有 ${progress.obligationTotal} 项未能自动核对在参考区）` : ""}
           </h3>
           <p className="mb-2 text-xs text-slate-600" data-testid="gbc-review-status-bar-counts">
             正式问题：已确认 {progress.confirmed} · 已忽略 {progress.ignored} · 已进整改包 {progress.inPackage} · 待复核 {progress.needsReview} · 待处理 {progress.pending}
@@ -185,7 +182,7 @@ export function ReviewInfoPanel({
           ) : (
             <p className="mb-2 text-xs text-success-700">服务端完成条件已满足。</p>
           )}
-          <p className="mb-2 text-xs text-slate-500">问题确认，或记录理由后忽略；未能自动核对的检查选核对无误、确认有问题或不适用，都计为已处理。参考条目不影响完成复核。</p>
+          <p className="mb-2 text-xs text-slate-500">系统检出的正式问题需确认（或记录理由后忽略）；未能自动核对与参考条目已移至「参考」区，不阻断完成复核。</p>
           <div className="flex flex-wrap gap-2">
             <button type="button" className={BUTTON} onClick={onShowRequired}>查看必须处理</button>
           </div>
@@ -195,7 +192,7 @@ export function ReviewInfoPanel({
           {progress.obligationPending === null ? (
             <p>当前复核上下文没有提供检查覆盖信息。</p>
           ) : progress.obligationPending > 0 ? (
-            <p>有 {progress.obligationPending} 项检查系统未能自动核对，已列在「必须处理」的“未能自动核对”里，逐项对照原文选择结论即可。</p>
+            <p>有 {progress.obligationPending} 项检查系统未能自动核对，已移至「参考」区仅供核查参考，不阻断完成复核。</p>
           ) : (
             <p>未能自动核对的检查已全部处理。</p>
           )}
@@ -204,7 +201,7 @@ export function ReviewInfoPanel({
         <section ref={aiSectionRef} data-testid="gbc-review-info-ai">
           <h3 className={HEADING}>AI 文字检查</h3>
           {aiScope ? (
-            <AiScopeBanner scope={aiScope} testId="gbc-review-ai-scope-panel" onRecheck={aiScope.needsRecheck ? onRecheck : undefined} recheckLabel="前往任务页补检" />
+            <AiScopeBanner scope={aiScope} testId="gbc-review-ai-scope-panel" onRecheck={aiScope.needsRecheck ? onRecheck : undefined} recheckLabel="重新分析补检" />
           ) : <p>本次分析没有记录 AI 文字检查的执行情况。</p>}
           {aiScope?.tone === "success" && aiScope.conclusionScope === "incomplete_scope" ? (
             <p className="mt-2 text-xs text-warning-700" data-testid="gbc-review-ai-scope-incomplete-note">

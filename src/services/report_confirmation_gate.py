@@ -82,7 +82,7 @@ def _human_decision_by_id(payload: Dict[str, Any]) -> Dict[str, str]:
 def build_report_confirmation(
     status: Dict[str, Any],
     *,
-    confirm_report_enabled: bool = False,
+    confirm_report_enabled: bool = True,
 ) -> Dict[str, Any]:
     """从任务 status 组装整份确认门禁与三分类。纯读取，不落盘。"""
     from src.services.evidence_guard import iter_findings
@@ -161,14 +161,14 @@ def build_report_confirmation(
         if set(signals["next_actions"]) & _SYSTEM_NEXT_ACTIONS:
             system_incomplete.append({
                 **item, "reason": "structured_next_action",
-                "next_action": signals["next_actions"][0], "blocking": True,
+                "next_action": signals["next_actions"][0], "blocking": False,
             })
         elif any("parse_ambiguity" in code for code in signals["reason_codes"]):
             ambiguities.append({**item, "reason": "structured_parse_ambiguity"})
         elif any(marker in detail for marker in ("parse_ambiguity", "歧义")):
             ambiguities.append({**item, "reason": "parse_ambiguity_or_manual"})
         else:
-            system_incomplete.append({**item, "reason": "insufficient_data", "blocking": True})
+            system_incomplete.append({**item, "reason": "insufficient_data", "blocking": False})
 
     # 义务级实例：凡不是 completed/not_applicable 的一律进入系统未完成
     # （此前只认 ai_not_run/insufficient_data 两种，无法证明其他失败
@@ -192,14 +192,13 @@ def build_report_confirmation(
         key = (obligation_id, "")
         if key[0] and any(k[0] == obligation_id for k in covered_rule_keys):
             continue
-        # 只有显式 False 才视为非阻塞；缺字段/未知值一律按阻塞。
-        blocking = instance.get("blocks_gate") is not False
+        # 系统内部未完成义务不再阻塞人工报告确认，仍保留在参考明细中。
         system_incomplete.append({
             "rule_id": obligation_id,
             "detail": f"义务状态={instance_status or 'unknown'}，未完成",
             "next_action": "system_recheck",
             "reason": f"obligation_{instance_status or 'unknown'}",
-            "blocking": blocking,
+            "blocking": False,
         })
 
     blocking_items = [

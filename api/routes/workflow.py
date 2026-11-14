@@ -20,6 +20,23 @@ async def get_workflow(request: Request, job_id: str | None = Query(default=None
     return await run_in_threadpool(issue_workflow_store.get_visible_state, user, job_id=job_id)
 
 
+def _sync_job_review_report(normalized_job_id: str) -> None:
+    status_payload = runtime.get_job_status_payload(normalized_job_id, apply_issue_filters=False)
+    status_payload["human_decisions"] = issue_workflow_store.project_job_issue_decisions(
+        normalized_job_id, status_payload
+    )
+    from src.schemas.review_report import build_review_report
+
+    status_payload["review_report"] = build_review_report(status_payload)
+    runtime.merge_job_status(
+        runtime.UPLOAD_ROOT / normalized_job_id,
+        {
+            "human_decisions": status_payload["human_decisions"],
+            "review_report": status_payload["review_report"],
+        },
+    )
+
+
 @router.post("/api/workflow")
 async def mutate_workflow(request: Request):
     _, _, user = require_login(request)
@@ -40,24 +57,8 @@ async def mutate_workflow(request: Request):
             status=str(body.get("status") or ""),
             note=body.get("note") if isinstance(body.get("note"), str) else None,
         )
-        # Keep the live canonical report in step with the just-persisted decision.
-        # Historical analysis snapshots remain immutable; report downloads project
-        # the same decision only when its revision/identity still matches.
         normalized_job_id = str(body.get("job_id") or "").strip()
-        status_payload = runtime.get_job_status_payload(normalized_job_id, apply_issue_filters=False)
-        status_payload["human_decisions"] = issue_workflow_store.project_job_issue_decisions(
-            normalized_job_id, status_payload
-        )
-        from src.schemas.review_report import build_review_report
-
-        status_payload["review_report"] = build_review_report(status_payload)
-        runtime.merge_job_status(
-            runtime.UPLOAD_ROOT / normalized_job_id,
-            {
-                "human_decisions": status_payload["human_decisions"],
-                "review_report": status_payload["review_report"],
-            },
-        )
+        _sync_job_review_report(normalized_job_id)
         append_audit_event(
             action="workflow.issue.update",
             actor=actor,
@@ -66,9 +67,27 @@ async def mutate_workflow(request: Request):
             resource_id=f"{body.get('job_id') or ''}::{body.get('issue_id') or ''}",
             details={"status": body.get("status")},
         )
-        # update_issue() 返回的是全局工作流状态；不能把其他组织/任务的
-        # 问题标题、备注通过 POST 响应泄露给普通用户。返回已按权限过滤的
-        # 本任务视图，前端也只消费本任务。
+        return issue_workflow_store.get_visible_state(user, job_id=normalized_job_id)
+
+    if action == "batch_update_issues":
+        normalized_job_id = str(body.get("job_id") or "").strip()
+        issue_ids = body.get("issue_ids")
+        _state = await issue_workflow_store.batch_update_issues(
+            user,
+            job_id=normalized_job_id,
+            issue_ids=issue_ids,
+            status=str(body.get("status") or ""),
+            note=body.get("note") if isinstance(body.get("note"), str) else None,
+        )
+        _sync_job_review_report(normalized_job_id)
+        append_audit_event(
+            action="workflow.issue.batch_update",
+            actor=actor,
+            result="success",
+            resource_type="issue_workflow",
+            resource_id=normalized_job_id,
+            details={"status": body.get("status"), "count": len(issue_ids or []) if isinstance(issue_ids, list) else 0},
+        )
         return issue_workflow_store.get_visible_state(user, job_id=normalized_job_id)
 
     if action == "create_package":

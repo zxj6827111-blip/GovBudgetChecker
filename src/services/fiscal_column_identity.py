@@ -36,7 +36,9 @@ def header_paths(fragment):
                 continue
             text = str(row[col] or "") if col < len(row) else ""
             own = cells.get((row_idx, col))
-            if not text and center is not None and (own is None or own.bbox is None):
+            if not text and center is not None and (
+                own is None or own.bbox is None or not str(own.raw_text or "").strip()
+            ):
                 spanning = [cell for cell in fragment.cells
                             if cell.row_idx == row_idx and cell.bbox and cell.raw_text
                             and cell.bbox[0] < center < cell.bbox[2]]
@@ -137,15 +139,40 @@ def canonical_column_mappings(fragment, rule):
 
     # Paired summary ledgers have distinct literal income/expenditure sides.
     if rule.code in {"FIN_01_income_expenditure_total", "FIN_04_fiscal_grant_total"}:
+        # 并列收支总表的顶层合并表头（如“收入”/“支出”、“财政拨款收入”/“财政拨款支出”）
+        # 在 pdfplumber 切分单元格后常只落在左侧第一列；沿顶行向右侧非维度列传递，碰到下一组表头或维度列即停。
+        paired_paths = [list(path) for path in paths]
+        current_group = ""
+        for col, path in enumerate(paired_paths):
+            top = path[0] if path else ""
+            if col in dimensions:
+                current_group = ""
+                continue
+            if top.startswith(("收入", "支出", "财政拨款收入", "财政拨款支出", "本年收入", "本年支出")):
+                current_group = top
+            elif top:
+                current_group = ""
+            elif current_group and path and any(path):
+                path[0] = current_group
+
         result = []
-        for col, path in enumerate(paths):
+        first_expenditure_col = next(
+            (
+                col
+                for col, path in enumerate(paired_paths)
+                if col not in dimensions
+                and (any(part.startswith("支出") or "财政拨款支出" in part for part in path) or "合计" in path)
+            ),
+            len(paired_paths),
+        )
+        for col, path in enumerate(paired_paths):
             if col in dimensions:
                 continue
-            if any(part.startswith("收入") for part in path) and any("决算数" in part for part in path):
+            if any(part.startswith("收入") or "财政拨款收入" in part for part in path) and any("决算数" in part for part in path):
                 result.append(mapping(col, "income_actual"))
-            elif any(part.startswith("支出") for part in path) and "合计" in path:
+            elif any(part.startswith("支出") or "财政拨款支出" in part for part in path) and "合计" in path:
                 result.append(mapping(col, "expenditure_actual"))
-            elif any(part.startswith("支出") for part in path) and any(part == "决算数" for part in path):
+            elif any(part.startswith("支出") or "财政拨款支出" in part for part in path) and any(part == "决算数" for part in path):
                 result.append(mapping(col, "expenditure_actual"))
             # 预算版财政拨款收支总表：父表头是「财政拨款收入 / 财政拨款支出」，
             # 收入侧阶段词是「预算数」。只认这两个完整父表头，不放宽决算版判据。
@@ -153,6 +180,13 @@ def canonical_column_mappings(fragment, rule):
                 result.append(mapping(col, "income_actual"))
             elif "财政拨款支出" in path and "合计" in path:
                 result.append(mapping(col, "expenditure_actual"))
+            elif (
+                rule.code == "FIN_04_fiscal_grant_total"
+                and col < first_expenditure_col
+                and any(part == "决算数" for part in path)
+                and not any("支出" in part for part in path)
+            ):
+                result.append(mapping(col, "income_actual"))
             elif (rule.code == "FIN_04_fiscal_grant_total" and path[-1:] == ["合计"]
                   and not any("收入" in part for part in path)):
                 # 横向过宽的总表会把「财政拨款支出」父表头挤到下一页，
