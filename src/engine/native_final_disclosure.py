@@ -1558,10 +1558,11 @@ def _amount_from_derived(rule, doc, text, begin, end, amount, unit, derived, key
                         evidence_ids=evidence)]
 
 
+# 说明正文经 NFKC 归一后括号为半角；层级标签必须同时接受全角/半角写法。
 _FUND_HIERARCHY_LABEL = re.compile(
-    r'(?P<klass>[\u4e00-\u9fff（）()0-9]{2,60}（类）)'
-    r'(?P<kuan>[\u4e00-\u9fff（）()0-9]{2,60}（款）)'
-    r'(?P<xiang>[\u4e00-\u9fff（）()0-9]{2,60}（项）)')
+    r'(?P<klass>[\u4e00-\u9fff（）()0-9]{2,60}[（(]类[）)])'
+    r'(?P<kuan>[\u4e00-\u9fff（）()0-9]{2,60}[（(]款[）)])'
+    r'(?P<xiang>[\u4e00-\u9fff（）()0-9]{2,60}[（(]项[）)])')
 
 
 def _derive_fund_total_from_bound_items(rule, doc, text, begin, end, title, item_claims):
@@ -1624,9 +1625,9 @@ def _derive_fund_total_from_bound_items(rule, doc, text, begin, end, title, item
         guard_error = _guard(doc, text, begin, label.start(), claim.end())
         if guard_error:
             return abort(f'声明上下文守卫未通过：{guard_error}')
-        klass = literal(label.group('klass').replace('（类）', ''))
-        kuan = literal(label.group('kuan').replace('（款）', ''))
-        xiang = literal(label.group('xiang').replace('（项）', ''))
+        klass = literal(re.sub(r'[（(]类[）)]$', '', label.group('klass')))
+        kuan = literal(re.sub(r'[（(]款[）)]$', '', label.group('kuan')))
+        xiang = literal(re.sub(r'[（(]项[）)]$', '', label.group('xiang')))
         item, match_error = _txt_fund_match_item(
             table_items, hierarchy, klass, kuan, xiang)
         if item is None:
