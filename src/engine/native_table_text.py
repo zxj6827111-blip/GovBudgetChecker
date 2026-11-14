@@ -251,14 +251,27 @@ def check_fiscal_grant_total(rule, doc):
     if not ranges:
         return finish(rule, [], ['未定位到说明四财政拨款总体情况原文范围'])
     title, begin, end = ranges[0]
+    # R5：说明四允许「收入总计/支出总计」分开叙述（环境监测站实样：分别写
+    # 财政拨款收入总计 1850.05 万元、支出总计 1850.05 万元），不要求原文
+    # 必须使用合并短语「收入支出总计」。合并短语与单独「支出总计」都对
+    # 支出侧操作数；单独「收入总计」对收入侧操作数（各自的原表列身份）。
     pattern = re.compile(rf'(?:财政拨款)?(?:收入支出|收支)(?:总计|合计|总额)'
                          rf'(?:为|共计|是)?(?P<amount>{_NUMBER})(?P<unit>{_UNIT})')
+    income_pattern = re.compile(rf'财政拨款收入(?:总计|合计|总额)'
+                                rf'(?:为|共计|是)?(?P<amount>{_NUMBER})(?P<unit>{_UNIT})')
+    expenditure_pattern = re.compile(rf'(?:财政拨款)?支出(?:总计|合计|总额)'
+                                     rf'(?:为|共计|是)?(?P<amount>{_NUMBER})(?P<unit>{_UNIT})')
     claims = list(pattern.finditer(text.compact, begin, end))
+    combined_spans = {(claim.start(), claim.end()) for claim in claims}
+    income_claims = [claim for claim in income_pattern.finditer(text.compact, begin, end)
+                     if not any(lo <= claim.start() < hi for lo, hi in combined_spans)]
+    expenditure_claims = [claim for claim in expenditure_pattern.finditer(text.compact, begin, end)
+                          if not any(lo <= claim.start() < hi for lo, hi in combined_spans)]
     issues, unresolved = [], []
-    if not claims:
+    if not claims and not expenditure_claims:
         return finish(rule, [], ['说明四未披露可绑定的财政拨款收支总计金额及单位'])
     fact, error = _pick(doc, facts, 'expenditure_actual', _NAMES['total'])
-    for claim in claims:
+    for claim in claims + expenditure_claims:
         key = f'grant:text:total:{claim.start()}'
         rejection = context_rejection(doc, text.compact, claim.start(), claim.end())
         invalid = error or (record_context_rejection(doc, text, claim.start(), claim.end(), rejection)
@@ -271,6 +284,21 @@ def check_fiscal_grant_total(rule, doc):
         issues.extend(compare(rule, doc, text, claim.start(), claim.end(),
                       _wan(claim['amount'], claim['unit']), fact, key,
                       '说明4↔T4财政拨款总计', title))
+    for claim in income_claims:
+        key = f'grant:text:income_total:{claim.start()}'
+        income_fact, income_error = _pick(doc, facts, 'income_actual', _NAMES['total'])
+        rejection = context_rejection(doc, text.compact, claim.start(), claim.end())
+        invalid = (income_error or
+                   (record_context_rejection(doc, text, claim.start(), claim.end(), rejection)
+                    if rejection else None))
+        if invalid:
+            unresolved.append(invalid)
+            receipt(rule, doc, key, [income_fact] if income_fact else [], status='insufficient_data',
+                    formula='说明四财政拨款收入总计 = T4收入总计', reason=invalid)
+            continue
+        issues.extend(compare(rule, doc, text, claim.start(), claim.end(),
+                      _wan(claim['amount'], claim['unit']), income_fact, key,
+                      '说明4↔T4财政拨款收入总计', title))
     return finish(rule, issues, unresolved)
 
 

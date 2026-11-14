@@ -240,9 +240,12 @@ export function UploadCenterPage() {
     : presets.organizationId;
   const orgValidationInFlightRef = useRef<Record<string, string>>({});
   useEffect(() => {
-    if (!effectivePresetOrgId) {
-      return;
-    }
+    // R6：按每个文件的**有效选择**（单文件人工覆盖优先，其次批量预设）确定
+    // 复核目标——没有批量预设时，单文件人工选择同样必须带 selected_org_id
+    // 复核，不得因 effectivePresetOrgId 为空而跳过。校验中/失败/过期（目标
+    // 组织与已有复核结论不一致）都不能显示"校验通过"（适配层据
+    // selected_org_validation 与 organization_source 判定）；响应乱序由
+    // in-flight 去重 + 目标一致校验兜底，失败后目标未变仍会再次触发。
     for (const entry of entries) {
       const overrideOrg = manualOverrides[entry.id]?.organizationId;
       const targetOrg = overrideOrg || effectivePresetOrgId;

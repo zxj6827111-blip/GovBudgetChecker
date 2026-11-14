@@ -961,6 +961,21 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
                 continue  # 只用同文独立原表作交叉证据
             if _name(getattr(f, 'subject_name', '')) != requested:
                 continue
+            # R3：锚事实自身必须具备可信身份，才能充当"同文独立原件证据"——
+            # 主体/期间与文档一致、决算阶段、识别资格可作操作数、且带可回
+            # 原件的证据引用（物理页+源格）。不同表的金额资金口径可以不同，
+            # 但身份证明维度缺失的候选不参与锚定。
+            if getattr(f, 'org_name', None) != getattr(context, 'org_name', None):
+                continue
+            if getattr(f, 'fiscal_year', None) != getattr(context, 'fiscal_year', None):
+                continue
+            if getattr(f, 'budget_stage', None) not in (None, '决算'):
+                continue
+            if str(getattr(f, 'recognition_status', '') or '') in ('ambiguous', 'low_confidence', 'missing'):
+                continue
+            anchor_refs = list((getattr(f, 'extra_dims', None) or {}).get('evidence_refs') or [])
+            if not any(ref.get('physical_page') and ref.get('source_cell_id') for ref in anchor_refs):
+                continue  # 无原件可回溯证据的事实不能作身份证明
             anchors.setdefault(code, []).append(f)
         if len(anchors) != 1:
             return None
@@ -1033,6 +1048,15 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
                 'kuan_prefix_code': anomaly_code[:5],
                 'narrative_name': item['xiang'],
                 'table_name': fact.subject_name,
+                'table_code': getattr(fact, 'table_code', ''),
+                'table_page': sorted({ref.get('physical_page') for ref in
+                                      ((getattr(fact, 'extra_dims', None) or {}).get('evidence_refs') or [])
+                                      if ref.get('physical_page')}),
+                'source_refs': [ref for ref in
+                                ((getattr(fact, 'extra_dims', None) or {}).get('evidence_refs') or [])
+                                if ref.get('physical_page') and ref.get('source_cell_id')],
+                'fact_uid': fact.fact_uid,
+                'raw_code_bytes': str(getattr(fact, 'subject_code', '') or ''),
                 'basis': 'printed_kuan_prefix_plus_exact_unique_name',
             })
         return fact, error
@@ -1374,18 +1398,38 @@ def check_function_disclosures(rule, doc):
         anomaly_hint = next((a for a in aliases if isinstance(a, dict)
                              and a.get('role') == 'code_length_anomaly_binding'), None)
         if anomaly_hint and not error:
+            # R8：编码异常发现必须完成原件证据交付——异常编码原格（物理页/
+            # 源格标识/原字节）、对应事实标识与说明侧位置一并携带，接受独立
+            # 原件证据校验，不再是无页码的未验证提示。
+            source_refs = list(anomaly_hint.get('source_refs') or [])
+            table_pages = sorted({ref['page'] for ref in source_refs})
+            narrative_page = _name_difference_hint(doc, item)
+            location = {
+                'subject_code': anomaly_hint['subject_code'],
+                'kuan_prefix_code': anomaly_hint['kuan_prefix_code'],
+                'narrative_name': anomaly_hint['narrative_name'],
+                'table_name': anomaly_hint['table_name'],
+                'table_code': anomaly_hint.get('table_code') or '',
+                'name_kind': 'code_length_anomaly',
+                'table_refs': [
+                    {'role': '异常编码原格', 'page': ref.get('physical_page'),
+                     'source_cell_id': ref.get('source_cell_id'),
+                     'raw_code': anomaly_hint.get('raw_code_bytes'),
+                     'quote': f"{anomaly_hint.get('raw_code_bytes')} {anomaly_hint.get('table_name')}"}
+                    for ref in source_refs],
+                **({'page': table_pages[0], 'pages': table_pages} if table_pages else {}),
+                **({'page': narrative_page} if narrative_page and not table_pages else {}),
+            }
             issues.append(rule._issue(
-                f"说明第{_name_difference_hint(doc, item) or '?'}页项“{anomaly_hint['narrative_name']}”"
+                f"说明第{narrative_page or '?'}页项“{anomaly_hint['narrative_name']}”"
                 f"对应表内编码 {anomaly_hint['subject_code']}（位数异常，规范为7位）："
                 "按其5位款级前缀（同表已打印款级行）＋逐字项名唯一绑定金额；"
                 "请核对原件编码是否多字，修正编码后与本说明一致。",
-                {'subject_code': anomaly_hint['subject_code'],
-                 'kuan_prefix_code': anomaly_hint['kuan_prefix_code'],
-                 'narrative_name': anomaly_hint['narrative_name'],
-                 'table_name': anomaly_hint['table_name'],
-                 'name_kind': 'code_length_anomaly'},
+                location,
                 'warn',
-                evidence_text=str(anomaly_hint['table_name'] or ''),
+                evidence_text=(f"异常编码原字节：{anomaly_hint.get('raw_code_bytes')}；"
+                               f"表内名称：{anomaly_hint.get('table_name')}"),
+                fact_ids=[anomaly_hint.get('fact_uid')] if anomaly_hint.get('fact_uid') else [],
                 check_relation_id=f'{rule.code}:general:text:item:{item.start()}:code_anomaly',
             ))
         # 博物馆、图书馆等 are literal fiscal subjects, not publisher names.
@@ -1514,6 +1558,112 @@ def _amount_from_derived(rule, doc, text, begin, end, amount, unit, derived, key
                         evidence_ids=evidence)]
 
 
+_FUND_HIERARCHY_LABEL = re.compile(
+    r'(?P<klass>[\u4e00-\u9fff（）()0-9]{2,60}（类）)'
+    r'(?P<kuan>[\u4e00-\u9fff（）()0-9]{2,60}（款）)'
+    r'(?P<xiang>[\u4e00-\u9fff（）()0-9]{2,60}（项）)')
+
+
+def _derive_fund_total_from_bound_items(rule, doc, text, begin, end, title, item_claims):
+    """R2：说明逐项之和推导基金总额——只有身份与完备性可证时才推导。
+
+    每条"支出决算为 N 万元"声明必须：
+    1. 就近回溯到完整「X（类）Y（款）Z（项）」身份标签（相邻性证明）；
+    2. 通过上下文守卫（_guard）与期间锚（声明前缀/标签含异年即拒绝）；
+    3. 绑定到基金表内唯一项级行（类/款/项三级身份 + 表内唯一）。
+    绑定集合还须与表内"有可用金额的项级行集合"互相覆盖（完备互斥），
+    同对象重复叙述（同码）金额一致去重、不一致拒绝。任一前提不成立
+    返回 None 并把具体原因写进 insufficient_data 回执——绝不把部分披露、
+    跨期或跨主体金额推定成总额矛盾。
+    """
+    from .rules_v33 import _txt_fund_match_item
+    from .year_roles import foreign_period_years
+
+    def literal(value):
+        return re.sub(r'\s+', '', str(value or ''))
+
+    def abort(reason):
+        receipt(rule, doc, 'fund:text:total:derived_from_items', [], status='insufficient_data',
+                formula='derived narrative item sum == fund table total (万元)',
+                reason=reason)
+        return None
+
+    facts, reason = table_facts(doc, FUND)
+    if reason:
+        return abort(f'基金表事实不可用：{reason}')
+    item_facts = [f for f in facts
+                  if getattr(f, 'indicator', '') == 'total_actual'
+                  and re.fullmatch(r'\d{7}', str(getattr(f, 'subject_code', '') or ''))
+                  and f.normalized_value is not None]
+    table_items = [{'code': str(f.subject_code), 'name': literal(f.subject_name),
+                    'amount': f.normalized_value} for f in item_facts]
+    if not table_items:
+        return abort('基金表未识别到带金额的项级行，无从证明说明集合完备')
+    hierarchy = {}
+    for f in facts:
+        code = str(getattr(f, 'subject_code', '') or '')
+        name = literal(getattr(f, 'subject_name', ''))
+        if code.isdigit() and len(code) in (3, 5, 7) and name:
+            hierarchy.setdefault(code, name)
+
+    bound_by_code: dict = {}
+    for claim in item_claims:
+        head = text.compact[max(begin, claim.start() - 400):claim.start()]
+        labels = list(_FUND_HIERARCHY_LABEL.finditer(head))
+        if not labels:
+            return abort('存在未伴随完整「（类）（款）（项）」身份标签的支出决算声明，'
+                         '无法证明其业务对象，不参与总额推导')
+        label = labels[-1]
+        # 期间锚：声明前缀或身份标签出现异年（如 2024年度…）→ 拒绝该声明。
+        context_head = text.compact[max(begin, label.start() - 60):claim.end()]
+        fiscal_year = getattr(getattr(doc, 'fact_context', None), 'fiscal_year', None)
+        foreign = sorted({token.year for token in foreign_period_years(context_head, fiscal_year)}
+                         ) if fiscal_year else []
+        if foreign:
+            return abort(f'声明或其身份标签携带异年 {foreign}，期间锚不成立，不参与总额推导')
+        guard_error = _guard(doc, text, begin, label.start(), claim.end())
+        if guard_error:
+            return abort(f'声明上下文守卫未通过：{guard_error}')
+        klass = literal(label.group('klass').replace('（类）', ''))
+        kuan = literal(label.group('kuan').replace('（款）', ''))
+        xiang = literal(label.group('xiang').replace('（项）', ''))
+        item, match_error = _txt_fund_match_item(
+            table_items, hierarchy, klass, kuan, xiang)
+        if item is None:
+            return abort(f'说明项「{klass}（类）{kuan}（款）{xiang}（项）」未能唯一绑定到'
+                         f'基金表项级行：{match_error}，不参与总额推导')
+        amount = _wan(claim.group('amount'), claim.group('unit'))
+        previous = bound_by_code.get(item['code'])
+        if previous is None:
+            bound_by_code[item['code']] = (amount, claim)
+        elif previous[0] != amount:
+            return abort(f'同一说明项 {item["code"]} 被重复叙述为不同金额'
+                         f'（{previous[0]} / {amount}），声明集合不自洽，不参与总额推导')
+
+    table_codes = {item['code'] for item in table_items}
+    uncovered = sorted(table_codes - set(bound_by_code))
+    if uncovered:
+        return abort(f'基金表存在未被说明列示的项级行 {uncovered}，列示集合不完备，'
+                     '不参与总额推导')
+    extra = sorted(set(bound_by_code) - table_codes)
+    if extra:
+        return abort(f'说明绑定到表外对象 {extra}，列示集合不互斥，不参与总额推导')
+
+    derived_value, operands, note = _fund_total_from_classes(doc, facts)
+    if derived_value is None:
+        return abort('基金表合计不可推导（类级行缺失或冲突），无从比对逐项之和')
+    item_sum = sum((amount for amount, _ in bound_by_code.values()), Decimal('0'))
+    ordered = sorted(bound_by_code.values(), key=lambda pair: pair[1].start())
+    key = 'fund:text:total:derived_from_items'
+    issues = _amount_from_derived(
+        rule, doc, text, ordered[0][1].start(), ordered[-1][1].end(),
+        str(item_sum), '万元', (derived_value, operands, note), key,
+        '政府性基金本年支出（逐项之和）', title,
+        derived_from='item_rows',
+        basis='说明逐项声明（经身份绑定且与表内项集合互斥完备）之和')
+    return issues
+
+
 def check_fund_totals(rule, doc):
     """政府性基金本年总收入、总支出：不使用结转或项目金额替代。"""
     text, ranges = sections(doc, lambda title: '政府性基金' in title and '收入支出决算情况说明' in title)
@@ -1537,29 +1687,22 @@ def check_fund_totals(rule, doc):
             receipt(rule, doc, 'fund:text:empty', [], status='not_applicable',
                     formula='explicit no government fund activity')
             return []
-        # D3/C-10：说明逐项列示（每项「支出决算为 N 万元」）而无总额句时，
-        # 总额按该节已列项决算数之和推导并与表内合计比对；推导依据写进
-        # formula，不冒充显式披露。逐项声明也不存在时保持取数不足（说明
-        # 读取范围已完整，总额句与逐项句均缺失属披露不完整，由上游义务
-        # 结构单独呈现）。
+        # D3/C-10（R2 收口）：说明逐项列示而无总额句时，只有证明"每条声明
+        # 绑定到表内唯一项级对象、主体/期间/单位锚成立、声明集合与表内项
+        # 集合互斥且完备、同对象重复叙述去重"之后，才允许以逐项之和推导
+        # 总额并与表内合计比对。任一前提不成立 → 保留具体未完成原因
+        # （fail-closed），不把部分披露或跨期/跨主体金额推定成总额矛盾。
         item_claims = list(_FUND_ITEM_DECISION.finditer(text.compact, begin, end))
         if item_claims:
-            facts, reason = table_facts(doc, FUND)
-            if not reason:
-                derived_value, operands, note = _fund_total_from_classes(doc, facts)
-                if derived_value is not None:
-                    item_sum = sum(
-                        (_wan(claim.group('amount'), claim.group('unit')) for claim in item_claims),
-                        Decimal('0'),
-                    )
-                    key = 'fund:text:total:derived_from_items'
-                    issues = _amount_from_derived(
-                        rule, doc, text, item_claims[0].start(), item_claims[-1].end(),
-                        str(item_sum), '万元', (derived_value, operands, note), key,
-                        '政府性基金本年支出（逐项之和）', title,
-                        derived_from='item_rows',
-                        basis='该节已列项支出决算数之和')
-                    return issues
+            derivation = _derive_fund_total_from_bound_items(
+                rule, doc, text, begin, end, title, item_claims)
+            if derivation is not None:
+                return derivation
+            # 推导前提不成立：原因已由 _derive_fund_total_from_bound_items
+            # 经 receipt/记录留痕，保持未完成而不是推定矛盾。
+            return finish(rule, [], [
+                '政府性基金说明未识别到可证明完备的逐项支出声明集合，'
+                '无法按「分项之和」推导总额；具体未完成原因见回执'])
         return finish(rule, [], ['政府性基金说明未识别到明确的本年总收入或总支出金额'])
     facts, reason = table_facts(doc, FUND)
     if reason:

@@ -23,6 +23,9 @@ export interface PreflightMatchCandidate {
   level: string;
   confidence: number;
   organization_path?: string;
+  /** R6：current 是否来自人工/批量覆盖（区别于后端自动绑定）——
+   *  人工来源在拿到一致的复核结论前不得显示"校验通过"。 */
+  organization_source?: string;
 }
 
 export interface PreflightResponseLike {
@@ -71,6 +74,15 @@ export function derivePreflightStatus(response: PreflightResponseLike | null | u
   // 共用同一判断（后端 _organization_binding_conflict），冲突信息由带
   // selected_org_id 的复核预检带回。
   if (response.selected_org_validation?.ok === false) {
+    return "needs_confirmation";
+  }
+  // R6：人工/批量补齐的组织在拿到与本次选择一致的复核结论之前，不得显示
+  // "校验通过"（复核请求可能仍在途、已失败或尚未触发）；后端自动绑定的
+  // current 无此标记，不受影响。
+  const organizationSource = String((response.current as { organization_source?: string } | null | undefined)
+    ?.organization_source ?? "");
+  if (organizationSource === "manual_override"
+    && response.selected_org_validation?.selected_org_id !== response.current?.organization_id) {
     return "needs_confirmation";
   }
   return "passed";
@@ -197,7 +209,10 @@ export function applyManualConfirmationOverride(
       // 人工选择视为完全确认，置信度记为 1——这与手动关联组织（associate 接口）
       // 的既有语义一致：人工选择不再是"匹配出来的猜测"，是已确认事实。
       confidence: 1,
-    };
+      // R6：标记该 current 来自人工覆盖——在拿到与本次选择一致的复核结论前，
+      // derivePreflightStatus 不得显示"校验通过"（needs_confirmation）。
+      organization_source: "manual_override",
+    } as PreflightMatchCandidate;
     // 机构归属整改：换选组织后，旧组织的复核结论不再适用——只保留与本次
     // 选择一致的 selected_org_validation，其余丢弃，避免把上一个组织的
     // 冲突/通过误挂在新选择上；新组织的复核由复核预检带回。

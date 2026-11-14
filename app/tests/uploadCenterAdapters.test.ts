@@ -223,12 +223,24 @@ assert.equal(afterOverride.doc_type, "dept_final", "缺失的文档类型必须�
 assert.equal(afterOverride.current?.organization_id, "org-9", "缺失的组织必须被覆盖值补齐");
 assert.equal(afterOverride.current?.confidence, 1, "人工选择视为完全确认，置信度记为 1");
 
-// 补齐后必须能通过 derivePreflightStatus 重新判定为 passed（状态转换真实生效，
-// 不是前端单方面改一个标记而后端仍收到空值）——这是"反例：补齐后必须能提交"的核心。
+// R6（Codex 独立审核 2026-11-13）：人工补齐的组织必须经后端复核（与提交共判）
+// 之后才能显示"校验通过"——补齐后立即 passed 的旧行为正是 R6 判定的前后端
+// 状态分裂，此处期望从 passed 更新为 needs_confirmation（复核在途/未触发）。
+// "闸门死路"由上传中心的自动复核 effect 解决：复核通过后状态转为 passed，
+// 真实冲突则显示封面机构与所选机构的冲突原因，不再是无法收敛的死门。
 assert.equal(
   derivePreflightStatus(afterOverride),
+  "needs_confirmation",
+  "R6: 人工补齐组织未经复核（validation=null）不得立即 passed；复核由页面 effect 自动触发",
+);
+const afterValidation = {
+  ...afterOverride,
+  selected_org_validation: { ok: true, selected_org_id: "org-9", selected_org_name: "上海市普陀区财政局" },
+};
+assert.equal(
+  derivePreflightStatus(afterValidation),
   "passed",
-  "REGRESSION: 补齐全部缺失字段后，derivePreflightStatus 必须重新判定为 passed，否则闸门变成死路",
+  "R6: 复核结论与本次人工选择一致且 ok=true → passed（闸门不是死路）",
 );
 
 // 反例：只补了一部分缺失字段时仍应是 needs_confirmation（不能因为补了一项就整体放行）
@@ -260,7 +272,13 @@ const pendingScope = applyBatchConfirmationOverride(ambiguousScope, presetDepart
 assert.equal(derivePreflightStatus(pendingScope), "needs_confirmation");
 assert.deepEqual(listPreflightConfirmationReasons(pendingScope), ["organization_scope_unconfirmed"]);
 const confirmedUnit = applyManualConfirmationOverride(pendingScope, { organizationId: "letters-unit", organizationName: "上海市信访办公室单位" });
-assert.equal(derivePreflightStatus(confirmedUnit), "passed");
+// R6：与上方同一语义——人工选择需经与本次选择一致的复核后才显示通过。
+assert.equal(derivePreflightStatus(confirmedUnit), "needs_confirmation");
+const confirmedUnitValidated = {
+  ...confirmedUnit,
+  selected_org_validation: { ok: true, selected_org_id: "letters-unit", selected_org_name: "上海市信访办公室单位" },
+};
+assert.equal(derivePreflightStatus(confirmedUnitValidated), "passed");
 assert.equal(confirmedUnit.current?.organization_id, "letters-unit");
 assert.equal(applyBatchConfirmationOverride({ report_year: 2024, doc_type: "dept_final", current: null }, presetDepartment).current?.organization_id, "letters-dept");
 
@@ -580,6 +598,80 @@ async function testMapWithConcurrency(): Promise<void> {
   assert.deepEqual([...started].sort((a, b) => a - b), [1, 2, 3, 4, 5]);
   assert.deepEqual(await mapWithConcurrency([], 3, async (value: number) => value), []);
 }
+
+// --- R6：人工补齐组织在复核结论一致前不得显示"校验通过" ---
+{
+  const raw: import("../app/components/workspace/uploadCenterAdapters").PreflightResponseLike = {
+    report_year: 2025,
+    doc_type: "dept_final",
+    current: null,
+    selected_org_validation: null,
+  };
+  const overridden = applyManualConfirmationOverride(raw, {
+    organizationId: "org-new",
+    organizationName: "新选单位",
+  });
+  assert.equal(
+    derivePreflightStatus(overridden),
+    "needs_confirmation",
+    "R6: 人工选择未经后端复核（validation=null）不得从 needs_confirmation 变 passed",
+  );
+  const validated: typeof raw = {
+    ...overridden,
+    selected_org_validation: {
+      ok: true,
+      selected_org_id: "org-new",
+      selected_org_name: "新选单位",
+    },
+  };
+  assert.equal(
+    derivePreflightStatus(validated),
+    "passed",
+    "R6: 复核结论与本次选择一致且 ok=true 才显示校验通过",
+  );
+  const conflicted: typeof raw = {
+    ...overridden,
+    selected_org_validation: {
+      ok: false,
+      code: "organization_cover_conflict",
+      selected_org_id: "org-new",
+      message: "封面机构与所选组织不一致",
+    },
+  };
+  assert.equal(
+    derivePreflightStatus(conflicted),
+    "needs_confirmation",
+    "R6: 复核冲突必须保持 needs_confirmation",
+  );
+  // 真实换选流程：页面 effect 检测目标组织变化后重新预检——新响应 current=null
+  // 且携带上一组织的旧复核结论；适配层必须在本次选择（org-other）与旧结论
+  // 不一致时丢弃旧结论，保持 needs_confirmation 等待新复核。
+  const staleBase = {
+    report_year: 2025,
+    doc_type: "dept_final",
+    current: null,
+    selected_org_validation: {
+      ok: true,
+      selected_org_id: "org-new",
+      selected_org_name: "新选单位",
+    },
+  } as typeof raw;
+  const stale = applyManualConfirmationOverride(staleBase, {
+    organizationId: "org-other",
+    organizationName: "改选单位",
+  });
+  assert.equal(
+    stale.selected_org_validation,
+    null,
+    "R6: 换选组织后旧复核结论必须被丢弃（与本选择不一致）",
+  );
+  assert.equal(
+    derivePreflightStatus(stale),
+    "needs_confirmation",
+    "R6: 换选组织后旧复核结论失效，保持 needs_confirmation 等待新复核",
+  );
+}
+
 
 testMapWithConcurrency()
   .then(() => console.log("uploadCenterAdapters.test.ts passed"))
