@@ -153,11 +153,20 @@ def decide_auto_binding(
         return defer("evidence_conflict", "明确的部门汇总与单位/本级原件证据冲突")
 
     eligible = [org for org in directory if _field(org, "level") in {"department", "unit"}]
+    # 「部门名（本级）」是本级口径对所属部门的指代（conflict 检查里同一规则的
+    # 种子侧）：原件写「甲局（本级）」时，把甲局部门纳入候选，走
+    # departments→related→verified 组合路径绑定其本级单位；不改变名称等价
+    # 语义——裸名与「（本级）」名仍不等价，绑定只发生在范围明确的前提下。
     matches = [
         org
         for org in eligible
         if any(
             identity_index.compare(item["text"], organization_name(org)).equivalent
+            or (
+                _field(org, "level") == "department"
+                and identity_name(item["text"])
+                == identity_name(organization_name(org)) + "(本级)"
+            )
             for item in evidence
         )
     ]
@@ -217,16 +226,24 @@ def decide_auto_binding(
     departments = [org for org in safe if _field(org, "level") == "department"]
     # 当原件只写部门裸名时，本级归属只能走明确范围＋已确认父子关系的组合路径。
     if departments:
-        related = [
-            org
-            for org in eligible
-            if _field(org, "level") == "unit"
-            and any(
-                identity_name(organization_name(org))
-                == identity_name(organization_name(dept)) + "(本级)"
-                for dept in departments
-            )
-        ]
+        related = []
+        for org in eligible:
+            if _field(org, "level") != "unit":
+                continue
+            unit_identity = identity_name(organization_name(org))
+            for dept in departments:
+                dept_identity = identity_name(organization_name(dept))
+                if unit_identity == dept_identity + "(本级)":
+                    # 既有路径：显式「（本级）」后缀单位（「本部」「本级」写法已归一）。
+                    related.append(org)
+                    break
+                if unit_identity == dept_identity and _field(org, "parent_id") == _field(dept, "id"):
+                    # 同名 unit 子记录：目录里部门与其本级单位完全同名、名称不带
+                    # 「（本级）」后缀（如普陀区民政局与其 code 002002 的同名单位）。
+                    # 须父子关系核实后才算本级候选；与「（本级）」后缀记录并存时
+                    # 走下方 tie 判定转人工，不择一猜测。
+                    related.append(org)
+                    break
         if scope == "unit":
             if not related:
                 return defer(

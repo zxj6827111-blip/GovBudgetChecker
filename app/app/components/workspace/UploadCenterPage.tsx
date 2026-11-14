@@ -38,7 +38,7 @@
 
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button, SectionTitle } from "@/components/ui";
 import { AIAnalysisOptions, useAIAnalysisOptions } from "@/components/AIAnalysisOptions";
@@ -151,10 +151,15 @@ export function UploadCenterPage() {
     };
   }, []);
 
-  const runPreflight = useCallback(async (entryId: string, file: File) => {
+  const runPreflight = useCallback(async (entryId: string, file: File, selectedOrgId?: string) => {
     try {
       const formData = new FormData();
       formData.set("file", file);
+      // 机构归属整改：带所选组织复核的预检与最终提交共用同一冲突判断，
+      // 有冲突时 selected_org_validation.ok=false，徽章不得显示"校验通过"。
+      if (selectedOrgId) {
+        formData.set("selected_org_id", selectedOrgId);
+      }
       const response = await fetch("/api/documents/preflight", { method: "POST", body: formData });
       if (!response.ok) {
         setEntries((prev) =>
@@ -224,6 +229,34 @@ export function UploadCenterPage() {
   const handleManualConfirm = useCallback((entryId: string, override: ManualConfirmationOverride) => {
     setManualOverrides((prev) => ({ ...prev, [entryId]: override }));
   }, []);
+
+  /** 机构归属整改：人工补齐/批量预设/归属向导指定的组织生效时，带
+   *  selected_org_id 复核预检（与最终提交同一冲突判断）。有冲突的文件
+   *  selected_org_validation.ok=false，徽章不得显示"校验通过"——不能只
+   *  因字段齐全就放行。复核请求按（文件、组织）去重；换选组织后旧结论
+   *  不再匹配，自动重新复核。 */
+  const effectivePresetOrgId = mode === "attribution"
+    ? attribution.unitId || attribution.departmentId
+    : presets.organizationId;
+  const orgValidationInFlightRef = useRef<Record<string, string>>({});
+  useEffect(() => {
+    if (!effectivePresetOrgId) {
+      return;
+    }
+    for (const entry of entries) {
+      const overrideOrg = manualOverrides[entry.id]?.organizationId;
+      const targetOrg = overrideOrg || effectivePresetOrgId;
+      if (!targetOrg || orgValidationInFlightRef.current[entry.id] === targetOrg) {
+        continue;
+      }
+      if (preflightResults[entry.id]?.selected_org_validation?.selected_org_id === targetOrg) {
+        orgValidationInFlightRef.current[entry.id] = targetOrg;
+        continue;
+      }
+      orgValidationInFlightRef.current[entry.id] = targetOrg;
+      void runPreflight(entry.id, entry.file, targetOrg);
+    }
+  }, [effectivePresetOrgId, entries, manualOverrides, preflightResults, runPreflight]);
 
   /** 计算某个文件"补齐后的有效 preflight"：先叠加批量预设，再叠加该文件的单文件
    *  人工覆盖（单文件覆盖优先级更高——用户专门为这个文件填的值，不应该被批量预设
