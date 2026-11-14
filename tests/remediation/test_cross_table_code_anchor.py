@@ -256,3 +256,75 @@ def test_anchor_with_mismatched_parse_run_not_bound():
     fact, _ = _hierarchy_fact(
         doc, target, _item_match("社会保障和就业支出", "行政事业单位离退休", "事业单位离退休"))
     assert fact is None
+
+
+# ---------------------------------------------------------------------------
+# C3 收口（2026-11-14 第二轮复验）：格真实存在之外，还必须证明该格内容支持
+# 锚事实宣称的编码与名称——同原行的编码/名称共同印证，矛盾即拒绝。
+# ---------------------------------------------------------------------------
+
+def _grid():
+    from src.schemas.parse_artifact import ParsedCell, ParsedTable
+    rows = [["2080502", "事业单位离退休", "100.00"]]
+    cells = [ParsedCell(0, col, text, text, None, 2,
+                        (col * 10.0, 0.0, col * 10.0 + 9.0, 9.0),
+                        False, 1.0, "万元", "lines")
+             for col, text in enumerate(rows[0])]
+    return ParsedTable("FIN_03_expenditure", "支出决算表", 2, 0,
+                       (0.0, 0.0, 100.0, 100.0), 0, 1.0, "lines", "万元",
+                       rows, cells, fragment_uid=CROSS_GRID_UID)
+
+
+def test_printed_code_contradicts_fact_not_bound():
+    # 原格编码 2080599 而事实宣称 2080502：格存在但不支持该编码，拒绝。
+    doc, target = welfare_document(cross_rows=[
+        ("FIN_03_expenditure", "2080502", "事业单位离退休"),
+    ])
+    anchor = doc.fact_context.facts[-1]
+    grid = doc.parse_artifact.physical_fragments[0]
+    grid.rows[0][0] = "2080599"
+    grid.cells[0].raw_text = grid.cells[0].normalized_text = "2080599"
+    source = anchor.extra_dims["row_identity_sources"][0]
+    source["grid_raw_text"] = source["recovered_text"] = "2080599"
+    fact, _ = _hierarchy_fact(
+        doc, target, _item_match("社会保障和就业支出", "行政事业单位离退休", "事业单位离退休"))
+    assert fact is None
+
+
+def test_printed_name_contradicts_fact_not_bound():
+    # 同原行名称格实际印的是其他名称：格存在但不支持宣称名称，拒绝。
+    doc, target = welfare_document(cross_rows=[
+        ("FIN_03_expenditure", "2080502", "事业单位离退休"),
+    ])
+    anchor = doc.fact_context.facts[-1]
+    grid = doc.parse_artifact.physical_fragments[0]
+    grid.rows[0][1] = "其他行政事业单位养老支出"
+    grid.cells[1].raw_text = grid.cells[1].normalized_text = grid.rows[0][1]
+    fact, _ = _hierarchy_fact(
+        doc, target, _item_match("社会保障和就业支出", "行政事业单位离退休", "事业单位离退休"))
+    assert fact is None
+
+
+def test_code_ref_pointing_to_name_cell_not_bound():
+    # 编码格引用实际指向名称格：格原文不是宣称编码，拒绝。
+    doc, target = welfare_document(cross_rows=[
+        ("FIN_03_expenditure", "2080502", "事业单位离退休"),
+    ])
+    anchor = doc.fact_context.facts[-1]
+    source = anchor.extra_dims["row_identity_sources"][0]
+    source["source_cell_id"] = f"{CROSS_GRID_UID}:r0c1"
+    source["grid_raw_text"] = source["recovered_text"] = "事业单位离退休"
+    fact, _ = _hierarchy_fact(
+        doc, target, _item_match("社会保障和就业支出", "行政事业单位离退休", "事业单位离退休"))
+    assert fact is None
+
+
+def test_missing_code_identity_sources_not_bound():
+    # 无编码原格来源：没有可独立核验的原件身份路径，不得因可选字段跳过证明。
+    doc, target = welfare_document(cross_rows=[
+        ("FIN_03_expenditure", "2080502", "事业单位离退休"),
+    ])
+    doc.fact_context.facts[-1].extra_dims.pop("row_identity_sources", None)
+    fact, _ = _hierarchy_fact(
+        doc, target, _item_match("社会保障和就业支出", "行政事业单位离退休", "事业单位离退休"))
+    assert fact is None

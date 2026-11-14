@@ -57,8 +57,12 @@ export function useOrgValidationLifecycle({ entries, targets, preflightResults, 
   const inFlightRef = useRef<Record<string, string>>({});
   /** entryId -> 最新请求代次；过期响应按代次丢弃。 */
   const requestGenRef = useRef<Record<string, number>>({});
-  /** entryId -> 最近失败目标与已尝试次数（限制自动重试）。 */
+  /** entryId -> 最近失败目标与已尝试次数（限制**同一选择周期**内的自动重试）。
+   *  换选到不同目标即开启新周期：effect 检测到目标变化时清掉旧台账，
+   *  换回原目标可以重新获得有限额度（C4 收口：有限重试与可恢复并存）。 */
   const failuresRef = useRef<Record<string, OrgValidationFailure>>({});
+  /** entryId -> effect 最近一次发起复核的目标（识别"换选开新周期"）。 */
+  const lastDispatchTargetRef = useRef<Record<string, string>>({});
   /** targets 的实时镜像：响应回调里判定"当前目标"用，不依赖闭包快照。 */
   const targetsRef = useRef(targets);
   targetsRef.current = targets;
@@ -101,6 +105,11 @@ export function useOrgValidationLifecycle({ entries, targets, preflightResults, 
         const payload = (await response.json()) as PreflightResponseLike & {
           page_count?: number | null;
         };
+        // C4 收口（第二轮复验）：response.json 是第二个异步边界——头先到、
+        // 正文延迟时，换选可能发生在 await json 期间。写状态前必须重判过期。
+        if (stale()) {
+          return; // 丢弃过期响应体：不得覆盖新目标的任何结果
+        }
         onResultRef.current(entryId, { kind: "success", payload });
       } catch {
         if (!stale()) {
@@ -109,7 +118,10 @@ export function useOrgValidationLifecycle({ entries, targets, preflightResults, 
         }
       } finally {
         // 在途结束（无论成败）：失败后的重发由 effect 依据失败台账决定。
-        if (inFlightRef.current[entryId] === claimedTarget) {
+        // 清理按**请求身份**（代次+目标）双重核对——旧请求的 finally 不得
+        // 清掉同目标新请求（A→A 重发）或新目标请求的 in-flight 记录。
+        if (requestGenRef.current[entryId] === gen
+            && inFlightRef.current[entryId] === claimedTarget) {
           delete inFlightRef.current[entryId];
         }
       }
@@ -130,10 +142,17 @@ export function useOrgValidationLifecycle({ entries, targets, preflightResults, 
       if (conclusion === targetOrg) {
         continue; // 当前目标已取得一致复核结论（含如实写入的冲突结论）
       }
+      // 换选（与上一周期目标不同）= 新选择周期：旧目标的失败台账清零，
+      // 换回原目标同样重新获得有限额度。同周期内重试仍受 MAX 限制。
+      if (lastDispatchTargetRef.current[entry.id]
+          && lastDispatchTargetRef.current[entry.id] !== targetOrg) {
+        delete failuresRef.current[entry.id];
+      }
       const failure = failuresRef.current[entry.id];
       if (failure && failure.org === targetOrg && failure.attempts >= MAX_AUTO_ATTEMPTS) {
-        continue; // 重试上限：停止自动重发，留人工重试入口
+        continue; // 同一选择周期重试上限：停止自动重发，留人工重试入口
       }
+      lastDispatchTargetRef.current[entry.id] = targetOrg;
       inFlightRef.current[entry.id] = targetOrg;
       void runPreflight(entry.id, entry.file, targetOrg);
     }
@@ -144,6 +163,7 @@ export function useOrgValidationLifecycle({ entries, targets, preflightResults, 
   const forgetEntry = useCallback((entryId: string) => {
     delete inFlightRef.current[entryId];
     delete failuresRef.current[entryId];
+    delete lastDispatchTargetRef.current[entryId];
     requestGenRef.current[entryId] = (requestGenRef.current[entryId] ?? 0) + 1;
   }, []);
 

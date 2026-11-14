@@ -895,6 +895,65 @@ def _cell_refs_on_current_original(doc, refs):
     return True
 
 
+def _anchor_row_identity_proven(doc, fact):
+    """C3 收口（2026-11-14 第二轮复验）：锚证据格必须实际支持宣称的身份。
+
+    "某格真实存在且引用原文一致"只证明引用可回原件；锚的编码/名称还必须
+    由该格及其所在原行印证——编码原格必填且不可缺省，格原文必须与
+    fact.subject_code 逐字相等，同一原行必须实际印有与 fact.subject_name
+    逐字（NFKC 去空白）相等的名称格。原格内容与事实矛盾（编码错配/名称
+    错配/名称格冒充编码格）一律不产生身份证明；不以金额相等定位身份，
+    也不以 fact 自身字段自证。
+    """
+    import unicodedata
+
+    extra = getattr(fact, 'extra_dims', None) or {}
+    code_sources = [ref for ref in (extra.get('row_identity_sources') or [])
+                    if isinstance(ref, dict) and ref.get('source_cell_id')]
+    if not code_sources:
+        return False  # 编码原格引用不可缺省：缺失就没有可核验的原件身份路径
+    if not _cell_refs_on_current_original(doc, code_sources):
+        return False
+    artifact = getattr(doc, 'parse_artifact', None)
+    if artifact is None:
+        return False
+    subject_code = str(getattr(fact, 'subject_code', '') or '').strip()
+
+    def normalize(value):
+        return ''.join(ch for ch in unicodedata.normalize('NFKC', str(value or ''))
+                       if not ch.isspace())
+
+    target_name = normalize(getattr(fact, 'subject_name', ''))
+    if not subject_code or not target_name:
+        return False
+    from src.services.rule_source_binding import _current_cell_catalog
+    cells, _conflicting = _current_cell_catalog(artifact)
+    for source in code_sources:
+        printed_code = normalize(source.get('grid_raw_text')
+                                 or source.get('recovered_text') or '')
+        if printed_code != subject_code:
+            return False  # 编码原格内容与事实宣称的编码不符
+        cell = cells.get(source.get('source_cell_id'))
+        if cell is None:
+            return False
+        # 同一原行必须实际印有宣称名称（编码格与名称格同 fragment 同行）。
+        # catalog 键格式 "{uid}:r{row}c{col}"（uid 不含 ":r"，坐标已是合并
+        # 视图归一后的原格坐标），从键反推同前缀即同 fragment 同行邻格。
+        key_match = re.match(r'^(.*):r(-?\d+)c(-?\d+)$', str(source.get('source_cell_id') or ''))
+        if key_match is None:
+            return False
+        prefix = f'{key_match.group(1)}:r{key_match.group(2)}c'
+        same_row_name = any(
+            key != source.get('source_cell_id')
+            and key.startswith(prefix)
+            and not other.is_header
+            and normalize(other.raw_text) == target_name
+            for key, other in cells.items())
+        if not same_row_name:
+            return False  # 同原行未印出宣称名称：格存在但不支持该身份
+    return True
+
+
 def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
     paths = hierarchy_paths({str(f.subject_code) for f in facts
                              if str(f.subject_code or '').isdigit()})
@@ -1019,10 +1078,10 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
             # C3：引用必须真实落在当前原件上（换文件哈希/不存在的源格一律拒绝）。
             if not _refs_on_current_original(anchor_refs):
                 continue
-            row_sources = list((getattr(f, 'extra_dims', None) or {})
-                               .get('row_identity_sources') or [])
-            if row_sources and not _refs_on_current_original(row_sources):
-                continue  # 编码原格引用同样必须处于当前原件
+            # C3 收口（第二轮复验）：编码原格必填且不可缺省，格内容必须实际
+            # 支持宣称编码、同原行必须实际印有宣称名称——格存在≠身份成立。
+            if not _anchor_row_identity_proven(doc, f):
+                continue
             anchors.setdefault(code, []).append(f)
         if len(anchors) != 1:
             return None

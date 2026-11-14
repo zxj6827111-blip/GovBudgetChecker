@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 
 import pytest
@@ -90,3 +91,111 @@ def test_merge_trace_records_do_not_mutate_amounts():
     assert error is None
     assert (fact.raw_value, fact.normalized_value, fact.subject_name) == before
     assert fact.extra_dims.get("evidence_refs"), "保留事实自身证据引用不变"
+
+
+# ---------------------------------------------------------------------------
+# C5 收口（第二轮复验）：合并证明必须进入**持久回执**（disclosure_sources），
+# 经 select→receipt→JSON 序列化→API 读回全链可回溯双侧；不能只断言内存
+# extra_dims。重复调用幂等去重；异值/冲突不收敛。
+# ---------------------------------------------------------------------------
+
+def _grid_doc(rows):
+    from decimal import Decimal as _D
+
+    from src.engine.fact_context import build_fact_context_from_artifact
+    from src.engine.pipeline import build_document
+    from src.schemas.parse_artifact import LogicalTableInstance, ParseArtifact, ParsedCell, ParsedTable
+
+    cells = [
+        ParsedCell(r, c, str(v) if v is not None else '', str(v) if v is not None else '',
+                   _D(str(v)) if (r >= 2 and c >= 2 and v) else None, 1,
+                   (c * 70, r * 25, (c + 1) * 70, (r + 1) * 25), r < 2, .99, '万元', 'lines')
+        for r, row in enumerate(rows) for c, v in enumerate(row)
+    ]
+    table = ParsedTable('FIN_03_expenditure', '支出决算表', 1, 0,
+                        (0, 0, 560, 25 * len(rows)), 2, .99, 'lines', '万元', rows, cells, 'frag')
+    instance = LogicalTableInstance('instance', 'FIN_03_expenditure', table.title,
+                                    ['frag'], 1, 1, org_name=ORG, fiscal_year=YEAR)
+    artifact = ParseArtifact(source_file_hash='a' * 64, parse_run_uid='run',
+                             table_fragments=[table], physical_fragments=[table],
+                             logical_tables=[instance])
+    context = build_fact_context_from_artifact(artifact, org_name=ORG, fiscal_year=YEAR,
+                                               report_kind='final', doc_type='dept_final')
+    doc = build_document('dup.pdf', [f'{ORG}2025年度部门决算'], [[rows]], 0)
+    doc.parse_artifact, doc.fact_context = artifact, context
+    doc.fact_receipts = []
+    return doc
+
+
+DUP_ROWS = [
+    ['功能分类科目编码', '科目名称', '本年支出合计', '基本支出', '项目支出', '上缴上级支出', '经营支出', '对附属单位补助支出'],
+    ['功能分类科目编码', '科目名称', None, None, None, None, None, None],
+    ['合计', None, '196.51', '100.00', '96.51', '', '', ''],
+    ['201', '一般公共服务支出', '196.51', '100.00', '96.51', '', '', ''],
+    ['20123', '民族事务', '96.51', '50.00', '46.51', '', '', ''],
+    ['20123', '民族事务', '96.51', '50.00', '46.51', '', '', ''],
+    ['2012301', '行政运行', '50.00', '50.00', '0.00', '', '', ''],
+    ['2012304', '民族工作专项', '46.51', '0.00', '46.51', '', '', ''],
+]
+
+
+def _duplicate_sources(receipt):
+    return [d for d in (receipt.get('disclosure_sources') or [])
+            if d.get('role') == 'same_value_duplicate_row']
+
+
+def test_duplicate_merge_proof_persists_to_final_relation_receipt():
+    """V33-005 真实规则：PASS 关系回执携带双侧合并证明（select→receipt）。"""
+    from src.engine.rules_v33 import R33005_TableTotalConsistency
+
+    doc = _grid_doc(DUP_ROWS)
+    issues = R33005_TableTotalConsistency().apply(doc)
+    assert isinstance(issues, list)
+    receipt = next(r for r in doc.fact_receipts
+                   if r.get('sub_check_id') == 'FIN_03_expenditure:20123:total_actual')
+    assert receipt['status'] == 'pass'
+    dupes = _duplicate_sources(receipt)
+    assert dupes, "合并证明必须随最终关系回执持久交付"
+    trace = dupes[0]
+    assert trace['duplicate_fact_uid'] and trace['kept_fact_uid']
+    assert trace['duplicate_fact_uid'] != trace['kept_fact_uid']
+    assert trace['source_cell_id'] and trace['physical_page']
+    assert trace['quote'] == '96.51' and trace['value'] == '96.51'
+    assert trace['file_hash'] == 'a' * 64
+    assert trace['parse_run_uid'] == 'run'
+    assert trace['basis'] == 'same_object_same_value_duplicate_row'
+
+
+def test_duplicate_merge_proof_survives_json_roundtrip():
+    """序列化/API 读回等价：回执经 JSON roundtrip 后双侧证据逐字保持。"""
+    from src.engine.rules_v33 import R33005_TableTotalConsistency
+
+    doc = _grid_doc(DUP_ROWS)
+    R33005_TableTotalConsistency().apply(doc)
+    receipt = next(r for r in doc.fact_receipts
+                   if r.get('sub_check_id') == 'FIN_03_expenditure:20123:total_actual')
+    roundtrip = json.loads(json.dumps(receipt, ensure_ascii=False, default=str))
+    dupes = [d for d in (roundtrip.get('disclosure_sources') or [])
+             if d.get('role') == 'same_value_duplicate_row']
+    assert len(dupes) == 1 and dupes[0]['duplicate_fact_uid']
+    assert dupes[0]['quote'] == '96.51'
+
+
+def test_duplicate_merge_trace_idempotent_across_repeated_selects():
+    """同一关系重复调用 select：合并留痕幂等去重，不重复追加。"""
+    first = _fact("2012304", "民族工作专项", "12.34", cell_id="frag:r10c2", page=8)
+    second = _fact("2012304", "民族工作专项", "12.34", cell_id="frag:r11c2", page=9)
+    doc = _doc([first, second])
+    for _ in range(3):
+        fact, error = select(doc, [first, second], "total_actual", code="2012304")
+        assert error is None and fact is first
+    traces = first.extra_dims.get('same_value_duplicate_cells') or []
+    assert len(traces) == 1, "重复调用不得重复追加合并留痕"
+    from src.engine.native_table_arithmetic import receipt as _receipt
+
+    class _Rule:
+        code = 'TEST'
+
+    _receipt(_Rule(), doc, 'test:relation', [first], status='pass', formula='test')
+    receipt_row = next(r for r in doc.fact_receipts if r.get('sub_check_id') == 'test:relation')
+    assert len(_duplicate_sources(receipt_row)) == 1

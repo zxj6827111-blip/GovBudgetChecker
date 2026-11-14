@@ -227,6 +227,54 @@ async function testNoTargetNoRequest() {
 
 let restoreFetchAfterScenario: () => void = () => {};
 
+/** C4 收口（第二轮复验）：延迟 response.json —— 头先到、正文延迟，
+ *  换选 B 且 B 成功后，A 的迟到正文必须整体丢弃（含 onResult）。 */
+async function testDelayedBodyDiscardedAfterTargetChange() {
+  const scenario = await runScenario({ e1: "org-a" });
+  const { api, calls, pending } = scenario;
+  restoreFetchAfterScenario = scenario.restoreFetch;
+  let resolveBody: (value: unknown) => void = () => {};
+  const bodyGate = new Promise((resolve) => { resolveBody = resolve; });
+  // A：响应头先到（ok），json 挂起。
+  await act(async () => { pending[0].resolve({ ok: true, json: () => bodyGate }); });
+  // 换选 B：目标变化 → 重新复核（gen2）。
+  await scenario.changeTargets({ e1: "org-b" });
+  assert.equal(calls.length, 2);
+  // B 完整成功。
+  await act(async () => { pending[1].resolve(okResponse("org-b")); });
+  await flushMicrotasks();
+  // A 的正文最后到达。
+  await act(async () => { resolveBody(okResponse("org-a")); });
+  await flushMicrotasks();
+  assert.deepEqual(api.results, [{ id: "e1", kind: "success" }],
+    "A 的延迟正文被丢弃：只有 B 的结果写入一次");
+  assert.equal(calls.length, 2, "不得因过期正文写回而再次发请求");
+}
+
+/** C4 收口：同一选择周期重试耗尽后，换选他目标成功、再换回原目标——
+ *  原目标必须开启新选择周期恢复复核（额度重置，同周期仍受限）。 */
+async function testRetryExhaustedThenReselectRestoresOriginalTarget() {
+  const scenario = await runScenario({ e1: "org-a" });
+  const { calls, pending, changeTargets } = scenario;
+  restoreFetchAfterScenario = scenario.restoreFetch;
+  await act(async () => { pending[0].resolve(makeResponse(false)); });
+  await flushMicrotasks();
+  await act(async () => { pending[1].resolve(makeResponse(false)); });
+  await flushMicrotasks();
+  assert.equal(calls.length, 2, "同周期两次失败后停止自动重发");
+  // 换 B 且成功。
+  await changeTargets({ e1: "org-b" });
+  assert.equal(calls[2].target, "org-b");
+  await act(async () => { pending[2].resolve(okResponse("org-b")); });
+  await flushMicrotasks();
+  // 换回 A：新选择周期 → A 重新复核。
+  await changeTargets({ e1: "org-a" });
+  assert.equal(calls.length, 4, "换回原目标必须开启新周期恢复复核");
+  assert.equal(calls[3].target, "org-a");
+  await act(async () => { pending[3].resolve(okResponse("org-a")); });
+  await flushMicrotasks();
+}
+
 const tests = [
   testSingleFileManualSelection,
   testFailureThenRetrySuccess,
@@ -235,6 +283,8 @@ const tests = [
   testConflictWrittenNotRefetched,
   testForgetEntryInvalidatesLateResponse,
   testNoTargetNoRequest,
+  testDelayedBodyDiscardedAfterTargetChange,
+  testRetryExhaustedThenReselectRestoresOriginalTarget,
 ];
 
 async function main() {
