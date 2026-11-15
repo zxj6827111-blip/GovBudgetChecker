@@ -364,6 +364,75 @@ def _v33_fact_identity(*facts: Any) -> Tuple[List[str], List[str]]:
     return list(dict.fromkeys(fact_ids)), list(dict.fromkeys(evidence_ids))
 
 
+def _record_v33_consumption(doc: Any, rule_id: str, table_code: str, *facts: Any) -> None:
+    """将规则实际消费的财政事实 uid 记入 structured_consumption，供来源绑定器核对。"""
+    fact_ctx = getattr(doc, "fact_context", None)
+    if fact_ctx is None:
+        return
+    valid = [fact for fact in facts if fact is not None and getattr(fact, "fact_uid", None)]
+    if not valid:
+        return
+    journal = getattr(doc, "structured_consumption", None)
+    if journal is None:
+        journal = doc.structured_consumption = []
+    journal.append({
+        "rule_id": rule_id,
+        "table_code": table_code,
+        "fact_uids": [fact.fact_uid for fact in valid],
+        "fact_version": fact_ctx.version_token,
+        "normalized_unit": "万元",
+    })
+
+
+def _v33_operand_ref(fact: Any, role: str) -> Dict[str, Any]:
+    from .native_three_public_ratios import operand_ref
+
+    return operand_ref(fact, role)
+
+
+def _v33_bound_text_table_location(
+    doc: Any,
+    rule_id: str,
+    *,
+    table_name: str,
+    table_code: str,
+    field: str,
+    table_page: Optional[int],
+    fact_ref: Any,
+    operand_role: str,
+    narrative_quotes: Sequence[str] = (),
+    extra: Optional[Dict[str, Any]] = None,
+    relation_id: str = "",
+) -> Tuple[Dict[str, Any], List[str], List[str]]:
+    """构造带真实表侧操作数与说明原文引用的 location，供来源绑定器验证 bbox。"""
+    from .native_empty_operands import NativeBlankTerm, blank_operand_refs
+
+    trefs = _narrative_quote_refs(doc, narrative_quotes)
+    base_page = table_page or (trefs[0]["page"] if trefs else 1)
+    loc: Dict[str, Any] = {"page": base_page, "table": table_name, "field": field}
+    if extra:
+        loc.update(extra)
+    fact_ctx = getattr(doc, "fact_context", None)
+    if isinstance(fact_ref, NativeBlankTerm) and fact_ctx is not None:
+        loc["operand_refs"] = []
+        loc["native_blank_operands"] = blank_operand_refs([fact_ref], relation_id)
+        loc["fact_context_version_token"] = fact_ctx.version_token
+        if trefs:
+            loc["table_refs"] = trefs
+        return loc, [], []
+    if fact_ref is not None and fact_ctx is not None:
+        _record_v33_consumption(doc, rule_id, table_code, fact_ref)
+        fact_ids, evidence_ids = _v33_fact_identity(fact_ref)
+        loc["operand_refs"] = [_v33_operand_ref(fact_ref, operand_role)]
+        loc["fact_context_version_token"] = fact_ctx.version_token
+        if trefs:
+            loc["table_refs"] = trefs
+        return loc, fact_ids, evidence_ids
+    if trefs:
+        loc["table_refs"] = trefs
+    return loc, [], []
+
+
 def _declared_pct_half_step(pct_text: Any) -> Optional[Decimal]:
     """声明百分比的取整半步长（D0 RC-6）。
 
@@ -433,11 +502,13 @@ def _narrative_quote_refs(doc: Any, quotes: Sequence[str]) -> List[Dict[str, Any
     """说明原文引文 → 带各自真实页码的 table_refs（D0 RC-1e）。
 
     说明引文的页码在说明所在页，而不是规则 finding 挂的表格页；证据门按
-    各条引用自己的页码核验（AC-09）。定位不到的引文丢弃——宁缺毋造。
+    各条引用自己的页码核验（AC-09）。若句读跨越分页边界，则按起始页码与
+    完整原文交给来源绑定器按页边界切分；定位不到的引文丢弃——宁缺毋造。
     """
     refs: List[Dict[str, Any]] = []
     page_texts = [str(t or "") for t in (getattr(doc, "page_texts", None) or [])]
     compact_pages = [re.sub(r"\s+", "", t) for t in page_texts]
+    merged_compact = "".join(compact_pages)
     for quote in quotes or ():
         text = str(quote or "").strip()
         if not text:
@@ -449,9 +520,20 @@ def _narrative_quote_refs(doc: Any, quotes: Sequence[str]) -> List[Dict[str, Any
             (idx + 1 for idx, hay in enumerate(compact_pages) if needle in hay),
             None,
         )
+        if page is not None:
+            refs.append({"page": page, "span": text[:400], "role": "说明原文"})
+            continue
+        at = merged_compact.find(needle)
+        if at >= 0:
+            cursor = 0
+            for idx, hay in enumerate(compact_pages):
+                if cursor <= at < cursor + len(hay):
+                    page = idx + 1
+                    break
+                cursor += len(hay)
         if page is None:
             continue
-        refs.append({"page": page, "span": text[:200], "role": "说明原文"})
+        refs.append({"page": page, "span": text[:400], "role": "说明原文"})
     return refs
 
 
@@ -1320,7 +1402,9 @@ class R33001_CoverYearUnit(Rule):
                     comparison_context = re.compile(
                         r"(同比|较上年|与\s*20\d{2}\s*年\s*相比|上年|上年度|历史|历年)"
                     )
+                    from .checklist_support import unique_quote
                     evidence_snippets = []
+                    year_refs: List[Dict[str, Any]] = []
                     for i in structural_pages:
                         if i >= len(doc.page_texts):
                             continue
@@ -1338,6 +1422,9 @@ class R33001_CoverYearUnit(Rule):
                                     continue
                                 if len(snippet) > 10:
                                     evidence_snippets.append(f"P{i+1}: ...{snippet}...")
+                                    quote = unique_quote(text, idx, idx + len(oy_str))
+                                    if quote:
+                                        year_refs.append({"role": "年份冲突位置", "page": i + 1, "span": quote})
                                     count += 1
                                 if len(evidence_snippets) >= 5:
                                     break
@@ -1351,10 +1438,13 @@ class R33001_CoverYearUnit(Rule):
                     if evidence_snippets:
                         year_str = ", ".join(map(str, other_years))
                         evidence = "\n".join(evidence_snippets)
+                        loc: Dict[str, Any] = {"page": year_refs[0]["page"] if year_refs else 1}
+                        if year_refs:
+                            loc["table_refs"] = year_refs
                         issues.append(
                             self._issue(
                                 f"封面/目录/表头出现多个年份：{doc.dominant_year}年报告的结构性位置出现{year_str}年内容，可能存在年份混淆。",
-                                {"page": 1},
+                                loc,
                                 severity="high",
                                 evidence_text=evidence,
                             )
@@ -3431,9 +3521,22 @@ class R33103_Income_vs_Text(Rule):
         unresolved: List[str] = []
         if total is not None and tt is not None:
             if not tolerant_equal(total, tt):
-                fact_ids, evidence_ids = _v33_fact_identity(fact_total_ref)
+                tt_quote, _ = _sentence_with_number(doc, sec_text, tt)
+                loc, fact_ids, evidence_ids = _v33_bound_text_table_location(
+                    doc,
+                    self.code,
+                    table_name="收入决算表",
+                    table_code="FIN_02_income",
+                    field="本年收入合计",
+                    table_page=p,
+                    fact_ref=fact_total_ref,
+                    operand_role="表2本年收入合计",
+                    narrative_quotes=[tt_quote] if tt_quote else (),
+                    relation_id=f"{self.code}:T2:income_total:text_vs_table",
+                )
                 issues.append(self._issue(
-                    f"收入合计：表{total} ≠ 文本{tt}", {"page": p}, "warn",
+                    f"收入合计：表{total} ≠ 文本{tt}", loc, "warn",
+                    evidence_text=tt_quote or None,
                     check_relation_id=f"{self.code}:T2:income_total:text_vs_table",
                     fact_ids=fact_ids,
                     evidence_ids=evidence_ids,
@@ -3540,9 +3643,22 @@ class R33103_Income_vs_Text(Rule):
                         fact_ids=[fact_fp_ref.fact_uid] if fact_fp_ref is not None else [],
                     ))
             elif not tolerant_equal(fp_compare, tf_compare):
-                fact_ids, evidence_ids = _v33_fact_identity(fact_fp_ref)
+                tf_quote, _ = _sentence_with_number(doc, sec_text, tf)
+                loc, fact_ids, evidence_ids = _v33_bound_text_table_location(
+                    doc,
+                    self.code,
+                    table_name="收入决算表",
+                    table_code="FIN_02_income",
+                    field="财政拨款收入",
+                    table_page=p,
+                    fact_ref=fact_fp_ref,
+                    operand_role="表2财政拨款收入",
+                    narrative_quotes=[tf_quote] if tf_quote else (),
+                    relation_id=f"{self.code}:T2:fiscal_allocation:text_vs_table",
+                )
                 issues.append(self._issue(
-                    f"财政拨款收入：表{fp} ≠ 文本{tf}", {"page": p}, "warn",
+                    f"财政拨款收入：表{fp} ≠ 文本{tf}", loc, "warn",
+                    evidence_text=tf_quote or None,
                     check_relation_id=f"{self.code}:T2:fiscal_allocation:text_vs_table",
                     fact_ids=fact_ids,
                     evidence_ids=evidence_ids,
@@ -3776,9 +3892,23 @@ class R33104_Expense_vs_Text(Rule):
             observations = blank_observations([fact_ref])
             if a is not None and b is not None:
                 if not tolerant_equal(a, b):
-                    fact_ids, evidence_ids = _v33_fact_identity(fact_ref)
+                    nar_quote, _ = _sentence_with_number(doc, sec_text, b)
+                    loc, fact_ids, evidence_ids = _v33_bound_text_table_location(
+                        doc,
+                        self.code,
+                        table_name="支出决算表",
+                        table_code="FIN_03_expenditure",
+                        field=nm,
+                        table_page=p,
+                        fact_ref=fact_ref,
+                        operand_role=f"表3{nm}",
+                        narrative_quotes=[nar_quote] if nar_quote else (),
+                        extra={"native_blank_sources": observations},
+                        relation_id=f"{self.code}:{sub_id}",
+                    )
                     issues.append(self._issue(
-                        f"{nm}：表{a} ≠ 文本{b}", {"page": p, 'native_blank_sources': observations}, "warn",
+                        f"{nm}：表{a} ≠ 文本{b}", loc, "warn",
+                        evidence_text=nar_quote or None,
                         check_relation_id=f"{self.code}:{sub_id}",
                         fact_ids=fact_ids,
                         evidence_ids=evidence_ids,
@@ -6441,10 +6571,42 @@ class R33200_InterTable_T1_T2(Rule):
             )
         if t1_income is not None and t1_income > 0.01 and t2_income > 0.01:
             if _amount_mismatch(t1_income, t2_income):
+                fact_ctx = getattr(doc, "fact_context", None)
+                t1_page = _get_first_anchor_page(doc, "收入支出决算总表")
+                loc: Dict[str, Any] = {
+                    "page": t1_page or 1,
+                    "table": "收入支出决算总表↔收入决算表",
+                    "t1": t1_income,
+                    "t2": t2_income,
+                }
+                fact_ids: List[str] = []
+                evidence_ids: List[str] = []
+                _, f1_fact, _ = _fact_operand_for_v33(
+                    fact_ctx, "income_actual",
+                    table_code="FIN_01_income_expenditure_total",
+                    subject_names=("本年收入合计",),
+                    budget_stages=("决算",),
+                )
+                _, f2_fact, _ = _fact_operand_for_v33(
+                    fact_ctx, "total_actual",
+                    table_code="FIN_02_income",
+                    subject_tokens=("合计", "总计"),
+                    budget_stages=("决算",),
+                )
+                if fact_ctx is not None and f1_fact is not None and f2_fact is not None:
+                    _record_v33_consumption(doc, self.code, "FIN_01_income_expenditure_total", f1_fact, f2_fact)
+                    fact_ids, evidence_ids = _v33_fact_identity(f1_fact, f2_fact)
+                    loc["operand_refs"] = [
+                        _v33_operand_ref(f1_fact, "T1本年收入合计"),
+                        _v33_operand_ref(f2_fact, "T2收入合计"),
+                    ]
+                    loc["fact_context_version_token"] = fact_ctx.version_token
                 issues.append(self._issue(
                     f"T1↔T2收入合计不一致：T1={t1_income:.2f}, T2={t2_income:.2f}",
-                    {"t1": t1_income, "t2": t2_income}, "error",
-                    evidence_text=f"表1(总表) 本年收入合计: {t1_income}\n表2(收入表) 合计: {t2_income}"
+                    loc, "error",
+                    evidence_text=f"表1(总表) 本年收入合计: {t1_income}\n表2(收入表) 合计: {t2_income}",
+                    fact_ids=fact_ids,
+                    evidence_ids=evidence_ids,
                 ))
         return issues
 
@@ -6510,10 +6672,42 @@ class R33201_InterTable_T1_T3(Rule):
 
         if t1_expense is not None and t1_expense > 0.01 and t3_expense > 0.01:
             if _amount_mismatch(t1_expense, t3_expense):
+                fact_ctx = getattr(doc, "fact_context", None)
+                t1_page = _get_first_anchor_page(doc, "收入支出决算总表")
+                loc: Dict[str, Any] = {
+                    "page": t1_page or 1,
+                    "table": "收入支出决算总表↔支出决算表",
+                    "t1": t1_expense,
+                    "t3": t3_expense,
+                }
+                fact_ids: List[str] = []
+                evidence_ids: List[str] = []
+                _, f1_fact, _ = _fact_operand_for_v33(
+                    fact_ctx, "expenditure_actual",
+                    table_code="FIN_01_income_expenditure_total",
+                    subject_names=("本年支出合计",),
+                    budget_stages=("决算",),
+                )
+                _, f3_fact, _ = _fact_operand_for_v33(
+                    fact_ctx, "total_actual",
+                    table_code="FIN_03_expenditure",
+                    subject_tokens=("合计", "总计"),
+                    budget_stages=("决算",),
+                )
+                if fact_ctx is not None and f1_fact is not None and f3_fact is not None:
+                    _record_v33_consumption(doc, self.code, "FIN_01_income_expenditure_total", f1_fact, f3_fact)
+                    fact_ids, evidence_ids = _v33_fact_identity(f1_fact, f3_fact)
+                    loc["operand_refs"] = [
+                        _v33_operand_ref(f1_fact, "T1本年支出合计"),
+                        _v33_operand_ref(f3_fact, "T3支出合计"),
+                    ]
+                    loc["fact_context_version_token"] = fact_ctx.version_token
                 issues.append(self._issue(
                     f"T1↔T3支出合计不一致：T1={t1_expense:.2f}, T3={t3_expense:.2f}",
-                    {"t1": t1_expense, "t3": t3_expense}, "error",
-                    evidence_text=f"表1(总表) 本年支出合计: {t1_expense}\n表3(支出表) 合计: {t3_expense}"
+                    loc, "error",
+                    evidence_text=f"表1(总表) 本年支出合计: {t1_expense}\n表3(支出表) 合计: {t3_expense}",
+                    fact_ids=fact_ids,
+                    evidence_ids=evidence_ids,
                 ))
         return issues
 
@@ -9404,15 +9598,31 @@ class R33223_Narrative6_T6(Rule):
                 unresolved_reasons=[f"基本支出决算表缺少关键行: {','.join(missing_parts)}"],
             )
 
+        fact_ctx = getattr(doc, "fact_context", None)
+
         # 校验人员经费
         if nar_personnel is not None and _amount_mismatch(nar_personnel, float(t6_personnel)):
+            ren_quote, ren_quote_page = (
+                _sentence_with_number(doc, scope6, nar_personnel)
+                if scope6 else (None, None)
+            )
+            ren_trefs = _narrative_quote_refs(doc, [ren_quote]) if ren_quote else []
+            _, t6_ren_fact, _ = _fact_operand_for_v33(
+                fact_ctx,
+                "total_actual",
+                table_code="FIN_06_basic_expenditure",
+                subject_tokens=("人员经费合计", "人员经费"),
+                budget_stages=("决算",),
+            )
+            nar_page = ren_trefs[0]["page"] if ren_trefs else (ren_quote_page or narrative_page)
             location = _make_issue_location(
                 _make_location_ref(
                     role="说明6",
-                    page=narrative_page,
+                    page=nar_page,
                     section="说明6（基本支出情况）",
                     field="人员经费",
                     value=nar_personnel,
+                    span=ren_trefs[0]["span"] if ren_trefs else None,
                 ),
                 _make_location_ref(
                     role="T6",
@@ -9427,26 +9637,49 @@ class R33223_Narrative6_T6(Rule):
                 row="人员经费合计",
                 field="人员经费",
             )
-            ren_quote, ren_quote_page = (
-                _sentence_with_number(doc, scope6, nar_personnel)
-                if scope6 else (None, None)
-            )
+            fact_ids: List[str] = []
+            evidence_ids: List[str] = []
+            if fact_ctx is not None and t6_ren_fact is not None:
+                _record_v33_consumption(doc, self.code, "FIN_06_basic_expenditure", t6_ren_fact)
+                fact_ids, evidence_ids = _v33_fact_identity(t6_ren_fact)
+                location["operand_refs"] = [_v33_operand_ref(t6_ren_fact, "T6人员经费")]
+                location["fact_context_version_token"] = fact_ctx.version_token
+                if ren_trefs:
+                    location["table_refs"] = ren_trefs
+                elif "table_refs" in location:
+                    location["table_refs"] = [ref for ref in location["table_refs"] if ref.get("span")]
             issues.append(self._issue(
                 f"说明6↔T6人员经费不一致：说明={nar_personnel:.2f}, T6={float(t6_personnel):.2f}",
                 location, "warn",
                 # D0 RC-1b：evidence 只保留说明侧原句；表侧数值在 location 携带
                 evidence_text=ren_quote or f"人员经费 {nar_personnel:g} 万元",
+                fact_ids=fact_ids,
+                evidence_ids=evidence_ids,
             ))
 
         # 校验公用经费
         if nar_public is not None and _amount_mismatch(nar_public, float(t6_public)):
+            pub_quote, pub_quote_page = (
+                _sentence_with_number(doc, scope6, nar_public)
+                if scope6 else (None, None)
+            )
+            pub_trefs = _narrative_quote_refs(doc, [pub_quote]) if pub_quote else []
+            _, t6_pub_fact, _ = _fact_operand_for_v33(
+                fact_ctx,
+                "total_actual",
+                table_code="FIN_06_basic_expenditure",
+                subject_tokens=("公用经费合计", "公用经费"),
+                budget_stages=("决算",),
+            )
+            nar_page = pub_trefs[0]["page"] if pub_trefs else (pub_quote_page or narrative_page)
             location = _make_issue_location(
                 _make_location_ref(
                     role="说明6",
-                    page=narrative_page,
+                    page=nar_page,
                     section="说明6（基本支出情况）",
                     field="公用经费",
                     value=nar_public,
+                    span=pub_trefs[0]["span"] if pub_trefs else None,
                 ),
                 _make_location_ref(
                     role="T6",
@@ -9461,14 +9694,23 @@ class R33223_Narrative6_T6(Rule):
                 row="公用经费合计",
                 field="公用经费",
             )
-            pub_quote, _pub_quote_page = (
-                _sentence_with_number(doc, scope6, nar_public)
-                if scope6 else (None, None)
-            )
+            fact_ids = []
+            evidence_ids = []
+            if fact_ctx is not None and t6_pub_fact is not None:
+                _record_v33_consumption(doc, self.code, "FIN_06_basic_expenditure", t6_pub_fact)
+                fact_ids, evidence_ids = _v33_fact_identity(t6_pub_fact)
+                location["operand_refs"] = [_v33_operand_ref(t6_pub_fact, "T6公用经费")]
+                location["fact_context_version_token"] = fact_ctx.version_token
+                if pub_trefs:
+                    location["table_refs"] = pub_trefs
+                elif "table_refs" in location:
+                    location["table_refs"] = [ref for ref in location["table_refs"] if ref.get("span")]
             issues.append(self._issue(
-                 f"说明6↔T6公用经费不一致：说明={nar_public:.2f}, T6={float(t6_public):.2f}",
+                f"说明6↔T6公用经费不一致：说明={nar_public:.2f}, T6={float(t6_public):.2f}",
                 location, "warn",
                 evidence_text=pub_quote or f"公用经费 {nar_public:g} 万元",
+                fact_ids=fact_ids,
+                evidence_ids=evidence_ids,
             ))
 
         return issues
@@ -12353,6 +12595,33 @@ def _span_page_fragments(
     return fragments
 
 
+def _merged_unique_refs(
+    merged: str,
+    offsets: List[int],
+    start: int,
+    end: int,
+    role: str,
+    section: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """为 merged 原文区间构造逐页唯一的 table_refs（跨页先切再逐页扩展唯一上下文）。"""
+    from .checklist_support import unique_quote
+
+    frags = _span_page_fragments(merged, offsets, start, end)
+    refs: List[Dict[str, Any]] = []
+    for frag in frags:
+        page = frag["page"]
+        p_start = offsets[page - 1]
+        p_end = (offsets[page] - 1) if page < len(offsets) else len(merged)
+        local_l = max(0, start - p_start)
+        local_r = min(p_end - p_start, end - p_start)
+        span = unique_quote(merged[p_start:p_end], local_l, local_r) or frag["span"]
+        ref: Dict[str, Any] = {"role": role, "page": page, "span": span}
+        if section:
+            ref["section"] = section
+        refs.append(ref)
+    return refs
+
+
 def _txt_fund_body_without_page_footers(doc, section, offsets):
     """只遮掉与物理页相符的末行页码，保留长度以回到未经改写的原文证据。"""
     body = list(section['body'])
@@ -14139,6 +14408,14 @@ class R33TrendCompletionRate(Rule):
                         "pct": pct,
                         "pct_text": re.sub(r"[\s,，]", "", match.group("pct")),
                         "phrase": _txt_fund_norm(match.group(0)),
+                        "refs": _merged_unique_refs(
+                            merged,
+                            offsets,
+                            match.start(),
+                            match.end(),
+                            "完成率声明",
+                            section_title,
+                        ),
                         "clause_start": 0,
                         "entry_start": 0,
                         "entry_end": len(merged),
@@ -14245,6 +14522,14 @@ class R33TrendCompletionRate(Rule):
             "span": re.sub(r"\s+", "", match.group(0)),
             "start": match.start("amount"),
             "end": match.end(),
+            "refs": _merged_unique_refs(
+                merged,
+                offsets,
+                match.start(),
+                match.end(),
+                "披露金额",
+                section_title,
+            ),
             "clause_head": _wp4e_clause_head(merged, match.start("amount")),
         }
 
@@ -14283,6 +14568,14 @@ class R33TrendCompletionRate(Rule):
             "span": re.sub(r"\s+", "", match.group(0)),
             "start": match.start(),
             "end": match.end(),
+            "refs": _merged_unique_refs(
+                merged,
+                offsets,
+                match.start(),
+                match.end(),
+                "披露金额",
+                section_title,
+            ),
             "clause_head": _wp4e_clause_head(merged, match.start()),
         }
 
@@ -14538,7 +14831,8 @@ class R33TrendCompletionRate(Rule):
             sole = (entry_prefix_actuals + entry_prefix_openings)[0]
             actual = {
                 **sole,
-                "span": f"{sole['span']}（条目首句金额，按本年支出决算承接）",
+                "span": sole["span"],
+                "role_note": "分子披露（条目首句金额，按本年支出决算承接）",
             }
 
         others = [
@@ -14700,31 +14994,30 @@ class R33TrendCompletionRate(Rule):
         identity_conflict: bool = False,
         alternative: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        pages = {claim["page"], denom["page"]}
-        refs = [
-            {
-                "role": "完成率声明",
-                "page": claim["page"],
-                "section": claim["section"],
-                "span": claim["phrase"],
-            },
-            {
-                "role": "分母披露",
-                "page": denom["page"],
-                "section": denom["section"],
-                "span": denom["span"],
-            },
-        ]
-        if actual is not None:
-            pages.add(actual["page"])
-            refs.append(
+        def _with_role(entry: Dict[str, Any], default_role: str, fallback_span: str) -> List[Dict[str, Any]]:
+            role = str(entry.get("role_note") or default_role)
+            src_refs = entry.get("refs")
+            if isinstance(src_refs, list) and src_refs:
+                return [{**item, "role": role} for item in src_refs if isinstance(item, dict)]
+            return [
                 {
-                    "role": "分子披露",
-                    "page": actual["page"],
-                    "section": actual["section"],
-                    "span": actual["span"],
+                    "role": role,
+                    "page": entry["page"],
+                    "section": entry["section"],
+                    "span": fallback_span,
                 }
-            )
+            ]
+
+        refs: List[Dict[str, Any]] = []
+        refs.extend(_with_role(claim, "完成率声明", claim["phrase"]))
+        refs.extend(_with_role(denom, "分母披露", denom["span"]))
+        if actual is not None:
+            refs.extend(_with_role(actual, "分子披露", actual["span"]))
+        pages = {
+            int(ref["page"])
+            for ref in refs
+            if isinstance(ref.get("page"), int) and ref["page"] > 0
+        } | {claim["page"], denom["page"]}
         location: Dict[str, Any] = {
             "page": claim["page"],
             "pages": sorted(pages),

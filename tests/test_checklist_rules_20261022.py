@@ -82,6 +82,15 @@ def test_unique_quote_expands_until_unique_on_page() -> None:
     assert page.count(quote) == 1 and quote.startswith("主要用于")
 
 
+def test_unique_quote_standalone_line_does_not_cross_newline() -> None:
+    page = "上海市普陀区桃浦镇\n2025\n年决算\n报告正文"
+    start = page.index("上海市普陀区桃浦镇")
+    end = start + len("上海市普陀区桃浦镇")
+    quote = unique_quote(page, start, end)
+    assert quote == "上海市普陀区桃浦镇"
+    assert "\n" not in quote
+
+
 # ---- CMM-002 扩展：重复与标点（D-02/D-04） ----------------------------------
 
 

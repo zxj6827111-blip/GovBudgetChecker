@@ -246,12 +246,20 @@ def _rejoin_wrapped_decimals(text: str) -> str:
     return text
 
 
+def _extract_page_text_aligned(target: Any) -> str:
+    """以稍放宽的基线容差抽取同页文本，防止同行的金额/年份因几磅微偏被拆行。"""
+    try:
+        return target.extract_text(y_tolerance=4.5) or ""
+    except TypeError:
+        return target.extract_text() or ""
+
+
 def extract_visible_text_from_page(page: Any) -> str:
-    raw_text = page.extract_text() or ""
+    raw_text = _extract_page_text_aligned(page)
     try:
         page_height = float(page.height)
         filtered_page = page.filter(lambda obj, h=page_height: is_visible_char(obj, h))
-        filtered_text = filtered_page.extract_text() or ""
+        filtered_text = _extract_page_text_aligned(filtered_page)
         if filtered_text.strip():
             return _rejoin_wrapped_decimals(filtered_text)
     except Exception:

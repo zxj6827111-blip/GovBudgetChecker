@@ -37,7 +37,7 @@ def sections(doc, match):
 
 
 def compare(rule, doc, text, start, end, value, fact, key, label, section, *, disclosure_sources=()):
-    refs = text.refs(start, end, '原文金额声明')
+    refs = text.refs(start, end, '原文金额声明', unique_context=True)
     from .native_empty_operands import NativeBlankTerm, independent_blank_zero, blank_observations, blank_operand_refs
     if isinstance(fact, NativeBlankTerm) and not independent_blank_zero(doc, fact):
         reason = (f'{label}原文明确为零/无支出，表内对应格经原件认证为空白'

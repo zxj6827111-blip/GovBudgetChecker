@@ -74,7 +74,26 @@ def _literal_ref_sources(ref, pages, file_hash):
     for number, original in enumerate(pages, 1):
         left, right = max(begin, offset), min(end, offset + len(original))
         if left < right and merged[left:right].strip():
-            literal = _native_span(merged[left:right], number, pages, file_hash)
+            slice_text = merged[left:right]
+            literal = _native_span(slice_text, number, pages, file_hash)
+            if literal is None:
+                # 整段跨页唯一命中时，已知本页的精确局部偏移；若单页切片在该页重复，
+                # 仅在当前页沿行边界向外扩展至在本页唯一后绑定。
+                page_haystack, _ = _indexed_text(original)
+                eb = max(0, left - offset)
+                ee = min(len(original), right - offset)
+                while ee - eb <= 400:
+                    frag_needle, _ = _indexed_text(original[eb:ee])
+                    if frag_needle and page_haystack.count(frag_needle) == 1:
+                        literal = _native_span(original[eb:ee], number, pages, file_hash)
+                        break
+                    prev_nl = original.rfind('\n', 0, max(0, eb - 1))
+                    next_nl = original.find('\n', ee + 1)
+                    nb = 0 if prev_nl < 0 else prev_nl + 1
+                    ne = len(original) if next_nl < 0 else next_nl
+                    if (nb, ne) == (eb, ee) or ne - nb > 400:
+                        break
+                    eb, ee = nb, ne
             if literal is None:
                 return []
             parts.append(literal)

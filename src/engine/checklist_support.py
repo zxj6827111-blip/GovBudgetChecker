@@ -140,7 +140,9 @@ def unique_quote(page_text: str, start: int, end: int, *, min_len: int = 10, max
 
     def _ok(a: int, b: int) -> bool:
         needle = _normalize_for_binding(text[a:b])
-        return len(needle) >= min(min_len, len(haystack)) and haystack.count(needle) == 1
+        whole_line = (a == line_left and b == line_right)
+        required = min(6, min_len, len(haystack)) if whole_line else min(min_len, len(haystack))
+        return len(needle) >= required and haystack.count(needle) == 1
 
     step = 4
     while not _ok(left, right) and (right - left) < max_len:
