@@ -263,7 +263,7 @@ def _amount(rule, doc, text, begin, end, amount, unit, fact, key, label, section
     declared = _wan(amount, unit)
     difference = declared - fact.normalized_value
     failed = amount_difference_exceeds_policy(difference)
-    refs = text.refs(begin, end, '原文决算金额声明')
+    refs = text.refs(begin, end, '原文决算金额声明', unique_context=True)
     ids, evidence = receipt(rule, doc, key, [fact], status='fail' if failed else 'pass',
             formula='explicit narrative amount == current table amount (万元)',
             disclosure_sources=[dict(ref, file_hash=doc.fact_context.file_hash) for ref in refs]
@@ -1845,7 +1845,7 @@ def _amount_from_derived(rule, doc, text, begin, end, amount, unit, derived, key
     declared = _wan(amount, unit)
     difference = declared - value
     failed = amount_difference_exceeds_policy(difference)
-    refs = text.refs(begin, end, '原文决算金额声明')
+    refs = text.refs(begin, end, '原文决算金额声明', unique_context=True)
     formula = ('explicit narrative amount == sum of class rows (total cell not printed)'
                if derived_from == 'class_rows' else
                'explicit narrative class amount == sum of leaf rows under the class code (no class row printed)')

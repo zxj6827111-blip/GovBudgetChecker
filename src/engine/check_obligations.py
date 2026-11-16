@@ -1915,6 +1915,9 @@ def _attach_structured_diagnostics(
         if summary is None:
             continue
         codes = list(dict.fromkeys((*instance.reason_codes, *summary["reason_codes"])))
+        specific = [code for code in codes if code != "rule_no_reason"]
+        if specific:
+            codes = specific
         instance.reason_codes = tuple(codes)
         instance.blocked_by = tuple(summary["blocked_by"])
         instance.missing_operands = tuple(summary["missing_operands"])

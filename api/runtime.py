@@ -1914,7 +1914,10 @@ def _blocking_obligation_total(job_id: str, status_data: Dict[str, Any], ignored
             ignored_issue_ids=ignored_issue_ids or [],
         )
         return len(blocking_coverage_obligations(
-            list(coverage.items), result, visible_issue_ids={problem.issue_id for problem in problems},
+            list(coverage.items),
+            result,
+            visible_issue_ids={problem.issue_id for problem in problems},
+            structured_ingest=status_data.get("structured_ingest"),
         ))
     except Exception:
         logger.exception("Failed to count blocking obligations for %s", job_id)

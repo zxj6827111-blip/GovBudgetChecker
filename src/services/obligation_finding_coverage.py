@@ -28,7 +28,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Set
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set
 
 from src.services.evidence_guard import is_formal_finding
 
@@ -825,12 +825,182 @@ def _missing_section_cascade_root(
     return None
 
 
+TABLE_READING_CASCADE_CODES = frozenset(
+    {
+        "table_mapping_incomplete",
+        "column_identity_unconfirmed",
+        "cell_low_confidence",
+        "cell_unbound",
+        "row_level_unresolved",
+        "cell_blank_semantics_unknown",
+        "operand_missing",
+        "operand_ambiguous",
+        "column_width_drift",
+    }
+)
+_TABLE_READING_STRICT_CODES = TABLE_READING_CASCADE_CODES - frozenset(
+    {"operand_missing", "operand_ambiguous"}
+)
+_READING_ITEM_TYPES = frozenset(
+    {
+        "table_mapping_incomplete",
+        "source_cell_unbound",
+        "invalid_number_format",
+        "low_confidence_table",
+        "table_reading_gap",
+    }
+)
+
+
+def _page_table_map(structured: Mapping[str, Any]) -> Dict[int, Set[str]]:
+    by_page: Dict[int, Set[str]] = {}
+    for entry in (
+        structured.get("recognized_tables"),
+        ((structured.get("reading_import") or {}).get("reading_quality") or {}).get("tables")
+        if isinstance(structured.get("reading_import"), Mapping)
+        else None,
+    ):
+        if not isinstance(entry, Sequence) or isinstance(entry, (str, bytes)):
+            continue
+        for tbl in entry:
+            if not isinstance(tbl, Mapping):
+                continue
+            codes = _table_codes_in(str(tbl.get("table_code") or tbl.get("code") or ""))
+            if not codes:
+                continue
+            pages: List[int] = []
+            for p_key in ("page", "page_number"):
+                p_val = tbl.get(p_key)
+                if isinstance(p_val, int) and p_val > 0:
+                    pages.append(p_val)
+            for p_list_key in ("pages", "page_numbers"):
+                p_list = tbl.get(p_list_key)
+                if isinstance(p_list, Sequence) and not isinstance(p_list, (str, bytes)):
+                    pages.extend(p for p in p_list if isinstance(p, int) and p > 0)
+            for p in pages:
+                by_page.setdefault(p, set()).update(codes)
+    return by_page
+
+
+def _broken_table_roots(
+    result_row: Any,
+    structured_ingest: Any,
+    visible: Optional[Set[str]],
+) -> Dict[str, str]:
+    """收集已被正式列为待审/错误的问题表根因：表代码(FIN_0x) -> 根问题 issue_id。"""
+    roots: Dict[str, str] = {}
+    structured = _json_dict(structured_ingest)
+    if not structured and isinstance(result_row, Mapping):
+        structured = _json_dict(result_row.get("structured_ingest"))
+    page_map = _page_table_map(structured) if structured else {}
+    job_uuid = str((result_row or {}).get("job_id") or "__quality_gate__") if isinstance(result_row, Mapping) else "__quality_gate__"
+
+    for index, item in enumerate(structured.get("review_items") or []):
+        if not isinstance(item, Mapping):
+            continue
+        item_type = str(item.get("type") or "").strip()
+        if item_type not in _READING_ITEM_TYPES:
+            continue
+        issue_id = str(item.get("id") or "").strip()
+        raw_page = item.get("page", item.get("page_number"))
+        page = int(raw_page) if isinstance(raw_page, int) and raw_page > 0 else None
+        raw_table = str(item.get("table_code") or "").strip()
+        if not issue_id:
+            page_token = str(page) if page is not None else "unlocated"
+            issue_id = f"{job_uuid}:structured-review:{item_type}:{raw_table or 'document'}:{page_token}:{index + 1}"
+        if visible is not None and issue_id not in visible:
+            continue
+        codes = _table_codes_in(raw_table)
+        if not codes:
+            candidate_pages: List[int] = []
+            if page is not None:
+                candidate_pages.append(page)
+            if isinstance(item.get("page_numbers"), Sequence):
+                candidate_pages.extend(p for p in item["page_numbers"] if isinstance(p, int) and p > 0)
+            mapped: Set[str] = set()
+            for p in candidate_pages:
+                mapped.update(page_map.get(p, ()))
+            if len(mapped) == 1:
+                codes = mapped
+        for code in sorted(codes):
+            roots.setdefault(code, issue_id)
+
+    for finding in _current_rule_findings(result_row):
+        if not isinstance(finding, dict) or not is_formal_finding(finding):
+            continue
+        issue_id = str(finding.get("id") or "").strip()
+        if not issue_id or (visible is not None and issue_id not in visible):
+            continue
+        location = _json_dict(finding.get("location"))
+        is_column_shift = bool(location.get("column_shift")) or str(
+            finding.get("check_relation_id") or ""
+        ).endswith(":column_shift")
+        if not is_column_shift:
+            continue
+        codes = _table_codes_in(str(location.get("table_code") or location.get("table") or ""))
+        for code in sorted(codes):
+            roots.setdefault(code, issue_id)
+    return roots
+
+
+def _table_reading_cascade_root(
+    item: Any,
+    result_row: Any,
+    visible: Optional[Set[str]],
+    structured_ingest: Any = None,
+) -> Optional[str]:
+    """若阻塞义务仅由已上浮的某张坏表（读取/映射/低置信/整列错位）导致，返回其根问题 id。"""
+    broken = _broken_table_roots(result_row, structured_ingest, visible)
+    if not broken:
+        return None
+    reasons = {
+        str(code).strip()
+        for code in (getattr(item, "reason_codes", None) or ())
+        if str(code).strip()
+    }
+    if not reasons or not (reasons <= TABLE_READING_CASCADE_CODES):
+        return None
+
+    cited_from_struct: Set[str] = set()
+    for blocker in getattr(item, "blocked_by", None) or ():
+        if isinstance(blocker, Mapping):
+            ref = str(blocker.get("ref") or "").strip()
+            if ref and not ref.startswith("规则级:"):
+                cited_from_struct.update(_table_codes_in(ref))
+    for bucket in (getattr(item, "missing_operands", None) or (), getattr(item, "candidates", None) or ()):
+        for entry in bucket:
+            if isinstance(entry, Mapping):
+                cited_from_struct.update(_table_codes_in(str(entry.get("table_code") or "")))
+
+    if cited_from_struct:
+        if not (cited_from_struct <= set(broken)):
+            return None
+        return broken[sorted(cited_from_struct)[0]]
+
+    detail = str(getattr(item, "detail", None) or "").split("结构：", 1)[0].strip()
+    cited_from_detail = _table_codes_in(detail)
+    if cited_from_detail:
+        if not (cited_from_detail <= set(broken)):
+            return None
+        return broken[sorted(cited_from_detail)[0]]
+
+    if not (reasons <= _TABLE_READING_STRICT_CODES):
+        return None
+    declared = _depends_on_tables(item)
+    overlap = sorted(declared & set(broken))
+    if not overlap:
+        return None
+    return broken[overlap[0]]
+
+
 def cascade_root_issue_ids(
     item: Any,
     result_row: Any,
     visible_issue_ids: Optional[Iterable[str]] = None,
+    *,
+    structured_ingest: Any = None,
 ) -> List[str]:
-    """返回可承接该未完成义务的根问题 issue id 列表（方案：缺表/空表、缺三公说明或同源名称错误）。"""
+    """返回可承接该未完成义务的根问题 issue id 列表（方案：缺表/空表、缺三公说明、表格读取异常或同源名称错误）。"""
     if str(getattr(item, "status", "") or "") != "insufficient_data":
         return []
     visible = set(visible_issue_ids) if visible_issue_ids is not None else None
@@ -840,7 +1010,29 @@ def cascade_root_issue_ids(
     section_root = _missing_section_cascade_root(item, result_row, visible)
     if section_root is not None:
         return [section_root]
+    reading_root = _table_reading_cascade_root(
+        item, result_row, visible, structured_ingest=structured_ingest
+    )
+    if reading_root is not None:
+        return [reading_root]
     return _v33227_name_mismatch_roots(item, result_row, visible)
+
+
+def cascade_root_issue_id(
+    item: Any,
+    result_row: Any,
+    visible_issue_ids: Optional[Iterable[str]] = None,
+    *,
+    structured_ingest: Any = None,
+) -> Optional[str]:
+    """该义务若只是“某张表缺失/为空表/读取异常”或已检出同款科目名称错误的连带后果，返回首个根问题 id。"""
+    roots = cascade_root_issue_ids(
+        item,
+        result_row,
+        visible_issue_ids=visible_issue_ids,
+        structured_ingest=structured_ingest,
+    )
+    return roots[0] if roots else None
 
 
 def _missing_or_empty_table_cascade_root(
@@ -884,13 +1076,3 @@ def _missing_or_empty_table_cascade_root(
             return None
     cited = cited_all & reported
     return roots[sorted(cited & dependent or cited)[0]]
-
-
-def cascade_root_issue_id(
-    item: Any,
-    result_row: Any,
-    visible_issue_ids: Optional[Iterable[str]] = None,
-) -> Optional[str]:
-    """该义务若只是“某张表缺失/为空表”或已检出同款科目名称错误的连带后果，返回首个根问题 id。"""
-    roots = cascade_root_issue_ids(item, result_row, visible_issue_ids=visible_issue_ids)
-    return roots[0] if roots else None

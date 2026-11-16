@@ -623,7 +623,7 @@ def apply_evidence_completeness(
                 finding["evidence_status"] = EVIDENCE_STATUS_RULE_WARNING
                 finding["evidence_missing"] = list(blocking)
                 rule_warnings.append(_finding_ref(finding, blocking))
-                if is_formal_finding(finding):
+                if is_formal_finding(finding) and not is_document_level_finding(finding):
                     formal_rule_warning_count += 1
 
         if is_document_level_finding(finding):

@@ -334,7 +334,7 @@ def _check_yoy(rule, doc, text, section, start, stop, year, owner, year_refs, is
         decimals = max(0, -declared.as_tuple().exponent)
         tolerance = max(Decimal('.1'), Decimal('.5').scaleb(-decimals))
         failed = difference > tolerance or not direction_matches
-        claim_refs = text.refs(start + current.start(), start + match.end(), '本年金额及同比声明')
+        claim_refs = text.refs(start + current.start(), start + match.end(), '本年金额及同比声明', unique_context=True)
         refs = list(claim_refs)
         if not re.search(r'20\d{2}(?:年度|年)', prefix):
             refs += year_refs

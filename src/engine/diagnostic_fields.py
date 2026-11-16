@@ -379,19 +379,23 @@ def lookup_failure(doc: Any, text: Any, *, sub_check_id: Any = None) -> List[Dic
 _RULE_LEVEL_PATTERNS = (
     # 表已识别但没有任何可用金额事实 = 空表/缺表（材料侧），与
     # native_table_arithmetic 的同一句话映射保持一致；不能报成列映射故障。
-    (("没有可用金额事实",), "table_missing", "instance_uid"),
-    (("结构化表模型不可用", "结构化表模型"), "table_mapping_incomplete", "instance_uid"),
+    (("没有可用金额事实", "缺失或无可解析行", "表缺失"), "table_missing", "instance_uid"),
+    (("结构化表模型不可用", "结构化表模型", "未读取或列未映射"), "table_mapping_incomplete", "instance_uid"),
     (("未定位到唯一的", "结构化表"), "table_missing", "instance_uid"),
     (("解析存在不确定",), "table_mapping_incomplete", "instance_uid"),
-    (("金额单位未识别", "金额单位不一致"), "scope_unconfirmed", "fund_scope"),
+    (("金额单位未识别", "金额单位不一致", "金额单位未知"), "scope_unconfirmed", "fund_scope"),
+    (("表头仅披露“预算数”", "显式预算阶段证据"), "scope_unconfirmed", "budget_stage"),
+    (("封面文种缺少独立依据",), "scope_unconfirmed", "org_scope"),
+    (("封面主体与所选组织不一致",), "subject_conflict", "organization"),
     (("财政年度",), "scope_unconfirmed", "year"),
-    (("列身份", "列组", "未绑定", "缺列", "列宽", "未登记「决算数」列", "列段内未定位", "未定位到功能分类"),
+    (("列身份", "列组", "未绑定", "未唯一绑定", "缺列", "列宽", "未登记「决算数」列", "列段内未定位", "未定位到功能分类"),
      "column_identity_unconfirmed", "column"),
-    (("行身份", "行未", "重复行", "合计行", "层级", "科目编码"), "row_level_unresolved", "row"),
+    (("行身份", "行未", "重复行", "合计行", "层级", "科目编码", "完整原始行缺失", "缺少关键行"),
+     "row_level_unresolved", "row"),
     (("身份不一致", "行内编码与名称", "编码与名称指向不同"), "row_level_unresolved", "row"),
     (("没有唯一当前事实",), "cell_unbound", "cell"),
     (("识别状态不可作操作数",), "cell_low_confidence", "cell"),
-    (("缺少明确可用数值", "不能按零", "为横线", "分项有空白"), "cell_blank_semantics_unknown", "cell"),
+    (("缺少明确可用数值", "不能按零", "为横线", "分项有空白", "空白且无独立取数依据"), "cell_blank_semantics_unknown", "cell"),
     (("存在多个实例",), "table_mapping_incomplete", "instance_uid"),
     (("来源表仍有未完成读取",), "table_mapping_incomplete", "instance_uid"),
     (("识别风险阻断",), "cell_low_confidence", "cell"),
@@ -570,13 +574,36 @@ def rule_level_entry(text: Any, rule_id: Any = None, doc: Any = None) -> Dict[st
                 "missing_operands": [],
                 "candidates": [],
             }
-    if any(token in value for token in ("未提取到", "未识别到", "未披露", "无法绑定", "未定位", "未找到")):
+    if any(token in value for token in ("多个不一致的本期金额披露", "无法确定比较基期", "基期交叉验证不可完成")):
+        page = _section_page(doc, value) if doc is not None else None
+        return {
+            "reason_codes": ["comparison_identity_unresolved"],
+            "blocked_by": [],
+            "missing_operands": [text_missing_operand(
+                section="决算情况说明", role=value[:40] or "同比比较口径", page=page,
+                row_key=None, column="比较基期", stage="决算")],
+            "candidates": [],
+        }
+    if any(token in value for token in ("未在表内定位到同名同级", "基本支出表未列")):
+        page = _section_page(doc, value) if doc is not None else None
+        return {
+            "reason_codes": ["subject_name_unlocated"],
+            "blocked_by": [],
+            "missing_operands": [text_missing_operand(
+                section="基本支出/功能分类表", role=value[:40] or "表内科目", page=page,
+                row_key=None, column="科目名称", stage="决算")],
+            "candidates": [],
+        }
+    if any(token in value for token in (
+        "未提取到", "未识别到", "未披露", "无法绑定", "未定位", "未找到",
+        "未明示", "未写明", "缺少显式决算金额", "年度未识别到", "属于其他年度",
+    )):
         page = _section_page(doc, value) if doc is not None else None
         return {
             "reason_codes": ["text_statement_absent"],
             "blocked_by": [],
             "missing_operands": [text_missing_operand(
-                section="决算情况说明", role=value[:40] or "说明金额", page=page,
+                section="决算情况说明", role=value[:40] or "说明表述", page=page,
                 row_key=None, column="说明表述", stage="决算")],
             "candidates": [],
         }
@@ -726,6 +753,9 @@ def aggregate(diagnostics: Sequence[Mapping[str, Any]], *, rule_id: Any = None,
         entry["reason_codes"] = [code for code in codes if code != "operand_missing"] or ["rule_no_reason"]
     if "operand_ambiguous" in codes and len(candidates) < 2:
         entry["reason_codes"] = [code for code in entry["reason_codes"] if code != "operand_ambiguous"] or ["rule_no_reason"]
+    specific_codes = [code for code in entry["reason_codes"] if code != "rule_no_reason"]
+    if specific_codes:
+        entry["reason_codes"] = specific_codes
     result: Dict[str, Any] = {
         "reason_codes": entry["reason_codes"],
         "blocked_by": blocked,

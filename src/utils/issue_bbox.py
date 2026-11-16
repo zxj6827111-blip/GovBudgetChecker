@@ -72,6 +72,18 @@ class PDFBBoxLocator:
         by the binder. Every coordinate comes from its original characters;
         neither an amount nor a fuzzy match can select a source location.
         """
+        located = self._lookup_native_span(evidence, page)
+        if located is None:
+            return None
+        bbox, quote = located
+        if self._valid_source_bbox(page, bbox) and self._region_text_matches(page, bbox, quote):
+            return bbox
+        return None
+
+    def _lookup_native_span(
+        self, evidence: Dict[str, Any], page: Optional[int]
+    ) -> Optional[tuple[List[float], str]]:
+        """Verify source_span offset & uniqueness on the binder's native page text."""
         if (evidence.get("source_method") != "native_text"
                 or evidence.get("source_identity_status") != "verified"
                 or not self._source_identity_complete(evidence, page)):
@@ -143,11 +155,9 @@ class PDFBBoxLocator:
                 max(float(char["x1"]) for char in source_chars),
                 max(float(char["bottom"]) for char in source_chars),
             ])
-            if self._valid_source_bbox(page, bbox) and self._region_text_matches(page, bbox, quote):
-                return bbox
+            return bbox, quote
         except Exception:
             return None
-        return None
 
     def _source_identity_complete(self, evidence: Dict[str, Any], page: Optional[int]) -> bool:
         """Exact source anchors must identify this original PDF, page, source object and quote."""
@@ -364,9 +374,16 @@ class PDFBBoxLocator:
         source_identity_complete = self._source_identity_complete(evidence, page)
         native_span = ("source_span" in evidence or
                        str(evidence.get("source_block_id") or "").startswith("native:"))
+        native_span_valid = True
         if native_span:
-            bbox = self._native_span_bbox(evidence, page)
-            source_identity_complete = source_identity_complete and bbox is not None
+            located = self._lookup_native_span(evidence, page)
+            native_span_valid = located is not None
+            bbox = None
+            if located is not None:
+                cand_bbox, cand_quote = located
+                if self._valid_source_bbox(page, cand_bbox) and self._region_text_matches(page, cand_bbox, cand_quote):
+                    bbox = cand_bbox
+            source_identity_complete = source_identity_complete and native_span_valid
             if bbox is not None:
                 evidence.update(bbox=bbox, location_level="exact_span", verification_status="verified")
             else:
@@ -390,6 +407,7 @@ class PDFBBoxLocator:
             and self._valid_document_page(page)
             and source_identity_complete
             and page_quote_matches
+            and (not native_span or bbox is not None)
         )
         evidence["source_identity_status"] = "verified" if source_identity_complete else "unverified"
         if page is not None and self._valid_document_page(page):

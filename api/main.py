@@ -528,23 +528,27 @@ def _resolve_cascaded_quality_blockers(
     obligation_coverage: Optional[Dict[str, Any]],
     structured_ingest: Optional[Dict[str, Any]],
     result_row: Optional[Dict[str, Any]],
-) -> tuple[Optional[List[Any]], set[str], set[str]]:
-    """计算去除同源问题覆盖/连带后的有效阻塞义务、名称差异连带集及原始阻塞集。"""
+) -> tuple[Optional[List[Any]], set[str], set[str], set[str]]:
+    """计算去除同源问题覆盖/连带后的有效阻塞义务、名称差异/表格读取连带集及原始阻塞集。"""
     if (
         not isinstance(result_row, dict)
         or not isinstance(obligation_coverage, dict)
         or not isinstance(obligation_coverage.get("instances"), list)
     ):
-        return None, set(), set()
+        return None, set(), set(), set(), set()
 
     from src.engine.check_obligations import UNRESOLVED_OBLIGATION_STATUSES
     from src.services.material_detail_query_service import build_coverage
+    from src.services.obligation_finding_coverage import (
+        TABLE_READING_CASCADE_CODES,
+        _broken_table_roots,
+    )
     from src.services.review_lifecycle_service import blocking_coverage_obligations
     from src.services.review_problem_set import collect_review_problems
 
     coverage = build_coverage(obligation_coverage)
     if not coverage.available:
-        return None, set(), set()
+        return None, set(), set(), set(), set()
 
     problems = collect_review_problems(
         job_uuid=str(result_row.get("job_id") or "__quality_gate__"),
@@ -564,7 +568,10 @@ def _resolve_cascaded_quality_blockers(
     ]
     raw_blocking_ids = {item.obligation_id for item in raw_blocking}
     remaining_blocking = blocking_coverage_obligations(
-        all_items, result_row, visible_issue_ids=visible_ids
+        all_items,
+        result_row,
+        visible_issue_ids=visible_ids,
+        structured_ingest=structured_ingest,
     )
     remaining_ids = {item.obligation_id for item in remaining_blocking}
     cascaded_name_mismatch_ids = {
@@ -579,16 +586,49 @@ def _resolve_cascaded_quality_blockers(
         }
         == {"name_mismatch_confirmed"}
     }
-    return remaining_blocking, cascaded_name_mismatch_ids, raw_blocking_ids
+    cascaded_table_reading_ids = {
+        item.obligation_id
+        for item in raw_blocking
+        if item.obligation_id not in remaining_ids
+        and item.obligation_id not in cascaded_name_mismatch_ids
+        and (
+            lambda codes: bool(codes) and codes <= TABLE_READING_CASCADE_CODES
+        )(
+            {
+                str(code).strip()
+                for code in (getattr(item, "reason_codes", None) or ())
+                if str(code).strip()
+            }
+        )
+    }
+    broken_table_codes = set(
+        _broken_table_roots(result_row, structured_ingest, visible_ids)
+    )
+    return (
+        remaining_blocking,
+        cascaded_name_mismatch_ids,
+        cascaded_table_reading_ids,
+        raw_blocking_ids,
+        broken_table_codes,
+    )
 
 
-def _is_cascaded_name_mismatch_rule(
+def _is_cascaded_quality_rule(
     item: Any,
     cascaded_name_mismatch_ids: set[str],
+    cascaded_table_reading_ids: set[str],
     raw_blocking_ids: set[str],
+    broken_table_codes: set[str] = frozenset(),
 ) -> bool:
-    """该条 insufficient_data 规则仅因已由 V33-227 正式报出的同源名称差异阻塞且无其他缺口。"""
-    if not cascaded_name_mismatch_ids or not isinstance(item, dict):
+    """该条 insufficient_data 规则仅因已上浮的同源名称差异或坏表读取/错列阻塞且无其他缺口。"""
+    if (
+        (
+            not cascaded_name_mismatch_ids
+            and not cascaded_table_reading_ids
+            and not broken_table_codes
+        )
+        or not isinstance(item, dict)
+    ):
         return False
     if str(item.get("status") or "") != STATUS_INSUFFICIENT_DATA:
         return False
@@ -596,8 +636,6 @@ def _is_cascaded_name_mismatch_rule(
     if not rule_id:
         return False
     diags = [dg for dg in (item.get("diagnostics") or []) if isinstance(dg, dict)]
-    if any(dg.get("blocked_by") for dg in diags):
-        return False
     codes = {
         str(code).strip()
         for code in (item.get("reason_codes") or [])
@@ -609,15 +647,41 @@ def _is_cascaded_name_mismatch_rule(
             for code in (dg.get("reason_codes") or [])
             if str(code).strip()
         )
-    if codes != {"name_mismatch_confirmed"}:
-        return False
     from src.engine.check_obligations import obligation_ids_for_rule
+    from src.services.obligation_finding_coverage import (
+        TABLE_READING_CASCADE_CODES,
+        _table_codes_in,
+    )
 
     linked_obs = [
         oid for oid in obligation_ids_for_rule(rule_id) if oid in raw_blocking_ids
     ]
-    return bool(linked_obs) and all(
-        oid in cascaded_name_mismatch_ids for oid in linked_obs
+    if not linked_obs:
+        if not broken_table_codes or not codes or not (codes <= TABLE_READING_CASCADE_CODES):
+            return False
+        cited_tables: set[str] = set()
+        for dg in diags:
+            for blk in dg.get("blocked_by") or ():
+                if isinstance(blk, dict):
+                    ref = str(blk.get("ref") or "").strip()
+                    if ref and not ref.startswith("规则级:"):
+                        cited_tables.update(_table_codes_in(ref))
+            for miss in dg.get("missing_operands") or ():
+                if isinstance(miss, dict):
+                    cited_tables.update(_table_codes_in(str(miss.get("table_code") or "")))
+        return bool(cited_tables) and cited_tables <= broken_table_codes
+    if (
+        cascaded_name_mismatch_ids
+        and not any(dg.get("blocked_by") for dg in diags)
+        and codes == {"name_mismatch_confirmed"}
+        and all(oid in cascaded_name_mismatch_ids for oid in linked_obs)
+    ):
+        return True
+    return (
+        bool(cascaded_table_reading_ids)
+        and bool(codes)
+        and codes <= TABLE_READING_CASCADE_CODES
+        and all(oid in cascaded_table_reading_ids for oid in linked_obs)
     )
 
 
@@ -913,12 +977,16 @@ def _evaluate_quality_gate(
                 }
             )
 
-    remaining_blocking_obligations, cascaded_name_mismatch_ids, raw_blocking_ids = (
-        _resolve_cascaded_quality_blockers(
-            obligation_coverage=obligation_coverage,
-            structured_ingest=structured_ingest,
-            result_row=result_row,
-        )
+    (
+        remaining_blocking_obligations,
+        cascaded_name_mismatch_ids,
+        cascaded_table_reading_ids,
+        raw_blocking_ids,
+        broken_table_codes,
+    ) = _resolve_cascaded_quality_blockers(
+        obligation_coverage=obligation_coverage,
+        structured_ingest=structured_ingest,
+        result_row=result_row,
     )
 
     # ---- 规则执行摘要（parse/execution 异常不再伪装成 hint finding） ----
@@ -939,8 +1007,12 @@ def _evaluate_quality_gate(
         insufficient_unresolved = [
             item
             for item in raw_insufficient_unresolved
-            if not _is_cascaded_name_mismatch_rule(
-                item, cascaded_name_mismatch_ids, raw_blocking_ids
+            if not _is_cascaded_quality_rule(
+                item,
+                cascaded_name_mismatch_ids,
+                cascaded_table_reading_ids,
+                raw_blocking_ids,
+                broken_table_codes,
             )
         ]
         cascaded_rule_count = len(raw_insufficient_unresolved) - len(
