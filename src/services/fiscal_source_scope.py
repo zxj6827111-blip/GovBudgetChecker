@@ -55,5 +55,5 @@ def organization_scope(artifact, local_title=None):
     max_page = max(pages, default=1)
     texts = ["\n".join(_witness_blocks(artifact, lambda p, page=page: p == page))
              for page in range(1, max_page + 1)]
-    scope, _evidence, _conflict = source_scope_evidence(texts)
+    scope, _evidence, _conflict = source_scope_evidence(texts, include_section_headings=False)
     return scope

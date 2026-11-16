@@ -48,9 +48,12 @@ def _is_jurisdiction_prefix_omission(value: str, target: str) -> bool:
 
 
 def source_scope_evidence(
-    page_texts: Sequence[str], filename: str = ""
+    page_texts: Sequence[str],
+    filename: str = "",
+    *,
+    include_section_headings: bool = True,
 ) -> tuple[str | None, list[dict], bool]:
-    """封面与构成说明为主；无封面明示时补充第二/三部分标题及内设机构/表注线索。"""
+    """封面与构成说明为主；无封面明示时按需补充第二/三部分标题及内设机构/表注线索。"""
     cover = detect_cover_facts(page_texts)
     found: list[dict[str, Any]] = []
     title = normalize_org_name(cover["cover_title"])
@@ -97,7 +100,11 @@ def source_scope_evidence(
                 found.append(
                     {"source": "composition", "page": page, "text": clause, "scope": scope}
                 )
-        if page <= 15:
+    if include_section_headings and not found and len(page_texts) > 1:
+        for page, text in enumerate(page_texts[:15], 1):
+            if page == 1:
+                continue
+            compact = normalize_org_name(text)
             for match in re.finditer(
                 r"第[二三]部分[^\n。]{0,45}?(部门|单位)(?:汇总)?(?:预算|决算)(?:表|情况说明)",
                 compact,
