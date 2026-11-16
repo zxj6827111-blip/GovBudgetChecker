@@ -6,8 +6,22 @@ import { useRouter } from "next/navigation";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Building2, ChevronLeft, ChevronRight, FolderOpen, LayoutGrid, List, RefreshCw, Search, Star } from "lucide-react";
 import { Badge, Metric } from "@/components/ui";
+import { BUTTON_BASE_CLASSES, BUTTON_SIZE_CLASSES, BUTTON_VARIANT_CLASSES } from "@/components/ui/buttonStyles";
 import { resolvePollingDecisionFromActivity } from "@/lib/jobPolling";
-import { directoryMaterialStatus, openReviewCount, type LatestMaterialStatus, type MaterialReportPage, type OrganizationReviewStatus } from "./materialReportAdapters";
+import { dispatchOrgTreeRefresh } from "@/lib/orgTreeEvents";
+import {
+  buildMaterialDeleteTargets,
+  directoryMaterialStatus,
+  formatMaterialDeleteSuccess,
+  materialReportDisplayTitle,
+  openReviewCount,
+  reviewLabel,
+  type LatestMaterialStatus,
+  type MaterialReport,
+  type MaterialReportDeleteSummary,
+  type MaterialReportPage,
+  type OrganizationReviewStatus,
+} from "./materialReportAdapters";
 import { MaterialReportCard, MaterialReportCardEmpty } from "./MaterialReportCard";
 import { MaterialReportTable } from "./MaterialReportTable";
 import { flattenOrganizationTree, type OrganizationFilterOption } from "../workspace/OrganizationFilterSelect";
@@ -86,6 +100,11 @@ export function DepartmentReportsPage({ routeOrganizationId }: { routeOrganizati
   const [loaded, setLoaded] = useState(false);
   const [routeStatus, setRouteStatus] = useState<"pending" | "ready" | "missing">("pending");
   const [error, setError] = useState<string | null>(null);
+  const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(() => new Set());
+  const [pendingDeleteItems, setPendingDeleteItems] = useState<MaterialReport[]>([]);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
   const pageRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     // 切换材料口径时从标题开始，避免沿用长目录的滚动位置。
@@ -223,6 +242,100 @@ export function DepartmentReportsPage({ routeOrganizationId }: { routeOrganizati
   }, [applyView]);
   const polling = useJobPolling({ fetcher: load, decide: useCallback(() => resolvePollingDecisionFromActivity(reportViewRef.current?.activity), []) });
   const refreshReports = polling.refreshNow;
+  useEffect(() => {
+    setSelectedItemIds(new Set());
+  }, [organizationId, includeDescendants, reportTab, managementScope, regionId, year, kind, keyword, reviewStatus, reportPage, cardYear]);
+  useEffect(() => {
+    if (pendingDeleteItems.length === 0 || deleting) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setDeleteError(null);
+        setPendingDeleteItems([]);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [pendingDeleteItems.length, deleting]);
+  const toggleSelectItem = useCallback((item: MaterialReport) => {
+    setSelectedItemIds((current) => {
+      const next = new Set(current);
+      if (next.has(item.item_id)) next.delete(item.item_id);
+      else next.add(item.item_id);
+      return next;
+    });
+  }, []);
+  const toggleSelectAllItems = useCallback((items: MaterialReport[]) => {
+    if (items.length === 0) return;
+    setSelectedItemIds((current) => {
+      const allSelected = items.every((item) => current.has(item.item_id));
+      const next = new Set(current);
+      if (allSelected) {
+        for (const item of items) next.delete(item.item_id);
+      } else {
+        for (const item of items) next.add(item.item_id);
+      }
+      return next;
+    });
+  }, []);
+  const openDeleteConfirm = useCallback((items: MaterialReport[]) => {
+    if (items.length === 0) return;
+    setDeleteError(null);
+    setPendingDeleteItems(items);
+  }, []);
+  const closeDeleteConfirm = useCallback(() => {
+    if (deleting) return;
+    setDeleteError(null);
+    setPendingDeleteItems([]);
+  }, [deleting]);
+  const confirmDeleteReports = useCallback(async () => {
+    if (pendingDeleteItems.length === 0 || deleting) return;
+    const { slotIds, jobIds } = buildMaterialDeleteTargets(pendingDeleteItems);
+    if (slotIds.length === 0 && jobIds.length === 0) {
+      setDeleteError("未找到可删除的报告标识。");
+      return;
+    }
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const singleSlot = pendingDeleteItems.length === 1 && slotIds.length === 1 && jobIds.length === 0;
+      const response = await fetch(
+        singleSlot
+          ? `/api/materials/reports/${encodeURIComponent(slotIds[0])}`
+          : "/api/materials/reports/batch-delete",
+        {
+          method: singleSlot ? "DELETE" : "POST",
+          headers: singleSlot ? undefined : { "Content-Type": "application/json" },
+          body: singleSlot ? undefined : JSON.stringify({ slot_ids: slotIds, job_ids: jobIds }),
+        },
+      );
+      const text = await response.text();
+      let payload: { ok?: boolean; detail?: string; data?: MaterialReportDeleteSummary } = {};
+      if (text) {
+        try {
+          payload = JSON.parse(text) as typeof payload;
+        } catch {
+          payload = { detail: text };
+        }
+      }
+      if (!response.ok || payload.ok === false || !payload.data) {
+        throw new Error(payload.detail || `删除失败（HTTP ${response.status}）`);
+      }
+      const deletedItems = pendingDeleteItems;
+      setPendingDeleteItems([]);
+      setSelectedItemIds((current) => {
+        const next = new Set(current);
+        for (const item of deletedItems) next.delete(item.item_id);
+        return next;
+      });
+      setActionNotice(formatMaterialDeleteSuccess(payload.data));
+      refreshReports();
+      dispatchOrgTreeRefresh();
+    } catch (reason) {
+      setDeleteError(reason instanceof Error ? reason.message : "删除报告失败，请稍后重试。");
+    } finally {
+      setDeleting(false);
+    }
+  }, [pendingDeleteItems, deleting, refreshReports]);
   useEffect(() => {
     const refresh = () => { if (!document.hidden) refreshReports(); };
     window.addEventListener("focus", refresh);
@@ -451,6 +564,12 @@ export function DepartmentReportsPage({ routeOrganizationId }: { routeOrganizati
         </div>
       </div> : null}
       {error ? <p role="alert" className="mt-4 rounded-md bg-danger-50 p-3 text-sm text-danger-700">{error}{loaded ? " 当前保留上次成功加载的结果。" : ""}</p> : null}
+      {actionNotice ? (
+        <div role="status" className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-md border border-success-200 bg-success-50 p-3 text-sm text-success-700" data-testid="material-report-delete-notice">
+          <span>{actionNotice}</span>
+          <button type="button" onClick={() => setActionNotice(null)} className="text-xs underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400">关闭</button>
+        </div>
+      ) : null}
       {!loaded && !error ? <p className="mt-4 text-sm text-slate-500">正在加载部门报告…</p> : null}
       {!detailMode ? <section className="mt-5" aria-label="部门与单位分级目录" data-testid="gbc-reports-directory">
         <div className="flex border-b border-border" role="group" aria-label="报告管理范围">
@@ -515,12 +634,22 @@ export function DepartmentReportsPage({ routeOrganizationId }: { routeOrganizati
             {reportsCurrent && selectedCardYear ? <section className="mt-4" role="tabpanel" aria-label={selectedCardYear === "unknown" ? "年度待确认" : `${selectedCardYear} 年度`} data-testid={`gbc-reports-year-${selectedCardYear}`}>
               <div className="grid gap-3 md:grid-cols-2">
                 {(["budget", "final"] as const).map((value) => <div key={value} className="flex min-w-0 flex-col gap-3">
-                  {cardItems[value].length ? cardItems[value].map((item) => <MaterialReportCard key={item.item_id} item={item} returnTo={currentHref} subjectId={organizationId} />) : <MaterialReportCardEmpty kind={value} year={selectedCardYear} />}
+                  {cardItems[value].length ? cardItems[value].map((item) => <MaterialReportCard key={item.item_id} item={item} returnTo={currentHref} subjectId={organizationId} isAdmin={isAdmin} onDelete={(target) => openDeleteConfirm([target])} />) : <MaterialReportCardEmpty kind={value} year={selectedCardYear} />}
                 </div>)}
               </div>
               {cardItems.other.length ? <>
                 <h2 className="mb-2 mt-5 text-sm font-semibold text-slate-700">类型待确认的材料 · {cardItems.other.length} 条</h2>
-                <MaterialReportTable items={cardItems.other} returnTo={currentHref} />
+                <MaterialReportTable
+                  items={cardItems.other}
+                  returnTo={currentHref}
+                  isAdmin={isAdmin}
+                  selectedIds={selectedItemIds}
+                  onToggleSelect={toggleSelectItem}
+                  onToggleSelectAll={toggleSelectAllItems}
+                  onDelete={(target) => openDeleteConfirm([target])}
+                  onBatchDelete={openDeleteConfirm}
+                  onClearSelection={() => setSelectedItemIds(new Set())}
+                />
               </> : null}
             </section> : null}
             {reportsCurrent && activeReportView && activeReportView.total > activeReportView.items.length ? <p className="mt-3 text-xs text-warning-700">材料较多，这里只按年度显示最近 {activeReportView.items.length} 份{regionId ? <>，全部材料可在<Link href={detailHref(regionId) as Route} className="underline">本范围全部材料</Link>中查看</> : null}。</p> : null}
@@ -545,12 +674,83 @@ export function DepartmentReportsPage({ routeOrganizationId }: { routeOrganizati
             {groups.map(([fiscalYear, reports]) => (
               <section key={fiscalYear} className="mt-5" data-testid={`gbc-reports-year-${fiscalYear}`}>
                 <h2 className="mb-2 text-sm font-semibold text-slate-700">{fiscalYear === "unknown" ? "财政年度待确认" : `${fiscalYear} 年度`} · {reports.length} 条材料记录{reportPageCount > 1 ? "（本页）" : ""}</h2>
-                <MaterialReportTable items={reports} returnTo={currentHref} />
+                <MaterialReportTable
+                  items={reports}
+                  returnTo={currentHref}
+                  isAdmin={isAdmin}
+                  selectedIds={selectedItemIds}
+                  onToggleSelect={toggleSelectItem}
+                  onToggleSelectAll={toggleSelectAllItems}
+                  onDelete={(target) => openDeleteConfirm([target])}
+                  onBatchDelete={openDeleteConfirm}
+                  onClearSelection={() => setSelectedItemIds(new Set())}
+                />
               </section>
             ))}
             {reportPageCount > 1 ? <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-sm text-slate-500" data-testid="gbc-reports-pagination"><span>共 {visibleTotal} 条材料记录 · 第 {currentReportPage + 1} / {reportPageCount} 页</span><div className="flex gap-2"><button type="button" disabled={currentReportPage === 0} onClick={() => setReportPage(currentReportPage - 1)} className={filterClass}>报告上一页</button><button type="button" disabled={currentReportPage + 1 >= reportPageCount} onClick={() => setReportPage(currentReportPage + 1)} className={filterClass}>报告下一页</button></div></div> : null}
           </>}
       </section> : null}
+      {pendingDeleteItems.length > 0 ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-800/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="material-report-delete-title"
+          data-testid="material-report-delete-modal"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) closeDeleteConfirm();
+          }}
+        >
+          <div className="w-full max-w-xl rounded-card border border-border bg-white p-6 shadow-xl">
+            <h2 id="material-report-delete-title" className="text-lg font-semibold text-slate-900">
+              {pendingDeleteItems.length === 1 ? "确认永久删除该报告" : `确认批量删除 ${pendingDeleteItems.length} 份报告`}
+            </h2>
+            <p className="mt-2 rounded-md border border-danger-200 bg-danger-50 p-3 text-xs leading-relaxed text-danger-700">
+              此操作不可撤销：将永久删除所选报告关联的文件版本、原始 PDF 与产物目录、分析任务、解析记录、复核会话、口径判定及事实快照。若某份报告属于监督基线台账，将清除其所有绑定数据并重置为待提交状态；否则移除对应台账槽位。
+            </p>
+            <ul className="mt-4 max-h-64 space-y-2 overflow-y-auto pr-1 text-sm">
+              {pendingDeleteItems.map((item) => {
+                const filename = item.current_version?.filename ?? item.filename ?? "无当前文件";
+                const versionText = item.version_count === null ? "文件版本待确认" : `${item.version_count} 个文件版本`;
+                return (
+                  <li key={item.item_id} className="rounded-md border border-border bg-slate-50 px-3 py-2.5">
+                    <p className="font-medium text-slate-900">{materialReportDisplayTitle(item)}</p>
+                    <p className="mt-1 break-all text-xs text-slate-600">文件：{filename}</p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {versionText} · {item.analysis_task_count} 个分析任务 · 复核状态：{reviewLabel(item.review)}
+                    </p>
+                  </li>
+                );
+              })}
+            </ul>
+            {deleteError ? (
+              <p role="alert" className="mt-3 rounded-md bg-danger-50 p-3 text-xs text-danger-700" data-testid="material-report-delete-error">
+                {deleteError}
+              </p>
+            ) : null}
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                disabled={deleting}
+                onClick={closeDeleteConfirm}
+                className={`${BUTTON_BASE_CLASSES} ${BUTTON_SIZE_CLASSES.md} ${BUTTON_VARIANT_CLASSES.secondary}`}
+                data-testid="material-report-delete-cancel"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={deleting}
+                onClick={() => void confirmDeleteReports()}
+                className={`${BUTTON_BASE_CLASSES} ${BUTTON_SIZE_CLASSES.md} ${BUTTON_VARIANT_CLASSES.danger}`}
+                data-testid="material-report-delete-confirm"
+              >
+                {deleting ? "正在删除…" : "确认永久删除"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

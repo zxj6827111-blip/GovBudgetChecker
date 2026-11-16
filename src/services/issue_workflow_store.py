@@ -1800,3 +1800,159 @@ async def create_package(
         next_state = _write_state(state)
     await persist_workflow_state(next_state)
     return {"state": next_state, "package": record}
+
+
+def _issue_key_belongs_to_jobs(issue_key: Any, target_job_ids: Set[str]) -> bool:
+    text = str(issue_key or "").strip()
+    job_id, separator, _ = text.partition("::")
+    return bool(separator and job_id in target_job_ids)
+
+
+def purge_workflow_records_for_jobs(
+    job_ids: Sequence[str],
+    *,
+    slot_ids: Sequence[str] = (),
+) -> Dict[str, Any]:
+    """Remove persisted issue workflow records, locks, and package refs for deleted jobs/slots."""
+    target_jobs = {str(item or "").strip() for item in job_ids if str(item or "").strip()}
+    target_slots = {str(item or "").strip() for item in slot_ids if str(item or "").strip()}
+    if not target_jobs and not target_slots:
+        return {
+            "changed": False,
+            "removed_issues": 0,
+            "removed_events": 0,
+            "removed_locks": 0,
+            "updated_packages": 0,
+            "removed_packages": 0,
+            "state": None,
+        }
+
+    with _state_lock():
+        if not _store_path().is_file():
+            return {
+                "changed": False,
+                "removed_issues": 0,
+                "removed_events": 0,
+                "removed_locks": 0,
+                "updated_packages": 0,
+                "removed_packages": 0,
+                "state": None,
+            }
+
+        state = _read_state()
+        issues = state.get("issues") or {}
+        next_issues = {
+            key: record
+            for key, record in issues.items()
+            if str((record or {}).get("job_id") or "").strip() not in target_jobs
+        }
+        removed_issues = len(issues) - len(next_issues)
+
+        events = state.get("decision_events") or []
+        next_events = [
+            event
+            for event in events
+            if str((event or {}).get("job_id") or "").strip() not in target_jobs
+        ]
+        removed_events = len(events) - len(next_events)
+
+        locks = state.get("review_locks") or {}
+        next_locks = {}
+        for lock_job_id, lock in locks.items():
+            lock_slot_id = str((lock or {}).get("slot_id") or "").strip()
+            if lock_job_id in target_jobs or (lock_slot_id and lock_slot_id in target_slots):
+                continue
+            next_locks[lock_job_id] = lock
+        removed_locks = len(locks) - len(next_locks)
+
+        migrations = state.get("legacy_ignore_migrations") or {}
+        next_migrations = {
+            mig_job_id: value
+            for mig_job_id, value in migrations.items()
+            if str(mig_job_id or "").strip() not in target_jobs
+        }
+        removed_migrations = len(migrations) - len(next_migrations)
+
+        next_packages = []
+        updated_packages = 0
+        removed_packages = 0
+        for package in state.get("packages") or []:
+            pkg_jobs = [jid for jid in (package.get("job_ids") or []) if str(jid or "").strip() not in target_jobs]
+            pkg_keys = [k for k in (package.get("issue_keys") or []) if not _issue_key_belongs_to_jobs(k, target_jobs)]
+            pkg_req_keys = [
+                k for k in (package.get("requested_issue_keys") or []) if not _issue_key_belongs_to_jobs(k, target_jobs)
+            ]
+            snapshots = package.get("report_snapshots")
+            next_snapshots = (
+                {
+                    jid: snap
+                    for jid, snap in snapshots.items()
+                    if str(jid or "").strip() not in target_jobs
+                }
+                if isinstance(snapshots, dict)
+                else {}
+            )
+            changed_pkg = (
+                len(pkg_jobs) != len(package.get("job_ids") or [])
+                or len(pkg_keys) != len(package.get("issue_keys") or [])
+                or (isinstance(snapshots, dict) and len(next_snapshots) != len(snapshots))
+                or (
+                    isinstance(package.get("requested_issue_keys"), list)
+                    and len(pkg_req_keys) != len(package.get("requested_issue_keys") or [])
+                )
+            )
+            if not pkg_jobs:
+                removed_packages += 1
+                continue
+            if changed_pkg:
+                updated_packages += 1
+                updated_pkg = copy.deepcopy(package)
+                updated_pkg["job_ids"] = pkg_jobs
+                updated_pkg["issue_keys"] = pkg_keys
+                if isinstance(updated_pkg.get("requested_issue_keys"), list):
+                    updated_pkg["requested_issue_keys"] = pkg_req_keys
+                updated_pkg["report_snapshots"] = next_snapshots
+                updated_pkg["updated_at"] = _now()
+                next_packages.append(updated_pkg)
+            else:
+                next_packages.append(package)
+
+        changed = bool(
+            removed_issues
+            or removed_events
+            or removed_locks
+            or removed_migrations
+            or updated_packages
+            or removed_packages
+        )
+        next_state = state
+        if changed:
+            state["issues"] = next_issues
+            state["decision_events"] = next_events
+            state["review_locks"] = next_locks
+            state["legacy_ignore_migrations"] = next_migrations
+            state["packages"] = next_packages
+            next_state = _write_state(state)
+
+    return {
+        "changed": changed,
+        "removed_issues": removed_issues,
+        "removed_events": removed_events,
+        "removed_locks": removed_locks,
+        "updated_packages": updated_packages,
+        "removed_packages": removed_packages,
+        "state": next_state,
+    }
+
+
+async def purge_and_persist_workflow_records_for_jobs(
+    job_ids: Sequence[str],
+    *,
+    slot_ids: Sequence[str] = (),
+) -> Dict[str, Any]:
+    """Purge local workflow state for deleted jobs/slots and mirror changes to PostgreSQL."""
+    result = purge_workflow_records_for_jobs(job_ids, slot_ids=slot_ids)
+    next_state = result.get("state")
+    if result.get("changed") and isinstance(next_state, dict):
+        await persist_workflow_state(next_state)
+    return result

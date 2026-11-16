@@ -118,6 +118,25 @@ def test_budget_punctuation_and_brackets() -> None:
     assert "：：" in text and "括号未闭合" in text and "文号格式" in text
 
 
+def test_half_width_punctuation_downgraded_to_info_while_keeping_doc_number() -> None:
+    doc = _doc([
+        "封面",
+        "卫生健康支出89.77万元，占4.21%;城乡社区支出1,723.59万元,占80.00%。",
+        "主要用于:办公保障服务。占0.45%.根据《办法》（沪财[2024]12号）实施。",
+    ])
+    issues = CMM002_TextAnomalyRule().apply(doc)
+    by_msg = {i.message: i for i in issues}
+    half_issues = [
+        i for msg, i in by_msg.items()
+        if any(tag in msg for tag in ("半角逗号/分号", "半角冒号", "半角句点", "英文句点"))
+    ]
+    assert len(half_issues) >= 3
+    assert all(i.severity == "info" for i in half_issues), [(i.message, i.severity) for i in half_issues]
+    doc_num_issues = [i for msg, i in by_msg.items() if "文号年份应使用六角括号" in msg]
+    assert len(doc_num_issues) == 1
+    assert doc_num_issues[0].severity == "low"
+
+
 # ---- CMM-005 方向矛盾词（B-09/D-07） ----------------------------------------
 
 

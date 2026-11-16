@@ -166,3 +166,159 @@ def test_unresolved_name_keeps_gate_and_does_not_claim_original_amount_missing()
                                   missing_operands=tuple(diagnostic['missing_operands']))
     assert instance.is_unresolved
     assert '金额核对尚未完成' in _derive_card_summary(instance)
+
+
+def test_legacy_pension_subject_names_normalize_and_report_multi_item_mismatches():
+    from types import SimpleNamespace as NS
+
+    from src.engine.native_name_evidence import _interleaved_wrapped_code_name_span
+    from src.engine.rules_v33 import build_document
+
+    assert subject_variant_key('行政事业单位离退休') == subject_variant_key('行政事业单位养老支出')
+    assert subject_variant_key('归口管理的行政单位离退休') == subject_variant_key('行政单位离退休')
+    assert subject_variant_key('归口管理的事业单位离退休') == subject_variant_key('事业单位离退休')
+    assert subject_variant_key('机关事业单位离退休') != subject_variant_key('行政事业单位养老支出')
+
+    # 验证跨行夹杂科目编码与金额的 T5 单元格定位
+    wrapped_table_text = (
+        "一般公共预算财政拨款支出决算表\n"
+        "行政事业单位\n"
+        "20805 162.00 162.00\n"
+        "养老支出\n"
+        "行政单位离退\n"
+        "2080501 57.31 57.31\n"
+        "休\n"
+    )
+    span_text = _interleaved_wrapped_code_name_span(wrapped_table_text, "20805", "行政事业单位\n养老支出")
+    assert span_text == "行政事业单位\n20805 162.00 162.00\n养老支出"
+
+    # 验证多条同款旧名与项级旧名均能完整报出、带出全部出现序号并指出应以表格为准
+    narrative_page = (
+        "五、一般公共预算财政拨款支出决算情况说明\n"
+        "（三）一般公共预算财政拨款支出决算具体情况\n"
+        "5、社会保障和就业支出（类）行政事业单位离退休（款）归口管理的行政单位离退休（项）。支出决算为57.31万元。\n"
+        "6、社会保障和就业支出（类）行政事业单位离退休（款）归口管理的事业单位离退休（项）。支出决算为28.14万元。\n"
+        "7、社会保障和就业支出（类）行政事业单位离退休（款）机关事业单位基本养老保险缴费支出（项）。支出决算为51.03万元。\n"
+        "六、一般公共预算财政拨款基本支出决算情况说明"
+    )
+    t5_rows = [
+        ["功能分类科目编码", "科目名称", "本年支出", "基本支出", "项目支出"],
+        ["208", "社会保障和就业支出", "162.00", "162.00", ""],
+        ["20805", "行政事业单位\n养老支出", "162.00", "162.00", ""],
+        ["2080501", "行政单位离退\n休", "57.31", "57.31", ""],
+        ["2080502", "事业单位离退休", "28.14", "28.14", ""],
+        ["2080505", "机关事业单位基本养老保险缴费支出", "51.03", "51.03", ""],
+    ]
+    doc = build_document("/tmp/t5-legacy-pension.pdf", [wrapped_table_text, narrative_page], [[t5_rows], []], 1000)
+    issues = R33227_Narrative5_T5_NameConsistency().apply(doc)
+    by_code = {issue.location.get("code"): issue for issue in issues}
+    assert {"20805", "2080501", "2080502"} <= set(by_code)
+    klass_issue = by_code["20805"]
+    assert "应以表格“行政事业单位养老支出”为准" in klass_issue.message
+    assert "涉及说明第5、6、7项" in klass_issue.message
+    narrative_refs = [
+        ref for ref in (klass_issue.location.get("table_refs") or [])
+        if ref.get("role") == "说明5"
+    ]
+    assert len(narrative_refs) == 3
+    table_refs = [
+        ref for ref in (klass_issue.location.get("table_refs") or [])
+        if ref.get("role") == "T5"
+    ]
+    assert table_refs and table_refs[0]["page"] == 1
+    assert "20805" in table_refs[0]["span"]
+    assert "应以表格“行政单位离退休”为准" in by_code["2080501"].message
+    assert "应以表格“事业单位离退休”为准" in by_code["2080502"].message
+
+    # 验证 functional_name_refs 同步保留 extra_spans 并对同名折行格使用编码消歧原文
+    from src.engine.native_name_evidence import functional_name_refs
+
+    art_doc, facts = document(extra=(('20805', '行政事业单位\n养老支出'), ('2080509', '行政事业单位\n养老支出')))
+    target_fact = next(f for f in facts if f.subject_code == '20805')
+    target_fact.row_order = 3
+    frag = art_doc.parse_artifact.table_fragments[0]
+    frag.fragment_uid = 'frag-1'
+    for cell in frag.cells:
+        cell.origin_fragment_uid = None
+        cell.origin_row_idx = None
+        cell.origin_col_idx = None
+    art_doc.parse_artifact.logical_tables = [NS(instance_uid='instance-1', fragment_uids=['frag-1'])]
+    art_doc.page_texts[0] += '\n5、甲（款）行政事业单位离退休\n6、乙（款）行政事业单位离退休'
+    refs = functional_name_refs(art_doc, '20805', '行政事业单位\n养老支出', {
+        'page': 1,
+        'source_span': '5、甲（款）行政事业单位离退休',
+        'extra_spans': ['6、乙（款）行政事业单位离退休'],
+    })
+    assert [r['span'] for r in refs if r['role'] == '功能分类说明原文'] == [
+        '5、甲（款）行政事业单位离退休',
+        '6、乙（款）行政事业单位离退休',
+    ]
+    assert any(
+        r['role'] == '原表科目编码及名称' and r['span'] == '行政事业单位\n20805 100.00\n养老支出'
+        for r in refs
+    )
+
+
+def test_legacy_culture_subject_variant_locates_class_and_keeps_literal_mismatch():
+    from src.engine.rules_v33 import R33222_Narrative5_T5, build_document
+    from src.engine.fact_context import FactContext
+    from tests.remediation.test_r22_a2_identity_chain import ORG, YEAR, _fact
+
+    assert subject_variant_key('文化体育与传媒支出') == subject_variant_key('文化旅游体育与传媒支出')
+    assert subject_variant_key('其他文化体育与传媒支出') == subject_variant_key('其他文化旅游体育与传媒支出')
+    assert subject_variant_key('文化体育与传媒支出') != subject_variant_key('体育支出')
+
+    entries = [
+        ('207', '文化旅游体育与传媒支出'),
+        ('20701', '文化和旅游'),
+        ('2070109', '群众文化'),
+    ]
+    base_doc, facts = document(entries=entries)
+    sources = []
+    fact, error = _hierarchy_fact(
+        base_doc, facts, _item_match('文化体育与传媒支出', '文化和旅游', '群众文化'), aliases=sources
+    )
+    assert error is None and fact.subject_code == '2070109'
+    assert any(
+        s.get('role') == 'native_subject_name_variant'
+        and s.get('subject_code') == '207'
+        and s.get('basis') == 'unique_native_code_parent_and_name_variant'
+        for s in sources
+    )
+
+    t5_rows = [['功能分类科目编码', '科目名称', '本年支出', '基本支出', '项目支出'],
+               *[[code, name, '100.00', '100.00', '0.00'] for code, name in entries],
+               ['合计', '', '100.00', '100.00', '0.00']]
+    narrative = (
+        '五、一般公共预算财政拨款支出决算情况说明\n'
+        '（一）一般公共预算财政拨款支出决算总体情况\n'
+        '一般公共预算财政拨款支出决算为100.00万元。\n'
+        '（三）一般公共预算财政拨款支出决算具体情况\n'
+        '1、文化体育与传媒支出（类）文化和旅游（款）群众文化（项）。支出决算为100.00万元。\n'
+        '六、一般公共预算财政拨款基本支出决算情况说明'
+    )
+    pages = ['一般公共预算财政拨款支出决算表\n' + base_doc.page_texts[0], narrative]
+    doc = build_document('/tmp/t5-legacy-culture.pdf', pages, [[t5_rows], []], 1000)
+    doc.parse_artifact = base_doc.parse_artifact
+    doc.fact_context = FactContext(facts, 'a' * 64, 'run', org_name=ORG, fiscal_year=YEAR)
+    total_fact = _fact('total', '合计', '100.00')
+    total_fact.extra_dims['evidence_refs'][0]['physical_page'] = 1
+    doc.fact_context.facts.append(total_fact)
+
+    R33222_Narrative5_T5().apply(doc)
+    assert any(
+        any(s.get('subject_code') == '207' and s.get('basis') == 'unique_native_code_parent_and_name_variant'
+            for s in r.get('disclosure_sources', []))
+        and r['status'] == 'pass'
+        for r in doc.fact_receipts
+    )
+    name_doc = build_document('/tmp/t5-legacy-culture.pdf', pages, [[t5_rows], []], 1000)
+    v227_issues = R33227_Narrative5_T5_NameConsistency().apply(name_doc)
+    assert any(
+        i.location.get('code') == '207'
+        and i.location.get('actual_name') == '文化体育与传媒支出'
+        and i.location.get('expected_name') == '文化旅游体育与传媒支出'
+        for i in v227_issues
+    )
+
+

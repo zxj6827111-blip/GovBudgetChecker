@@ -18,10 +18,23 @@ function yearLabel(year: string | number | null | undefined) {
  * 某个财政年度的一份预算或决算：复核状态、当前文件与分析、复核人和入口。
  * 文件版本、分析代际与历史复核结论在材料详情“版本与来源”中查看。
  */
-export function MaterialReportCard({ item, returnTo, subjectId }: { item: MaterialReport; returnTo: string; subjectId: string }) {
+export function MaterialReportCard({
+  item,
+  returnTo,
+  subjectId,
+  isAdmin = false,
+  onDelete,
+}: {
+  item: MaterialReport;
+  returnTo: string;
+  subjectId: string;
+  isAdmin?: boolean;
+  onDelete?: (item: MaterialReport) => void;
+}) {
   const version = item.current_version;
   const action = materialReviewAction(item);
   const source = materialSource(item);
+  const deletable = Boolean(item.slot_id || item.job_id || version?.source_job_id);
   return <article className="flex min-w-0 flex-col rounded-card border border-border bg-white p-4" data-testid={`material-report-${item.slot_id ?? item.job_id}`}>
     <div className="flex flex-wrap items-start justify-between gap-2">
       <div className="min-w-0">
@@ -42,6 +55,16 @@ export function MaterialReportCard({ item, returnTo, subjectId }: { item: Materi
       {action.jobId ? <Link href={reviewDetailPath(action.jobId, returnTo) as Route} className={`${BUTTON_BASE_CLASSES} ${BUTTON_SIZE_CLASSES.sm} ${BUTTON_VARIANT_CLASSES.primary}`}>{action.label}</Link> : <span className="text-xs text-slate-500">暂不可复核</span>}
       {source ? <a href={source} className="text-slate-600 underline">下载原件</a> : <span className="text-xs text-slate-500">原件不可用或无访问权限</span>}
       {item.slot_id ? <Link href={materialHistoryHref(item.slot_id, returnTo) as Route} className="text-primary-700 underline">版本与复核记录</Link> : null}
+      {isAdmin && onDelete && deletable ? (
+        <button
+          type="button"
+          onClick={() => onDelete(item)}
+          className={`${BUTTON_BASE_CLASSES} ${BUTTON_SIZE_CLASSES.sm} ml-auto border border-danger-200 bg-white text-danger-700 hover:bg-danger-50`}
+          data-testid="material-report-delete-btn"
+        >
+          删除报告
+        </button>
+      ) : null}
     </div>
   </article>;
 }

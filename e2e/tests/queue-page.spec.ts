@@ -86,16 +86,28 @@ function makeManyJobs(): Array<Record<string, unknown>> {
   return many;
 }
 
-async function installQueueMocks(page: Page, jobs: Array<Record<string, unknown>>) {
+interface QueueMockOptions {
+  isAdmin?: boolean;
+  onSingleDelete?: (jobId: string) => void;
+  onBatchDelete?: (jobIds: string[]) => void;
+}
+
+async function installQueueMocks(
+  page: Page,
+  jobs: Array<Record<string, unknown>>,
+  options: QueueMockOptions = {},
+) {
+  let currentJobs = jobs.map((job) => ({ ...job }));
   await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;
+    const method = route.request().method();
 
     if (path === "/api/auth/me") {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ user: { username: "e2e-user", is_admin: false } }),
+        body: JSON.stringify({ user: { username: options.isAdmin ? "admin" : "e2e-user", is_admin: Boolean(options.isAdmin) } }),
       });
       return;
     }
@@ -105,8 +117,54 @@ async function installQueueMocks(page: Page, jobs: Array<Record<string, unknown>
       return;
     }
 
+    if (path === "/api/jobs/batch-delete" && method === "POST") {
+      const body = route.request().postDataJSON() as { job_ids?: string[] } | null;
+      const requested = Array.isArray(body?.job_ids) ? body.job_ids.map(String) : [];
+      options.onBatchDelete?.(requested);
+      const requestedSet = new Set(requested);
+      const existing = new Set(currentJobs.map((job) => String(job.job_id)));
+      const deletedJobIds = requested.filter((id) => existing.has(id));
+      currentJobs = currentJobs.filter((job) => !requestedSet.has(String(job.job_id)));
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          success: true,
+          requested_count: requested.length,
+          deleted_count: deletedJobIds.length,
+          failed_count: 0,
+          deleted_job_ids: deletedJobIds,
+          failed: [],
+          deleted_slot_ids: [],
+          reset_baseline_slot_ids: [],
+          updated_slot_ids: [],
+          deleted_version_ids: [],
+        }),
+      });
+      return;
+    }
+
+    if (path.startsWith("/api/jobs/") && method === "DELETE") {
+      const targetId = decodeURIComponent(path.slice("/api/jobs/".length));
+      options.onSingleDelete?.(targetId);
+      currentJobs = currentJobs.filter((job) => String(job.job_id) !== targetId);
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          success: true,
+          job_id: targetId,
+          deleted_slot_ids: [],
+          reset_baseline_slot_ids: [],
+          updated_slot_ids: [],
+          deleted_version_ids: [],
+        }),
+      });
+      return;
+    }
+
     if (path === "/api/jobs") {
-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(jobs) });
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(currentJobs) });
       return;
     }
 
@@ -287,5 +345,72 @@ test.describe("Queue page (Task 8.1)", () => {
       "href",
       /\/queue\?job=job-review/,
     );
+  });
+
+  test("hides delete actions for non-admin users", async ({ page }) => {
+    await page.context().addCookies([sessionCookie]);
+    await installQueueMocks(page, BASE_JOBS, { isAdmin: false });
+    await page.goto("/queue");
+
+    await expect(page.getByTestId("gbc-workbench-queue-row-job-review")).toBeVisible();
+    await expect(page.getByTestId("gbc-queue-batch-delete")).toHaveCount(0);
+    await expect(page.getByTestId("gbc-workbench-queue-delete-job-review")).toHaveCount(0);
+  });
+
+  test("admin can single-delete and batch-delete failed/finished jobs with confirmation modal", async ({ page }) => {
+    const singleDeleted: string[] = [];
+    const batchDeleted: string[][] = [];
+    const extraErrorJob = {
+      job_id: "diag-failed-2",
+      filename: null,
+      status: "error",
+      organization_id: null,
+      organization_name: null,
+      report_year: null,
+      report_kind: "unknown",
+      merged_issue_total: 0,
+    };
+
+    await page.context().addCookies([sessionCookie]);
+    await installQueueMocks(page, [...BASE_JOBS, extraErrorJob], {
+      isAdmin: true,
+      onSingleDelete: (id) => singleDeleted.push(id),
+      onBatchDelete: (ids) => batchDeleted.push(ids),
+    });
+    await page.goto("/queue");
+
+    // 管理员可见批量删除与单条删除；正在分析中的任务禁用删除按钮
+    await expect(page.getByTestId("gbc-queue-batch-delete")).toBeDisabled();
+    await expect(page.getByTestId("gbc-workbench-queue-delete-job-analyzing-1")).toBeDisabled();
+    await expect(page.getByTestId("gbc-workbench-queue-delete-job-unresolved-year")).toBeEnabled();
+
+    // 单条删除：点删除打开确认弹窗 -> 确认删除 -> 列表移除
+    await page.getByTestId("gbc-workbench-queue-delete-job-unresolved-year").click();
+    const modal = page.getByTestId("gbc-queue-delete-modal");
+    await expect(modal).toBeVisible();
+    await expect(modal).toContainText("确认删除该任务");
+    await page.getByTestId("gbc-queue-delete-confirm").click();
+
+    await expect(modal).toHaveCount(0);
+    expect(singleDeleted).toEqual(["job-unresolved-year"]);
+    await expect(page.getByTestId("gbc-workbench-queue-row-job-unresolved-year")).toHaveCount(0);
+    await expect(page.getByTestId("gbc-queue-result-count")).toContainText("共 4 个任务");
+
+    // 批量删除：勾选已完成任务与失败任务 -> 点击批量删除 -> 确认删除 -> 勾选清空且任务移除
+    await page.getByTestId("gbc-queue-select-job-review").check();
+    await page.getByTestId("gbc-queue-select-diag-failed-2").check();
+    await expect(page.getByTestId("gbc-queue-batch-delete")).toContainText("批量删除（2）");
+    await page.getByTestId("gbc-queue-batch-delete").click();
+
+    await expect(modal).toBeVisible();
+    await expect(modal).toContainText("确认批量删除 2 个任务");
+    await expect(modal).toContainText("diag-failed-2");
+    await page.getByTestId("gbc-queue-delete-confirm").click();
+
+    await expect(modal).toHaveCount(0);
+    expect(batchDeleted).toEqual([["job-review", "diag-failed-2"]]);
+    await expect(page.getByTestId("gbc-workbench-queue-row-job-review")).toHaveCount(0);
+    await expect(page.getByTestId("gbc-workbench-queue-row-diag-failed-2")).toHaveCount(0);
+    await expect(page.getByTestId("gbc-queue-selected-count")).toContainText("已选 0 个任务");
   });
 });

@@ -47,12 +47,76 @@ function formatScaled(value: number, decimals: number): string {
   return (value / SCALE).toFixed(decimals);
 }
 
+const EVIDENCE_ROLE_LABELS: Record<string, string> = {
+  parent: "合计项",
+  child: "明细项",
+  // CMM-007 同比复算两条相互印证的原文角色，用业务语言替代代码缩写。
+  "增减句": "同比增减说明（增减额与百分比）",
+  "本期披露": "本期金额说明（用于推算上年基期）",
+  // 跨处/占比/表文对照类规则引用角色。
+  "披露A": "第一处原文表述",
+  "披露B": "第二处原文表述",
+  occurrence: "原文出现位置",
+  denominator: "占比分母（基准总额）",
+  ratio: "占比/比例表述",
+  component: "构成明细项",
+  total: "合计项",
+  "说明5": "正文具体情况说明",
+  "T5": "一般公共预算支出表",
+  "表格": "表格数据",
+  "情况说明": "正文情况说明",
+  "占比声明": "占比表述",
+  "完成率声明": "预算完成率表述",
+};
+
 export function evidenceRoleLabel(role: string): string {
-  if (role === "parent") return "合计项";
-  if (role === "child") return "明细项";
+  const mapped = EVIDENCE_ROLE_LABELS[role];
+  if (mapped) return mapped;
   // 规则按序号命名的“原文位置1/2”对审核员没有区分意义。
   if (/^原文位置\d*$/.test(role)) return "原文";
   return role;
+}
+
+/** 格式化每条证据自带的原文摘录，避免过长或换行断裂。 */
+export function formatEvidenceRefQuote(quoteText: string | undefined, verified: boolean): string {
+  const text = (quoteText ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  const clipped = text.length > 110 ? `${text.slice(0, 109)}…` : text;
+  if (!verified || /^["“]/.test(clipped)) return clipped;
+  return `“${clipped}”`;
+}
+
+export interface EvidenceRefDisplay {
+  roleLabel: string;
+  heading?: string;
+  body: string;
+}
+
+/** 组装单条证据按钮的主文案与角色标签，多条证据时每条都带出自己的原文片段。 */
+export function buildEvidenceRefDisplay(
+  ref: Pick<ProblemEvidenceRef, "role" | "valueText" | "quoteText">,
+  totalRefs: number,
+  problemQuote: string,
+  verified: boolean,
+): EvidenceRefDisplay {
+  const roleLabel = evidenceRoleLabel(ref.role);
+  const valueBadge = ref.valueText ? `${ref.valueText} 万元` : "";
+  const formattedRefQuote = formatEvidenceRefQuote(ref.quoteText, verified);
+  const excerpt = formattedRefQuote || (totalRefs === 1 ? problemQuote : "");
+  const isGenericRole = roleLabel === "原文" || /^定位 \d+$/.test(roleLabel);
+
+  if (excerpt) {
+    const showHeading = totalRefs > 1 || !isGenericRole;
+    return {
+      roleLabel,
+      ...(showHeading ? { heading: [roleLabel, valueBadge].filter(Boolean).join(" · ") } : {}),
+      body: excerpt,
+    };
+  }
+  return {
+    roleLabel,
+    body: [roleLabel, valueBadge].filter(Boolean).join(" · ") || roleLabel,
+  };
 }
 
 /** 位置文字去掉页码，再去掉同组各项都相同的部分（表名、口径），只留区分各项的名称。 */

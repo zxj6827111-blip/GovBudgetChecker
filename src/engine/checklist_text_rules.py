@@ -205,11 +205,13 @@ def _format_punctuation_issues(rule: Rule, doc: Document) -> List[Issue]:
     half_period = re.compile(r"(?<=[一-鿿%％])\.(?![0-9A-Za-z])")
     doc_number = re.compile(r"[一-鿿]{1,12}[\[【（(]\s*(?:19|20)\d{2}\s*[\]】）)]\s*\d+号")
     issues: List[Issue] = []
+    # 半角冒号/逗号分号/句点属于排版习惯差异，降级为 info（进「参考」栏、不进入「必须处理」）；
+    # 文号六角括号规范错误保留 low。
     classes = {
-        "half_colon": (colon, "中文语境使用半角冒号“:”，应使用全角“：”。"),
-        "half_comma": (half_comma, "中文语境使用半角逗号/分号，应使用全角“，”/“；”。"),
-        "half_period": (half_period, "中文语境使用半角句点“.”，应使用全角“。”。"),
-        "doc_number": (doc_number, "文号年份应使用六角括号“〔〕”，当前使用方括号/尖括号。"),
+        "half_colon": (colon, "中文语境使用半角冒号“:”，应使用全角“：”。", "info"),
+        "half_comma": (half_comma, "中文语境使用半角逗号/分号，应使用全角“，”/“；”。", "info"),
+        "half_period": (half_period, "中文语境使用半角句点“.”，应使用全角“。”。", "info"),
+        "doc_number": (doc_number, "文号年份应使用六角括号“〔〕”，当前使用方括号/尖括号。", "low"),
     }
     # 定义/释义段（名词解释、第四部分）与目录不参与标点格式检查：
     # 这些页面的大段释义性文字允许半角符号，且不属于“说明正文”。
@@ -218,7 +220,7 @@ def _format_punctuation_issues(rule: Rule, doc: Document) -> List[Issue]:
                         if "第四部分" in str(text or "") or "名词解释" in str(text or "")]
     part4_start = max(part4_candidates) if part4_candidates else None
     colon_prefix = re.compile(r"(?:主要用于|主要原因|如下|说明|情况|完成预算|原因)$")
-    for key, (pattern, message) in classes.items():
+    for key, (pattern, message, item_severity) in classes.items():
         hits: List[Tuple[int, str, int, int]] = []
         for page, text in iter_pages(doc):
             if key == "half_colon" and part4_start is not None and page >= part4_start:
@@ -242,7 +244,7 @@ def _format_punctuation_issues(rule: Rule, doc: Document) -> List[Issue]:
         sample = text[start:end].strip()
         issues.append(issue_at(
             rule, f"{message}全文共 {len(hits)} 处（如“{sample}”）。",
-            page, text, start, end, severity="low", checklist_item="D-04", occurrences=len(hits),
+            page, text, start, end, severity=item_severity, checklist_item="D-04", occurrences=len(hits),
             table_refs=[{"page": p, "span": unique_quote(t, a, b), "role": "occurrence"} for p, t, a, b in hits],
         ))
     return issues

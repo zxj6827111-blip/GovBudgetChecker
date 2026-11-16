@@ -38,7 +38,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from api import material_access, runtime
-from api.auth_utils import require_login, user_can_access_job
+from api.auth_utils import require_admin, require_login, user_can_access_job
+from src.services.audit_log import append_audit_event
 from src.schemas.material_detail import (
     SlotDetailResponse,
     SlotRunListData,
@@ -181,6 +182,89 @@ async def department_material_history(slot_id: str, request: Request):
             _report_source_availability(items[0], history=True)
         return {"slot_id": slot_id, "versions": items[0]["versions"] if items else []}
     return {"ok": True, "data": await _with_connection(load)}
+
+
+class ReportBatchDeleteRequest(BaseModel):
+    slot_ids: List[str] = Field(default_factory=list)
+    job_ids: List[str] = Field(default_factory=list)
+
+
+@router.post("/api/materials/reports/batch-delete")
+async def batch_delete_department_reports(
+    request: Request,
+    body: ReportBatchDeleteRequest,
+):
+    from src.services.material_report_deletion import delete_material_reports
+
+    _, _, user = require_admin(request)
+    slot_ids = [str(item or "").strip() for item in body.slot_ids if str(item or "").strip()]
+    job_ids = [str(item or "").strip() for item in body.job_ids if str(item or "").strip()]
+    if not slot_ids and not job_ids:
+        raise HTTPException(status_code=400, detail="slot_ids or job_ids is required")
+
+    actor = str(user.get("username") or "")
+    result = await _with_connection(
+        lambda conn: delete_material_reports(
+            conn,
+            slot_ids=slot_ids,
+            job_ids=job_ids,
+            actor=actor,
+        )
+    )
+    append_audit_event(
+        action="material_report.batch_delete",
+        actor=actor,
+        result="success" if not result.get("failed") else "partial_success",
+        resource_type="material_report_batch",
+        details={
+            "requested_slot_count": int(result.get("requested_slot_count") or 0),
+            "requested_job_count": int(result.get("requested_job_count") or 0),
+            "deleted_slot_count": len(result.get("deleted_slot_ids") or []),
+            "reset_baseline_slot_count": len(result.get("reset_baseline_slot_ids") or []),
+            "deleted_version_count": len(result.get("deleted_version_ids") or []),
+            "deleted_job_count": len(result.get("deleted_job_ids") or []),
+            "failed_count": len(result.get("failed") or []),
+        },
+    )
+    return {"ok": True, "data": result}
+
+
+@router.delete("/api/materials/reports/{slot_id}")
+async def delete_department_material_report(slot_id: str, request: Request):
+    from src.services.material_report_deletion import delete_material_reports
+
+    _, _, user = require_admin(request)
+    actor = str(user.get("username") or "")
+    result = await _with_connection(
+        lambda conn: delete_material_reports(
+            conn,
+            slot_ids=[slot_id],
+            actor=actor,
+        )
+    )
+    deleted_any = bool(
+        result.get("deleted_slot_ids") or result.get("reset_baseline_slot_ids")
+    )
+    if result.get("failed") and not deleted_any:
+        first_error = result["failed"][0]
+        raise HTTPException(
+            status_code=int(first_error.get("status_code") or 404),
+            detail=first_error.get("detail") or "material slot not found",
+        )
+    append_audit_event(
+        action="material_report.delete",
+        actor=actor,
+        result="success",
+        resource_type="material_slot",
+        resource_id=slot_id,
+        details={
+            "deleted_slot_count": len(result.get("deleted_slot_ids") or []),
+            "reset_baseline_slot_count": len(result.get("reset_baseline_slot_ids") or []),
+            "deleted_version_count": len(result.get("deleted_version_ids") or []),
+            "deleted_job_count": len(result.get("deleted_job_ids") or []),
+        },
+    )
+    return {"ok": True, "data": result}
 
 
 class ExpectedCsvRequest(BaseModel):

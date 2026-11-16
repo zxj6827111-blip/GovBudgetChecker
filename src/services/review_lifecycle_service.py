@@ -63,7 +63,11 @@ from src.engine.check_obligations import (
     get_obligation,
 )
 from src.schemas.material_detail import CoverageObligationItem
-from src.services.obligation_finding_coverage import cascade_root_issue_id, obligation_covered_by_finding
+from src.services.obligation_finding_coverage import (
+    cascade_root_issue_id,
+    cascade_root_issue_ids,
+    obligation_covered_by_finding,
+)
 from src.services.obligation_locations import (
     merge_locations,
     resolve_obligation_locations,
@@ -608,8 +612,7 @@ def cascaded_coverage_obligations(
             continue
         if obligation_covered_by_finding(item, result_row, visible_issue_ids=visible):
             continue
-        root = cascade_root_issue_id(item, result_row, visible_issue_ids=visible)
-        if root is not None:
+        for root in cascade_root_issue_ids(item, result_row, visible_issue_ids=visible):
             grouped.setdefault(root, []).append(item)
     return grouped
 

@@ -3100,7 +3100,43 @@ def _tolerant_functional_item_codes(
     by_item = [code for code, entry in table_entries.items()
                if entry.get("level") == "项"
                and _functional_names_similar(item_name, entry.get("name", ""))]
-    return by_item if len(by_item) == 1 else []
+    if len(by_item) == 1:
+        return by_item
+
+    # 同款确定性命中时，若说明项名在中间漏字或加字（如“其他城乡社区支出”漏掉“公共设施”），
+    # 允许唯一有序子序列定位交由 V33-227 明确报错并高亮，不跨款定位、不豁免严格一致检查。
+    if scoped:
+        req_key = _narrative_name_key(item_name)
+        req_full = normalize_text(item_name or "")
+        subseq_matches: List[str] = []
+        for code, entry in scoped.items():
+            act_full = normalize_text(entry.get("name", "") or "")
+            act_key = _narrative_name_key(act_full)
+            if not req_key or not act_key or req_full == act_full:
+                continue
+            shorter, longer = (req_key, act_key) if len(req_key) <= len(act_key) else (act_key, req_key)
+            gap_len = len(longer) - len(shorter)
+            if len(shorter) < 4 or not (2 <= gap_len <= 6):
+                continue
+            if len(req_full) < 4 or len(act_full) < 4:
+                continue
+            same_head = req_full[:2] == act_full[:2]
+            same_tail = req_full[-2:] == act_full[-2:]
+            if not (
+                (same_head and same_tail)
+                or (
+                    len(shorter) >= 6
+                    and shorter in longer
+                    and (same_head or same_tail or len(shorter) * 2 >= len(longer))
+                )
+            ):
+                continue
+            chars = iter(longer)
+            if all(ch in chars for ch in shorter):
+                subseq_matches.append(code)
+        if len(subseq_matches) == 1:
+            return subseq_matches
+    return []
 
 
 def _build_functional_item_name_index(
@@ -3149,6 +3185,90 @@ def _extract_final_functional_narrative_mentions(
         scoped_pages = [merged[max(offset, begin):min(offset+len(str(text or "")), end)]
                         if max(offset, begin) < min(offset+len(str(text or "")), end) else ""
                         for offset, text in zip(offsets, doc.page_texts, strict=False)]
+    def _record_entry(
+        match: re.Match[str],
+        source_text: str,
+        page_num: int,
+        cross_page_spans: Optional[List[Dict[str, object]]] = None,
+    ) -> None:
+        groups = match.groupdict()
+        class_name = str(groups.get("class_name") or "").strip(" 　：:；;，,。.")
+        section_name = str(groups.get("section_name") or "").strip(" 　：:；;，,。.")
+        item_name = str(groups.get("item_name") or "").strip(" 　：:；;，,。.")
+        if not class_name or not section_name or not item_name:
+            return
+
+        class_code = str(groups.get("class_code") or "").strip()
+        section_code = str(groups.get("section_code") or "").strip()
+        item_code = str(groups.get("item_code") or "").strip()
+
+        matched_codes: Optional[Tuple[str, str, str]] = None
+        if class_code and section_code and item_code:
+            matched_codes = (
+                class_code,
+                f"{class_code}{section_code}",
+                f"{class_code}{section_code}{item_code}",
+            )
+        else:
+            normalized_section = normalize_text(section_name)
+            normalized_item = normalize_text(item_name)
+            item_candidates = by_section_item.get((normalized_section, normalized_item), [])
+            if len(item_candidates) == 1:
+                item_full_code = item_candidates[0]
+                matched_codes = (
+                    item_full_code[:3],
+                    item_full_code[:5],
+                    item_full_code[:7],
+                )
+            else:
+                # 同款的确定性名称变体优先于其他款里的全局同名项。
+                # 不能先按全局项名命中另一款，再把正确的款名报成错误。
+                tolerant = _tolerant_functional_item_codes(table_entries, section_name, item_name)
+                if len(tolerant) == 1:
+                    item_full_code = tolerant[0]
+                    matched_codes = (
+                        item_full_code[:3],
+                        item_full_code[:5],
+                        item_full_code[:7],
+                    )
+
+        if not matched_codes:
+            return
+
+        snippet = _snippet(source_text, match.start(), match.end(), max_len=40)
+        for code, raw_name, level in (
+            (matched_codes[0], class_name, "类"),
+            (matched_codes[1], section_name, "款"),
+            (matched_codes[2], item_name, "项"),
+        ):
+            bucket = mentions.setdefault(code, [])
+            existing = next(
+                (
+                    item
+                    for item in bucket
+                    if item.get("page") == str(page_num)
+                    and normalize_text(item.get("name", "")) == normalize_text(raw_name)
+                ),
+                None,
+            )
+            if existing is not None:
+                if not cross_page_spans:
+                    span_text = match.group()
+                    extras = existing.setdefault("extra_spans", [])
+                    if span_text and span_text != existing.get("source_span") and span_text not in extras:
+                        extras.append(span_text)
+                continue
+            entry: Dict[str, object] = {
+                "page": str(page_num),
+                "name": raw_name,
+                "level": level,
+                "snippet": snippet,
+                "source_span": match.group(),
+            }
+            if cross_page_spans:
+                entry["cross_page_spans"] = cross_page_spans
+            bucket.append(entry)  # type: ignore[arg-type]
+
     for page_num, text in enumerate(scoped_pages, start=1):
         if not text:
             continue
@@ -3159,72 +3279,44 @@ def _extract_final_functional_narrative_mentions(
         entries = sorted([*_FUNCTIONAL_NARRATIVE_ENTRY_RE.finditer(text),
                           *_FUNCTIONAL_NARRATIVE_DASH_RE.finditer(text)], key=lambda m: m.start())
         for match in entries:
-            groups = match.groupdict()
-            class_name = str(groups.get("class_name") or "").strip(" 　：:；;，,。.")
-            section_name = str(groups.get("section_name") or "").strip(" 　：:；;，,。.")
-            item_name = str(groups.get("item_name") or "").strip(" 　：:；;，,。.")
-            if not class_name or not section_name or not item_name:
+            _record_entry(match, text, page_num)
+
+    # 逐项说明跨页断词（如上页尾「其他行」+ 下页首「政事业单位离退休支出」）按相邻非空页桥接匹配，
+    # 并将两侧各自物理页原文片段记为 cross_page_spans，交由证据链做双页物理框定位。
+    for page_num in range(1, len(scoped_pages)):
+        prev_raw = scoped_pages[page_num - 1]
+        next_raw = scoped_pages[page_num]
+        if not prev_raw or not next_raw:
+            continue
+        prev_paras = merge_soft_wrapped_lines(prev_raw)
+        next_paras = merge_soft_wrapped_lines(next_raw)
+        if not prev_paras or not next_paras:
+            continue
+        tail_para, head_para = prev_paras[-1], next_paras[0]
+        if not tail_para or not head_para or tail_para.endswith(("。", "；", ";", "！", "!", "？", "?")):
+            continue
+        bridge_text = f"{tail_para}{head_para}"
+        bridge_entries = sorted(
+            [*_FUNCTIONAL_NARRATIVE_ENTRY_RE.finditer(bridge_text),
+             *_FUNCTIONAL_NARRATIVE_DASH_RE.finditer(bridge_text)],
+            key=lambda m: m.start(),
+        )
+        for match in bridge_entries:
+            if not (match.start() < len(tail_para) < match.end()):
                 continue
-
-            class_code = str(groups.get("class_code") or "").strip()
-            section_code = str(groups.get("section_code") or "").strip()
-            item_code = str(groups.get("item_code") or "").strip()
-
-            matched_codes: Optional[Tuple[str, str, str]] = None
-            if class_code and section_code and item_code:
-                matched_codes = (
-                    class_code,
-                    f"{class_code}{section_code}",
-                    f"{class_code}{section_code}{item_code}",
-                )
-            else:
-                normalized_section = normalize_text(section_name)
-                normalized_item = normalize_text(item_name)
-                item_candidates = by_section_item.get((normalized_section, normalized_item), [])
-                if len(item_candidates) == 1:
-                    item_full_code = item_candidates[0]
-                    matched_codes = (
-                        item_full_code[:3],
-                        item_full_code[:5],
-                        item_full_code[:7],
-                    )
-                else:
-                    # 同款的确定性名称变体优先于其他款里的全局同名项。
-                    # 不能先按全局项名命中另一款，再把正确的款名报成错误。
-                    tolerant = _tolerant_functional_item_codes(table_entries, section_name, item_name)
-                    if len(tolerant) == 1:
-                        item_full_code = tolerant[0]
-                        matched_codes = (
-                            item_full_code[:3],
-                            item_full_code[:5],
-                            item_full_code[:7],
-                        )
-
-            if not matched_codes:
+            left_raw = bridge_text[match.start():len(tail_para)].strip()
+            right_raw = bridge_text[len(tail_para):match.end()].strip()
+            if not left_raw or not right_raw:
                 continue
-
-            snippet = _snippet(text, match.start(), match.end(), max_len=40)
-            for code, raw_name, level in (
-                (matched_codes[0], class_name, "类"),
-                (matched_codes[1], section_name, "款"),
-                (matched_codes[2], item_name, "项"),
-            ):
-                bucket = mentions.setdefault(code, [])
-                if any(
-                    item.get("page") == str(page_num)
-                    and normalize_text(item.get("name", "")) == normalize_text(raw_name)
-                    for item in bucket
-                ):
-                    continue
-                bucket.append(
-                    {
-                        "page": str(page_num),
-                        "name": raw_name,
-                        "level": level,
-                        "snippet": snippet,
-                        "source_span": match.group(),
-                    }
-                )
+            _record_entry(
+                match,
+                bridge_text,
+                page_num,
+                cross_page_spans=[
+                    {"page": page_num, "span": left_raw, "context": tail_para},
+                    {"page": page_num + 1, "span": right_raw, "context": head_para},
+                ],
+            )
 
     return mentions
 
@@ -8884,21 +8976,36 @@ class R33227_Narrative5_T5_NameConsistency(Rule):
                     _attach_name_evidence_refs(doc, location, mention, mention_page,
                                                table_row_page, code, table_entry.get("name") or "")
 
-                evidence_text = (
-                    f"编码：{row_label}\n"
-                    f"表格名称：{table_entry['name']}\n"
-                    f"说明名称：{narrative_name}\n"
-                    f"说明片段：{mention.get('snippet', '')}"
-                )
+                item_nos: List[str] = []
+                for raw_span in [mention.get("source_span"), *(mention.get("extra_spans") or [])]:
+                    num_match = re.match(r"\s*(\d+)\s*[、.．]", str(raw_span or ""))
+                    if num_match and num_match.group(1) not in item_nos:
+                        item_nos.append(num_match.group(1))
+                evidence_lines = [
+                    f"编码：{row_label}",
+                    f"表格名称：{table_entry['name']}",
+                    f"说明名称：{narrative_name}",
+                ]
+                if item_nos:
+                    evidence_lines.append(f"涉及条目：第{'、'.join(item_nos)}项")
+                evidence_lines.append(f"说明片段：{mention.get('snippet', '')}")
+                evidence_text = "\n".join(evidence_lines)
                 from src.services.fiscal_subject_names import subject_suffix_key
                 suffix_only = (_functional_name_matches(table_entry["name"], narrative_name)
                                or subject_suffix_key(table_entry["name"]) == subject_suffix_key(narrative_name))
                 # 表格名称在格内折行（“一般公共服务\n支出”），提示语里按原文连写。
                 shown_table_name = re.sub(r"\s+", "", table_entry["name"])
+                tail_notes = []
+                if suffix_only:
+                    tail_notes.append("名称多/少“支出/决算”等字")
+                else:
+                    tail_notes.append(f"应以表格“{shown_table_name}”为准")
+                if len(item_nos) > 1:
+                    tail_notes.append(f"涉及说明第{'、'.join(item_nos)}项")
                 issues.append(self._issue(
                     f"说明5{level}级科目名称与T5不一致（{row_label}）："
                     f"表格“{shown_table_name}”，说明“{narrative_name}”"
-                    + ("（名称多/少“支出/决算”等字）" if suffix_only else ""),
+                    + (f"（{'；'.join(tail_notes)}）" if tail_notes else ""),
                     location,
                     severity="low" if suffix_only else "warn",
                     evidence_text=evidence_text,
@@ -9012,12 +9119,17 @@ def _attach_name_evidence_refs(doc, location, mention, narrative_page, table_pag
     两侧都取不到唯一原文时保持原样（不伪造引用）。
     """
     refs = []
-    narrative_span = str(mention.get("source_span") or "")
-    if narrative_span and _span_unique_on_page(doc, narrative_page, narrative_span):
-        refs.append({"page": narrative_page, "span": narrative_span, "role": "说明5",
-                     "section": "说明5（一般公共预算财政拨款支出决算具体情况）",
-                     "row": location.get("row"), "field": "功能分类科目名称",
-                     "code": code, "subject": mention.get("name")})
+    seen_spans = set()
+    for candidate_span in [mention.get("source_span"), *(mention.get("extra_spans") or [])]:
+        narrative_span = str(candidate_span or "")
+        if not narrative_span or narrative_span in seen_spans:
+            continue
+        if _span_unique_on_page(doc, narrative_page, narrative_span):
+            seen_spans.add(narrative_span)
+            refs.append({"page": narrative_page, "span": narrative_span, "role": "说明5",
+                         "section": "说明5（一般公共预算财政拨款支出决算具体情况）",
+                         "row": location.get("row"), "field": "功能分类科目名称",
+                         "code": code, "subject": mention.get("name")})
     table_span = _functional_table_name_span(doc, table_page, code, name)
     if table_span:
         refs.append({"page": table_page, "span": table_span, "role": "T5",
@@ -9026,6 +9138,7 @@ def _attach_name_evidence_refs(doc, location, mention, narrative_page, table_pag
                      "code": code, "subject": name})
     if refs:
         location["table_refs"] = refs
+        location["page"] = refs[0]["page"]
         location["pages"] = sorted({ref["page"] for ref in refs})
 
 
@@ -9052,7 +9165,8 @@ def _functional_table_name_span(doc: Document, page: int, code: str, name: str) 
         if needle and joined.count(needle) == 1:
             start = joined.index(needle)
             return text[positions[start]:positions[start + len(needle) - 1] + 1]
-    return ""
+    from .native_name_evidence import _interleaved_wrapped_code_name_span
+    return _interleaved_wrapped_code_name_span(text, code, name) or ""
 
 
 
@@ -13553,15 +13667,32 @@ def _nar_repeat_sections(
     目录页（前 120 字含「目录」）上的同名标题行不作为章节边界——它是目录
     条目，不是正文标题。
     """
+    from .diagnostic_fields import _toc_line_indexes
+
     texts = [str(item or "") for item in (getattr(doc, "page_texts", []) or [])]
     toc_pages = {
-        index for index, text in enumerate(texts) if "目录" in text[:120]
+        index for index, text in enumerate(texts)
+        if "目录" in re.sub(r"\s+", "", text[:120])
     }
+    # 目录续页不含「目录」标题时（如仅余「七、……十一、……第四部分」），若紧接目录页且无正文句号、
+    # 且页面主体皆为目录行，同样按目录跳过。
+    for index, text in enumerate(texts):
+        if (index - 1) in toc_pages and text.strip() and "。" not in text:
+            non_empty = [line for line in text.splitlines() if line.strip()]
+            if non_empty and len(_toc_line_indexes(text)) >= len(text.splitlines()) - 1:
+                toc_pages.add(index)
+    toc_line_sets = {index: _toc_line_indexes(text) for index, text in enumerate(texts)}
     starts: List[Tuple[str, int]] = []
     for match in _NAR_REPEAT_SECTION_RE.finditer(merged):
         page = _txt_fund_page_for(offsets, match.start())
-        if (page - 1) in toc_pages:
+        page_idx = page - 1
+        if page_idx in toc_pages:
             continue
+        if (page_idx - 1) in toc_pages and 0 <= page_idx < len(texts):
+            rel = match.start() - offsets[page_idx]
+            line_idx = texts[page_idx][:max(rel, 0)].count("\n")
+            if line_idx in toc_line_sets.get(page_idx, ()):
+                continue
         starts.append((re.sub(r"\s+", "", match.group(0)), match.start()))
     sections: List[Tuple[str, int, int]] = []
     for idx, (title, start) in enumerate(starts):

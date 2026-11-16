@@ -332,7 +332,7 @@ def _truncated_name_source(doc, fact, item, siblings):
             'basis': 'unique_native_code_parent_and_narrative_prefix'}
 
 
-def _record_text_gap(doc, text, item, *, codes, role):
+def _record_text_gap(doc, text, item, *, codes, role, sub_check_id=None):
     """DH-02：说明条目绑不到表内科目时登记文字侧缺数位置（页码来自原页引用）。"""
     from .diagnostic_fields import record_gap, text_missing_operand
 
@@ -354,7 +354,8 @@ def _record_text_gap(doc, text, item, *, codes, role):
     record_gap(doc, texts, reason_codes=codes, missing_operands=[text_missing_operand(
         section='支出决算具体情况说明', role=role, page=page,
         row_key=str(level_value('xiang') or level_value('kuan') or level_value('klass') or ''),
-        column='决算金额', stage='决算', year=year if isinstance(year, int) and year >= 1900 else None)])
+        column='决算金额', stage='决算', year=year if isinstance(year, int) and year >= 1900 else None)],
+        sub_check_id=sub_check_id)
 
 def _name_difference_hint(doc, item):
     """A2：类/款/项名差异提示的原文出处（只取页码，不伪造 bbox）。"""
@@ -859,7 +860,103 @@ def _native_name_variant_code(doc, facts, name, width, parent, paths, aliases):
     return code
 
 
-def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
+def _is_near_subject_name_candidate(requested: str, actual: str) -> bool:
+    """同款下识别“漏字/多字/多前缀”的唯一差异候选，仅供说明解释，不用于金额绑定。"""
+    if not requested or not actual or requested == actual:
+        return False
+    if len(actual) > len(requested):
+        gap = len(actual) - len(requested)
+        if not 1 <= gap <= 6:
+            return False
+        contiguous_core = len(requested) >= 6 and requested in actual
+        head_or_tail = requested[:2] == actual[:2] or (
+            contiguous_core and (requested[-2:] == actual[-2:] or len(requested) * 2 >= len(actual))
+        )
+        if gap > 2 and (len(requested) < 4 or not head_or_tail):
+            return False
+        chars = iter(actual)
+        return all(char in chars for char in requested)
+
+    # 正文比表内多字（多缀词或错加前缀）：仅对足够长的标准科目放行（>=6），
+    # 避免“行政运行”(4字) 与“行政事业运行”(6字) 被误判为同一科目。
+    gap = len(requested) - len(actual)
+    if not 1 <= gap <= 6 or len(actual) < 6:
+        return False
+    same_head = requested[:2] == actual[:2]
+    same_tail = requested[-2:] == actual[-2:]
+    if same_head:
+        if gap > 2 and not (same_tail or actual in requested):
+            return False
+        chars = iter(requested)
+        return all(char in chars for char in actual)
+    return actual in requested and (same_tail or len(actual) * 2 >= len(requested))
+
+
+def _compact_display(value: str) -> str:
+    return re.sub(r'\s+', '', unicodedata.normalize('NFKC', str(value or '')))
+
+
+def _kuan_mismatch_reason(doc, facts, item, klass: str, paths: dict) -> str | None:
+    """款名无法匹配且未触发独立绑定时，定位同款唯一下级项以解释款/项名称差异。"""
+    requested_xiang = _name(item['xiang'])
+    if not klass or not requested_xiang:
+        return None
+    leaves = [
+        f for f in facts
+        if f.indicator == 'total_actual'
+        and len(paths.get(str(f.subject_code), '')) == 7
+        and paths[str(f.subject_code)].startswith(klass)
+    ]
+    exact = {str(f.subject_code): f for f in leaves if _name(f.subject_name) == requested_xiang}
+    if exact:
+        matched = exact if len(exact) == 1 else {}
+    else:
+        near = {
+            str(f.subject_code): f for f in leaves
+            if _is_near_subject_name_candidate(requested_xiang, _name(f.subject_name))
+        }
+        matched = near if len(near) == 1 else {}
+    if len(matched) != 1:
+        return None
+    leaf_code, leaf_f = next(iter(matched.items()))
+    kuan_code = next((c for c, p in paths.items() if p == paths[leaf_code][:5]), None)
+    kuan_facts = [
+        f for f in facts
+        if f.indicator == 'total_actual' and str(f.subject_code) == kuan_code
+    ] if kuan_code else []
+    if len(kuan_facts) != 1:
+        return None
+    kuan_f = kuan_facts[0]
+    shown_kuan = re.sub(r'\s+', '', str(kuan_f.subject_name or ''))
+    if not _name(shown_kuan) or _name(shown_kuan) == _name(item['kuan']):
+        return None
+    text = _Text.from_pages(doc.page_texts)
+    source = text.refs(item.start(), item.end(), '原文科目')
+    narr_page = source[0]['page'] if source else '?'
+    kuan_pages = sorted({
+        ref['physical_page'] for ref in kuan_f.extra_dims.get('evidence_refs', [])
+        if ref.get('physical_page')
+    })
+    clauses = [
+        f"科目名称差异候选（款）：正文第{narr_page}页写“{item['kuan']}”（涉及项“{item['xiang']}”）；"
+        f"表格第{'、'.join(map(str, kuan_pages)) or '?'}页编码{kuan_code}写“{shown_kuan}”。"
+        "名称不一致，尚未绑定金额；请核对科目名称后确认，不能仅凭金额相同认定一致。"
+    ]
+    shown_leaf = re.sub(r'\s+', '', str(leaf_f.subject_name or ''))
+    if _compact_display(shown_leaf) != _compact_display(item['xiang']):
+        leaf_pages = sorted({
+            ref['physical_page'] for ref in leaf_f.extra_dims.get('evidence_refs', [])
+            if ref.get('physical_page')
+        })
+        clauses.append(
+            f"科目名称差异候选：正文第{narr_page}页写“{item['xiang']}”；"
+            f"同款表格第{'、'.join(map(str, leaf_pages)) or '?'}页编码{leaf_code}写“{shown_leaf}”。"
+            "名称不一致，尚未绑定金额；请核对科目名称后确认，不能仅凭金额相同认定一致。"
+        )
+    return '；'.join(clauses)
+
+
+def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None, sub_check_id=None):
     paths = hierarchy_paths({str(f.subject_code) for f in facts
                              if str(f.subject_code or '').isdigit()})
     if len(set(paths.values())) != len(paths):
@@ -934,7 +1031,8 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
         return None
 
     def bind_exact_leaf_independent_of_parent_label():
-        # 原文款名有误时，须两条不同项名各自逐字唯一地落入同一原生款链。
+        # 原文款名有误时，须两条不同项名各自逐字唯一地落入同一原生款链，
+        # 或该类在完整原表中仅含唯一原生款且原文把类名误重复到了款位。
         # 不采用旧名词典、编辑距离或金额匹配；原文款名差异仍交名称规则报告。
         pages = _general_table_pages(doc, facts)
         native_rows, native_refs = _native_grid_name_rows(doc, pages)
@@ -959,7 +1057,17 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
                        and _name(name) == _name(other['xiang'])}
             if len(matches) == 1:
                 corroborated.update(matches)
-        if len(corroborated) < 2 or leaf not in corroborated:
+        class_kuans = {code for code in native_rows
+                       if len(paths.get(code, '')) == 5 and paths[code].startswith(klass)}
+        item_scope = next((begin for _title, begin, end in ranges if begin <= item.start() < end), None)
+        single_kuan_class_repeat = (
+            _name(item['kuan']) == _name(item['klass'])
+            and parent_code is not None
+            and class_kuans == {parent_code}
+            and (not ranges or (item_scope is not None
+                                and not _guard(doc, source_text, item_scope, item.start(), item.start())))
+        )
+        if not ((len(corroborated) >= 2 and leaf in corroborated) or single_kuan_class_repeat):
             return None
         chain = []
         for code in (klass_code, parent_code, leaf):
@@ -972,7 +1080,9 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
             aliases.extend(ref for code in sorted(corroborated - {leaf}) for ref in native_refs[code])
             aliases.append(dict(role='independent_exact_leaf_chain', klass_code=klass_code,
                                 kuan_code=parent_code, xiang_code=leaf,
-                                corroborating_leaf_codes=sorted(corroborated),
+                                corroborating_leaf_codes=sorted(corroborated or {leaf}),
+                                basis=('single_kuan_class_repeat'
+                                       if len(corroborated) < 2 else 'two_leaf_corroboration'),
                                 narrative_parent=item['kuan'], table_parent=chain[1].subject_name))
         return chain[-1], None
 
@@ -1035,10 +1145,9 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
                         code = str(f.subject_code)
                         actual = _name(f.subject_name)
                         if (f.indicator != 'total_actual' or len(paths.get(code, '')) != 7
-                                or not paths[code].startswith(parent) or not 0 < len(actual)-len(requested) <= 2):
+                                or not paths[code].startswith(parent)):
                             continue
-                        chars = iter(actual)
-                        if all(char in chars for char in requested):
+                        if _is_near_subject_name_candidate(requested, actual):
                             near[code] = f
                 if len(near) == 1:
                     candidate = next(iter(near.values()))
@@ -1046,17 +1155,27 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None):
                     pages = sorted({ref['physical_page'] for ref in refs if ref.get('physical_page')})
                     text = _Text.from_pages(doc.page_texts)
                     source = text.refs(item.start(), item.end(), '原文科目')
+                    shown_candidate = re.sub(r'\s+', '', str(candidate.subject_name or ''))
                     reason = (f"科目名称差异候选：正文第{source[0]['page'] if source else '?'}页写“{item[group]}”；"
-                                  f"同款表格第{'、'.join(map(str,pages)) or '?'}页编码{candidate.subject_code}写“{candidate.subject_name}”。"
+                                  f"同款表格第{'、'.join(map(str,pages)) or '?'}页编码{candidate.subject_code}写“{shown_candidate}”。"
                                   "名称不一致，尚未绑定金额；请核对科目名称后确认，不能仅凭金额相同认定一致。")
-                    _record_text_gap(doc, reason, item, codes=['name_mismatch_confirmed'], role='说明科目对应金额')
+                    _record_text_gap(doc, reason, item, codes=['name_mismatch_confirmed'],
+                                     role='说明科目对应金额', sub_check_id=sub_check_id)
                     return None, reason
+                if group == 'kuan':
+                    kuan_reason = _kuan_mismatch_reason(doc, facts, item, klass, paths)
+                    if kuan_reason:
+                        _record_text_gap(doc, kuan_reason, item, codes=['name_mismatch_confirmed'],
+                                         role='说明科目对应金额', sub_check_id=sub_check_id)
+                        return None, kuan_reason
                 reason = (f'说明中的{level}“{item[group]}”在表内找不到同名科目'
                           f'（可能使用了旧科目名称或写错），无法与表格金额对应')
-                _record_text_gap(doc, reason, item, codes=['text_binding_failed'], role='说明科目对应金额')
+                _record_text_gap(doc, reason, item, codes=['text_binding_failed'],
+                                 role='说明科目对应金额', sub_check_id=sub_check_id)
                 return None, reason
             reason = f'说明中的{level}“{item[group]}”在表内对应多个科目，无法唯一对应'
-            _record_text_gap(doc, reason, item, codes=['text_binding_failed'], role='说明科目对应金额')
+            _record_text_gap(doc, reason, item, codes=['text_binding_failed'],
+                             role='说明科目对应金额', sub_check_id=sub_check_id)
             return None, reason
         parent = paths[next(iter(candidates))]
         if group == 'klass':
@@ -1197,7 +1316,7 @@ def check_function_disclosures(rule, doc):
         claims = list(_DECISION.finditer(text.compact, item.end(), stop))
         key = f'general:text:item:{item.start()}'
         aliases = []
-        fact, error = _hierarchy_fact(doc, facts, item, siblings=items, aliases=aliases)
+        fact, error = _hierarchy_fact(doc, facts, item, siblings=items, aliases=aliases, sub_check_id=key)
         # A2（R2.2 QP-04）：类名差异在身份链成立时只作提示，金额照常核对。
         name_hint = next((a for a in aliases if isinstance(a, dict)
                           and a.get('role') == 'klass_name_difference'), None)
@@ -1256,7 +1375,8 @@ def check_function_disclosures(rule, doc):
             # DH-02：说明条目内无法唯一确定显式决算金额；位置落在条目原文页。
             _record_text_gap(doc, [decision_error, error], item,
                              codes=['operand_missing'],
-                             role=f'{item["xiang"]}条目显式决算金额')
+                             role=f'{item["xiang"]}条目显式决算金额',
+                             sub_check_id=key)
         if error:
             # 零额项被表内省略：说明明确写 0，且父级款合计 = 表内已列项之和。
             # 这不是“找不到科目”的取数不足，而是零值行未列示；不弹补核。

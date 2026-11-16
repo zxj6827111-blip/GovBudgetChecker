@@ -5,6 +5,7 @@ export type Severity = SeverityCode;
 export interface ProblemEvidenceRef {
   key: string;
   role: string;
+  quoteText?: string;
   relationId?: string;
   operandId?: string;
   sourceCellId?: string;

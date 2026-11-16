@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .amount_math import classify_amount_diff
 from .rule_policy import AMOUNT_TOLERANCE_WAN
-from .checklist_support import compact, display_envelope, flat_span, issue_at, iter_pages, page_flat, page_has_table
+from .checklist_support import compact, display_envelope, flat_span, issue_at, iter_pages, page_flat, page_has_table, unique_quote
 from .fact_context import _canonical_budget_stage
 from .native_table_arithmetic import table_facts
 from .rule_outcome import RuleDeferred, RuleNotApplicable
@@ -615,6 +615,22 @@ def _operand_evidence(record: Dict[str, Any]) -> Dict[str, Any]:
     return evidence
 
 
+def _table_general_public_expenditure_total(doc: Document) -> Tuple[Optional[Decimal], Optional[str]]:
+    """具体情况段缺少总体句时，回退取表5（一般公共预算财政拨款支出决算表）本年支出合计。"""
+    facts, reason = table_facts(doc, "FIN_05_general_public_expenditure")
+    if reason or not facts:
+        return None, None
+    total_fact = _total_fact(facts, "total_actual", ("合计", "总计")) or _total_fact(facts, "total_actual")
+    if total_fact is not None and total_fact.normalized_value is not None:
+        val = Decimal(str(total_fact.normalized_value))
+        raw = str(total_fact.raw_value or "").replace(",", "").replace("，", "").strip() or format(val, "f")
+        return val, raw
+    top_total = _top_level_rows_total(facts)
+    if top_total is not None:
+        return top_total, format(top_total, "f")
+    return None, None
+
+
 class R33251_FunctionalDetailCompleteness(Rule):
     code, severity = "V33-251", "warn"
     desc = "支出决算具体情况逐项细化到项、分项加总等于总额、不漏列科目（清单 A-09/C-11/C-12）"
@@ -638,6 +654,14 @@ class R33251_FunctionalDetailCompleteness(Rule):
             page, text, flat, positions, begin, _ = blocks[0]
             s, e = flat_span(positions, begin, begin + 16)
             return page, text, s, e
+
+        def _locate_header() -> Tuple[int, str, int, int]:
+            page, text, flat, positions, *_ = blocks[0]
+            header_match = _DETAIL_START_RE.search(flat)
+            if header_match is not None:
+                s, e = flat_span(positions, header_match.start(), header_match.end())
+                return page, text, s, e
+            return _locate(0)
 
         issues: List[Issue] = []
         unresolved: List[str] = []
@@ -668,63 +692,95 @@ class R33251_FunctionalDetailCompleteness(Rule):
                     self, f"支出决算具体情况未细化到项：“{item['head'][:30]}”只列至类/款级科目。",
                     page, text, s, e, severity="warn", checklist_item="A-09",
                 ))
-        listed_final = 0
-        if total:
-            # 一个编号下可能挂多条“类（类）款（款）项（项）”子条目（每条各有年初预算与支出决算），
-            # 所以按总额之后出现的全部声明加总，不按编号取第一处。
-            # 单位按原文（元/万元/亿元）归一；不能把“元”项按“万元”名义值补入。
-            tail_start = total.end()
-            records: List[Dict[str, Any]] = []
-            for match in _DECL_RE.finditer(joined, tail_start):
-                raw, unit = match.group("amount"), match.group("unit")
-                value = _dec(raw)
-                factor = _AMOUNT_UNIT_FACTOR.get(unit)
-                records.append({
-                    "kind": _decl_kind(match.group("kind")),
-                    "raw": raw, "unit": unit, "pos": match.start(),
-                    "value_wan": value * factor if value is not None and factor is not None else None,
-                    "not_included_reason": (
-                        None if value is not None and factor is not None
-                        else "amount_or_unit_unusable"
-                    ),
-                })
-            # 应披露集合来自识别到的项级条目：每条科目都要有年初预算与支出决算
-            # 两个槽位。没有数字不是“没有检查义务”，缺失槽位同样进入未纳入清单。
-            clauses = _subject_clauses(joined, items)
-            # D0 RC-3b：同条目同槽位的缺单位金额，有唯一带单位的同槽位声明时
-            # 按该单位归一后参与合计；漏单位缺陷由 CMM-011 独立交付，
-            # 不再让整个构成检查被阻断（宜川部门决算 P29 实证）。
-            _inherit_clause_unit(clauses, records, joined, tail_start)
-            accounting = _clause_declaration_accounting(
-                joined, clauses, records, tail_start
+        from .native_table_arithmetic import receipt as relation_receipt
+
+        if total is None:
+            header_page, header_text, header_s, header_e = _locate_header()
+            missing_msg = (
+                "支出决算具体情况未按标准模板撰写总体情况说明"
+                "（“（三）一般公共预算财政拨款支出决算具体情况”下缺少年初预算、"
+                "支出决算总额、预算完成率及变动原因说明）。"
             )
-            listed_final = sum(1 for record in records if record["kind"] == "final")
-            for key, label, kind, checklist in (
-                (1, "年初预算", "budget", "C-11"), (2, "支出决算", "final", "C-12"),
-            ):
-                kind_records = [record for record in records if record["kind"] == kind]
-                not_included = {
-                    record["pos"]: record
-                    for record in kind_records
-                    if not _operand_admitted(record, accounting["conflicts"])
-                }
-                for record in accounting["gaps"].get(kind, []):
-                    not_included[record["pos"]] = record
-                rejected_positions = set(not_included) | accounting["conflicts"]
-                included = [record for record in kind_records
-                            if _operand_admitted(record, rejected_positions)]
-                not_included_items = [not_included[pos] for pos in sorted(not_included)]
-                withheld_items = accounting["withheld"].get(kind, [])
-                disclosure_exceptions = [
-                    item for item in accounting["exceptions"]
-                    if kind in item["stages"]
-                    or (item["scope"] == "ambiguous" and not item["stages"])
-                ]
-                exception_evidence = _exception_evidence(disclosure_exceptions, _locate)
-                if not kind_records and not not_included_items and not withheld_items:
-                    continue
-                stated = _dec(total.group(key))
-                from .native_table_arithmetic import receipt as relation_receipt
+            issues.append(issue_at(
+                self,
+                missing_msg,
+                header_page,
+                header_text,
+                header_s,
+                header_e,
+                severity="warn",
+                checklist_item="A-09",
+                section="一般公共预算财政拨款支出决算具体情况",
+                check_relation_id=f"{self.code}:V33-251:total:missing",
+            ))
+            relation_receipt(
+                self, doc, "V33-251:total:missing", [],
+                status="fail",
+                formula="section intro states initial budget and final expenditure totals",
+                reason=missing_msg,
+                reason_codes=["stated_total_missing"],
+            )
+
+        # 一个编号下可能挂多条“类（类）款（款）项（项）”子条目（每条各有年初预算与支出决算），
+        # 所以按总额之后（无总括句时从首项起）出现的全部声明加总，不按编号取第一处。
+        # 单位按原文（元/万元/亿元）归一；不能把“元”项按“万元”名义值补入。
+        tail_start = total.end() if total is not None else starts[0]
+        records: List[Dict[str, Any]] = []
+        for match in _DECL_RE.finditer(joined, tail_start):
+            raw, unit = match.group("amount"), match.group("unit")
+            value = _dec(raw)
+            factor = _AMOUNT_UNIT_FACTOR.get(unit)
+            records.append({
+                "kind": _decl_kind(match.group("kind")),
+                "raw": raw, "unit": unit, "pos": match.start(),
+                "value_wan": value * factor if value is not None and factor is not None else None,
+                "not_included_reason": (
+                    None if value is not None and factor is not None
+                    else "amount_or_unit_unusable"
+                ),
+            })
+        # 应披露集合来自识别到的项级条目：每条科目都要有年初预算与支出决算
+        # 两个槽位。没有数字不是“没有检查义务”，缺失槽位同样进入未纳入清单。
+        clauses = _subject_clauses(joined, items)
+        # D0 RC-3b：同条目同槽位的缺单位金额，有唯一带单位的同槽位声明时
+        # 按该单位归一后参与合计；漏单位缺陷由 CMM-011 独立交付，
+        # 不再让整个构成检查被阻断（宜川部门决算 P29 实证）。
+        _inherit_clause_unit(clauses, records, joined, tail_start)
+        accounting = _clause_declaration_accounting(
+            joined, clauses, records, tail_start
+        )
+        listed_final = sum(1 for record in records if record["kind"] == "final")
+        for key, label, kind, checklist in (
+            (1, "年初预算", "budget", "C-11"), (2, "支出决算", "final", "C-12"),
+        ):
+            if total is None and kind == "budget":
+                # 缺少总括段已作为正式模板问题报出；表5不含年初预算列，此处不再重复报取数不足。
+                continue
+            kind_records = [record for record in records if record["kind"] == kind]
+            not_included = {
+                record["pos"]: record
+                for record in kind_records
+                if not _operand_admitted(record, accounting["conflicts"])
+            }
+            for record in accounting["gaps"].get(kind, []):
+                not_included[record["pos"]] = record
+            rejected_positions = set(not_included) | accounting["conflicts"]
+            included = [record for record in kind_records
+                        if _operand_admitted(record, rejected_positions)]
+            not_included_items = [not_included[pos] for pos in sorted(not_included)]
+            withheld_items = accounting["withheld"].get(kind, [])
+            disclosure_exceptions = [
+                item for item in accounting["exceptions"]
+                if kind in item["stages"]
+                or (item["scope"] == "ambiguous" and not item["stages"])
+            ]
+            exception_evidence = _exception_evidence(disclosure_exceptions, _locate)
+            if not kind_records and not not_included_items and not withheld_items:
+                continue
+            if total is not None:
+                stated_raw = total.group(key)
+                stated = _dec(stated_raw)
+                total_origin_label = f"该部分所列{label}总额"
                 if stated is None:
                     unresolved.append(f"{label}总额缺失，无法复算分项加总")
                     unresolved_codes.append("stated_total_missing")
@@ -737,174 +793,123 @@ class R33251_FunctionalDetailCompleteness(Rule):
                         disclosure_sources=exception_evidence,
                     )
                     continue
-                gap_summary = _completeness_summary(not_included_items, label)
-                gap_codes = _completeness_codes(not_included_items)
-                withheld_summary = (
-                    f"另有{len(withheld_items)}个科目依法不予公开、金额未知"
-                    if withheld_items else ""
-                )
-                unknown = bool(not_included_items or withheld_items)
-                if not included:
-                    if not_included_items:
-                        detail = (
-                            f"{label}无已纳入分项，{len(not_included_items)}处金额未纳入合计"
-                            f"（{gap_summary}）"
-                            + (f"；{withheld_summary}" if withheld_summary else "")
-                            + "，不能发布分项加总"
-                        )
-                        codes = list(dict.fromkeys([
-                            *(gap_codes or ["item_amount_not_included"]),
-                            *(["withheld_amount_unknown", "sum_scope_not_comparable"]
-                              if withheld_items else []),
-                        ]))
-                        unresolved.append(detail)
-                        unresolved_codes.extend(codes)
-                        relation_receipt(
-                            self, doc, f"V33-251:{kind}:item_sum", [],
-                            status="insufficient_data",
-                            formula="sum(item declared amounts normalized by original unit) == stated section total (万元)",
-                            reason=detail,
-                            reason_codes=codes,
-                            disclosure_sources=exception_evidence,
-                        )
-                        continue
-                    if withheld_items:
-                        detail = (
-                            f"{label}仅有依法不予公开的分项，金额未知；"
-                            "公开分项与全口径总额不可比，不做完整加总判断"
-                        )
-                        relation_receipt(
-                            self, doc, f"V33-251:{kind}:item_sum", [],
-                            status="not_applicable",
-                            formula="sum(item declared amounts normalized by original unit) == stated section total (万元)",
-                            reason=detail,
-                            reason_codes=["withheld_amount_unknown", "sum_scope_not_comparable"],
-                            disclosure_sources=exception_evidence,
-                        )
-                        continue
+            else:
+                stated, stated_raw = _table_general_public_expenditure_total(doc)
+                total_origin_label = "《一般公共预算财政拨款支出决算表》合计"
+                if stated is None or stated_raw is None:
+                    relation_receipt(
+                        self, doc, f"V33-251:{kind}:item_sum", [],
+                        status="insufficient_data",
+                        formula="sum(item declared amounts normalized by original unit) == FIN_05 table total (万元)",
+                        reason=f"{label}总额缺失且表5合计未取到，无法复算分项加总",
+                        reason_codes=["stated_total_missing"],
+                        disclosure_sources=exception_evidence,
+                    )
                     continue
-                subtotal = sum((record["value_wan"] for record in included), Decimal(0))
-                envelope = display_envelope(
-                    [total.group(key), *[format(record["value_wan"], "f") for record in included]]
-                )
-                difference = subtotal - stated
-                known_exceeds = difference > envelope
-                if unknown:
-                    if known_exceeds:
-                        parts = [
-                            f"已公开分项{label}合计{format(subtotal, 'f')}万元"
-                            f"（纳入{len(included)}项），已超过该部分{label}总额"
-                            f"{format(stated, 'f')}万元，差{format(abs(difference), 'f')}万元；"
-                            "即使未纳入或依法不予公开的分项为零，该加总关系也不成立"
-                        ]
-                        if not_included_items:
-                            parts.append(f"另有{gap_summary}，未纳入合计")
-                        if withheld_items:
-                            parts.append(withheld_summary)
-                        message = "；".join(parts) + "。"
-                        # DH-02：回执创建前登记结构化卡点（分项范围不一致）。
-                        from .diagnostic_fields import blocker as _diag_blocker, record_gap as _diag_gap
-                        _scope_entry = dict(
-                            reason_codes=['scope_unconfirmed', 'item_amount_not_included',
-                                          'sum_scope_not_comparable'],
-                            blocked_by=[_diag_blocker(dimension='fund_scope',
-                                                      ref=f'V33-251:{kind}:{label}:分项范围',
-                                                      reason_code='scope_unconfirmed')])
-                        _diag_gap(doc, message, **_scope_entry)
-                        page, text, s, e = _locate(total.start())
-                        issues.append(issue_at(
-                            self, message, page, text, s, e, severity="info",
-                            checklist_item=checklist,
-                            included_items=[_operand_evidence(record) for record in included],
-                            not_included_items=[_operand_evidence(record) for record in not_included_items],
-                            withheld_items=withheld_items,
-                            disclosure_exceptions=exception_evidence,
-                            stated_total_wan=format(stated, "f"),
-                            included_subtotal_wan=format(subtotal, "f"),
-                            difference_wan=format(difference, "f"),
-                            completeness="partial",
-                        ))
-                        codes = list(dict.fromkeys([
-                            *(gap_codes or (["item_amount_not_included"]
-                                            if not_included_items else [])),
-                            "item_sum_mismatch",
-                            *(["withheld_amount_unknown"] if withheld_items else []),
-                        ]))
-                        relation_receipt(
-                            self, doc, f"V33-251:{kind}:item_sum", [],
-                            status="insufficient_data" if not_included_items else "fail",
-                            formula="sum(item declared amounts normalized by original unit) == stated section total (万元)",
-                            reason=message,
-                            reason_codes=codes,
-                            disclosure_sources=exception_evidence,
-                        )
-                        if not_included_items:
-                            from .diagnostic_fields import blocker, record_gap
-                            scope_entry = dict(
-                                reason_codes=['scope_unconfirmed', 'item_amount_not_included',
-                                              'sum_scope_not_comparable'],
-                                blocked_by=[blocker(dimension='fund_scope',
-                                                    ref=f'V33-251:{kind}:{label}:分项范围',
-                                                    reason_code='scope_unconfirmed')])
-                            unresolved_text = (
-                                f"{label}有{len(not_included_items)}处金额未纳入合计：{gap_summary}"
-                            )
-                            record_gap(doc, unresolved_text, **scope_entry)
-                            unresolved.append(unresolved_text)
-                            unresolved_codes.extend(gap_codes or ["item_amount_not_included"])
-                            if withheld_items:
-                                unresolved_codes.extend(
-                                    ["withheld_amount_unknown", "sum_scope_not_comparable"]
-                                )
-                        continue
+            gap_summary = _completeness_summary(not_included_items, label)
+            gap_codes = _completeness_codes(not_included_items)
+            withheld_summary = (
+                f"另有{len(withheld_items)}个科目依法不予公开、金额未知"
+                if withheld_items else ""
+            )
+            unknown = bool(not_included_items or withheld_items)
+            if not included:
+                if not_included_items:
+                    detail = (
+                        f"{label}无已纳入分项，{len(not_included_items)}处金额未纳入合计"
+                        f"（{gap_summary}）"
+                        + (f"；{withheld_summary}" if withheld_summary else "")
+                        + "，不能发布分项加总"
+                    )
+                    codes = list(dict.fromkeys([
+                        *(gap_codes or ["item_amount_not_included"]),
+                        *(["withheld_amount_unknown", "sum_scope_not_comparable"]
+                          if withheld_items else []),
+                    ]))
+                    unresolved.append(detail)
+                    unresolved_codes.extend(codes)
+                    relation_receipt(
+                        self, doc, f"V33-251:{kind}:item_sum", [],
+                        status="insufficient_data",
+                        formula="sum(item declared amounts normalized by original unit) == stated section total (万元)",
+                        reason=detail,
+                        reason_codes=codes,
+                        disclosure_sources=exception_evidence,
+                    )
+                    continue
+                if withheld_items:
+                    detail = (
+                        f"{label}仅有依法不予公开的分项，金额未知；"
+                        "公开分项与全口径总额不可比，不做完整加总判断"
+                    )
+                    relation_receipt(
+                        self, doc, f"V33-251:{kind}:item_sum", [],
+                        status="not_applicable",
+                        formula="sum(item declared amounts normalized by original unit) == stated section total (万元)",
+                        reason=detail,
+                        reason_codes=["withheld_amount_unknown", "sum_scope_not_comparable"],
+                        disclosure_sources=exception_evidence,
+                    )
+                    continue
+                continue
+            subtotal = sum((record["value_wan"] for record in included), Decimal(0))
+            envelope = display_envelope(
+                [stated_raw, *[format(record["value_wan"], "f") for record in included]]
+            )
+            difference = subtotal - stated
+            known_exceeds = difference > envelope
+            anchor_page, anchor_text, anchor_s, anchor_e = (
+                _locate(total.start()) if total is not None else _locate_header()
+            )
+            if unknown:
+                if known_exceeds:
+                    parts = [
+                        f"已公开分项{label}合计{format(subtotal, 'f')}万元"
+                        f"（纳入{len(included)}项），已超过{total_origin_label}"
+                        f"{format(stated, 'f')}万元，差{format(abs(difference), 'f')}万元；"
+                        "即使未纳入或依法不予公开的分项为零，该加总关系也不成立"
+                    ]
                     if not_included_items:
-                        parts = [
-                            f"已公开分项{label}合计{format(subtotal, 'f')}万元"
-                            f"（纳入{len(included)}项）",
-                            f"另有{gap_summary}，未纳入合计",
-                        ]
-                        if withheld_items:
-                            parts.append(withheld_summary)
-                        parts.append(
-                            "公开分项与全口径总额范围不一致，不计算完整加总差额，"
-                            "不能视为完整分项加总"
-                        )
-                        message = "；".join(parts) + "。"
-                        # DH-02：回执创建前登记结构化卡点（分项范围不一致）。
-                        from .diagnostic_fields import blocker as _diag_blocker, record_gap as _diag_gap
-                        _scope_entry = dict(
-                            reason_codes=['scope_unconfirmed', 'item_amount_not_included',
-                                          'sum_scope_not_comparable'],
-                            blocked_by=[_diag_blocker(dimension='fund_scope',
-                                                      ref=f'V33-251:{kind}:{label}:分项范围',
-                                                      reason_code='scope_unconfirmed')])
-                        _diag_gap(doc, message, **_scope_entry)
-                        page, text, s, e = _locate(total.start())
-                        issues.append(issue_at(
-                            self, message, page, text, s, e, severity="info",
-                            checklist_item=checklist,
-                            included_items=[_operand_evidence(record) for record in included],
-                            not_included_items=[_operand_evidence(record) for record in not_included_items],
-                            withheld_items=withheld_items,
-                            disclosure_exceptions=exception_evidence,
-                            stated_total_wan=format(stated, "f"),
-                            included_subtotal_wan=format(subtotal, "f"),
-                            difference_wan=None,
-                            completeness="partial",
-                        ))
-                        codes = list(dict.fromkeys([
-                            *(gap_codes or ["item_amount_not_included"]),
-                            "sum_scope_not_comparable",
-                            *(["withheld_amount_unknown"] if withheld_items else []),
-                        ]))
-                        relation_receipt(
-                            self, doc, f"V33-251:{kind}:item_sum", [],
-                            status="insufficient_data",
-                            formula="sum(item declared amounts normalized by original unit) == stated section total (万元)",
-                            reason=message,
-                            reason_codes=codes,
-                            disclosure_sources=exception_evidence,
-                        )
+                        parts.append(f"另有{gap_summary}，未纳入合计")
+                    if withheld_items:
+                        parts.append(withheld_summary)
+                    message = "；".join(parts) + "。"
+                    # DH-02：回执创建前登记结构化卡点（分项范围不一致）。
+                    from .diagnostic_fields import blocker as _diag_blocker, record_gap as _diag_gap
+                    _scope_entry = dict(
+                        reason_codes=['scope_unconfirmed', 'item_amount_not_included',
+                                      'sum_scope_not_comparable'],
+                        blocked_by=[_diag_blocker(dimension='fund_scope',
+                                                  ref=f'V33-251:{kind}:{label}:分项范围',
+                                                  reason_code='scope_unconfirmed')])
+                    _diag_gap(doc, message, **_scope_entry)
+                    issues.append(issue_at(
+                        self, message, anchor_page, anchor_text, anchor_s, anchor_e, severity="info",
+                        checklist_item=checklist,
+                        included_items=[_operand_evidence(record) for record in included],
+                        not_included_items=[_operand_evidence(record) for record in not_included_items],
+                        withheld_items=withheld_items,
+                        disclosure_exceptions=exception_evidence,
+                        stated_total_wan=format(stated, "f"),
+                        included_subtotal_wan=format(subtotal, "f"),
+                        difference_wan=format(difference, "f"),
+                        completeness="partial",
+                    ))
+                    codes = list(dict.fromkeys([
+                        *(gap_codes or (["item_amount_not_included"]
+                                        if not_included_items else [])),
+                        "item_sum_mismatch",
+                        *(["withheld_amount_unknown"] if withheld_items else []),
+                    ]))
+                    relation_receipt(
+                        self, doc, f"V33-251:{kind}:item_sum", [],
+                        status="insufficient_data" if not_included_items else "fail",
+                        formula="sum(item declared amounts normalized by original unit) == stated section total (万元)",
+                        reason=message,
+                        reason_codes=codes,
+                        disclosure_sources=exception_evidence,
+                    )
+                    if not_included_items:
                         from .diagnostic_fields import blocker, record_gap
                         scope_entry = dict(
                             reason_codes=['scope_unconfirmed', 'item_amount_not_included',
@@ -922,151 +927,208 @@ class R33251_FunctionalDetailCompleteness(Rule):
                             unresolved_codes.extend(
                                 ["withheld_amount_unknown", "sum_scope_not_comparable"]
                             )
-                        continue
-                    detail = (
-                        f"{label}有{len(withheld_items)}个科目依法不予公开，金额未知；"
-                        "公开分项与全口径总额不可比，不做完整加总判断"
+                    continue
+                if not_included_items:
+                    parts = [
+                        f"已公开分项{label}合计{format(subtotal, 'f')}万元"
+                        f"（纳入{len(included)}项）",
+                        f"另有{gap_summary}，未纳入合计",
+                    ]
+                    if withheld_items:
+                        parts.append(withheld_summary)
+                    parts.append(
+                        "公开分项与全口径总额范围不一致，不计算完整加总差额，"
+                        "不能视为完整分项加总"
                     )
+                    message = "；".join(parts) + "。"
+                    # DH-02：回执创建前登记结构化卡点（分项范围不一致）。
+                    from .diagnostic_fields import blocker as _diag_blocker, record_gap as _diag_gap
+                    _scope_entry = dict(
+                        reason_codes=['scope_unconfirmed', 'item_amount_not_included',
+                                      'sum_scope_not_comparable'],
+                        blocked_by=[_diag_blocker(dimension='fund_scope',
+                                                  ref=f'V33-251:{kind}:{label}:分项范围',
+                                                  reason_code='scope_unconfirmed')])
+                    _diag_gap(doc, message, **_scope_entry)
+                    issues.append(issue_at(
+                        self, message, anchor_page, anchor_text, anchor_s, anchor_e, severity="info",
+                        checklist_item=checklist,
+                        included_items=[_operand_evidence(record) for record in included],
+                        not_included_items=[_operand_evidence(record) for record in not_included_items],
+                        withheld_items=withheld_items,
+                        disclosure_exceptions=exception_evidence,
+                        stated_total_wan=format(stated, "f"),
+                        included_subtotal_wan=format(subtotal, "f"),
+                        difference_wan=None,
+                        completeness="partial",
+                    ))
+                    codes = list(dict.fromkeys([
+                        *(gap_codes or ["item_amount_not_included"]),
+                        "sum_scope_not_comparable",
+                        *(["withheld_amount_unknown"] if withheld_items else []),
+                    ]))
                     relation_receipt(
                         self, doc, f"V33-251:{kind}:item_sum", [],
-                        status="not_applicable",
-                        formula="sum(item declared amounts normalized by original unit) == stated section total (万元)",
-                        reason=detail,
-                        reason_codes=["withheld_amount_unknown", "sum_scope_not_comparable"],
-                        disclosure_sources=exception_evidence,
-                    )
-                    continue
-                if not (abs(difference) > envelope):
-                    relation_receipt(
-                        self, doc, f"V33-251:{kind}:item_sum", [],
-                        status="pass",
-                        formula="sum(item declared amounts normalized by original unit) == stated section total (万元)",
-                        reason=None,
-                        reason_codes=[],
-                        disclosure_sources=exception_evidence,
-                    )
-                    continue
-                unit_items = [record for record in included if record["unit"] != "万元"
-                              and not (record.get("source") == "explicit_zero"
-                                       and record["unit"] is None and record["value_wan"] == 0)]
-                anchors = []
-                for record in unit_items:
-                    page, text, s, e = _locate(record["pos"])
-                    anchors.append({
-                        "page": page, "amount": record["raw"], "unit": record["unit"],
-                        "value_wan": format(record["value_wan"], "f"),
-                        "section": "支出决算具体情况", "span": text[s:e],
-                    })
-                page, text, s, e = _locate(total.start())
-                parts = [
-                    f"支出决算具体情况逐项列示的{label}合计{format(subtotal, 'f')}万元"
-                    f"（纳入{len(included)}项），与该部分所列{label}总额{format(stated, 'f')}万元不一致，"
-                    f"相差{format(abs(difference), 'f')}万元"
-                ]
-                conditional_assumed = conditional_included = conditional_delta = None
-                if unit_items:
-                    units = "、".join(sorted({record["unit"] for record in unit_items}))
-                    conditional_assumed = sum(
-                        (_dec(record["raw"]) or Decimal(0) for record in unit_items), Decimal(0)
-                    )
-                    conditional_included = sum(
-                        (record["value_wan"] for record in unit_items), Decimal(0)
-                    )
-                    conditional_delta = conditional_assumed - conditional_included
-                    parts.append(f"其中{len(unit_items)}项原文以{units}列示，已按原文单位折算为万元")
-                    basis = (
-                        f"当前已纳入{format(conditional_included, 'f')}万元，"
-                        f"若按万元名义值替换为{format(conditional_assumed, 'f')}万元"
-                    )
-                    if conditional_delta > 0:
-                        parts.append(
-                            f"条件性说明：若这些项按万元名义值计入，合计将增加"
-                            f"{format(conditional_delta, 'f')}万元（{basis}）；"
-                            "本规则不采用该假设，单位问题另行确认"
-                        )
-                    elif conditional_delta < 0:
-                        parts.append(
-                            f"条件性说明：若这些项按万元名义值计入，合计将减少"
-                            f"{format(abs(conditional_delta), 'f')}万元（{basis}）；"
-                            "本规则不采用该假设，单位问题另行确认"
-                        )
-                    else:
-                        parts.append(
-                            f"条件性说明：若这些项按万元名义值计入，合计不变（{basis}）；"
-                            "本规则不采用该假设，单位问题另行确认"
-                        )
-                if subtotal < stated:
-                    parts.append("可能漏列科目")
-                else:
-                    parts.append("分项合计超出总额")
-                message = "；".join(parts) + "。"
-                receipt_codes = ["item_sum_mismatch"]
-                if unit_items:
-                    receipt_codes.append("source_unit_normalized")
-                # 2A：差额被同源单位错精确解释时，下游不再产出独立正式问题；
-                # 金额子检查仍为 executed，回执记录解释来源与剩余差额。
-                explained = (
-                    conditional_delta is not None
-                    and _unit_error_explains_amount(difference, conditional_delta, AMOUNT_TOLERANCE_WAN)
-                )
-                if explained:
-                    receipt_codes.append("explained_by_unit_error")
-                    relation_receipt(
-                        self, doc, f"V33-251:{kind}:item_sum",
-                        [],
-                        status="fail",
+                        status="insufficient_data",
                         formula="sum(item declared amounts normalized by original unit) == stated section total (万元)",
                         reason=message,
-                        reason_codes=receipt_codes,
+                        reason_codes=codes,
                         disclosure_sources=exception_evidence,
-                        amount_subcheck_status="executed",
-                        explained_by="unit_error",
-                        residual_difference_wan=format(
-                            max(abs(difference) - abs(conditional_delta), Decimal(0)), "f"),
-                        cascade_of=_runtime_defect_key(doc, page, f"{label}:{format(conditional_assumed, 'f')}"),
                     )
+                    from .diagnostic_fields import blocker, record_gap
+                    scope_entry = dict(
+                        reason_codes=['scope_unconfirmed', 'item_amount_not_included',
+                                      'sum_scope_not_comparable'],
+                        blocked_by=[blocker(dimension='fund_scope',
+                                            ref=f'V33-251:{kind}:{label}:分项范围',
+                                            reason_code='scope_unconfirmed')])
+                    unresolved_text = (
+                        f"{label}有{len(not_included_items)}处金额未纳入合计：{gap_summary}"
+                    )
+                    record_gap(doc, unresolved_text, **scope_entry)
+                    unresolved.append(unresolved_text)
+                    unresolved_codes.extend(gap_codes or ["item_amount_not_included"])
+                    if withheld_items:
+                        unresolved_codes.extend(
+                            ["withheld_amount_unknown", "sum_scope_not_comparable"]
+                        )
                     continue
-                issues.append(issue_at(
-                    self, message, page, text, s, e, severity="warn", checklist_item=checklist,
-                    included_items=[
-                        {**{k: v for k, v in record.items() if k != "value_wan"},
-                         "value_wan": format(record["value_wan"], "f")}
-                        for record in included
-                    ],
-                    not_included_items=not_included_items,
-                    unit_normalized_items=anchors,
-                    disclosure_exceptions=exception_evidence,
-                    stated_total_wan=format(stated, "f"),
-                    included_subtotal_wan=format(subtotal, "f"),
-                    difference_wan=format(difference, "f"),
-                    completeness="complete",
-                    # 两种口径属于同一原文节的整改事项，但各自算式和失败回执独立保留。
-                    detail_section_anchor={"page": page, "span": text[s:e]},
-                    check_relation_id=f"{self.code}:V33-251:{kind}:item_sum",
-                    **({"conditional_assumed_wan": format(conditional_assumed, "f"),
-                        "conditional_included_wan": format(conditional_included, "f"),
-                        "conditional_delta_wan": format(conditional_delta, "f")}
-                       if conditional_delta is not None else {}),
-                ))
+                detail = (
+                    f"{label}有{len(withheld_items)}个科目依法不予公开，金额未知；"
+                    "公开分项与全口径总额不可比，不做完整加总判断"
+                )
                 relation_receipt(
                     self, doc, f"V33-251:{kind}:item_sum", [],
+                    status="not_applicable",
+                    formula="sum(item declared amounts normalized by original unit) == stated section total (万元)",
+                    reason=detail,
+                    reason_codes=["withheld_amount_unknown", "sum_scope_not_comparable"],
+                    disclosure_sources=exception_evidence,
+                )
+                continue
+            if not (abs(difference) > envelope):
+                relation_receipt(
+                    self, doc, f"V33-251:{kind}:item_sum", [],
+                    status="pass",
+                    formula="sum(item declared amounts normalized by original unit) == stated section total (万元)",
+                    reason=None,
+                    reason_codes=[],
+                    disclosure_sources=exception_evidence,
+                )
+                continue
+            unit_items = [record for record in included if record["unit"] != "万元"
+                          and not (record.get("source") == "explicit_zero"
+                                   and record["unit"] is None and record["value_wan"] == 0)]
+            anchors = []
+            for record in unit_items:
+                page, text, s, e = _locate(record["pos"])
+                anchors.append({
+                    "page": page, "amount": record["raw"], "unit": record["unit"],
+                    "value_wan": format(record["value_wan"], "f"),
+                    "section": "支出决算具体情况", "span": text[s:e],
+                })
+            parts = [
+                f"支出决算具体情况逐项列示的{label}合计{format(subtotal, 'f')}万元"
+                f"（纳入{len(included)}项），与{total_origin_label}{format(stated, 'f')}万元不一致，"
+                f"相差{format(abs(difference), 'f')}万元"
+            ]
+            conditional_assumed = conditional_included = conditional_delta = None
+            if unit_items:
+                units = "、".join(sorted({record["unit"] for record in unit_items}))
+                conditional_assumed = sum(
+                    (_dec(record["raw"]) or Decimal(0) for record in unit_items), Decimal(0)
+                )
+                conditional_included = sum(
+                    (record["value_wan"] for record in unit_items), Decimal(0)
+                )
+                conditional_delta = conditional_assumed - conditional_included
+                parts.append(f"其中{len(unit_items)}项原文以{units}列示，已按原文单位折算为万元")
+                basis = (
+                    f"当前已纳入{format(conditional_included, 'f')}万元，"
+                    f"若按万元名义值替换为{format(conditional_assumed, 'f')}万元"
+                )
+                if conditional_delta > 0:
+                    parts.append(
+                        f"条件性说明：若这些项按万元名义值计入，合计将增加"
+                        f"{format(conditional_delta, 'f')}万元（{basis}）；"
+                        "本规则不采用该假设，单位问题另行确认"
+                    )
+                elif conditional_delta < 0:
+                    parts.append(
+                        f"条件性说明：若这些项按万元名义值计入，合计将减少"
+                        f"{format(abs(conditional_delta), 'f')}万元（{basis}）；"
+                        "本规则不采用该假设，单位问题另行确认"
+                    )
+                else:
+                    parts.append(
+                        f"条件性说明：若这些项按万元名义值计入，合计不变（{basis}）；"
+                        "本规则不采用该假设，单位问题另行确认"
+                    )
+            if subtotal < stated:
+                parts.append("可能漏列科目")
+            else:
+                parts.append("分项合计超出总额")
+            message = "；".join(parts) + "。"
+            receipt_codes = ["item_sum_mismatch"]
+            if unit_items:
+                receipt_codes.append("source_unit_normalized")
+            # 2A：差额被同源单位错精确解释时，下游不再产出独立正式问题；
+            # 金额子检查仍为 executed，回执记录解释来源与剩余差额。
+            explained = (
+                conditional_delta is not None
+                and _unit_error_explains_amount(difference, conditional_delta, AMOUNT_TOLERANCE_WAN)
+            )
+            if explained:
+                receipt_codes.append("explained_by_unit_error")
+                relation_receipt(
+                    self, doc, f"V33-251:{kind}:item_sum",
+                    [],
                     status="fail",
                     formula="sum(item declared amounts normalized by original unit) == stated section total (万元)",
                     reason=message,
                     reason_codes=receipt_codes,
                     disclosure_sources=exception_evidence,
                     amount_subcheck_status="executed",
+                    explained_by="unit_error",
+                    residual_difference_wan=format(
+                        max(abs(difference) - abs(conditional_delta), Decimal(0)), "f"),
+                    cascade_of=_runtime_defect_key(doc, anchor_page, f"{label}:{format(conditional_assumed, 'f')}"),
                 )
-        if total is None and items:
-            unresolved.append("具体情况段落未识别到年初预算/支出决算总额，分项加总无从复算")
-            unresolved_codes.append("stated_total_missing")
-            from .native_table_arithmetic import receipt as relation_receipt
+                continue
+            issues.append(issue_at(
+                self, message, anchor_page, anchor_text, anchor_s, anchor_e,
+                severity="warn", checklist_item=checklist,
+                included_items=[
+                    {**{k: v for k, v in record.items() if k != "value_wan"},
+                     "value_wan": format(record["value_wan"], "f")}
+                    for record in included
+                ],
+                not_included_items=not_included_items,
+                unit_normalized_items=anchors,
+                disclosure_exceptions=exception_evidence,
+                stated_total_wan=format(stated, "f"),
+                included_subtotal_wan=format(subtotal, "f"),
+                difference_wan=format(difference, "f"),
+                completeness="complete",
+                # 两种口径属于同一原文节的整改事项，但各自算式和失败回执独立保留。
+                detail_section_anchor={
+                    "page": anchor_page,
+                    "span": unique_quote(anchor_text, anchor_s, anchor_e),
+                },
+                check_relation_id=f"{self.code}:V33-251:{kind}:item_sum",
+                **({"conditional_assumed_wan": format(conditional_assumed, "f"),
+                    "conditional_included_wan": format(conditional_included, "f"),
+                    "conditional_delta_wan": format(conditional_delta, "f")}
+                   if conditional_delta is not None else {}),
+            ))
             relation_receipt(
-                self, doc, "V33-251:total:missing", [],
-                status="insufficient_data",
+                self, doc, f"V33-251:{kind}:item_sum", [],
+                status="fail",
                 formula="sum(item declared amounts normalized by original unit) == stated section total (万元)",
-                reason="具体情况段落未识别到年初预算/支出决算总额，分项加总无从复算",
-                reason_codes=["stated_total_missing"],
+                reason=message,
+                reason_codes=receipt_codes,
+                disclosure_sources=exception_evidence,
+                amount_subcheck_status="executed",
             )
         issues.extend(self._coverage(doc, joined, items, _locate, listed_final))
         if unresolved:

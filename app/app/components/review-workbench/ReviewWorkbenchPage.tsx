@@ -625,10 +625,11 @@ export function ReviewWorkbenchPage({ initialJobId }: { initialJobId?: string } 
     // 只说证据是什么、哪条规则；问题标题已在右侧，不在这里重复。
     const source = selectedProblem.source === "ai" ? "大模型" : selectedProblem.source === "rule" ? "本地规则"
       : selectedProblem.source === "obligation" ? "未能自动核对" : "";
+    const mappedRole = ref ? evidenceRoleLabel(ref.role) : "";
     const label = calcRow
       ? `${calcRow.role} · ${calcRow.row.label} · ${calcRow.row.valueText} 万元`
-      : ref && (ref.role === "parent" || ref.role === "child" || ref.valueText)
-        ? [evidenceRoleLabel(ref.role), ref.valueText ? `${ref.valueText} 万元` : ""].filter(Boolean).join(" · ")
+      : ref && (ref.role === "parent" || ref.role === "child" || ref.valueText || mappedRole !== ref.role || ref.quoteText)
+        ? [mappedRole, ref.valueText ? `${ref.valueText} 万元` : ""].filter(Boolean).join(" · ")
         : [source, selectedProblem.source === "obligation" ? selectedProblem.check : selectedProblem.ruleId].filter(Boolean).join(" · ");
     return { label, page: highlightedProblem.page };
   }, [activeTab, selectedProblem, selectedEvidenceRefKey, highlightedProblem]);

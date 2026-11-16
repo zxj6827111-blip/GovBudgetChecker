@@ -412,3 +412,110 @@ def test_rejoin_wrapped_decimals_and_fin04_paired_headers():
     assert mapped["income_actual"] == 1
     assert mapped["expenditure_actual"] == 3
 
+
+def test_spaced_toc_and_omitted_section4_heading_anchor_correctly():
+    from src.engine.diagnostic_fields import diagnostics_for_texts
+    from src.engine.pipeline import build_document
+    from src.engine.rules_v33 import R33105_FinGrantTotal_vs_Text, R33221_Narrative4_T4
+
+    table = grid([["收入", "", "支出", "", "", "", ""],
+                  ["项目", "决算数", "项目", "合计", "一般公共预算财政拨款", "政府性基金预算财政拨款", "国有资本经营预算财政拨款"],
+                  ["本年收入合计", "100", "本年支出合计", "100", "100", "", ""],
+                  ["总计", "120", "总计", "120", "120", "", ""]],
+                 [0, 30, 60, 90, 120, 150, 180, 210], uid="grant-s4", page=3,
+                 code="FIN_04_fiscal_grant_total", headers=2, confidence=.99, unit="万元")
+    table.title = "财政拨款收入支出决算总表"
+    for col, start, end in [(0, 0, 60), (2, 60, 210)]:
+        table.cells[col].bbox = (start, 0, end, 10)
+    for col in [1, 3, 4, 5, 6]:
+        table.cells[col].bbox = None
+    base = context_for([table], [table])
+
+    texts = [
+        "目 录\n第一部分 概况\n三、支出决算情况说明\n四、财政拨款收入支出决算总体情况说明\n五、一般公共预算财政拨款支出决算情况说明",
+        "七、财政拨款“三公”经费支出决算情况说明\n八、政府性基金预算财政拨款收入支出决算情况说明\n第四部分 名词解释",
+        "财政拨款收入支出决算总表\n单位：万元",
+        "第三部分 决算情况说明\n三、支出决算情况说明\n本年支出合计150万元。\n甲局2025年度财政拨款收入支出总计120万元。\n五、一般公共预算财政拨款支出决算情况说明\n一般公共预算财政拨款支出120万元。",
+    ]
+    doc = build_document("甲局2025年度部门决算.pdf", texts, [[], [], [table.rows], []], 0)
+    doc.parse_artifact, doc.fact_context = base.parse_artifact, base.fact_context
+    assert not R33105_FinGrantTotal_vs_Text().apply(doc)
+    assert not R33221_Narrative4_T4().apply(doc)
+    # 若仅含“说明四”缺数文本、未定位到正文，锚点必须指向正文说明而非 T4 表格页。
+    diags = diagnostics_for_texts(doc, ["说明四未披露可绑定的财政拨款收支总计金额及单位"], rule_id="V33-221")
+    assert any(mo.get("page") == 4 for d in diags for mo in d.get("missing_operands", []))
+
+
+def test_v33227_cross_page_item_wrap_alias_and_omitted_middle_word():
+    from src.engine.pipeline import build_document
+    from src.engine.rule_outcome import RuleDeferred
+    from src.engine.rules_v33 import R33222_Narrative5_T5, R33227_Narrative5_T5_NameConsistency
+    from src.schemas.source_reconstruction import SourceToken
+
+    t5_rows = [
+        ["项目", "", "", "", "一般公共预算财政拨款支出决算数", "", ""],
+        ["类", "款", "项", "科目名称", "合计", "基本支出", "项目支出"],
+        ["合计", "", "", "", "80.00", "30.00", "50.00"],
+        ["208", "", "", "社会保障和就业支出", "10.00", "10.00", "0.00"],
+        ["20805", "", "", "行政事业单位养老支出", "10.00", "10.00", "0.00"],
+        ["2080599", "", "", "其他行政事业单位养老支出", "10.00", "10.00", "0.00"],
+        ["212", "", "", "城乡社区支出", "50.00", "0.00", "50.00"],
+        ["21203", "", "", "城乡社区公共设施", "50.00", "0.00", "50.00"],
+        ["2120399", "", "", "其他城乡社区公共设施支出", "50.00", "0.00", "50.00"],
+        ["215", "", "", "资源勘探工业信息等支出", "20.00", "20.00", "0.00"],
+        ["21505", "", "", "工业和信息产业", "20.00", "20.00", "0.00"],
+        ["2150501", "", "", "产业发展", "20.00", "20.00", "0.00"],
+    ]
+    t5 = grid(t5_rows, [0, 30, 60, 90, 210, 250, 290, 330], uid="t5-mix", page=1,
+              code="FIN_05_general_public_expenditure", headers=2, confidence=.99, unit="万元")
+    t5.title = "一般公共预算财政拨款支出决算表"
+    tokens = []
+    for cell in t5.cells:
+        if cell.row_idx >= 3 and cell.col_idx == 0:
+            cell.bbox = (0.0, cell.bbox[1], 90.0, cell.bbox[3])
+        if cell.row_idx >= 3 and cell.col_idx in {0, 3} and cell.raw_text:
+            tokens.append(SourceToken(
+                token_uid=f"tok-{cell.row_idx}-{cell.col_idx}",
+                raw_text=cell.raw_text,
+                physical_page=1,
+                bbox=[cell.bbox[0] + 0.5, cell.bbox[1] + 0.5, cell.bbox[2] - 0.5, cell.bbox[3] - 0.5],
+                source_method="native_text",
+                source_ref={"source_file_hash": "a" * 64, "source_block_id": f"blk-{cell.row_idx}"},
+            ))
+    base = context_for([t5], [t5])
+    base.parse_artifact.source_tokens = tokens
+
+    pages = [
+        "一般公共预算财政拨款支出决算表\n单位：万元\n"
+        + "\n".join(" ".join(cell for cell in row if cell) for row in t5_rows),
+        "五、一般公共预算财政拨款支出决算情况说明\n"
+        "2025年度一般公共预算财政拨款支出决算为80.00万元。\n"
+        "（三）一般公共预算财政拨款支出决算具体情况\n"
+        "1、社会保障和就业支出－行政事业单位养老支出－其他行",
+        "政事业单位离退休支出。主要用于：活动。年初预算为10.00万元，支出决算为10.00万元。\n"
+        "2、城乡社区支出-城乡社区公共设施-其他城乡社区支出。主要用于：工程。年初预算为0万元，支出决算为50.00万元。\n"
+        "3、资源勘探工业信息等支出－工业和信息产业监管－产业发展。主要用于：专项。年初预算为20.00万元，支出决算为20.00万元。\n"
+        "六、一般公共预算财政拨款基本支出决算情况说明",
+    ]
+    doc = build_document("甲局2025年度部门决算.pdf", pages, [[t5.rows], [], []], 0)
+    doc.parse_artifact, doc.fact_context = base.parse_artifact, base.fact_context
+
+    name_issues = R33227_Narrative5_T5_NameConsistency().apply(doc)
+    codes = {iss.location.get("code"): iss for iss in name_issues}
+    assert {"2080599", "2120399", "21505"} <= set(codes)
+    # 跨页条目 2080599 必须保留两页原文引用 + 原表引用。
+    ref_pages = {ref.get("page") for ref in (codes["2080599"].location or {}).get("table_refs", [])}
+    assert ref_pages == {1, 2, 3}
+
+    # 21505 与 2080599 均有历史科目映射；仅 2120399 因中间漏词保持 name_mismatch_confirmed 人工确认。
+    with pytest.raises(RuleDeferred) as deferred:
+        R33222_Narrative5_T5().apply(doc)
+    assert len(deferred.value.unresolved_reasons) == 1
+    assert "2120399" in deferred.value.unresolved_reasons[0]
+    receipts = [r for r in getattr(doc, "fact_receipts", []) if r.get("status") == "insufficient_data"]
+    assert any(
+        "2120399" in str(r.get("incomplete_reason") or "")
+        and "name_mismatch_confirmed" in (r.get("reason_codes") or [])
+        for r in receipts
+    )
+

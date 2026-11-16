@@ -11,6 +11,25 @@ def _compact(value):
     return re.sub(r'\s+', '', unicodedata.normalize('NFKC', str(value or '')))
 
 
+def _interleaved_wrapped_code_name_span(page_text: str, code: str, name: str):
+    """表内名称格多行折行、编码/数值夹在中间行时，返回唯一跨行原文片段。"""
+    lines = [line.strip() for line in str(name or '').splitlines() if line.strip()]
+    code_str = str(code or '').strip()
+    if len(lines) < 2 or not code_str:
+        return None
+    pattern = re.compile(
+        rf'(?:^|(?<=\s)){re.escape(lines[0])}\s*\n\s*{re.escape(code_str)}(?!\d)[^\n]*\n\s*{re.escape(lines[-1])}'
+    )
+    matches = list(pattern.finditer(str(page_text or '')))
+    if len(matches) != 1:
+        return None
+    candidate = matches[0].group(0)
+    compact_candidate = _compact(candidate)
+    if not all(_compact(part) in compact_candidate for part in lines):
+        return None
+    return candidate
+
+
 def _qualified_name_span(page_text, code, name):
     """重复名称只有原文中唯一相邻的科目编码+名称才可消歧。"""
     chars, positions = [], []
@@ -22,7 +41,7 @@ def _qualified_name_span(page_text, code, name):
     text = ''.join(chars)
     needle = str(code) + _compact(name)
     if text.count(needle) != 1:
-        return None
+        return _interleaved_wrapped_code_name_span(page_text, code, name)
     start = text.index(needle)
     raw_start = positions[start]
     if raw_start and page_text[raw_start - 1].isdigit():
@@ -52,15 +71,6 @@ def functional_name_refs(doc, code, expected_name, mention):
     if len(cells) != 1:
         return []
     cell = cells[0]
-    try:
-        page = int(mention.get('page'))
-    except (TypeError, ValueError):
-        return []
-    quote = mention.get('source_span')
-    if not quote or not 1 <= page <= len(doc.page_texts):
-        return []
-    if _compact(doc.page_texts[page - 1]).count(_compact(quote)) != 1:
-        return []
     source_id = f'{cell.origin_fragment_uid or table.fragment_uid}:r{cell.origin_row_idx if cell.origin_row_idx is not None else cell.row_idx}c{cell.origin_col_idx if cell.origin_col_idx is not None else cell.col_idx}'
     name_ref = {'page': cell.page_number, 'span': cell.raw_text, 'role': '原表科目名称',
                 'bbox': list(cell.bbox), 'source_cell_id': source_id}
@@ -72,4 +82,49 @@ def functional_name_refs(doc, code, expected_name, mention):
         # cell's smaller rectangle or claim it is a single-cell quote.
         name_ref = {'page': cell.page_number, 'span': span, 'role': '原表科目编码及名称',
                     'name_source_cell_id': source_id}
-    return [{'page': page, 'span': quote, 'role': '功能分类说明原文'}, name_ref]
+
+    cross_page_spans = mention.get('cross_page_spans') or []
+    if cross_page_spans:
+        narrative_refs = []
+        seen_page_spans = set()
+        for piece in cross_page_spans:
+            try:
+                piece_page = int(piece.get('page'))
+            except (TypeError, ValueError):
+                return []
+            if not 1 <= piece_page <= len(doc.page_texts):
+                return []
+            page_compact = _compact(doc.page_texts[piece_page - 1])
+            chosen_span = None
+            for candidate_span in (piece.get('span'), piece.get('context')):
+                compact_piece = _compact(candidate_span)
+                if compact_piece and page_compact.count(compact_piece) == 1:
+                    chosen_span = candidate_span
+                    break
+            if not chosen_span:
+                return []
+            key = (piece_page, _compact(chosen_span))
+            if key not in seen_page_spans:
+                seen_page_spans.add(key)
+                narrative_refs.append({'page': piece_page, 'span': chosen_span, 'role': '功能分类说明原文'})
+        return [*narrative_refs, name_ref]
+
+    try:
+        page = int(mention.get('page'))
+    except (TypeError, ValueError):
+        return []
+    quote = mention.get('source_span')
+    if not quote or not 1 <= page <= len(doc.page_texts):
+        return []
+    if _compact(doc.page_texts[page - 1]).count(_compact(quote)) != 1:
+        return []
+    narrative_refs = []
+    seen_spans = set()
+    for raw_quote in [quote, *(mention.get('extra_spans') or [])]:
+        compact_quote = _compact(raw_quote)
+        if not compact_quote or compact_quote in seen_spans:
+            continue
+        if _compact(doc.page_texts[page - 1]).count(compact_quote) == 1:
+            seen_spans.add(compact_quote)
+            narrative_refs.append({'page': page, 'span': raw_quote, 'role': '功能分类说明原文'})
+    return [*narrative_refs, name_ref]

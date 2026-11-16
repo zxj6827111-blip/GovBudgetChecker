@@ -28,7 +28,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { Route } from "next";
 import { useEffect, useRef, type ReactNode } from "react";
-import { ClipboardCheck, RefreshCw } from "lucide-react";
+import { ClipboardCheck, RefreshCw, Trash2 } from "lucide-react";
 
 import { Badge, StageProgress, Td, Th } from "@/components/ui";
 import type { BadgeTone } from "@/components/ui";
@@ -150,6 +150,8 @@ function formatDocTypeLabel(job: JobSummaryRecord): string {
 export interface WorkbenchQueueTableProps {
   jobs: JobSummaryRecord[];
   onReanalyze?: (jobId: string) => void;
+  /** 可选：删除任务回调（仅在传值时渲染行内删除按钮，供管理员队列页使用）。 */
+  onDelete?: (jobId: string) => void;
   /**
    * 修复 3：可选的「开始分析」回调——只对 uploaded（待分析）态的行渲染入口，
    * 与修复 2 的上传触发分析走同一条链路（POST /api/analyze/{job_id}）。
@@ -216,6 +218,7 @@ function ReviewEntryLink({ job, returnTo }: { job: JobSummaryRecord; returnTo: s
 export function WorkbenchQueueTable({
   jobs,
   onReanalyze,
+  onDelete,
   onStartAnalysis,
   renderRowActions,
   selection,
@@ -384,6 +387,20 @@ export function WorkbenchQueueTable({
                         重新分析
                       </button>
                     )}
+                    {onDelete ? (
+                      <button
+                        type="button"
+                        onClick={() => onDelete(jobId)}
+                        disabled={actionsDisabled || busyJobIds?.has(jobId) || status === "analyzing"}
+                        aria-label={`删除任务 ${job.filename ?? jobId}`}
+                        title="删除任务及其关联文件、分析和复核记录"
+                        data-testid={`gbc-workbench-queue-delete-${jobId}`}
+                        className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-2 py-1 text-xs font-medium text-danger-600 transition-colors hover:bg-danger-50 hover:text-danger-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger-400 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                        删除
+                      </button>
+                    ) : null}
                   </span>
                 </Td>
               </tr>

@@ -4,7 +4,9 @@ import { toUiProblems } from "../lib/uiAdapters";
 import {
   buildAmountComparison,
   buildCalculationGroups,
+  buildEvidenceRefDisplay,
   detailSummary,
+  evidenceRoleLabel,
 } from "../app/components/review-workbench/reviewReadingAdapters";
 import {
   composeDecisionNote,
@@ -203,5 +205,82 @@ assert.equal(isIgnoreReasonComplete("rounding", ""), true);
 assert.equal(isIgnoreReasonComplete("other", "  "), false);
 assert.equal(isIgnoreReasonComplete("other", "已在附表说明"), true);
 assert.equal(isIgnoreReasonComplete("unknown", "x"), false);
+
+// 多条原文对照证据（如 CMM-007）必须把技术角标换成人话，并保留每条自带的原文片段。
+assert.equal(evidenceRoleLabel("增减句"), "同比增减说明（增减额与百分比）");
+assert.equal(evidenceRoleLabel("本期披露"), "本期金额说明（用于推算上年基期）");
+assert.equal(evidenceRoleLabel("occurrence"), "原文出现位置");
+assert.equal(evidenceRoleLabel("原文位置2"), "原文");
+
+const cmm007Problem = mapOne({
+  id: "CMM-007-9",
+  rule_id: "CMM-007",
+  source: "rule",
+  severity: "error",
+  title: "同比零基数/增减额与增长百分比复算不一致",
+  message: "本期 11.67 万元、减少 1.92 万元，复算基期 13.59 万元。",
+  evidence: [{ page: 19, text: "因公出国（境）费支出决算\n减少 1.92 万元，下降 16.45%；" }],
+  evidence_verification: { status: "verified", source_identity_complete: true },
+  location: {
+    page: 19,
+    table_refs: [
+      {
+        role: "增减句",
+        page: 19,
+        physical_page: 19,
+        section: "七、财政拨款“三公”经费支出决算情况说明",
+        quote: "因公出国（境）费支出决算\n减少 1.92 万元，下降 16.45%；",
+        bbox: [89.88, 486.11, 505.44, 532.31],
+        location_level: "exact_span",
+        verification_status: "verified",
+      },
+      {
+        role: "本期披露",
+        page: 19,
+        physical_page: 19,
+        section: "七、财政拨款“三公”经费支出决算情况说明",
+        quote: "因公出国（境）\n费决算为 11.67 万元，完成预算的 233.40%；",
+        bbox: [89.88, 267.71, 506.04, 313.91],
+        location_level: "exact_span",
+        verification_status: "verified",
+      },
+    ],
+  },
+});
+
+const cmmRefs = cmm007Problem.evidenceRefs ?? [];
+assert.equal(cmmRefs.length, 2);
+assert.equal(cmmRefs[0].quoteText, "因公出国（境）费支出决算减少 1.92 万元，下降 16.45%；");
+assert.equal(cmmRefs[1].quoteText, "因公出国（境）费决算为 11.67 万元，完成预算的 233.40%；");
+assert.deepEqual(
+  buildEvidenceRefDisplay(cmmRefs[0], cmmRefs.length, "", true),
+  {
+    roleLabel: "同比增减说明（增减额与百分比）",
+    heading: "同比增减说明（增减额与百分比）",
+    body: "“因公出国（境）费支出决算减少 1.92 万元，下降 16.45%；”",
+  },
+);
+assert.deepEqual(
+  buildEvidenceRefDisplay(cmmRefs[1], cmmRefs.length, "", true),
+  {
+    roleLabel: "本期金额说明（用于推算上年基期）",
+    heading: "本期金额说明（用于推算上年基期）",
+    body: "“因公出国（境）费决算为 11.67 万元，完成预算的 233.40%；”",
+  },
+);
+assert.deepEqual(
+  buildEvidenceRefDisplay(textOnly.evidenceRefs![0], 1, "“年初预算为 32043.94 万元，”", true),
+  {
+    roleLabel: "原文",
+    body: "“年初预算为 32043.94 万元，”",
+  },
+);
+assert.deepEqual(
+  buildEvidenceRefDisplay({ role: "child", valueText: "9.12" }, 2, "", true),
+  {
+    roleLabel: "明细项",
+    body: "明细项 · 9.12 万元",
+  },
+);
 
 console.log("reviewReading tests passed");

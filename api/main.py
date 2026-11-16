@@ -523,6 +523,104 @@ def _count_result_findings(result: Dict[str, Any]) -> int:
     return count_formal_findings(result)
 
 
+def _resolve_cascaded_quality_blockers(
+    *,
+    obligation_coverage: Optional[Dict[str, Any]],
+    structured_ingest: Optional[Dict[str, Any]],
+    result_row: Optional[Dict[str, Any]],
+) -> tuple[Optional[List[Any]], set[str], set[str]]:
+    """计算去除同源问题覆盖/连带后的有效阻塞义务、名称差异连带集及原始阻塞集。"""
+    if (
+        not isinstance(result_row, dict)
+        or not isinstance(obligation_coverage, dict)
+        or not isinstance(obligation_coverage.get("instances"), list)
+    ):
+        return None, set(), set()
+
+    from src.engine.check_obligations import UNRESOLVED_OBLIGATION_STATUSES
+    from src.services.material_detail_query_service import build_coverage
+    from src.services.review_lifecycle_service import blocking_coverage_obligations
+    from src.services.review_problem_set import collect_review_problems
+
+    coverage = build_coverage(obligation_coverage)
+    if not coverage.available:
+        return None, set(), set()
+
+    problems = collect_review_problems(
+        job_uuid=str(result_row.get("job_id") or "__quality_gate__"),
+        ai_findings=result_row.get("ai_findings"),
+        rule_findings=result_row.get("rule_findings"),
+        merged_result=result_row.get("merged"),
+        structured_ingest=structured_ingest,
+        result=result_row,
+        ignored_issue_ids=[],
+    )
+    visible_ids = {problem.issue_id for problem in problems}
+    all_items = list(coverage.items)
+    raw_blocking = [
+        item
+        for item in all_items
+        if item.blocks_gate and item.status in UNRESOLVED_OBLIGATION_STATUSES
+    ]
+    raw_blocking_ids = {item.obligation_id for item in raw_blocking}
+    remaining_blocking = blocking_coverage_obligations(
+        all_items, result_row, visible_issue_ids=visible_ids
+    )
+    remaining_ids = {item.obligation_id for item in remaining_blocking}
+    cascaded_name_mismatch_ids = {
+        item.obligation_id
+        for item in raw_blocking
+        if item.obligation_id not in remaining_ids
+        and not getattr(item, "blocked_by", None)
+        and {
+            str(code).strip()
+            for code in (getattr(item, "reason_codes", None) or ())
+            if str(code).strip()
+        }
+        == {"name_mismatch_confirmed"}
+    }
+    return remaining_blocking, cascaded_name_mismatch_ids, raw_blocking_ids
+
+
+def _is_cascaded_name_mismatch_rule(
+    item: Any,
+    cascaded_name_mismatch_ids: set[str],
+    raw_blocking_ids: set[str],
+) -> bool:
+    """该条 insufficient_data 规则仅因已由 V33-227 正式报出的同源名称差异阻塞且无其他缺口。"""
+    if not cascaded_name_mismatch_ids or not isinstance(item, dict):
+        return False
+    if str(item.get("status") or "") != STATUS_INSUFFICIENT_DATA:
+        return False
+    rule_id = str(item.get("rule_id") or "").strip()
+    if not rule_id:
+        return False
+    diags = [dg for dg in (item.get("diagnostics") or []) if isinstance(dg, dict)]
+    if any(dg.get("blocked_by") for dg in diags):
+        return False
+    codes = {
+        str(code).strip()
+        for code in (item.get("reason_codes") or [])
+        if str(code).strip()
+    }
+    for dg in diags:
+        codes.update(
+            str(code).strip()
+            for code in (dg.get("reason_codes") or [])
+            if str(code).strip()
+        )
+    if codes != {"name_mismatch_confirmed"}:
+        return False
+    from src.engine.check_obligations import obligation_ids_for_rule
+
+    linked_obs = [
+        oid for oid in obligation_ids_for_rule(rule_id) if oid in raw_blocking_ids
+    ]
+    return bool(linked_obs) and all(
+        oid in cascaded_name_mismatch_ids for oid in linked_obs
+    )
+
+
 def _evaluate_quality_gate(
     page_assessment: Dict[str, Any],
     report_kind: Any,
@@ -539,6 +637,7 @@ def _evaluate_quality_gate(
     doc_type: Optional[str] = None,
     obligation_coverage: Optional[Dict[str, Any]] = None,
     fact_overlay_report: Optional[Dict[str, Any]] = None,
+    result_row: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """任务级质量门禁：决定终态是 done / degraded / review_required。
 
@@ -809,14 +908,42 @@ def _evaluate_quality_gate(
                 }
             )
 
+    remaining_blocking_obligations, cascaded_name_mismatch_ids, raw_blocking_ids = (
+        _resolve_cascaded_quality_blockers(
+            obligation_coverage=obligation_coverage,
+            structured_ingest=structured_ingest,
+            result_row=result_row,
+        )
+    )
+
     # ---- 规则执行摘要（parse/execution 异常不再伪装成 hint finding） ----
     if isinstance(rule_execution_summary, dict) and rule_execution_summary:
         error_rules = int(rule_execution_summary.get("execution_error") or 0)
         parse_error_rules = int(rule_execution_summary.get("parse_error") or 0)
         # insufficient_data 同样属"未得出可信结论"：数据缺失的规则被
         # 静默记 pass 是假绿 no_findings 的来源之一（GPT5.6 P0-2）。
-        insufficient_rules = int(
+        raw_insufficient_rules = int(
             rule_execution_summary.get("insufficient_data") or 0
+        )
+        raw_insufficient_unresolved = [
+            item
+            for item in (rule_execution_summary.get("unresolved_rules") or [])
+            if isinstance(item, dict)
+            and str(item.get("status") or "") == STATUS_INSUFFICIENT_DATA
+        ]
+        insufficient_unresolved = [
+            item
+            for item in raw_insufficient_unresolved
+            if not _is_cascaded_name_mismatch_rule(
+                item, cascaded_name_mismatch_ids, raw_blocking_ids
+            )
+        ]
+        cascaded_rule_count = len(raw_insufficient_unresolved) - len(
+            insufficient_unresolved
+        )
+        insufficient_rules = max(
+            raw_insufficient_rules - cascaded_rule_count,
+            len(insufficient_unresolved),
         )
         if error_rules + parse_error_rules > 0:
             review_reasons.append(
@@ -839,15 +966,7 @@ def _evaluate_quality_gate(
                         f"有 {insufficient_rules} 条规则因数据缺失/解析歧义无法得出结论"
                         "（如表缺失、行宽无法对齐），这些检查项未实际覆盖，需人工复核"
                     ),
-                    "unresolved_rules": [
-                        item
-                        for item in (
-                            rule_execution_summary.get("unresolved_rules") or []
-                        )
-                        if isinstance(item, dict)
-                        and str(item.get("status") or "")
-                        == STATUS_INSUFFICIENT_DATA
-                    ][:20],
+                    "unresolved_rules": insufficient_unresolved[:20],
                 }
             )
 
@@ -865,7 +984,44 @@ def _evaluate_quality_gate(
     # 台账回答"应该检查的事情完成了多少"。前者按实现方视角计数，后者按
     # 业务要求计数，因此"规则不存在"这类漏查只有台账能发现。
     obligation_blocking = 0
-    if isinstance(obligation_coverage, dict):
+    if remaining_blocking_obligations is not None:
+        obligation_blocking = len(remaining_blocking_obligations)
+        if obligation_blocking > 0:
+            from collections import Counter
+
+            labels = (
+                obligation_coverage.get("by_reason_labels")
+                if isinstance(obligation_coverage, dict)
+                and isinstance(obligation_coverage.get("by_reason_labels"), dict)
+                else {}
+            )
+            by_reason = Counter(
+                str(getattr(item, "reason", None) or "unknown")
+                for item in remaining_blocking_obligations
+            )
+            parts = [
+                f"{labels.get(code, code)} {count} 项"
+                for code, count in sorted(by_reason.items(), key=lambda kv: -kv[1])
+            ]
+            review_reasons.append(
+                {
+                    "code": "check_obligations_incomplete",
+                    "message": (
+                        f"应检查事项中有 {obligation_blocking} 项未完成"
+                        f"（{'、'.join(parts)}），本次结论只覆盖已完成的检查范围，"
+                        "不能视为已完整审核"
+                    ),
+                    "blocking_obligation_ids": [
+                        item.obligation_id for item in remaining_blocking_obligations
+                    ][:40],
+                    "catalog_version": (
+                        obligation_coverage.get("catalog_version")
+                        if isinstance(obligation_coverage, dict)
+                        else None
+                    ),
+                }
+            )
+    elif isinstance(obligation_coverage, dict):
         try:
             obligation_blocking = int(obligation_coverage.get("blocking_total") or 0)
         except (TypeError, ValueError):
@@ -2534,6 +2690,7 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             doc_type=doc_type,
             obligation_coverage=obligation_coverage,
             fact_overlay_report=fact_overlay_report,
+            result_row=result,
         )
         result["meta"]["quality_gate"] = quality_gate
         # 结论作用域同时写进 result.meta：任务详情/复核台/材料详情读的是

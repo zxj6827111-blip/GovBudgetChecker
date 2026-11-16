@@ -412,6 +412,23 @@ class PDFBBoxLocator:
                 evidence["location_level"] = "region"
         return evidence
 
+    def _yx_region_text(self, words: List[Any]) -> str:
+        """按视觉行聚类(y_tolerance=4.5)并按 x0 排序拼接原文，对齐 pdfplumber 读序。"""
+        if not words:
+            return ""
+        visual_lines: List[List[Any]] = []
+        for word in sorted(words, key=lambda w: (float(w[1]), float(w[0]))):
+            if visual_lines and abs(float(word[1]) - float(visual_lines[-1][0][1])) <= 4.5:
+                visual_lines[-1].append(word)
+            else:
+                visual_lines.append([word])
+        yx_tokens = [
+            str(word[4] or "")
+            for line_words in visual_lines
+            for word in sorted(line_words, key=lambda w: float(w[0]))
+        ]
+        return self._region_text("".join(yx_tokens))
+
     def _page_text_matches(self, page_number: Optional[int], quote: Any) -> bool:
         """Authenticate a quoted source span on the physical page without requiring a bbox."""
         needle = self._region_text(quote)
@@ -419,8 +436,12 @@ class PDFBBoxLocator:
             return False
         try:
             document, _fitz = self._load_document()
-            page_text = self._region_text(document.load_page(page_number - 1).get_text())
-            return bool(page_text and needle in page_text)
+            page = document.load_page(page_number - 1)
+            page_text = self._region_text(page.get_text())
+            if bool(page_text and needle in page_text):
+                return True
+            yx_page_text = self._yx_region_text(page.get_text("words") or [])
+            return bool(yx_page_text) and needle in yx_page_text
         except Exception:
             return False
 
@@ -458,13 +479,19 @@ class PDFBBoxLocator:
             page = document[page_number - 1]
             words = page.get_text("words") or []
             x0, y0, x1, y1 = bbox
-            region_tokens = [
-                str(word[4] or "")
+            overlapping_words = [
+                word
                 for word in words
                 if not (word[2] < x0 or word[0] > x1 or word[3] < y0 or word[1] > y1)
             ]
-            haystack = self._region_text("".join(region_tokens))
-            return bool(haystack) and self._region_text(quote) in haystack
+            haystack = self._region_text("".join(str(word[4] or "") for word in overlapping_words))
+            if bool(haystack) and needle in haystack:
+                return True
+            # 表格折行格被 pdfplumber 按视觉行序(y_tolerance=4.5, x0)重排时，
+            # 同一视觉行内的文字与跨列数字顺序可能与 PyMuPDF 默认流序不同；
+            # 按同口径视觉行聚类后再按 x0 排序拼接复核，仍严格要求区域内真实含全部原文字符。
+            yx_haystack = self._yx_region_text(overlapping_words)
+            return bool(yx_haystack) and needle in yx_haystack
         except Exception:
             return False
 

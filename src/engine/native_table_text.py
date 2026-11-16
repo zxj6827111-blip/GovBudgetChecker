@@ -248,11 +248,25 @@ def check_fiscal_grant_total(rule, doc):
     if reason:
         return finish(rule, [], [reason])
     text, ranges = sections(doc, lambda title: '财政拨款收入支出决算总体情况说明' in title)
+    explicit_pattern = re.compile(
+        rf'财政拨款(?:收入支出|收支)(?:总计|合计|总额)(?:为|共计|是)?(?P<amount>{_NUMBER})(?P<unit>{_UNIT})'
+    )
+    pattern = re.compile(
+        rf'(?:财政拨款)?(?:收入支出|收支)(?:总计|合计|总额)(?:为|共计|是)?(?P<amount>{_NUMBER})(?P<unit>{_UNIT})'
+    )
+    if not ranges:
+        # 少数材料漏印「四、财政拨款收入支出决算总体情况说明」标题，但紧接着说明三仍写了明确的
+        # 「财政拨款收入支出总计 X 万元」一句；仅当显式带「财政拨款」前缀时兜底取数，不放宽到非财政口径。
+        _, fallback_ranges = sections(doc, lambda title: title.startswith('三、') and '支出决算' in title)
+        if fallback_sections := [
+            r for r in fallback_ranges
+            if list(explicit_pattern.finditer(text.compact, r[1], r[2]))
+        ]:
+            ranges = fallback_sections
+            pattern = explicit_pattern
     if not ranges:
         return finish(rule, [], ['未定位到说明四财政拨款总体情况原文范围'])
     title, begin, end = ranges[0]
-    pattern = re.compile(rf'(?:财政拨款)?(?:收入支出|收支)(?:总计|合计|总额)'
-                         rf'(?:为|共计|是)?(?P<amount>{_NUMBER})(?P<unit>{_UNIT})')
     claims = list(pattern.finditer(text.compact, begin, end))
     issues, unresolved = [], []
     if not claims:

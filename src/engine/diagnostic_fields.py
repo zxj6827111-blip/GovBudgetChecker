@@ -334,17 +334,29 @@ def record_failure(doc: Any, texts: Any, entry: Mapping[str, Any]) -> None:
             bucket.setdefault(text, []).append(dict(entry))
 
 
-def lookup_failure(doc: Any, text: Any) -> List[Dict[str, Any]]:
+def _matches_sub_check(entry: Mapping[str, Any], target_sub_check: str) -> bool:
+    if not target_sub_check:
+        return True
+    recorded = str(entry.get("_sub_check_id") or "").strip()
+    return not recorded or recorded == target_sub_check
+
+
+def lookup_failure(doc: Any, text: Any, *, sub_check_id: Any = None) -> List[Dict[str, Any]]:
     """按失败文本取回登记的结构化事实；先精确匹配，再按最长包含匹配。"""
     if doc is None or not str(text or "").strip():
         return []
     target = str(text)
+    target_sub = str(sub_check_id or "").strip()
     bucket = _registry(doc)
     if not bucket:
         return []
     with _REGISTRY_LOCK:
         if target in bucket:
-            return [dict(item) for item in bucket[target]]
+            return [
+                dict(item)
+                for item in bucket[target]
+                if _matches_sub_check(item, target_sub)
+            ]
         hits: List[tuple] = []
         for known, entries in bucket.items():
             if len(known) >= 4 and known in target:
@@ -354,7 +366,11 @@ def lookup_failure(doc: Any, text: Any) -> List[Dict[str, Any]]:
         hits.sort(reverse=True)
         matched: List[Dict[str, Any]] = []
         for _, known in hits:
-            matched.extend(dict(item) for item in bucket[known])
+            matched.extend(
+                dict(item)
+                for item in bucket[known]
+                if _matches_sub_check(item, target_sub)
+            )
         return matched
 
 
@@ -390,6 +406,7 @@ _SECTION_HINTS = (
     ("功能分类", ("支出决算情况说明", "功能分类")),
     ("人员经费", ("基本支出情况说明", "人员经费")),
     ("公用经费", ("基本支出情况说明", "公用经费")),
+    ("说明四", ("财政拨款收入支出决算总体情况说明", "决算情况说明")),
     ("财政拨款收支总计", ("财政拨款收支总表", "财政拨款")),
     ("决算情况说明", ("决算情况说明",)),
     ("三公", ("三公",)),
@@ -576,7 +593,7 @@ def diagnostics_for_texts(doc: Any, texts: Iterable[Any], *, rule_id: Any = None
     merged: List[Dict[str, Any]] = []
     seen = set()
     for text in texts or []:
-        for entry in lookup_failure(doc, text):
+        for entry in lookup_failure(doc, text, sub_check_id=sub_check_id):
             try:
                 finalized = finalize(
                     entry, rule_id=rule_id, sub_check_id=sub_check_id, obligation_id=obligation_id
@@ -606,6 +623,52 @@ def diagnostics_for_texts(doc: Any, texts: Iterable[Any], *, rule_id: Any = None
     return merged
 
 
+def _operand_physical_key(item: Any) -> str:
+    """去掉关系身份附加字段后的物理位置键，用于合并同一缺数位置。"""
+    if not isinstance(item, Mapping):
+        return canonical(item)
+    stripped = {
+        key: value
+        for key, value in item.items()
+        if key not in {"check_relation_id", "sub_check_id", "rule_id"}
+    }
+    return canonical(stripped)
+
+
+def _operand_has_relation_identity(item: Any) -> bool:
+    return isinstance(item, Mapping) and bool(
+        item.get("check_relation_id") or item.get("sub_check_id")
+    )
+
+
+def _merge_missing_operands(
+    target: List[Dict[str, Any]],
+    incoming: Sequence[Any],
+) -> None:
+    """合并 missing_operands，同一物理位置优先保留带关系 ID 的条目而不重复。"""
+    known_exact = {canonical(item) for item in target}
+    by_physical: Dict[str, int] = {}
+    for index, item in enumerate(target):
+        by_physical.setdefault(_operand_physical_key(item), index)
+    for item in incoming or ():
+        exact = canonical(item)
+        if exact in known_exact:
+            continue
+        phys = _operand_physical_key(item)
+        stamped = _operand_has_relation_identity(item)
+        if phys in by_physical:
+            existing_index = by_physical[phys]
+            if not stamped:
+                continue
+            if not _operand_has_relation_identity(target[existing_index]):
+                target[existing_index] = dict(item)
+                known_exact.add(exact)
+                continue
+        target.append(dict(item))
+        known_exact.add(exact)
+        by_physical.setdefault(phys, len(target) - 1)
+
+
 def merge_entry(entry: Mapping[str, Any], extra: Mapping[str, Any]) -> Dict[str, Any]:
     """合并两条登记事实（用于同一关系的多个缺口）。"""
     result = {
@@ -617,12 +680,13 @@ def merge_entry(entry: Mapping[str, Any], extra: Mapping[str, Any]) -> Dict[str,
         "missing_operands": [dict(item) for item in entry.get("missing_operands") or []],
         "candidates": [dict(item) for item in entry.get("candidates") or []],
     }
-    for field in ("blocked_by", "missing_operands", "candidates"):
+    for field in ("blocked_by", "candidates"):
         known = {canonical(item) for item in result[field]}
         for item in extra.get(field) or []:
             if canonical(item) not in known:
                 result[field].append(dict(item))
                 known.add(canonical(item))
+    _merge_missing_operands(result["missing_operands"], extra.get("missing_operands") or [])
     return result
 
 
@@ -642,12 +706,13 @@ def aggregate(diagnostics: Sequence[Mapping[str, Any]], *, rule_id: Any = None,
         for code in diag.get("reason_codes") or []:
             if str(code) and str(code) not in codes:
                 codes.append(str(code))
-        for field, bucket in (("blocked_by", blocked), ("missing_operands", missing), ("candidates", candidates)):
+        for field, bucket in (("blocked_by", blocked), ("candidates", candidates)):
             known = {canonical(item) for item in bucket}
             for item in diag.get(field) or []:
                 if canonical(item) not in known:
                     bucket.append(dict(item))
                     known.add(canonical(item))
+        _merge_missing_operands(missing, diag.get("missing_operands") or [])
     if not codes:
         return None
     entry = {
@@ -741,7 +806,7 @@ def fields_for_text(doc: Any, text: Any, *, status: Any = "insufficient_data", r
     优先使用失败发生处登记的结构化事实；规则显式传入的原因码只在仍能形成
     可定位诊断时并入（否则保留已登记的可定位诊断，避免把汇总变成不可解释）。
     """
-    entries = lookup_failure(doc, text)
+    entries = lookup_failure(doc, text, sub_check_id=sub_check_id)
     if entries:
         base = entries[0]
         for extra in entries[1:]:
@@ -866,9 +931,10 @@ def record_gap(doc: Any, texts: Any, *, reason_codes: Sequence[str],
                missing_operands: Sequence[Mapping[str, Any]] = (),
                candidates: Sequence[Mapping[str, Any]] = (),
                blocked_by: Sequence[Mapping[str, Any]] = (),
-               preferred_action: Any = None) -> None:
+               preferred_action: Any = None,
+               sub_check_id: Any = None) -> None:
     """登记一条取数缺口；字段组合由 finalize 校验，不合法则不登记（不影响结论）。"""
-    entry = {
+    entry: Dict[str, Any] = {
         "reason_codes": [str(code) for code in reason_codes],
         "blocked_by": [dict(item) for item in blocked_by],
         "missing_operands": [dict(item) for item in missing_operands],
@@ -880,6 +946,9 @@ def record_gap(doc: Any, texts: Any, *, reason_codes: Sequence[str],
         finalize(entry)
     except ValueError:
         return
+    clean_sub_check = str(sub_check_id or "").strip()
+    if clean_sub_check:
+        entry["_sub_check_id"] = clean_sub_check
     record_failure(doc, texts, entry)
 
 

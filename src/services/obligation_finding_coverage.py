@@ -639,23 +639,180 @@ def _depends_on_tables(item: Any) -> Set[str]:
     return codes
 
 
-def cascade_root_issue_id(
+_V33227_NAME_MISMATCH_CLAUSE_RE = re.compile(
+    r"科目名称差异候选(?:（(?P<level>[^）]+)）)?：正文第(?P<page>[^页]*)页写“(?P<actual>[^”]+)”"
+    r"(?:（涉及项“(?P<item_name>[^”]+)”）)?；"
+    r"(?:同款)?表格第[^页]*页编码(?P<code>\d+)写“(?P<expected>[^”]+)”[^。]*。"
+    r"名称不一致，尚未绑定金额(?:；请核对科目名称后确认，不能仅凭金额相同认定一致。)?"
+)
+
+
+def _compact_subject_text(value: Any) -> str:
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(value or "")))
+
+
+def _finding_narrative_pages(finding: Mapping[str, Any]) -> Set[int]:
+    location = _json_dict(finding.get("location"))
+    pages: Set[int] = set()
+    for ref in location.get("table_refs") or []:
+        if not isinstance(ref, Mapping):
+            continue
+        role = str(ref.get("role") or "")
+        page = ref.get("page")
+        if "说明" in role and isinstance(page, int) and page > 0:
+            pages.add(page)
+    for raw in (location.get("page"), finding.get("page"), finding.get("page_number")):
+        if isinstance(raw, int) and raw > 0:
+            pages.add(raw)
+    if pages:
+        return pages
+    for raw in location.get("pages") or []:
+        if isinstance(raw, int) and raw > 0:
+            pages.add(raw)
+    return pages
+
+
+def _finding_is_v33227(finding: Mapping[str, Any]) -> bool:
+    rule_id = str(finding.get("rule_id") or finding.get("check") or "").strip()
+    tags = {str(tag).strip() for tag in _json_list(finding.get("tags"))}
+    return rule_id == "V33-227" or "V33-227" in tags
+
+
+def _v33227_name_mismatch_roots(
+    item: Any,
+    result_row: Any,
+    visible: Optional[Set[str]],
+) -> List[str]:
+    """方案 A：OBL-TXT-T5 仅因同款科目名称差异中断、且每处均已被正式 V33-227 报出时挂入其下方。
+
+    安全边界（任一不满足即返回空列表，退回独立补核以免漏报）：
+    - reason_codes 必须严格等于 ``{"name_mismatch_confirmed"}``，且无 ``blocked_by``；
+    - missing_operands 必须非空，且每处缺数与 detail 中每条差异说明均需对应到可见正式 V33-227。
+    """
+    if str(getattr(item, "obligation_id", "") or "") != "OBL-TXT-T5":
+        return []
+    if getattr(item, "blocked_by", None):
+        return []
+    reason_codes = {
+        str(code).strip()
+        for code in (getattr(item, "reason_codes", None) or [])
+        if str(code).strip()
+    }
+    if reason_codes != {"name_mismatch_confirmed"}:
+        return []
+    operands = [
+        operand
+        for operand in (getattr(item, "missing_operands", None) or [])
+        if isinstance(operand, Mapping)
+    ]
+    if not operands:
+        return []
+
+    v227_entries: List[tuple] = []
+    for finding in _current_rule_findings(result_row):
+        if not isinstance(finding, dict) or not is_formal_finding(finding):
+            continue
+        issue_id = str(finding.get("id") or "").strip()
+        if not issue_id or (visible is not None and issue_id not in visible):
+            continue
+        if not _finding_is_v33227(finding):
+            continue
+        loc = _json_dict(finding.get("location"))
+        actual_name = _compact_subject_text(loc.get("actual_name"))
+        if not actual_name:
+            continue
+        code = re.sub(r"\D+", "", str(loc.get("code") or loc.get("row") or ""))
+        v227_entries.append((issue_id, actual_name, code, _finding_narrative_pages(finding)))
+    if not v227_entries:
+        return []
+
+    reasons = str(getattr(item, "detail", None) or "").split("结构：", 1)[0].strip()
+    clauses = [match.groupdict() for match in _V33227_NAME_MISMATCH_CLAUSE_RE.finditer(reasons)]
+    if clauses:
+        leftover = _V33227_NAME_MISMATCH_CLAUSE_RE.sub("", reasons).strip(" ；;。")
+        if leftover:
+            return []
+    elif reasons and any(
+        token in reasons
+        for token in ("找不到", "缺少", "缺失", "主体", "多个科目", "显式决算金额", "未提取", "未识别", "跨页", "差额", "不一致：")
+    ):
+        return []
+
+    clause_codes: Dict[tuple, Set[str]] = {}
+    clause_codes_by_name: Dict[str, Set[str]] = {}
+    item_clause_hits: Dict[tuple, List[str]] = {}
+    item_clause_hits_by_name: Dict[str, List[str]] = {}
+    matched_ids: List[str] = []
+    for clause in clauses:
+        c_actual = _compact_subject_text(clause.get("actual"))
+        c_code = str(clause.get("code") or "").strip()
+        raw_page = str(clause.get("page") or "").strip()
+        c_page = int(raw_page) if raw_page.isdigit() and int(raw_page) > 0 else None
+        if not c_actual or not c_code:
+            return []
+        clause_codes.setdefault((c_actual, c_page), set()).add(c_code)
+        clause_codes_by_name.setdefault(c_actual, set()).add(c_code)
+        clause_hits = [
+            issue_id
+            for issue_id, actual_name, code, pages in v227_entries
+            if actual_name == c_actual
+            and (not code or code == c_code)
+            and (c_page is None or not pages or c_page in pages)
+        ]
+        if not clause_hits:
+            return []
+        matched_ids.extend(clause_hits)
+        c_item = _compact_subject_text(clause.get("item_name"))
+        if c_item:
+            item_clause_hits.setdefault((c_item, c_page), []).extend(clause_hits)
+            item_clause_hits_by_name.setdefault(c_item, []).extend(clause_hits)
+
+    for operand in operands:
+        row_key = _compact_subject_text(operand.get("row_key"))
+        if not row_key:
+            return []
+        raw_page = operand.get("page")
+        op_page = int(raw_page) if isinstance(raw_page, int) and raw_page > 0 else None
+        expected_codes = clause_codes.get((row_key, op_page))
+        if expected_codes is None and len(clause_codes_by_name.get(row_key, set())) == 1:
+            expected_codes = clause_codes_by_name[row_key]
+        hits = [
+            issue_id
+            for issue_id, actual_name, code, pages in v227_entries
+            if actual_name == row_key
+            and (op_page is None or not pages or op_page in pages)
+            and (not expected_codes or not code or code in expected_codes)
+        ]
+        if not hits and not expected_codes:
+            hits = list(item_clause_hits.get((row_key, op_page), []))
+            if not hits and op_page is None:
+                hits = list(item_clause_hits_by_name.get(row_key, []))
+        if not hits:
+            return []
+        matched_ids.extend(hits)
+    return list(dict.fromkeys(matched_ids))
+
+
+def cascade_root_issue_ids(
     item: Any,
     result_row: Any,
     visible_issue_ids: Optional[Iterable[str]] = None,
-) -> Optional[str]:
-    """该义务若只是“某张表缺失/为空表”的连带后果，返回根问题的 issue id。
-
-    条件（全部满足）：
-    - 义务为 ``insufficient_data``；
-    - 当前可见的正式问题里有“缺失表：X”或“X 为空表”；
-    - 义务声明依赖表 X（``depends_on``）；
-    - 义务 detail 中每一条未完成原因（“；”分隔，忽略“结构：”注记）都指向已报
-      缺失/空表的表，且结构化卡点（``blocked_by``）引用的表也都在其中。
-    """
+) -> List[str]:
+    """返回可承接该未完成义务的根问题 issue id 列表（方案：缺表/空表 或 同源名称错误）。"""
     if str(getattr(item, "status", "") or "") != "insufficient_data":
-        return None
+        return []
     visible = set(visible_issue_ids) if visible_issue_ids is not None else None
+    table_root = _missing_or_empty_table_cascade_root(item, result_row, visible)
+    if table_root is not None:
+        return [table_root]
+    return _v33227_name_mismatch_roots(item, result_row, visible)
+
+
+def _missing_or_empty_table_cascade_root(
+    item: Any,
+    result_row: Any,
+    visible: Optional[Set[str]],
+) -> Optional[str]:
     roots: Dict[str, str] = {}
     for finding in _current_rule_findings(result_row):
         if not isinstance(finding, dict) or not is_formal_finding(finding):
@@ -692,3 +849,13 @@ def cascade_root_issue_id(
             return None
     cited = cited_all & reported
     return roots[sorted(cited & dependent or cited)[0]]
+
+
+def cascade_root_issue_id(
+    item: Any,
+    result_row: Any,
+    visible_issue_ids: Optional[Iterable[str]] = None,
+) -> Optional[str]:
+    """该义务若只是“某张表缺失/为空表”或已检出同款科目名称错误的连带后果，返回首个根问题 id。"""
+    roots = cascade_root_issue_ids(item, result_row, visible_issue_ids=visible_issue_ids)
+    return roots[0] if roots else None
