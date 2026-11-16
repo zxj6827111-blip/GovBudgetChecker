@@ -588,7 +588,26 @@ class CMM019_CoverElements(Rule):
                 pos = cover.find("区级")
                 _emit(f"封面标题漏写区名：“{title_line}”应写明“{district.group(1)}”。", max(pos - 12, 0), max(pos, 0) + 6)
         if _uses_writing_resolution(doc) and not scope:
-            incomplete.append("封面文种缺少独立依据")
+            archive_basis = resolution.get("archive_basis") if isinstance(resolution, dict) else None
+            snapshot = resolution.get("snapshot") if isinstance(resolution, dict) else None
+            template_auto = bool(
+                isinstance(snapshot, dict)
+                and snapshot.get("available")
+                and ((snapshot.get("capability_scope") or {}).get("writing_auto"))
+            )
+            if (
+                isinstance(archive_basis, dict)
+                and archive_basis.get("organization_id")
+                and not archive_basis.get("level")
+                and not template_auto
+                and not resolution.get("archive_subject_mismatch")
+            ):
+                if not archive_basis.get("organization_name"):
+                    incomplete.append("所属组织已不在目录中（层级未知），无法核验封面文种")
+                else:
+                    incomplete.append("所属组织层级未知（且未启用模板自动裁决），无法核验封面文种")
+            else:
+                incomplete.append("封面文种缺少独立依据")
         if incomplete:
             from .diagnostic_fields import blocker, record_gap
             for reason in incomplete:

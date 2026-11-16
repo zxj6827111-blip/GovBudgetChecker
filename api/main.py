@@ -1512,6 +1512,18 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
         # 同一来源），检查主体、金额范围与写法裁决全程消费这一份冻结值；
         # 重新分析取当时的当前选择，已出结果引用冻结副本。
         selected_org_basis = runtime.resolve_organization_basis(organization_id)
+        if not selected_org_basis.get("level") and runtime.ORG_AVAILABLE:
+            try:
+                job_link = runtime.require_org_storage().get_job_org(job_id)
+                linked_org_id = getattr(job_link, "org_id", None) if job_link else None
+                if linked_org_id and str(linked_org_id).strip() != str(organization_id or "").strip():
+                    linked_basis = runtime.resolve_organization_basis(linked_org_id)
+                    if linked_basis.get("organization_name"):
+                        organization_id = str(linked_org_id).strip()
+                        organization_name = organization_name or linked_basis.get("organization_name")
+                        selected_org_basis = linked_basis
+            except Exception:
+                pass
 
         # 检查是否启用双模式。
         # 必须走真实 Settings 接口（is_dual_mode_enabled 读 config/app.yaml 的
