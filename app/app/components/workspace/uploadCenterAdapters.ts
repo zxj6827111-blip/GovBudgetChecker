@@ -23,6 +23,9 @@ export interface PreflightMatchCandidate {
   level: string;
   confidence: number;
   organization_path?: string;
+  /** R6：current 是否来自人工/批量覆盖（区别于后端自动绑定）——
+   *  人工来源在拿到一致的复核结论前不得显示"校验通过"。 */
+  organization_source?: string;
 }
 
 export interface PreflightResponseLike {
@@ -35,6 +38,17 @@ export interface PreflightResponseLike {
   binding_decision?: {
     candidates?: PreflightMatchCandidate[];
     reasons?: Array<{ code?: string; candidates?: Array<{ id: string; name?: string; level?: string }> }>;
+  } | null;
+  /** 机构归属整改：所选组织与封面证据的复核结果（与最终提交共用同一判断）。
+   *  无所选组织时后端不返回该键；ok=false 时不得显示"校验通过"。 */
+  selected_org_validation?: {
+    ok?: boolean;
+    code?: string;
+    message?: string;
+    cover_org_name?: string;
+    selected_org_id?: string;
+    selected_org_name?: string;
+    selected_level?: string;
   } | null;
 }
 
@@ -56,6 +70,21 @@ export function derivePreflightStatus(response: PreflightResponseLike | null | u
   if (!hasReportYear || !hasDocType || !hasConfidentOrgMatch) {
     return "needs_confirmation";
   }
+  // 机构归属整改：所选组织与封面证据冲突时不得显示"校验通过"——预检与提交
+  // 共用同一判断（后端 _organization_binding_conflict），冲突信息由带
+  // selected_org_id 的复核预检带回。
+  if (response.selected_org_validation?.ok === false) {
+    return "needs_confirmation";
+  }
+  // R6：人工/批量补齐的组织在拿到与本次选择一致的复核结论之前，不得显示
+  // "校验通过"（复核请求可能仍在途、已失败或尚未触发）；后端自动绑定的
+  // current 无此标记，不受影响。
+  const organizationSource = String((response.current as { organization_source?: string } | null | undefined)
+    ?.organization_source ?? "");
+  if (organizationSource === "manual_override"
+    && response.selected_org_validation?.selected_org_id !== response.current?.organization_id) {
+    return "needs_confirmation";
+  }
   return "passed";
 }
 
@@ -70,7 +99,12 @@ export const PREFLIGHT_STATUS_LABELS: Record<PreflightStatus, string> = {
 // ---------------------------------------------------------------------------
 
 /** needs_confirmation 的具体成因，供 UI 精确提示"缺什么"而不是笼统一句话。 */
-export type PreflightConfirmationReason = "missing_report_year" | "missing_doc_type" | "low_confidence_org" | "organization_scope_unconfirmed";
+export type PreflightConfirmationReason =
+  | "missing_report_year"
+  | "missing_doc_type"
+  | "low_confidence_org"
+  | "organization_scope_unconfirmed"
+  | "selected_org_conflict";
 
 function needsOrganizationScopeConfirmation(response: PreflightResponseLike): boolean {
   return Boolean(response.binding_decision?.reasons?.some((reason) => reason.code === "scope_undetermined"));
@@ -79,7 +113,7 @@ function needsOrganizationScopeConfirmation(response: PreflightResponseLike): bo
 /**
  * 逐项列出 preflight 响应缺失/低置信度的字段。
  *
- * 与 derivePreflightStatus 判据完全一致（同样的三个真实字段），只是把"是否需要确认"
+ * 与 derivePreflightStatus 判据完全一致（同样的真实字段），只是把"是否需要确认"
  * 这个布尔结果展开成"具体缺哪几项"的列表，用于 UI 精确提示与单文件编辑表单的
  * 初始值兜底（例如只缺年份时不应该连文档类型一起要求用户重新选）。
  */
@@ -102,6 +136,10 @@ export function listPreflightConfirmationReasons(
   if (!hasConfidentOrgMatch) {
     reasons.push(needsOrganizationScopeConfirmation(response) ? "organization_scope_unconfirmed" : "low_confidence_org");
   }
+  // 机构归属整改：所选组织与封面证据冲突（预检复核结果）也要精确列出。
+  if (response.selected_org_validation?.ok === false) {
+    reasons.push("selected_org_conflict");
+  }
   return reasons;
 }
 
@@ -110,6 +148,7 @@ export const PREFLIGHT_CONFIRMATION_REASON_LABELS: Record<PreflightConfirmationR
   missing_doc_type: "文档类型未识别到",
   low_confidence_org: "组织匹配置信度不足",
   organization_scope_unconfirmed: "部门/单位归属待逐份确认",
+  selected_org_conflict: "所选机构与封面不一致",
 };
 
 /**
@@ -170,7 +209,16 @@ export function applyManualConfirmationOverride(
       // 人工选择视为完全确认，置信度记为 1——这与手动关联组织（associate 接口）
       // 的既有语义一致：人工选择不再是"匹配出来的猜测"，是已确认事实。
       confidence: 1,
-    };
+      // R6：标记该 current 来自人工覆盖——在拿到与本次选择一致的复核结论前，
+      // derivePreflightStatus 不得显示"校验通过"（needs_confirmation）。
+      organization_source: "manual_override",
+    } as PreflightMatchCandidate;
+    // 机构归属整改：换选组织后，旧组织的复核结论不再适用——只保留与本次
+    // 选择一致的 selected_org_validation，其余丢弃，避免把上一个组织的
+    // 冲突/通过误挂在新选择上；新组织的复核由复核预检带回。
+    if (base.selected_org_validation && base.selected_org_validation.selected_org_id !== override.organizationId) {
+      base.selected_org_validation = null;
+    }
   }
 
   return base;
@@ -514,6 +562,31 @@ export function describeUploadFailure(input: DescribeUploadFailureInput): Upload
   }
 
   if (status === 422 && object) {
+    // 机构归属整改：组织冲突用 code 字段（_organization_binding_conflict 返回
+    // {"code": ...}），与年份/文种冲突的 error 字段并列；先读 code 再回退 error，
+    // 避免把组织冲突笼统显示成年份或文种校验失败。
+    const orgConflictCode = String(object.code ?? "");
+    if (orgConflictCode === "organization_cover_conflict") {
+      return {
+        title: `文件 ${filename} 的所选机构与封面不一致`,
+        detail: `封面机构：${String(object.cover_org_name ?? "未识别到")}；所选机构：${String(object.selected_org_name ?? "未指定")}`,
+        suggestion: "请改选与封面一致的组织（本级口径可选无后缀的同名单位），或核对材料封面后重新上传。",
+      };
+    }
+    if (orgConflictCode === "organization_scope_conflict") {
+      return {
+        title: `文件 ${filename} 的所选机构层级与封面不符`,
+        detail: `封面口径：${String(object.cover_org_label ?? "预算单位")}；所选层级：${String(object.selected_level === "unit" ? "下属单位" : "主管部门")}`,
+        suggestion: "部门汇总材料请选择主管部门，单位/本级材料请选择对应单位后重新上传。",
+      };
+    }
+    if (orgConflictCode === "organization_contract_conflict") {
+      return {
+        title: `文件 ${filename} 的组织信息存在冲突`,
+        detail: text || "所选组织与封面证据存在不可调和的冲突。",
+        suggestion: "请核对组织目录与材料封面后重新选择。",
+      };
+    }
     const errorCode = String(object.error ?? "");
     if (errorCode === "report_type_conflict") {
       return {

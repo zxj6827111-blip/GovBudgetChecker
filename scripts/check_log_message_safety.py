@@ -184,6 +184,9 @@ SAFE_LOG_NAMES = frozenset(
         "last_exception",
         "error_msg",
         "msg",
+        # attempts：入库重试的次数上限（环境变量读取的纯数值循环边界），
+        # 只可能是整数，不含材料原文。
+        "attempts",
         # --- 标识符 / 路径。路径含文件名，但文件名不是材料正文 ---
         "path",
         "filename",

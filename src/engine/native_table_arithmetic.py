@@ -211,7 +211,36 @@ def select(doc, facts, indicator, *, code=None, name=None, stage='决算', allow
                 unique.setdefault(
                     (fact.subject_code, fact.indicator, str(fact.raw_value),
                      str(fact.normalized_value), fact.unit), fact)
-            candidates = list(unique.values())
+            kept = list(unique.values())
+            # C5（2026-11-14 复验）：同码同值重复行合并为同一业务行时，被合并
+            # 的重复原格证据随保留事实留痕（双侧可回原件）；异值收敛仍 >1，
+            # 走下方"不唯一"拒绝。留痕只记录原件格身份，不改写任何金额。
+            if len(kept) == 1 and len(candidates) > 1:
+                kept_fact = kept[0]
+                extra = getattr(kept_fact, 'extra_dims', None)
+                if isinstance(extra, dict):
+                    traces = extra.setdefault('same_value_duplicate_cells', [])
+                    seen_cells = {trace.get('source_cell_id') for trace in traces}
+                    for duplicate in candidates:
+                        if duplicate is kept_fact:
+                            continue
+                        for ref in (duplicate.extra_dims or {}).get('evidence_refs', []):
+                            if (isinstance(ref, dict) and ref.get('source_cell_id')
+                                    and ref.get('source_cell_id') not in seen_cells):
+                                seen_cells.add(ref.get('source_cell_id'))
+                                traces.append({
+                                    'duplicate_fact_uid': duplicate.fact_uid,
+                                    'kept_fact_uid': kept_fact.fact_uid,
+                                    'subject_code': duplicate.subject_code,
+                                    'indicator': duplicate.indicator,
+                                    'source_cell_id': ref.get('source_cell_id'),
+                                    'physical_page': ref.get('physical_page'),
+                                    'quote': ref.get('quote'),
+                                    'file_hash': ref.get('file_hash'),
+                                    'value': str(duplicate.raw_value),
+                                    'basis': 'same_object_same_value_duplicate_row',
+                                })
+            candidates = kept
     if len(candidates) != 1:
         if not candidates and allow_native_blank and facts:
             term = blank_term(doc, facts[0].table_code, indicator, code=code,
@@ -262,6 +291,30 @@ def receipt(rule, doc, relation, facts, *, status, formula, reason=None, disclos
         # D0 RC-2c：同科目重复原行按同一业务行归集时，重复行事实随回执留痕
         disclosure_sources = [*disclosure_sources, *getattr(doc, '_economic_duplicate_row_observations', [])]
     ids, evidence = journal(rule, doc, facts)
+    # C5 收口（第二轮复验）：同值重复合并的证明必须进入**持久回执**，不能
+    # 只留在内存 extra_dims——双侧格/事实、物理页、文件/批次、原值与合并
+    # 依据随 disclosure_sources 交付；重复调用靠 select 侧幂等去重，不改
+    # 金额、身份或容差。
+    duplicate_sources = []
+    for fact in facts:
+        for trace in (getattr(fact, 'extra_dims', None) or {}).get(
+                'same_value_duplicate_cells') or []:
+            duplicate_sources.append({
+                'role': 'same_value_duplicate_row',
+                'kept_fact_uid': trace.get('kept_fact_uid') or fact.fact_uid,
+                'duplicate_fact_uid': trace.get('duplicate_fact_uid'),
+                'subject_code': trace.get('subject_code') or fact.subject_code,
+                'indicator': trace.get('indicator') or fact.indicator,
+                'source_cell_id': trace.get('source_cell_id'),
+                'physical_page': trace.get('physical_page'),
+                'quote': trace.get('quote'),
+                'file_hash': trace.get('file_hash'),
+                'parse_run_uid': getattr(getattr(doc, 'fact_context', None), 'parse_run_uid', None),
+                'value': trace.get('value') if trace.get('value') is not None else str(fact.raw_value),
+                'basis': trace.get('basis') or 'same_object_same_value_duplicate_row',
+            })
+    if duplicate_sources:
+        disclosure_sources = [*disclosure_sources, *duplicate_sources]
     _v33_relation_receipt(doc, rule.code, relation, status=status,
                           operand_fact_ids=ids, formula=formula, incomplete_reason=reason,
                           cell_observations=[*blank_observations(facts), *cell_observations],

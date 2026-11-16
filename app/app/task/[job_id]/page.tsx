@@ -331,13 +331,29 @@ function LegacyRevisionTaskDetail({
         organization_name?: string;
         organization_match_type?: string;
         organization_match_confidence?: number;
-        detail?: string;
+        detail?: string | { code?: string; message?: string; cover_org_name?: string; selected_org_name?: string };
         error?: string;
         message?: string;
       };
 
       if (!response.ok) {
-        throw new Error(payload.detail || payload.error || payload.message || "关联报告失败");
+        // 机构归属整改：后端组织冲突是结构化 detail={"code": ...}——不能把对象
+        // 直接 String 化成 "[object Object]"，也不能漏读 code 字段。
+        const detail = payload.detail;
+        const structured = typeof detail === "object" && detail !== null ? detail : null;
+        const conflictText = structured?.code === "organization_cover_conflict"
+          ? `封面机构与所选组织不一致（封面：${structured.cover_org_name ?? "未识别到"}；所选：${structured.selected_org_name ?? "未指定"}）`
+          : structured?.code === "organization_scope_conflict"
+            ? `封面层级口径与所选组织层级不符（${structured.message ?? ""}）`
+            : null;
+        throw new Error(
+          conflictText
+          || (typeof detail === "string" && detail)
+          || structured?.message
+          || payload.error
+          || payload.message
+          || "关联报告失败",
+        );
       }
 
       const nextOrganizationId = String(payload.organization_id ?? "").trim();

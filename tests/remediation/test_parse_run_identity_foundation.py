@@ -707,6 +707,8 @@ class _Connection:
     def transaction(self): return _Transaction()
     async def fetch(self, *_args, **_kwargs): return []
     async def execute(self, *_args, **_kwargs): return None
+    # D5：统一入库的逐格/逐块写入改为 executemany 批量执行（同语句同语义）。
+    async def executemany(self, *_args, **_kwargs): return None
     async def fetchrow(self, *_args, **_kwargs): return None
 
 

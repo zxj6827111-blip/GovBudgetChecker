@@ -84,6 +84,9 @@ _FUND_EXPENDITURE = re.compile(
 _BARE_EXPENDITURE = re.compile(
     rf'[，,](?:本年)?支出(?:合计|决算(?:数)?)?(?:为|是)?'
     rf'(?P<amount>{_NUMBER})(?P<unit>{_UNIT})')
+# 说明逐项条目的决算金额声明（无基金标签前缀）：「……（项）……支出决算为 N 万元」。
+_FUND_ITEM_DECISION = re.compile(
+    rf'支出决算(?:数)?(?:为|是)?(?P<amount>{_NUMBER})(?P<unit>{_UNIT})')
 _SELF_COUNT = re.compile(
     r'(?:绩效自评(?:的)?(?:20\d{2}年度)?项目|'
     r'(?:开展|组织)?(?:项目支出)?绩效自评(?:项目)?(?:共|涉及)?)'
@@ -956,6 +959,98 @@ def _kuan_mismatch_reason(doc, facts, item, klass: str, paths: dict) -> str | No
     return '；'.join(clauses)
 
 
+def _cell_refs_on_current_original(doc, refs):
+    """C3/C1（2026-11-14 复验）：原格引用必须绑定当前原件。
+
+    文件哈希与解析批次一致、源格真实存在于当前解析产物（复用证据装订同一
+    口径的原格目录）、格原文与引用逐字一致且页码相符。无解析产物或任一
+    引用不合格返回 False——缺失资格不得升级可信身份，也不能冒充原格证据。
+    """
+    from src.services.rule_source_binding import _current_cell_catalog
+    artifact = getattr(doc, 'parse_artifact', None)
+    context = getattr(doc, 'fact_context', None)
+    if artifact is None or context is None or not refs:
+        return False
+    file_hash = str(getattr(context, 'file_hash', '') or '')
+    if (not file_hash
+            or str(getattr(artifact, 'source_file_hash', '') or '') != file_hash
+            or str(getattr(context, 'parse_run_uid', '') or '')
+            != str(getattr(artifact, 'parse_run_uid', '') or '')):
+        return False
+    cells, conflicting = _current_cell_catalog(artifact)
+    for ref in refs:
+        if not isinstance(ref, dict):
+            return False
+        cell = cells.get(ref.get('source_cell_id'))
+        quote = str(ref.get('quote') or ref.get('grid_raw_text')
+                    or ref.get('recovered_text') or '')
+        if (cell is None or str(ref.get('file_hash') or '') != file_hash
+                or ref.get('source_cell_id') in conflicting
+                or not quote.strip() or cell.raw_text != quote
+                or ref.get('physical_page') != cell.page_number):
+            return False
+    return True
+
+
+def _anchor_row_identity_proven(doc, fact):
+    """C3 收口（2026-11-14 第二轮复验）：锚证据格必须实际支持宣称的身份。
+
+    "某格真实存在且引用原文一致"只证明引用可回原件；锚的编码/名称还必须
+    由该格及其所在原行印证——编码原格必填且不可缺省，格原文必须与
+    fact.subject_code 逐字相等，同一原行必须实际印有与 fact.subject_name
+    逐字（NFKC 去空白）相等的名称格。原格内容与事实矛盾（编码错配/名称
+    错配/名称格冒充编码格）一律不产生身份证明；不以金额相等定位身份，
+    也不以 fact 自身字段自证。
+    """
+    import unicodedata
+
+    extra = getattr(fact, 'extra_dims', None) or {}
+    code_sources = [ref for ref in (extra.get('row_identity_sources') or [])
+                    if isinstance(ref, dict) and ref.get('source_cell_id')]
+    if not code_sources:
+        return False  # 编码原格引用不可缺省：缺失就没有可核验的原件身份路径
+    if not _cell_refs_on_current_original(doc, code_sources):
+        return False
+    artifact = getattr(doc, 'parse_artifact', None)
+    if artifact is None:
+        return False
+    subject_code = str(getattr(fact, 'subject_code', '') or '').strip()
+
+    def normalize(value):
+        return ''.join(ch for ch in unicodedata.normalize('NFKC', str(value or ''))
+                       if not ch.isspace())
+
+    target_name = normalize(getattr(fact, 'subject_name', ''))
+    if not subject_code or not target_name:
+        return False
+    from src.services.rule_source_binding import _current_cell_catalog
+    cells, _conflicting = _current_cell_catalog(artifact)
+    for source in code_sources:
+        printed_code = normalize(source.get('grid_raw_text')
+                                 or source.get('recovered_text') or '')
+        if printed_code != subject_code:
+            return False  # 编码原格内容与事实宣称的编码不符
+        cell = cells.get(source.get('source_cell_id'))
+        if cell is None:
+            return False
+        # 同一原行必须实际印有宣称名称（编码格与名称格同 fragment 同行）。
+        # catalog 键格式 "{uid}:r{row}c{col}"（uid 不含 ":r"，坐标已是合并
+        # 视图归一后的原格坐标），从键反推同前缀即同 fragment 同行邻格。
+        key_match = re.match(r'^(.*):r(-?\d+)c(-?\d+)$', str(source.get('source_cell_id') or ''))
+        if key_match is None:
+            return False
+        prefix = f'{key_match.group(1)}:r{key_match.group(2)}c'
+        same_row_name = any(
+            key != source.get('source_cell_id')
+            and key.startswith(prefix)
+            and not other.is_header
+            and normalize(other.raw_text) == target_name
+            for key, other in cells.items())
+        if not same_row_name:
+            return False  # 同原行未印出宣称名称：格存在但不支持该身份
+    return True
+
+
 def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None, sub_check_id=None):
     paths = hierarchy_paths({str(f.subject_code) for f in facts
                              if str(f.subject_code or '').isdigit()})
@@ -992,6 +1087,189 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None, sub_check_id
             if error:
                 return None, error
         return select(doc, facts, 'total_actual', code=leaf_code)
+
+    def _fact_identity_matches_context(fact):
+        """绑定前核验事实与文档身份一致（年份/主体/资金/阶段），不依赖 select 内部。"""
+        context = getattr(doc, 'fact_context', None)
+        if context is None:
+            return False
+        if getattr(fact, 'org_name', None) != getattr(context, 'org_name', None):
+            return False
+        if getattr(fact, 'fiscal_year', None) != getattr(context, 'fiscal_year', None):
+            return False
+        for field in ('fund_scope', 'budget_stage'):
+            expected = getattr(context, field, None)
+            if expected is not None and getattr(fact, field, None) != expected:
+                return False
+        return True
+
+    def _truncation_ambiguity_guard(anchor_code):
+        """目标表自身的截断候选不得构成歧义或冲突（D2 交叉证据不越权）。
+
+        - 无截断候选：放行（如福利院「事业单离退休」非前缀截断）；
+        - 唯一截断候选且即锚定行：须通过原格物理认证（网格名与事实名一致）；
+        - 其余（多候选 / 候选非锚定行 / 物理认证失败）：拒绝绑定。
+        """
+        def literal(value):
+            return re.sub(r'\s+', '', str(value or ''))
+
+        requested = literal(item['xiang'])
+        truncated = {}
+        for f in facts:
+            code = str(f.subject_code or '')
+            raw = literal(f.subject_name)
+            if (getattr(f, 'indicator', '') != 'total_actual' or len(paths.get(code, '')) != 7
+                    or not paths[code].startswith(parent) or len(raw) < 8
+                    or raw == requested or not requested.startswith(raw)):
+                continue
+            truncated.setdefault(code, f)
+        if not truncated:
+            return True
+        if len(truncated) == 1 and next(iter(truncated)) == anchor_code:
+            return _truncated_name_source(doc, truncated[anchor_code], item, siblings) is not None
+        return False
+
+    def _refs_on_current_original(refs):
+        return _cell_refs_on_current_original(doc, refs)
+
+    def bind_leaf_via_cross_table_code():
+        # D2 统一身份绑定：目标表项名与说明名逐字不一致（如表内中间漏字）时，
+        # 用同一份材料其他原表打印的「编码＋完整名称」定位编码，再按编码在
+        # 目标表内唯一定位行。同名对应多个不同编码、编码在目标表内不唯一、
+        # 与已绑定的类/款前缀不符、或目标表自身存在截断歧义/名称冲突时
+        # 一律放弃；名称差异仍由 V33-227 按原文独立报告。
+        requested = _name(item['xiang'])
+        if not requested or not facts:
+            return None
+        target_table = getattr(facts[0], 'table_code', '')
+        context = getattr(doc, 'fact_context', None)
+        all_facts = list(getattr(context, 'facts', []) or [])
+        anchors: dict = {}
+        for f in all_facts:
+            code = str(getattr(f, 'subject_code', '') or '')
+            if not re.fullmatch(r'\d{7}', code):
+                continue
+            if getattr(f, 'table_code', '') == target_table:
+                continue  # 只用同文独立原表作交叉证据
+            if _name(getattr(f, 'subject_name', '')) != requested:
+                continue
+            # R3：锚事实自身必须具备可信身份，才能充当"同文独立原件证据"——
+            # 主体/期间与文档一致、决算阶段、识别资格可作操作数、且带可回
+            # 原件的证据引用（物理页+源格）。不同表的金额资金口径可以不同，
+            # 但身份证明维度缺失的候选不参与锚定。
+            if getattr(f, 'org_name', None) != getattr(context, 'org_name', None):
+                continue
+            if getattr(f, 'fiscal_year', None) != getattr(context, 'fiscal_year', None):
+                continue
+            # C3：非决算阶段（含未识别）与跨期（年初等）行不充当本年身份证明。
+            if getattr(f, 'budget_stage', None) != '决算':
+                continue
+            if getattr(f, 'period', None) not in (None, '本年'):
+                continue
+            if str(getattr(f, 'recognition_status', '') or '') in (
+                    'ambiguous', 'low_confidence', 'missing', 'observed_blank', 'rejected'):
+                continue
+            anchor_refs = list((getattr(f, 'extra_dims', None) or {}).get('evidence_refs') or [])
+            if not any(ref.get('physical_page') and ref.get('source_cell_id') for ref in anchor_refs):
+                continue  # 无原件可回溯证据的事实不能作身份证明
+            # C3：引用必须真实落在当前原件上（换文件哈希/不存在的源格一律拒绝）。
+            if not _refs_on_current_original(anchor_refs):
+                continue
+            # C3 收口（第二轮复验）：编码原格必填且不可缺省，格内容必须实际
+            # 支持宣称编码、同原行必须实际印有宣称名称——格存在≠身份成立。
+            if not _anchor_row_identity_proven(doc, f):
+                continue
+            anchors.setdefault(code, []).append(f)
+        if len(anchors) != 1:
+            return None
+        anchor_code = next(iter(anchors))
+        if not paths.get(anchor_code, '').startswith(parent):
+            return None  # 锚编码不在已绑定的类/款链下：同名跨款，不绑
+        if not _truncation_ambiguity_guard(anchor_code):
+            return None
+        target_rows = [f for f in facts if str(f.subject_code) == anchor_code]
+        if not target_rows:
+            return None
+        # 同码多指标（total/basic）属同一表行；行名身份必须唯一且与说明名不同。
+        target_names = {_name(f.subject_name) for f in target_rows}
+        if len(target_names) != 1 or next(iter(target_names)) == requested:
+            return None  # 目标表名本就一致时不应走到这里，防御性放弃
+        fact, error = select(doc, facts, 'total_actual', code=anchor_code, allow_native_blank=True)
+        if error or fact is None:
+            return fact, error
+        if not _fact_identity_matches_context(fact):
+            return None
+        if aliases is not None:
+            anchor_refs = []
+            for f in anchors[anchor_code]:
+                anchor_refs.extend(f.extra_dims.get('evidence_refs', [])
+                                   if hasattr(f, 'extra_dims') else [])
+            aliases.extend(anchor_refs)
+            aliases.append({
+                'role': 'cross_table_code_anchor',
+                'subject_code': anchor_code,
+                'narrative_name': item['xiang'],
+                'target_table_name': fact.subject_name,
+                'anchor_tables': sorted({getattr(f, 'table_code', '') for f in anchors[anchor_code]}),
+                'anchor_names': sorted({_name(f.subject_name) for f in anchors[anchor_code]}),
+                'basis': 'same_document_printed_code_with_exact_name',
+            })
+        return fact, error
+
+    def bind_leaf_via_code_anomaly():
+        # D2 编码位数异常绑定：表内编码位数异常（如 8 位，原件多印一位）导致
+        # 编码不在规范层级内、项级候选为空时，若身份可由独立证据链唯一证明
+        # ——8 位编码的 5 位款级前缀与已绑定款链一致、该前缀是同表已打印的
+        # 款级行、项名与说明逐字相等且唯一（物化层已按此锚定解除
+        # low_confidence）——则按该链绑定金额；编码异常由调用方单独报告。
+        # 多候选、前缀不符或未锚定时一律放弃（fail-closed）。
+        requested = _name(item['xiang'])
+        if not requested:
+            return None
+        anchored = {}
+        for f in facts:
+            code = str(f.subject_code or '')
+            if not re.fullmatch(r'\d{8}', code):
+                continue
+            if (f.extra_dims or {}).get('code_length_anomaly') is not True:
+                continue
+            if paths.get(code[:5], '') != parent:
+                continue
+            if _name(f.subject_name) != requested:
+                continue
+            anchored.setdefault(code, f)
+        if len(anchored) != 1:
+            return None
+        anomaly_code = next(iter(anchored))
+        fact, error = select(doc, facts, 'total_actual', code=anomaly_code, allow_native_blank=True)
+        if error or fact is None:
+            return fact, error
+        if aliases is not None:
+            # C1（2026-11-14 复验）：异常编码发现必须以**编码原格**为证据——
+            # row_identity_sources 才携带编码格（原格ID/原字节/物理页），
+            # 金额格 evidence_refs（r..c2）不是编码证据，不能冒充编码原格引文。
+            extra = getattr(fact, 'extra_dims', None) or {}
+            aliases.append({
+                'role': 'code_length_anomaly_binding',
+                'subject_code': anomaly_code,
+                'kuan_prefix_code': anomaly_code[:5],
+                'narrative_name': item['xiang'],
+                'table_name': fact.subject_name,
+                'table_code': getattr(fact, 'table_code', ''),
+                'table_page': sorted({ref.get('physical_page') for ref in
+                                      (extra.get('evidence_refs') or [])
+                                      if ref.get('physical_page')}),
+                'amount_cell_refs': [ref for ref in (extra.get('evidence_refs') or [])
+                                     if ref.get('physical_page') and ref.get('source_cell_id')],
+                'code_cell_refs': [ref for ref in (extra.get('row_identity_sources') or [])
+                                   if ref.get('physical_page') and ref.get('source_cell_id')
+                                   and str(ref.get('grid_raw_text') or ref.get('recovered_text')
+                                           or '').strip()],
+                'fact_uid': fact.fact_uid,
+                'raw_code_bytes': str(getattr(fact, 'subject_code', '') or ''),
+                'basis': 'printed_kuan_prefix_plus_exact_unique_name',
+            })
+        return fact, error
 
     def bind_under_parent_word_order_error():
         # 款名仅为同字异序时，可用完整原表中逐字唯一的项名及原件层级链
@@ -1135,6 +1413,12 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None, sub_check_id
                 rebound = rebind_leaf_under_class()
                 if rebound is not None:
                     return rebound
+                anchored = bind_leaf_via_cross_table_code()
+                if anchored is not None:
+                    return anchored
+                anomaly_bound = bind_leaf_via_code_anomaly()
+                if anomaly_bound is not None:
+                    return anomaly_bound
             level = {'klass': '类', 'kuan': '款', 'xiang': '项'}[group]
             if not candidates:
                 # 仅解释原文差异，不把近似名称或相同金额升级为同一科目身份。
@@ -1341,6 +1625,89 @@ def check_function_disclosures(rule, doc):
                 evidence_text=name_hint['narrative_name'],
                 check_relation_id=f'{rule.code}:general:text:item:{item.start()}:klass_name',
             ))
+        # D2：编码位数异常（原件多印一位）按独立身份链绑定金额后，异常本身
+        # 必须按原文单独报告——不吞进金额核对结果，也不用相似度猜正码。
+        anomaly_hint = next((a for a in aliases if isinstance(a, dict)
+                             and a.get('role') == 'code_length_anomaly_binding'), None)
+        if anomaly_hint and not error:
+            # R8：编码异常发现必须完成原件证据交付——异常编码原格（物理页/
+            # 源格标识/原字节/bbox/文件与解析批次）、对应事实标识与说明侧位置
+            # 一并携带，接受独立原件证据校验，不再是无页码的未验证提示。
+            # C1（2026-11-14 复验）：evidence_refs 契约键是 physical_page，
+            # 直接取不存在的 'page' 会 KeyError（救助任务 V33-222 真实崩溃）；
+            # 且证据必须是编码原格（row_identity_sources），金额格不是编码证据，
+            # 引文只用该格自己的原文，不拼贴"编码＋名称"冒充原格引文。
+            context = getattr(doc, 'fact_context', None)
+
+            def _bbox_of(ref):
+                for source in (ref.get('native_text_sources') or []):
+                    if isinstance(source, dict) and source.get('bbox'):
+                        return list(source['bbox'])
+                return None
+
+            def _certified(refs):
+                return refs and _cell_refs_on_current_original(doc, refs)
+
+            code_cell_refs = list(anomaly_hint.get('code_cell_refs') or [])
+            amount_cell_refs = list(anomaly_hint.get('amount_cell_refs') or [])
+            code_certified = _certified(code_cell_refs)
+            table_refs = []
+            evidence_quote = ''
+            if code_certified:
+                # 编码原格可认证：引文=该格原文（grid_raw_text），带原格ID/bbox/页码。
+                table_refs = [
+                    {'role': '异常编码原格', 'page': ref.get('physical_page'),
+                     'physical_page': ref.get('physical_page'),
+                     'source_cell_id': ref.get('source_cell_id'),
+                     'span': str(ref.get('grid_raw_text') or ref.get('recovered_text') or ''),
+                     'raw_code': anomaly_hint.get('raw_code_bytes'),
+                     'file_hash': ref.get('file_hash'),
+                     'parse_run_uid': getattr(context, 'parse_run_uid', None),
+                     **({'bbox': bbox} if (bbox := _bbox_of(ref)) else {})}
+                    for ref in code_cell_refs]
+                evidence_quote = next(
+                    (ref['span'] for ref in table_refs if ref.get('span')), '')
+            else:
+                # 编码原格缺失或不可认证：不声称编码原格证据，退回到页码定位并
+                # 如实登记缺口；发现本身不静默吞掉，由证据门按未核验处理。
+                table_refs = [
+                    {'role': '金额格（编码原格证据缺失）', 'page': ref.get('physical_page'),
+                     'source_cell_id': ref.get('source_cell_id'),
+                     'span': str(ref.get('quote') or '')}
+                    for ref in amount_cell_refs if str(ref.get('quote') or '').strip()]
+                evidence_quote = next(
+                    (ref['span'] for ref in table_refs if ref.get('span')), '')
+            table_pages = sorted({ref.get('physical_page') for ref in
+                                  (code_cell_refs + amount_cell_refs)
+                                  if ref.get('physical_page')})
+            narrative_page = _name_difference_hint(doc, item)
+            location = {
+                'subject_code': anomaly_hint['subject_code'],
+                'kuan_prefix_code': anomaly_hint['kuan_prefix_code'],
+                'narrative_name': anomaly_hint['narrative_name'],
+                'table_name': anomaly_hint['table_name'],
+                'table_code': anomaly_hint.get('table_code') or '',
+                'name_kind': 'code_length_anomaly',
+                'code_cell_evidence': 'certified' if code_certified else 'unavailable',
+                'file_hash': getattr(context, 'file_hash', None),
+                'parse_run_uid': getattr(context, 'parse_run_uid', None),
+                'table_refs': table_refs,
+                **({'page': table_pages[0], 'pages': table_pages} if table_pages else {}),
+                **({'page': narrative_page} if narrative_page and not table_pages else {}),
+            }
+            issues.append(rule._issue(
+                f"说明第{narrative_page or '?'}页项“{anomaly_hint['narrative_name']}”"
+                f"对应表内编码 {anomaly_hint['subject_code']}（位数异常，规范为7位）："
+                "按其5位款级前缀（同表已打印款级行）＋逐字项名唯一绑定金额；"
+                "请核对原件编码是否多字，修正编码后与本说明一致。",
+                location,
+                'warn',
+                # C1：evidence_text 只能是真实原格引文（编码格原文），拼接描述
+                # 不能当原文——证据门会逐字核验引文是否落在所称页面。
+                evidence_text=evidence_quote,
+                fact_ids=[anomaly_hint.get('fact_uid')] if anomaly_hint.get('fact_uid') else [],
+                check_relation_id=f'{rule.code}:general:text:item:{item.start()}:code_anomaly',
+            ))
         # 博物馆、图书馆等 are literal fiscal subjects, not publisher names.
         # Their hierarchy is already validated above; only the declaration
         # prefix can introduce a foreign owner or year for this item.
@@ -1468,6 +1835,148 @@ def _amount_from_derived(rule, doc, text, begin, end, amount, unit, derived, key
                         evidence_ids=evidence)]
 
 
+# 说明正文经 NFKC 归一后括号为半角；层级标签必须同时接受全角/半角写法。
+_FUND_HIERARCHY_LABEL = re.compile(
+    r'(?P<klass>[\u4e00-\u9fff（）()0-9]{2,60}[（(]类[）)])'
+    r'(?P<kuan>[\u4e00-\u9fff（）()0-9]{2,60}[（(]款[）)])'
+    r'(?P<xiang>[\u4e00-\u9fff（）()0-9]{2,60}[（(]项[）)])')
+# C2（2026-11-14 复验）：声明身份范围边界——编号条目起点。声明只能借用
+# 同一条目内且位于其前的身份标签；跨新编号（"2、"）、跨中文序号条目即换对象，
+# 不得再借上一条的标签。金额中的小数点不会命中（后瞻要求非数字）。
+_FUND_ITEM_HEAD = re.compile(
+    r'\d{1,3}[、．]|\d{1,3}\.(?=\D)'
+    r'|[（(][一二三四五六七八九十百]{1,3}[）)]'
+    r'|[一二三四五六七八九十百]{1,3}[、．]')
+
+
+def _resolve_klass_against_table(klass, hierarchy):
+    """类名可能被叙述性定语粘连（"同一项目城乡社区支出（类）"）。
+
+    只接受与表内已打印类级行名称（3位码行）唯一对齐的后缀，不做模糊近似；
+    对不齐或对出多个不同类名时保持原文（由逐级匹配失败拒绝绑定）。
+    """
+    known = {name for code, name in hierarchy.items()
+             if len(code) == 3 and name}
+    if not known or klass in known:
+        return klass
+    suffixes = {klass[index:] for index in range(1, len(klass))
+                if klass[index:] in known}
+    if len(suffixes) == 1:
+        return next(iter(suffixes))
+    return klass
+
+
+def _derive_fund_total_from_bound_items(rule, doc, text, begin, end, title, item_claims):
+    """R2：说明逐项之和推导基金总额——只有身份与完备性可证时才推导。
+
+    每条"支出决算为 N 万元"声明必须：
+    1. 就近回溯到完整「X（类）Y（款）Z（项）」身份标签（相邻性证明）；
+    2. 通过上下文守卫（_guard）与期间锚（声明前缀/标签含异年即拒绝）；
+    3. 绑定到基金表内唯一项级行（类/款/项三级身份 + 表内唯一）。
+    绑定集合还须与表内"有可用金额的项级行集合"互相覆盖（完备互斥），
+    同对象重复叙述（同码）金额一致去重、不一致拒绝。任一前提不成立
+    返回 None 并把具体原因写进 insufficient_data 回执——绝不把部分披露、
+    跨期或跨主体金额推定成总额矛盾。
+    """
+    from .rules_v33 import _txt_fund_match_item
+    from .year_roles import foreign_period_years
+
+    def literal(value):
+        return re.sub(r'\s+', '', str(value or ''))
+
+    def abort(reason):
+        receipt(rule, doc, 'fund:text:total:derived_from_items', [], status='insufficient_data',
+                formula='derived narrative item sum == fund table total (万元)',
+                reason=reason)
+        return None
+
+    facts, reason = table_facts(doc, FUND)
+    if reason:
+        return abort(f'基金表事实不可用：{reason}')
+    item_facts = [f for f in facts
+                  if getattr(f, 'indicator', '') == 'total_actual'
+                  and re.fullmatch(r'\d{7}', str(getattr(f, 'subject_code', '') or ''))
+                  and f.normalized_value is not None]
+    table_items = [{'code': str(f.subject_code), 'name': literal(f.subject_name),
+                    'amount': f.normalized_value} for f in item_facts]
+    if not table_items:
+        return abort('基金表未识别到带金额的项级行，无从证明说明集合完备')
+    hierarchy = {}
+    for f in facts:
+        code = str(getattr(f, 'subject_code', '') or '')
+        name = literal(getattr(f, 'subject_name', ''))
+        if code.isdigit() and len(code) in (3, 5, 7) and name:
+            hierarchy.setdefault(code, name)
+
+    bound_by_code: dict = {}
+    used_labels: set = set()
+    for claim in item_claims:
+        # C2（2026-11-14 复验）：每条声明先独立证实对象——身份标签必须属于
+        # 声明所在的**同一条目**（最近一个编号条目起点之后），并取该范围内
+        # 距声明最近的未被先前声明占用的标签。跨新编号（"2、另一项目…"）、
+        # 跨条目或标签已被前一声明占用的，都不得借身份。finditer 带 pos/endpos
+        # 时 match.start() 是全文绝对偏移，不再有切片内偏移误当全文偏移的问题。
+        scope_start = begin
+        for marker in _FUND_ITEM_HEAD.finditer(text.compact, begin, claim.start()):
+            scope_start = marker.end()
+        labels = list(_FUND_HIERARCHY_LABEL.finditer(
+            text.compact, scope_start, claim.start()))
+        label = labels[-1] if labels else None
+        if label is None or label.start() in used_labels:
+            return abort('存在未伴随自身完整「（类）（款）（项）」身份标签的支出决算声明，'
+                         '无法证明其业务对象，不参与总额推导')
+        used_labels.add(label.start())
+        # 期间锚：声明前缀或身份标签出现异年（如 2024年度…）→ 拒绝该声明。
+        context_head = text.compact[max(begin, label.start() - 60):claim.end()]
+        fiscal_year = getattr(getattr(doc, 'fact_context', None), 'fiscal_year', None)
+        foreign = sorted({token.year for token in foreign_period_years(context_head, fiscal_year)}
+                         ) if fiscal_year else []
+        if foreign:
+            return abort(f'声明或其身份标签携带异年 {foreign}，期间锚不成立，不参与总额推导')
+        guard_error = _guard(doc, text, begin, label.start(), claim.end())
+        if guard_error:
+            return abort(f'声明上下文守卫未通过：{guard_error}')
+        klass = _resolve_klass_against_table(
+            literal(re.sub(r'[（(]类[）)]$', '', label.group('klass'))), hierarchy)
+        kuan = literal(re.sub(r'[（(]款[）)]$', '', label.group('kuan')))
+        xiang = literal(re.sub(r'[（(]项[）)]$', '', label.group('xiang')))
+        item, match_error = _txt_fund_match_item(
+            table_items, hierarchy, klass, kuan, xiang)
+        if item is None:
+            return abort(f'说明项「{klass}（类）{kuan}（款）{xiang}（项）」未能唯一绑定到'
+                         f'基金表项级行：{match_error}，不参与总额推导')
+        amount = _wan(claim.group('amount'), claim.group('unit'))
+        previous = bound_by_code.get(item['code'])
+        if previous is None:
+            bound_by_code[item['code']] = (amount, claim)
+        elif previous[0] != amount:
+            return abort(f'同一说明项 {item["code"]} 被重复叙述为不同金额'
+                         f'（{previous[0]} / {amount}），声明集合不自洽，不参与总额推导')
+
+    table_codes = {item['code'] for item in table_items}
+    uncovered = sorted(table_codes - set(bound_by_code))
+    if uncovered:
+        return abort(f'基金表存在未被说明列示的项级行 {uncovered}，列示集合不完备，'
+                     '不参与总额推导')
+    extra = sorted(set(bound_by_code) - table_codes)
+    if extra:
+        return abort(f'说明绑定到表外对象 {extra}，列示集合不互斥，不参与总额推导')
+
+    derived_value, operands, note = _fund_total_from_classes(doc, facts)
+    if derived_value is None:
+        return abort('基金表合计不可推导（类级行缺失或冲突），无从比对逐项之和')
+    item_sum = sum((amount for amount, _ in bound_by_code.values()), Decimal('0'))
+    ordered = sorted(bound_by_code.values(), key=lambda pair: pair[1].start())
+    key = 'fund:text:total:derived_from_items'
+    issues = _amount_from_derived(
+        rule, doc, text, ordered[0][1].start(), ordered[-1][1].end(),
+        str(item_sum), '万元', (derived_value, operands, note), key,
+        '政府性基金本年支出（逐项之和）', title,
+        derived_from='item_rows',
+        basis='说明逐项声明（经身份绑定且与表内项集合互斥完备）之和')
+    return issues
+
+
 def check_fund_totals(rule, doc):
     """政府性基金本年总收入、总支出：不使用结转或项目金额替代。"""
     text, ranges = sections(doc, lambda title: '政府性基金' in title and '收入支出决算情况说明' in title)
@@ -1491,6 +2000,22 @@ def check_fund_totals(rule, doc):
             receipt(rule, doc, 'fund:text:empty', [], status='not_applicable',
                     formula='explicit no government fund activity')
             return []
+        # D3/C-10（R2 收口）：说明逐项列示而无总额句时，只有证明"每条声明
+        # 绑定到表内唯一项级对象、主体/期间/单位锚成立、声明集合与表内项
+        # 集合互斥且完备、同对象重复叙述去重"之后，才允许以逐项之和推导
+        # 总额并与表内合计比对。任一前提不成立 → 保留具体未完成原因
+        # （fail-closed），不把部分披露或跨期/跨主体金额推定成总额矛盾。
+        item_claims = list(_FUND_ITEM_DECISION.finditer(text.compact, begin, end))
+        if item_claims:
+            derivation = _derive_fund_total_from_bound_items(
+                rule, doc, text, begin, end, title, item_claims)
+            if derivation is not None:
+                return derivation
+            # 推导前提不成立：原因已由 _derive_fund_total_from_bound_items
+            # 经 receipt/记录留痕，保持未完成而不是推定矛盾。
+            return finish(rule, [], [
+                '政府性基金说明未识别到可证明完备的逐项支出声明集合，'
+                '无法按「分项之和」推导总额；具体未完成原因见回执'])
         return finish(rule, [], ['政府性基金说明未识别到明确的本年总收入或总支出金额'])
     facts, reason = table_facts(doc, FUND)
     if reason:

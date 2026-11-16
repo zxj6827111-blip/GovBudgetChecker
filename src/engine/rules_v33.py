@@ -3866,6 +3866,36 @@ class R33103_Income_vs_Text(Rule):
         return issues
 
 
+def _project_zero_omission_closure(sec_text, doc, *, total, basic, proj, tt, tb, tp):
+    """说明按零值省略项目支出时的可审计闭合判据（D3 零值省略表达）。
+
+    全部条件同时成立才返回占比声明，任一不成立返回 None（保持原有
+    fail-closed 转人工，不把未提金额随意补零，也不只凭显示同额断零）：
+    - 说明未显式列示项目支出金额（tp is None）；
+    - 表内项目支出为 0（事实值或原件认证空白）；
+    - 表内支出合计 = 基本支出（无剩余构成项容纳其他支出）；
+    - 说明的支出合计与基本支出金额均与表侧各自绑定一致；
+    - 说明以"占100%"显式声明基本支出占支出合计比重（经占比解析器
+      消歧，非仅两处显示金额相等）。
+    返回的声明携带原文引文，供回执作闭合证据；推导值不冒充显式披露。
+    """
+    if tp is not None or proj is None or float(proj) != 0:
+        return None
+    if total is None or basic is None or not tolerant_equal(total, basic):
+        return None
+    if tt is None or not tolerant_equal(float(tt), total):
+        return None
+    if tb is None or not tolerant_equal(float(tb), basic):
+        return None
+    claim = _resolve_indicator_percentage(
+        sec_text, ("基本支出",), ("本年支出合计", "本年支出", "支出合计", "支出总额", "总支出"),
+        **_percentage_document_context(doc, sec_text),
+    )
+    if claim.status == "ambiguous" or claim.value is None or claim.value != Decimal("100"):
+        return None
+    return claim
+
+
 class R33104_Expense_vs_Text(Rule):
     code, severity = "V33-104", "warn"
     desc = "支出决算表 ↔ 支出决算情况说明（含占比）"
@@ -4020,6 +4050,21 @@ class R33104_Expense_vs_Text(Rule):
                         cell_observations=observations,
                         formula=formula,
                     )
+            elif (b is None and nm == "项目支出"
+                  and _project_zero_omission_closure(
+                      sec_text, doc, total=total, basic=basic, proj=proj, tt=tt, tb=tb, tp=tp
+                  ) is not None):
+                # D3 零值省略闭合：说明只写基本支出及其100%占比、表内项目支出
+                # 经原件认证为 0/空白时，金额关系按推导 0 == 表 0 记 pass。
+                # 推导依据写进公式，不冒充显式披露；闭合条件不成立时上方
+                # 分支不进入，保持原 fail-closed。
+                _v33_relation_receipt(
+                    doc, self.code, sub_id,
+                    status="pass",
+                    operand_fact_ids=_v33_fact_identity(fact_ref)[0],
+                    cell_observations=observations,
+                    formula="text.项目支出(零值省略=0：基本支出占100%＋表内原件认证空白) == table.FIN_03.project_actual(=0)",
+                )
             else:
                 if a is None:
                     unresolved.append(fact_block or f"支出决算表缺少关键行: {nm}")
@@ -9376,11 +9421,16 @@ class R33220_Narrative3_T3(Rule):
         nar_project_span: Optional[str] = None
         nar_basic_page: Optional[int] = None
         nar_project_page: Optional[int] = None
+        nar_body: Optional[str] = None
         narrative_page: Optional[int] = None
 
         for title, body, _offset in split_numbered_sections(merged_text):
             if "支出决算情况说明" not in title:
                 continue
+            # 目录页的同名条目正文为空；只取首个有真实正文的分节（含标题行
+            # 吸收的首句片段），供零值省略闭合的占比声明解析使用。
+            if nar_body is None and body.strip():
+                nar_body = f"{title}{body}"
             body_clauses = split_clauses(body)
             for clause in body_clauses:
                 if nar_basic is None and "基本支出" in clause:
@@ -9437,6 +9487,7 @@ class R33220_Narrative3_T3(Rule):
         header_rows = t3_rows[:3]
         idx_basic: Optional[int] = None
         idx_project: Optional[int] = None
+        idx_total: Optional[int] = None
 
         for hrow in header_rows:
             str_hrow = [str(c or "").strip() for c in hrow]
@@ -9444,6 +9495,12 @@ class R33220_Narrative3_T3(Rule):
                 idx_basic = find_column_index(str_hrow, ["基本支出"], exclude_keys=["人员", "公用"])
             if idx_project is None:
                 idx_project = find_column_index(str_hrow, ["项目支出"])
+            if idx_total is None:
+                idx_total = find_column_index(str_hrow, ["本年支出合计"])
+            if idx_total is None:
+                # 区级模板的支出决算表合计列只印「合计」；排除分项列避免错配。
+                idx_total = find_column_index(
+                    str_hrow, ["合计"], exclude_keys=["基本支出", "项目支出", "人员", "公用"])
             if idx_basic is not None and idx_project is not None:
                 break
 
@@ -9559,6 +9616,42 @@ class R33220_Narrative3_T3(Rule):
                 unresolved_reasons.append(f"T3基本支出列取数未完成: {table_basic.reason or '非有效数值'}")
         else:
             unresolved_reasons.append("支出决算情况说明中未提取到基本支出金额")
+
+        # D3 零值省略：说明未单列项目支出金额时，若基本支出与表侧一致、表内
+        # 项目支出为 0 或经原件认证空白、且说明显式声明基本支出占支出合计
+        # 100%（经占比解析消歧），则项目支出按推导 0 参与比对，推导依据由
+        # 后续比对的原件空白观察携带；任一条件不成立保持原 fail-closed 转人工。
+        if nar_project is None and nar_body:
+            basic_consistent = False
+            if nar_basic is not None and table_basic.is_numeric and table_basic.decimal_val is not None:
+                diff_zero = abs(table_basic.decimal_val - (nar_basic.decimal_val or Decimal("0")))
+                env_zero = (half_unit_for_term(nar_basic.scale_digits, nar_basic.unit)
+                            + half_unit_for_term(table_basic.scale_digits, table_basic.unit))
+                basic_consistent = not amount_difference_exceeds_policy(diff_zero, env_zero)
+            total_equals_basic = False
+            if idx_total is not None:
+                table_total_zero = extract_row_strict(total_row, idx_total, "本年支出合计", default_unit=t3_unit)
+                if (table_total_zero.is_numeric and table_total_zero.decimal_val is not None
+                        and table_basic.is_numeric and table_basic.decimal_val is not None):
+                    env_total = (half_unit_for_term(table_total_zero.scale_digits, table_total_zero.unit)
+                                 + half_unit_for_term(table_basic.scale_digits, table_basic.unit))
+                    total_equals_basic = not amount_difference_exceeds_policy(
+                        abs(table_total_zero.decimal_val - table_basic.decimal_val), env_total)
+            project_is_zero = (
+                (table_project.is_numeric and table_project.decimal_val == Decimal("0"))
+                or _certified_blank_observation("project_actual") is not None
+            )
+            claim_zero = _resolve_indicator_percentage(
+                nar_body, ("基本支出",), ("本年支出合计", "本年支出", "支出合计", "支出总额", "总支出"),
+                **_percentage_document_context(doc, nar_body),
+            )
+            if (basic_consistent and total_equals_basic and project_is_zero
+                    and claim_zero.status != "ambiguous"
+                    and claim_zero.value is not None and claim_zero.value == Decimal("100")):
+                nar_project = StrictValue(
+                    raw_text="0", status="valid",
+                    decimal_val=Decimal("0"), scale_digits=2, unit=t3_unit,
+                )
 
         # 校验项目支出
         if nar_project is not None:
@@ -13062,6 +13155,39 @@ def _txt_fund_match_item(
         return None, "款级命中多行，无法确定取哪一行"
     if closed:
         return closed[0], ""
+
+    # 可审计兜底（D2 统一身份绑定）：款级名称逐字不一致导致三级匹配失败，但
+    # 类名与项名均逐字相等（含规范后缀键），且该类下同名项唯一时，
+    # (类, 项) 已经唯一确定表行——金额关系照常比对，款名差异由调用方单独
+    # 报告。不做相似度、不按同额猜配：类或项任何一级不匹配/不唯一、表内
+    # 款行名称缺失（无从证明"差异"来源）时一律 fail-closed。
+    anchored: List[Dict[str, Any]] = []
+    for item in items:
+        if len(item["code"]) != 7:
+            continue
+        if _txt_fund_name_key(item["name"]) != _txt_fund_name_key(xiang):
+            continue
+        item_kuan_name = hierarchy.get(item["code"][:5])
+        if item_kuan_name is None:
+            continue  # 表内款行名称缺失：无法证明差异来源，不进入兜底
+        klass_name = hierarchy.get(item["code"][:3])
+        if klass_name is None:
+            continue
+        if _txt_fund_name_key(klass_name) == _txt_fund_name_key(klass) \
+                and _txt_fund_name_key(item_kuan_name) != _txt_fund_name_key(kuan):
+            anchored.append(item)
+    if len(anchored) == 1:
+        found = dict(anchored[0])
+        found["identity_basis"] = {
+            "kind": "klass_xiang_unique",
+            "unconfirmed_level": "kuan",
+            "narrative_kuan": kuan,
+            "table_kuan": hierarchy.get(found["code"][:5]) or "",
+            "kuan_code": found["code"][:5],
+            "klass": klass,
+            "xiang": xiang,
+        }
+        return found, ""
     return None, "未在表内定位到同名同级的功能分类项"
 
 
@@ -13144,11 +13270,21 @@ def _txt_fund_bind_statements(
         amount_text = re.sub(r"[,，\s]", "", amount_text)
         unit = _txt_fund_norm(unit)
         if not any(pos < m.start() for pos in markers):
-            blocked.append(
-                f"说明句「{label}…」未落在「支出具体情况如下」支出明细段内，"
-                "支出决算口径不可确认"
+            # 格式变体（D2）：章节内没有任何「支出具体情况如下」变体标记，且
+            # 本句是紧邻的编号条目（1、/（1）…）时，整节即支出明细段——编号
+            # ＋完整三级类款项身份本身构成明细段边界。已有标记但本句落在标记
+            # 之前的，维持原 fail-closed（可能落在收入/同比段）。
+            section_is_detail = (
+                not markers
+                and re.search(r'(?:^|[。；：！？\n])(?:\d{1,2}[、.．]|[（(]\d{1,2}[）)])\s*$',
+                              body[max(0, m.start() - 12):m.start()])
             )
-            continue
+            if not section_is_detail:
+                blocked.append(
+                    f"说明句「{label}…」未落在「支出具体情况如下」支出明细段内，"
+                    "支出决算口径不可确认"
+                )
+                continue
         # 期间锚：句读边界截出的前缀**或项名本身**出现异年 → 不跨期绑定。
         # 项名可能自带年份前缀（「2024年度住房保障支出（类）」——年份被名称段
         # 吸收时前缀检查扫不到，必须两处都查）。
@@ -13413,6 +13549,7 @@ class R33TxtFundDetail(Rule):
             fund_tables.extend(_txt_fund_tables_by_alias(doc, other_scope[3]))
         document_names = _txt_fund_document_names(doc, exclude=fund_tables)
         document_children = _txt_fund_children(document_names)
+        name_diff_reported = set()
         for binding in bindings:
             item, match_error = _txt_fund_match_item(
                 items, hierarchy, binding["klass"], binding["kuan"], binding["xiang"],
@@ -13423,6 +13560,41 @@ class R33TxtFundDetail(Rule):
                     f"{scope_label}：说明项「{binding['label']}」{match_error}，该句不形成正式比较"
                 )
                 continue
+            basis = item.get("identity_basis") or {}
+            if basis.get("kind") == "klass_xiang_unique":
+                # 款名差异按原文独立报告（口径同 V33-227：非后缀差异 warn），
+                # 金额关系继续比对——名称问题不抵销金额核对，金额核对也不
+                # 吞掉名称差异。
+                diff_key = (basis.get("kuan_code"), basis.get("narrative_kuan"), basis.get("table_kuan"))
+                if diff_key not in name_diff_reported:
+                    name_diff_reported.add(diff_key)
+                    narrative_page = _txt_fund_page_for(
+                        offsets, section["body_start"] + binding["offset"]
+                    )
+                    issues.append(self._issue(
+                        f"{scope_label}：说明款级科目名称与表内不一致（{basis['kuan_code']}）："
+                        f"表格“{basis['table_kuan']}”，说明“{basis['narrative_kuan']}”",
+                        {
+                            "table": table_title,
+                            "page": int(item["page"]),
+                            "pages": sorted({int(item["page"]), narrative_page}),
+                            "row": f"{item['code']} {item['name']}",
+                            "code": item["code"],
+                            "field": "款级科目名称",
+                            "fund_scope": scope_label,
+                            "obligation_id": _TXT_FUND_OBLIGATION_ID,
+                            "name_kind": "kuan_name_difference",
+                        },
+                        severity="warn",
+                        evidence_text=(
+                            f"编码：{basis['kuan_code']}\n"
+                            f"表格款名：{basis['table_kuan']}\n"
+                            f"说明款名：{basis['narrative_kuan']}\n"
+                            f"类名：{basis['klass']}\n项名：{basis['xiang']}\n"
+                            f"绑定依据：类名与项名逐字相等且该类下同名项唯一，"
+                            "金额关系按独立身份链继续核对"
+                        ),
+                    ))
             if item["amount"] is None:
                 unresolved.append(
                     f"{scope_label}：表内「{item['code']} {item['name']}」的本年支出"

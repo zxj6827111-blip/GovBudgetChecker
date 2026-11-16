@@ -12,6 +12,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import time
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from src.db.connection import DatabaseConnection
@@ -212,6 +213,94 @@ def _normalize_document_profile(value: Any) -> Optional[Dict[str, Any]]:
     )
 
 
+def _is_transient_ingest_error(exc: BaseException) -> bool:
+    """判定可安全重试的瞬时入库错误（D5）。
+
+    只认命令超时与连接类故障，以及 PG 侧明确的资源/运维类 SQLSTATE（53 资源
+    不足、57 运维干预、40 事务回滚类、08 连接异常）；其余错误（约束冲突、
+    语义校验等）重试只会重复失败，原样抛出。
+    """
+    if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
+        return True
+    try:
+        import asyncpg
+    except ImportError:  # pragma: no cover - 运行环境必装 asyncpg
+        return False
+    if isinstance(exc, (asyncpg.PostgresConnectionError, asyncpg.ConnectionDoesNotExistError)):
+        return True
+    sqlstate = str(getattr(exc, "sqlstate", "") or "")
+    return sqlstate[:2] in {"53", "57", "40", "08"}
+
+
+async def _persist_artifact_with_retry(
+    conn, artifact, *, job_id: str, document_version_id: int,
+    org_name: Optional[str], fiscal_year: Optional[int],
+):
+    """统一产物入库的幂等重试（D5/R1 修复：保持事务与连接所有权）。
+
+    parse_run_uid 是内容哈希（同文件同配置同归属必同 uid），重复提交由
+    ON CONFLICT 语义保证幂等——这是重试在"提交状态未知"时依然安全的前提。
+
+    所有权规则（R1）：
+    - 本函数**永不更换连接**。瞬时失败（命令超时）后 asyncpg 会重置该连接
+      使其回到可用状态，重试在同一连接上进行；调用方持有的事务/连接引用
+      始终有效，finally 释放责任不发生转移。
+    - 若调用处于外层事务内（``conn.is_in_transaction()``，如 analysis_revision
+      的 storage_tx）：命令超时已使外层事务被服务端重置，任何续跑或重试都
+      无意义——立即上抛，由调用方回滚整个工作单元后按任务级重跑。
+    - 独立事务场景（无外层事务）：同一连接重试前先回查 parse_run_uid——
+      命中已完成运行则采纳（提交状态未知→先回查，不盲目重发）；回查失败
+      视为提交状态未知，凭 uid 幂等性安全重发。
+    """
+    attempts = int(os.getenv("GOVBUDGET_INGEST_PERSIST_ATTEMPTS") or 3)
+    inside_outer_tx = bool(getattr(conn, "is_in_transaction", lambda: False)())
+    for attempt in range(1, attempts + 1):
+        try:
+            started = time.monotonic()
+            parse_run_id = await persist_parse_artifact(
+                conn, artifact, document_version_id=document_version_id,
+                org_name=org_name, fiscal_year=fiscal_year)
+            logger.info(
+                "ingest stage timing job=%s stage=unified_artifact_write attempt=%d "
+                "seconds=%.2f cells=%d text_blocks=%d fragments=%d",
+                job_id, attempt, time.monotonic() - started,
+                sum(len(frag.cells) for frag in artifact.table_fragments),
+                len(artifact.text_blocks), len(artifact.table_fragments))
+            return parse_run_id
+        except Exception as exc:
+            if not _is_transient_ingest_error(exc) or attempt >= attempts:
+                raise
+            if inside_outer_tx:
+                # 外层事务持有者（storage_tx）的保存点已被服务端重置摧毁：
+                # 任何续跑都会在"已释放/已重置的事务"上操作。立即上抛，
+                # 由调用方回滚整个工作单元；连接由调用方 finally 统一释放。
+                logger.error(
+                    "unified artifact write failed transiently inside an outer "
+                    "transaction (job=%s attempt=%d): %s: %s; aborting so the "
+                    "caller rolls back the whole work unit",
+                    job_id, attempt, type(exc).__name__, str(exc) or "<no message>")
+                raise
+            logger.warning(
+                "unified artifact write failed transiently (job=%s attempt=%d/%d): "
+                "%s: %s; rechecking commit state on the same connection before retry",
+                job_id, attempt, attempts, type(exc).__name__, str(exc) or "<no message>")
+            # 提交状态回查（同一连接）：命中已完成运行则采纳；回查失败视为
+            # 状态未知，凭 parse_run_uid 幂等性安全重发，不盲目假设未提交。
+            try:
+                row = await conn.fetchrow(
+                    "SELECT id, status FROM parse_runs WHERE parse_run_uid = $1",
+                    artifact.parse_run_uid)
+            except Exception:  # noqa: BLE001 - 回查失败不阻断重试
+                logger.exception("commit-state recheck failed during retry (job=%s)", job_id)
+                row = None
+            if row is not None and row["status"] == "completed":
+                logger.info(
+                    "job=%s: previous write had actually committed as parse_run %s; adopting it",
+                    job_id, row["id"])
+                return int(row["id"])
+    raise RuntimeError("unreachable: persist retry loop exhausted")
+
+
 async def run_structured_ingest(
     job_id: str,
     pdf_path: Path,
@@ -385,8 +474,9 @@ async def run_structured_ingest(
 
         if parse_run_id is None:
             ingest_stage = "unified_artifact_write"
-            parse_run_id = await persist_parse_artifact(
-                conn, parse_artifact, document_version_id=version_id,
+            parse_run_id = await _persist_artifact_with_retry(
+                conn, parse_artifact, job_id=job_id,
+                document_version_id=version_id,
                 org_name=org_name, fiscal_year=fiscal_year,
             )
 
@@ -552,11 +642,15 @@ async def run_structured_ingest(
             await storage_tx.rollback()
             storage_tx = None
         logger.exception("Structured ingest failed for job %s", job_id)
-        err_desc = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+        # D5：错误信息必须可诊断——asyncpg 命令超时的 str() 为空字符串，
+        # 旧封装把它一路写进 trusted_ingest_not_committed: None。异常类型
+        # 与阶段标识随错误结果带回，任何一方为空也不得显示成 None。
+        error_text = str(exc) or f"{type(exc).__name__} (no message)"
         error_payload: Dict[str, Any] = {
             "job_id": job_id,
             "status": "error",
-            "error": err_desc,
+            "error": error_text,
+            "error_type": type(exc).__name__,
             "ingest_stage": ingest_stage,
             "unified_storage": {"status": "error", "failed_stage": ingest_stage,
                                 "parse_run_id": parse_run_id},
@@ -566,7 +660,7 @@ async def run_structured_ingest(
                     "id": f"{job_id}:structured_ingest_error",
                     "type": "ingest_error",
                     "severity": "error",
-                    "message": err_desc,
+                    "message": f"{ingest_stage}: {type(exc).__name__}: {error_text}",
                     "recommended_action": "check_database_and_pdf_parser",
                 }
             ],

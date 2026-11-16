@@ -251,8 +251,24 @@ def check_fiscal_grant_total(rule, doc):
     explicit_pattern = re.compile(
         rf'财政拨款(?:收入支出|收支)(?:总计|合计|总额)(?:为|共计|是)?(?P<amount>{_NUMBER})(?P<unit>{_UNIT})'
     )
+    explicit_income_pattern = re.compile(
+        rf'财政拨款收入(?:总计|合计|总额)(?:为|共计|是)?(?P<amount>{_NUMBER})(?P<unit>{_UNIT})'
+    )
+    explicit_expenditure_pattern = re.compile(
+        rf'财政拨款支出(?:总计|合计|总额)(?:为|共计|是)?(?P<amount>{_NUMBER})(?P<unit>{_UNIT})'
+    )
+    # R5：说明四允许「收入总计/支出总计」分开叙述（环境监测站实样：分别写
+    # 财政拨款收入总计 1850.05 万元、支出总计 1850.05 万元），不要求原文
+    # 必须使用合并短语「收入支出总计」。合并短语与单独「支出总计」都对
+    # 支出侧操作数；单独「收入总计」对收入侧操作数（各自的原表列身份）。
     pattern = re.compile(
         rf'(?:财政拨款)?(?:收入支出|收支)(?:总计|合计|总额)(?:为|共计|是)?(?P<amount>{_NUMBER})(?P<unit>{_UNIT})'
+    )
+    income_pattern = re.compile(
+        rf'财政拨款收入(?:总计|合计|总额)(?:为|共计|是)?(?P<amount>{_NUMBER})(?P<unit>{_UNIT})'
+    )
+    expenditure_pattern = re.compile(
+        rf'(?:财政拨款)?支出(?:总计|合计|总额)(?:为|共计|是)?(?P<amount>{_NUMBER})(?P<unit>{_UNIT})'
     )
     if not ranges:
         # 少数材料漏印「四、财政拨款收入支出决算总体情况说明」标题，但紧接着说明三仍写了明确的
@@ -260,19 +276,29 @@ def check_fiscal_grant_total(rule, doc):
         _, fallback_ranges = sections(doc, lambda title: title.startswith('三、') and '支出决算' in title)
         if fallback_sections := [
             r for r in fallback_ranges
-            if list(explicit_pattern.finditer(text.compact, r[1], r[2]))
+            if any(
+                p.search(text.compact, r[1], r[2])
+                for p in (explicit_pattern, explicit_income_pattern, explicit_expenditure_pattern)
+            )
         ]:
             ranges = fallback_sections
             pattern = explicit_pattern
+            income_pattern = explicit_income_pattern
+            expenditure_pattern = explicit_expenditure_pattern
     if not ranges:
         return finish(rule, [], ['未定位到说明四财政拨款总体情况原文范围'])
     title, begin, end = ranges[0]
     claims = list(pattern.finditer(text.compact, begin, end))
+    combined_spans = {(claim.start(), claim.end()) for claim in claims}
+    income_claims = [claim for claim in income_pattern.finditer(text.compact, begin, end)
+                     if not any(lo <= claim.start() < hi for lo, hi in combined_spans)]
+    expenditure_claims = [claim for claim in expenditure_pattern.finditer(text.compact, begin, end)
+                          if not any(lo <= claim.start() < hi for lo, hi in combined_spans)]
     issues, unresolved = [], []
-    if not claims:
+    if not claims and not expenditure_claims:
         return finish(rule, [], ['说明四未披露可绑定的财政拨款收支总计金额及单位'])
     fact, error = _pick(doc, facts, 'expenditure_actual', _NAMES['total'])
-    for claim in claims:
+    for claim in claims + expenditure_claims:
         key = f'grant:text:total:{claim.start()}'
         rejection = context_rejection(doc, text.compact, claim.start(), claim.end())
         invalid = error or (record_context_rejection(doc, text, claim.start(), claim.end(), rejection)
@@ -285,6 +311,21 @@ def check_fiscal_grant_total(rule, doc):
         issues.extend(compare(rule, doc, text, claim.start(), claim.end(),
                       _wan(claim['amount'], claim['unit']), fact, key,
                       '说明4↔T4财政拨款总计', title))
+    for claim in income_claims:
+        key = f'grant:text:income_total:{claim.start()}'
+        income_fact, income_error = _pick(doc, facts, 'income_actual', _NAMES['total'])
+        rejection = context_rejection(doc, text.compact, claim.start(), claim.end())
+        invalid = (income_error or
+                   (record_context_rejection(doc, text, claim.start(), claim.end(), rejection)
+                    if rejection else None))
+        if invalid:
+            unresolved.append(invalid)
+            receipt(rule, doc, key, [income_fact] if income_fact else [], status='insufficient_data',
+                    formula='说明四财政拨款收入总计 = T4收入总计', reason=invalid)
+            continue
+        issues.extend(compare(rule, doc, text, claim.start(), claim.end(),
+                      _wan(claim['amount'], claim['unit']), income_fact, key,
+                      '说明4↔T4财政拨款收入总计', title))
     return finish(rule, issues, unresolved)
 
 
@@ -309,7 +350,12 @@ def check_income_structure(rule, doc):
             continue
         label = match.group('label')
         seen.add(label)
-        fact, error = select(doc, facts, labels[label], code='total')
+        # C5（2026-11-14 复验）：原件合计行对应格经网格认证为真空白时，按已
+        # 确认政策生成带来源的空白观测操作数参与核对（blank_term 的行/列/格
+        # 身份与原格认证门槛全部保持）；横线/无/识别不清/缺失格一律不在此列，
+        # 仍按取数不足处理。说明写 0 时由 compare 的空白路径判 not_applicable，
+        # 说明写非 0 时保留 insufficient_data 阻断，不用正文 0 反填表格。
+        fact, error = select(doc, facts, labels[label], code='total', allow_native_blank=True)
         key = f'income:text:{labels[label]}:{match.start()}'
         if error:
             unresolved.append(error)
@@ -353,8 +399,22 @@ def check_three_public_details(rule, doc, *, require_vehicle_details=True, check
             at += 2
         match = pattern.match(text.compact, at, end)
         absence = re.search(r'(?:无|没有|未发生)$', text.compact[max(detail_begin, subject.start() - 4):subject.start()])
-        absent = absence is not None and (at == end or text.compact[at] in '。；;，,')
-        statement_end = at if absent else (match.end() if match else at)
+        # 后置无支出句式（如「因公出国（境）费无支出无预算」）：AGENTS.md 三公
+        # 专项与 D-010 口径——写明未发生视为已披露。紧随主体词、不含金额的
+        # 无支出/未发生短语与前置无表达同等对待；短语必须以句界收尾，防止
+        # 把后续金额吞进无支出声明。
+        post_absence = (re.match(r'(?:无|没有|未)(?:相应)?(?:支出|发生|安排)(?:无(?:相应)?预算|预算)?',
+                                 text.compact[at:]) if at < end else None)
+        post_absence_end = at + post_absence.end() if post_absence else None
+        absent = (
+            (absence is not None and (at == end or text.compact[at] in '。；;，,'))
+            or (post_absence is not None
+                and (post_absence_end == end or text.compact[post_absence_end] in '。；;，,、'))
+        )
+        statement_end = (post_absence_end if post_absence else at) if absent else (match.end() if match else at)
+        # 前置无表达的“无/没有”词长度；后置无支出句式时前缀长度为 0
+        #（声明从主体词起，无支出短语已含在 statement_end 范围内）。
+        absence_prefix_len = len(absence.group()) if absence is not None else 0
         if (not match and not absent) or context_guard(doc, text.compact, subject.start(), statement_end):
             continue
         seen.add(indicator)
@@ -366,12 +426,12 @@ def check_three_public_details(rule, doc, *, require_vehicle_details=True, check
             receipt(rule, doc, key, [], status='insufficient_data', formula='text = table', reason=error)
             continue
         if indicator == 'vehicle_purchase_operation' and value == 0 and fact.normalized_value == 0:
-            start = subject.start() - len(absence.group()) if absent else subject.start()
+            start = subject.start() - absence_prefix_len if absent else subject.start()
             zero_vehicle_sources = [{**ref, 'file_hash': doc.fact_context.file_hash}
                                     for ref in text.refs(start, statement_end, '明确公务用车分项无支出')]
         if isinstance(fact, NativeBlankTerm) and (value == 0 or not independent_blank_zero(doc, fact)):
             if value == 0:
-                start = subject.start() - len(absence.group()) if absent else subject.start()
+                start = subject.start() - absence_prefix_len if absent else subject.start()
                 sources = [{**ref, 'file_hash': doc.fact_context.file_hash}
                            for ref in text.refs(start, statement_end, '明确无此项说明')]
                 receipt(rule, doc, key, [fact], status='not_applicable', formula='明确无此项说明与原件空白格一致',
@@ -381,7 +441,7 @@ def check_three_public_details(rule, doc, *, require_vehicle_details=True, check
                 unresolved.append(reason)
                 receipt(rule, doc, key, [fact], status='insufficient_data', formula='text = table', reason=reason)
             continue
-        statement_start = subject.start() - len(absence.group()) if absent else subject.start()
+        statement_start = subject.start() - absence_prefix_len if absent else subject.start()
         stated.setdefault(indicator, (value, statement_start, statement_end))
         issues.extend(compare(rule, doc, text, statement_start, statement_end, value, fact, key, LABELS[indicator], title))
     required = (('overseas', 'vehicle_purchase', 'vehicle_operation', 'reception')

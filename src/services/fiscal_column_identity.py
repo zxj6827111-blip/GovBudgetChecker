@@ -23,13 +23,46 @@ def header_paths(fragment):
     # 框进表格的表题、编制单位行横跨全表，不能当作每一列的父表头。
     preamble = ({index for index, row in enumerate(rows) if is_table_preamble_row(row)}
                 if fragment.extraction_method in {"lines", "lines_strict"} else set())
-    paths = []
+    # 行分组锚：非空格按几何跨度（bbox 覆盖到的列中心，即合并格/跨列文本的
+    # 记录跨度）圈定覆盖区间。用途有二：
+    # 1) 上一行的分组边界——行内空占位格向左延续父级文本时不得跨组
+    #    （三公矩阵「公务接待费」分组下的空行不得继承左邻「运行维护费」）；
+    # 2) 候选父格自身的记录跨度——bbox 覆盖 ≥2 列中心说明物理跨度仍在，
+    #    外推不得越出该跨度；只有单列覆盖（父行画竖线、跨度被切碎）才允许
+    #    向左自由延续（过宽总表把「财政拨款支出」挤到下页时，首页的
+    #    「财政拨款收入」不能越过自身跨度去覆盖支出侧空列）。
+    column_centers = []
     for col in range(width):
         boxes = ([cell.bbox for cell in geometry_cells if cell.col_idx == col and cell.bbox]
                  or [cell.bbox for cell in fragment.cells if cell.col_idx == col and cell.bbox])
         narrow = min(boxes, key=lambda b: b[2] - b[0]) if boxes else None
-        center = (narrow[0] + narrow[2]) / 2 if narrow else None
+        column_centers.append((narrow[0] + narrow[2]) / 2 if narrow else None)
+    row_anchors, row_anchor_spans = [], []
+    for row_idx, row in enumerate(rows):
+        anchors, spans = {}, {}
+        for anchor_col, value in enumerate(row):
+            if not str(value or ""):
+                continue
+            cell = cells.get((row_idx, anchor_col))
+            box = getattr(cell, "bbox", None) if cell is not None else None
+            covered = set()
+            if box:
+                for index, center in enumerate(column_centers):
+                    if center is not None and box[0] < center < box[2]:
+                        covered.add(index)
+            if anchor_col not in covered:
+                covered.add(anchor_col)
+            spans[anchor_col] = covered
+            for index in covered:
+                anchors.setdefault(index, anchor_col)
+        row_anchors.append(anchors)
+        row_anchor_spans.append(spans)
+    paths = []
+    for col in range(width):
+        center = column_centers[col]
         path = []
+        leaf_row = rows[-1] if rows else []
+        leaf_label = str(leaf_row[col] or "") if col < len(leaf_row) else ""
         for row_idx, row in enumerate(rows):
             if row_idx in preamble:
                 path.append("")
@@ -44,6 +77,30 @@ def header_paths(fragment):
                             and cell.bbox[0] < center < cell.bbox[2]]
                 if len(spanning) == 1:
                     text = spanning[0].raw_text
+            if not text and row_idx + 1 < len(rows) and leaf_label:
+                # 合并父表头在物理网格里只落首子列：父行画竖线时（如财政拨款
+                # 收入支出决算总表的「收入｜支出」父行），其余子列是带边框的
+                # 空占位格，几何跨度恢复无从下手。此时父级身份按同行左侧最近
+                # 非空格延续——该列在叶表头行有自己的非空标签，说明它是同一
+                # 父组下的真实数据列；叶表头行不外推，叶子是该列自己的标签，
+                # 空叶不得继承左邻叶子文本。
+                upper = row_anchors[row_idx - 1] if row_idx > 0 else None
+                group = upper.get(col) if upper is not None else None
+                spans_here = row_anchor_spans[row_idx]
+                for left in range(col - 1, -1, -1):
+                    left_text = str(row[left] or "") if left < len(row) else ""
+                    if not left_text:
+                        continue
+                    if upper is not None and upper.get(left) != group:
+                        # 左候选格属上一行的另一分组：本列与它不同组，不得借用。
+                        break
+                    recorded = spans_here.get(left)
+                    if recorded and len(recorded) >= 2 and col not in recorded:
+                        # 候选父格的物理跨度已被网格记录且未覆盖本列：
+                        # 空列属于缺失的父表头（如被挤到下页），不得越界借用。
+                        break
+                    text = left_text
+                    break
             path.append(normalize_text(text))
         paths.append(path)
     # 基金/国资表可能把支出子表头与收入合计数印在同一行。
