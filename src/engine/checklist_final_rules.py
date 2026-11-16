@@ -70,7 +70,7 @@ _DECL_RE = re.compile(
     r"(?P<kind>年初预算|支出决算|决算支出|决算数|"
     r"(?:(?<=[。；;：:，,])[ \t]*预算))"
     r"(?:数)?(?:为|是)?\s*[:：]?\s*"
-    r"(?P<amount>" + _AMOUNT + r")\s*(?P<unit>亿元|万元|元)?"
+    r"(?P<amount>" + _AMOUNT + r")\s*(?:(?P<bad_unit>万万元|亿亿元|元元|万元万)|(?P<unit>亿元|万元|元))?"
 )
 _AMOUNT_UNIT_FACTOR = {
     "亿元": Decimal("10000"),
@@ -568,7 +568,9 @@ def _completeness_summary(items: Sequence[Dict[str, Any]], label: str) -> str:
                        "candidate_amount_conflict", "exception_amount_conflict"})
     ambiguous = sum(1 for item in items
                     if item.get("not_included_reason") == "exception_scope_ambiguous")
-    unusable = len(items) - missing - conflict - ambiguous
+    dup_unit = sum(1 for item in items
+                   if item.get("not_included_reason") == "duplicated_unit")
+    unusable = len(items) - missing - conflict - ambiguous - dup_unit
     parts = []
     if missing:
         parts.append(f"{missing}处未披露{label}金额")
@@ -576,6 +578,8 @@ def _completeness_summary(items: Sequence[Dict[str, Any]], label: str) -> str:
         parts.append(f"{conflict}处{label}金额存在候选冲突或与例外声明矛盾")
     if ambiguous:
         parts.append(f"{ambiguous}处{label}例外声明作用域无法证明")
+    if dup_unit:
+        parts.append(f"{dup_unit}处{label}金额单位重复（如“万万元”）")
     if unusable:
         parts.append(f"{unusable}处{label}金额缺少可归一单位或格式")
     return "、".join(parts) or "金额无法纳入合计"
@@ -727,15 +731,26 @@ class R33251_FunctionalDetailCompleteness(Rule):
         tail_start = total.end() if total is not None else starts[0]
         records: List[Dict[str, Any]] = []
         for match in _DECL_RE.finditer(joined, tail_start):
-            raw, unit = match.group("amount"), match.group("unit")
+            raw, unit, bad_unit = match.group("amount"), match.group("unit"), match.group("bad_unit")
             value = _dec(raw)
             factor = _AMOUNT_UNIT_FACTOR.get(unit)
+            if bad_unit:
+                bad_page, bad_text, bad_s, bad_e = _locate(match.start())
+                issues.append(issue_at(
+                    self,
+                    f"支出决算具体情况中金额单位重复：“{raw}{bad_unit}”，请核对并修正原文单位。",
+                    bad_page, bad_text, bad_s, bad_e,
+                    severity="warn", checklist_item="C-14",
+                    section="一般公共预算财政拨款支出决算具体情况",
+                ))
             records.append({
                 "kind": _decl_kind(match.group("kind")),
                 "raw": raw, "unit": unit, "pos": match.start(),
+                **({"bad_unit": bad_unit} if bad_unit else {}),
                 "value_wan": value * factor if value is not None and factor is not None else None,
                 "not_included_reason": (
-                    None if value is not None and factor is not None
+                    "duplicated_unit" if bad_unit
+                    else None if value is not None and factor is not None
                     else "amount_or_unit_unusable"
                 ),
             })
@@ -874,17 +889,8 @@ class R33251_FunctionalDetailCompleteness(Rule):
                     if withheld_items:
                         parts.append(withheld_summary)
                     message = "；".join(parts) + "。"
-                    # DH-02：回执创建前登记结构化卡点（分项范围不一致）。
-                    from .diagnostic_fields import blocker as _diag_blocker, record_gap as _diag_gap
-                    _scope_entry = dict(
-                        reason_codes=['scope_unconfirmed', 'item_amount_not_included',
-                                      'sum_scope_not_comparable'],
-                        blocked_by=[_diag_blocker(dimension='fund_scope',
-                                                  ref=f'V33-251:{kind}:{label}:分项范围',
-                                                  reason_code='scope_unconfirmed')])
-                    _diag_gap(doc, message, **_scope_entry)
                     issues.append(issue_at(
-                        self, message, anchor_page, anchor_text, anchor_s, anchor_e, severity="info",
+                        self, message, anchor_page, anchor_text, anchor_s, anchor_e, severity="warn",
                         checklist_item=checklist,
                         included_items=[_operand_evidence(record) for record in included],
                         not_included_items=[_operand_evidence(record) for record in not_included_items],

@@ -926,13 +926,23 @@ def build_worklist_review_summary(
     if analysis.completed:
         _load_problem_set(state)
         _load_coverage(state)
+    pending_findings = (
+        sum(b.count or 0 for b in _problem_blockers(state.problems, state.decisions))
+        if analysis.completed else None
+    )
+    pending_checks = len(_unhandled_obligations(state)) if state.coverage_available else None
+    signoff_only = bool(
+        analysis.completed
+        and status in ("pending", "invalidated")
+        and str(analysis.status or "").strip().lower() == "done"
+        and pending_findings == 0
+        and (pending_checks is None or pending_checks == 0)
+    )
     return {
         "review_status": status,
-        "pending_findings": (
-            sum(b.count or 0 for b in _problem_blockers(state.problems, state.decisions))
-            if analysis.completed else None
-        ),
-        "pending_checks": len(_unhandled_obligations(state)) if state.coverage_available else None,
+        "signoff_only": signoff_only,
+        "pending_findings": pending_findings,
+        "pending_checks": pending_checks,
         "reviewer": _opt_text((effective or {}).get("completed_by") or (effective or {}).get("started_by")),
         "reviewed_at": _opt_iso((effective or {}).get("completed_at") or (effective or {}).get("started_at")),
     }

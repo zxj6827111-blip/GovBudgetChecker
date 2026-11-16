@@ -92,6 +92,7 @@ STATUS_REASON_AWAITING_ANALYSIS = "awaiting_analysis"
 STATUS_REASON_ANALYSIS_RUNNING = "analysis_running"
 STATUS_REASON_ANALYSIS_FAILED = "analysis_failed"
 STATUS_REASON_FINDINGS_PENDING = "findings_pending"
+STATUS_REASON_AWAITING_SIGNOFF = "awaiting_signoff"
 STATUS_REASON_REVIEW_IN_PROGRESS = "review_in_progress"
 STATUS_REASON_REVIEW_DONE = "review_completed"
 #: 已确认的口径与后来识别到的口径互相矛盾。这类矛盾必须由人工裁决，

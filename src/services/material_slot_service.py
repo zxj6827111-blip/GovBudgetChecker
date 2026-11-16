@@ -484,6 +484,7 @@ class MaterialSlotService:
         *,
         analysis_state: Optional[str] = None,
         review_state: Optional[str] = None,
+        has_pending_review_work: Optional[bool] = None,
         now: Optional[datetime] = None,
     ) -> Dict[str, str]:
         """按库里的事实重算并落库槽位状态。
@@ -538,6 +539,7 @@ class MaterialSlotService:
                 has_current_document=row["current_document_version_id"] is not None,
                 analysis_state=analysis_state if analysis_state is not None else inferred_analysis,
                 review_state=review_state if review_state is not None else inferred_review,
+                has_pending_review_work=has_pending_review_work,
                 now=now,
             )
             await self._conn.execute(

@@ -35,6 +35,22 @@ def _pick(doc, facts, indicator, names, *, allow_native_blank=False):
                            name='或'.join(names), stage='决算')
         return None, reason
     fact = candidates[0]
+    if isinstance(fact, NativeBlankTerm):
+        if allow_native_blank:
+            from .native_empty_operands import valid_blank_observation
+            observation = (fact.extra_dims or {}).get('native_blank_observation')
+            if (
+                observation
+                and fact.normalized_value is not None
+                and valid_blank_observation(
+                    doc.parse_artifact,
+                    doc.fact_context,
+                    observation,
+                    getattr(doc, 'page_texts', None),
+                )
+            ):
+                return fact, None
+        return None, '空白观察项未通过当前原件复验'
     reason = operand_rejection_reason(fact, doc.fact_context.org_name)
     if (reason or fact.fiscal_year != doc.fact_context.fiscal_year
             or _canonical_budget_stage(fact.budget_stage) != '决算'

@@ -535,6 +535,11 @@ _AFTER_HEAD_AMOUNT_RE = re.compile(
 )
 
 
+_DUPLICATED_UNIT_RE = re.compile(
+    r"(\d[\d,]*(?:\.\d+)?)\s*(万万元|亿亿元|元元|万元万)"
+)
+
+
 class CMM011_AmountUnitWan(Rule):
     code, severity = "CMM-011", "warn"
     desc = "说明正文金额单位应为万元（预/决算通用，清单 C-14 / R001）"
@@ -544,6 +549,13 @@ class CMM011_AmountUnitWan(Rule):
         integer_hits: List[Tuple[int, str, int, int]] = []
         for page, text in iter_pages(doc):
             flat, positions = page_flat(doc, page, text)
+            for match in _DUPLICATED_UNIT_RE.finditer(flat):
+                start, end = flat_span(positions, match.start(), match.end())
+                literal = text[start:end].strip()
+                issues.append(issue_at(
+                    self, f"金额单位书写有误（重复单位）：“{literal}”，请核对并修正原文单位。",
+                    page, text, start, end, severity="warn", checklist_item="C-14",
+                ))
             for match in _YUAN_AMOUNT_RE.finditer(flat):
                 before = flat[max(0, match.start() - 12):match.start()]
                 if re.search(r"[万亿千百]$", before) or _YUAN_RATE_CONTEXT_RE.search(before):
@@ -671,12 +683,23 @@ class CMM012_YearExpression(Rule):
             if year is None or kind not in {"budget", "final"}:
                 continue
             for match in _COMPARE_RE.finditer(flat):
-                if int(match.group(1)) != year:
-                    continue
+                compared_year = int(match.group(1))
                 follower = match.group(3) or ""
-                if kind == "final" and follower in {"年初", "全年", "调整", "预算"}:
-                    continue  # 决算数与本年度预算数对比是正常口径
-                _emit(match, f"比较年度有误：本报告为{year}年度，“{match.group(0)}”的比较年度应为{year - 1}年。")
+                if compared_year == year:
+                    if kind == "final" and follower in {"年初", "全年", "调整", "预算"}:
+                        continue  # 决算数与本年度预算数对比是正常口径
+                    _emit(match, f"比较年度有误：本报告为{year}年度，“{match.group(0)}”的比较年度应为{year - 1}年。")
+                elif compared_year > year:
+                    _emit(match, f"比较年度有误：本报告为{year}年度，“{match.group(0)}”不得晚于报告年度（应为{year - 1}年）。")
+                elif compared_year < year - 1:
+                    tail = flat[match.end():match.end() + 16]
+                    yoy_verb = follower in {"增加", "减少", "增长", "下降", "同期", "相比", "比较"} or (
+                        match.group(0).startswith(("比", "较"))
+                        and follower in {"", "预算", "决算", "年初", "全年", "执行", "实际"}
+                        and re.search(r"^(?:度)?[^\n。；;]{0,12}(?:增加|减少|增长|下降|持平)", tail)
+                    )
+                    if yoy_verb:
+                        _emit(match, f"比较年度有误：本报告为{year}年度，“{match.group(0)}”的比较年度应为{year - 1}年。")
             context_re = _FINAL_CONTEXT_RE if kind == "final" else _BUDGET_CONTEXT_RE
             for match in context_re.finditer(flat):
                 if int(match.group(1)) == year:

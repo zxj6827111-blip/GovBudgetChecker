@@ -1737,13 +1737,47 @@ def check_function_disclosures(rule, doc):
                 except (ValueError, ArithmeticError):
                     pass
         if len(claims) != 1:
-            decision_error = f'{item["xiang"]}条目显式决算金额缺失或不唯一，不能用预算金额替代'
-            error = error or decision_error
-            # DH-02：说明条目内无法唯一确定显式决算金额；位置落在条目原文页。
-            _record_text_gap(doc, [decision_error, error], item,
-                             codes=['operand_missing'],
-                             role=f'{item["xiang"]}条目显式决算金额',
-                             sub_check_id=key)
+            bad_unit_re = re.compile(
+                rf'(?:支出决算(?:数)?|决算数)[，,]?(?:为|是)?(?P<amount>{_NUMBER})(?P<bad_unit>万万元|亿亿元|元元|万元万)'
+            )
+            bad_claims = list(bad_unit_re.finditer(text.compact, item.end(), stop))
+            if len(bad_claims) == 1 and not claims:
+                bad_claim = bad_claims[0]
+                bad_refs = text.refs(bad_claim.start(), bad_claim.end(), '决算金额重复单位')
+                bad_page = bad_refs[0]['page'] if bad_refs else None
+                bad_span = bad_refs[0]['span'] if bad_refs else bad_claim.group(0)
+                bad_literal = f"{bad_claim.group('amount')}{bad_claim.group('bad_unit')}"
+                issues.append(rule._issue(
+                    f"说明第{bad_page or '?'}页科目“{item['xiang']}”决算金额单位重复：“{bad_literal}”，"
+                    "请核对并修正原文单位（不作猜测换算）。",
+                    {
+                        **({'page': bad_page, 'pages': [bad_page]} if bad_page else {}),
+                        'section': title,
+                        'subject': item['xiang'],
+                        'bad_unit': bad_claim.group('bad_unit'),
+                        'table_refs': bad_refs,
+                    },
+                    'warn',
+                    evidence_text=bad_span,
+                    check_relation_id=f'{rule.code}:{key}:bad_unit',
+                ))
+                decision_error = (
+                    f'{item["xiang"]}条目决算金额单位书写有误（“{bad_literal}”），'
+                    '已报材料单位错误，本项金额核对未完成'
+                )
+                error = error or decision_error
+                _record_text_gap(doc, [decision_error, error], item,
+                                 codes=['text_statement_unparsed'],
+                                 role=f'{item["xiang"]}条目决算金额单位错误',
+                                 sub_check_id=key)
+            else:
+                decision_error = f'{item["xiang"]}条目显式决算金额缺失或不唯一，不能用预算金额替代'
+                error = error or decision_error
+                # DH-02：说明条目内无法唯一确定显式决算金额；位置落在条目原文页。
+                _record_text_gap(doc, [decision_error, error], item,
+                                 codes=['operand_missing'],
+                                 role=f'{item["xiang"]}条目显式决算金额',
+                                 sub_check_id=key)
         if error:
             # 零额项被表内省略：说明明确写 0，且父级款合计 = 表内已列项之和。
             # 这不是“找不到科目”的取数不足，而是零值行未列示；不弹补核。

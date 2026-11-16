@@ -793,18 +793,53 @@ def _v33227_name_mismatch_roots(
     return list(dict.fromkeys(matched_ids))
 
 
+def _missing_section_cascade_root(
+    item: Any,
+    result_row: Any,
+    visible: Optional[Set[str]],
+) -> Optional[str]:
+    """三公说明章节或三公表空表无说明已作为正式问题报出时，下游同源缺章义务挂入其下方。"""
+    codes = {str(c).strip() for c in (getattr(item, "reason_codes", None) or []) if str(c).strip()}
+    if codes and not codes <= {"text_statement_absent"}:
+        return None
+    if getattr(item, "blocked_by", None):
+        return None
+    detail = str(getattr(item, "detail", None) or "").split("结构：", 1)[0].strip()
+    if not detail:
+        return None
+    clauses = [clause.strip() for clause in detail.split("；") if clause.strip()]
+    if not clauses or not all(
+        "三公经费" in clause and ("未找到" in clause or "未定位到" in clause) and ("说明" in clause or "原文" in clause)
+        for clause in clauses
+    ):
+        return None
+    for finding in _current_rule_findings(result_row):
+        if not isinstance(finding, dict) or not is_formal_finding(finding):
+            continue
+        issue_id = str(finding.get("id") or "").strip()
+        if not issue_id or (visible is not None and issue_id not in visible):
+            continue
+        msg = str(finding.get("message") or finding.get("title") or "")
+        if ("三公" in msg and ("为空表" in msg or "缺少" in msg) and "说明" in msg):
+            return issue_id
+    return None
+
+
 def cascade_root_issue_ids(
     item: Any,
     result_row: Any,
     visible_issue_ids: Optional[Iterable[str]] = None,
 ) -> List[str]:
-    """返回可承接该未完成义务的根问题 issue id 列表（方案：缺表/空表 或 同源名称错误）。"""
+    """返回可承接该未完成义务的根问题 issue id 列表（方案：缺表/空表、缺三公说明或同源名称错误）。"""
     if str(getattr(item, "status", "") or "") != "insufficient_data":
         return []
     visible = set(visible_issue_ids) if visible_issue_ids is not None else None
     table_root = _missing_or_empty_table_cascade_root(item, result_row, visible)
     if table_root is not None:
         return [table_root]
+    section_root = _missing_section_cascade_root(item, result_row, visible)
+    if section_root is not None:
+        return [section_root]
     return _v33227_name_mismatch_roots(item, result_row, visible)
 
 

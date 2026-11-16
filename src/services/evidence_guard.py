@@ -587,6 +587,7 @@ def apply_evidence_completeness(
     failed_count = 0
     degraded: List[Dict[str, Any]] = []
     rule_warnings: List[Dict[str, Any]] = []
+    formal_rule_warning_count = 0
 
     for finding in iter_findings(result):
         total += 1
@@ -622,6 +623,8 @@ def apply_evidence_completeness(
                 finding["evidence_status"] = EVIDENCE_STATUS_RULE_WARNING
                 finding["evidence_missing"] = list(blocking)
                 rule_warnings.append(_finding_ref(finding, blocking))
+                if is_formal_finding(finding):
+                    formal_rule_warning_count += 1
 
         if is_document_level_finding(finding):
             document_level_total += 1
@@ -649,6 +652,7 @@ def apply_evidence_completeness(
         "failed_count": failed_count,
         "degraded_count": len(degraded),
         "rule_warning_count": len(rule_warnings),
+        "formal_rule_warning_count": formal_rule_warning_count,
         "formal_issue_total": formal_total,
         "degraded": degraded[:_DETAIL_LIMIT],
         "rule_warnings": rule_warnings[:_DETAIL_LIMIT],
