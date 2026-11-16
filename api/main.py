@@ -2488,7 +2488,29 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                     **runtime.extract_job_status_context(current_ingest_status),
                 },
             )
-            if latest_ingest.get("is_latest") or candidate_only:
+            is_authoritative_slot_job = False
+            if (
+                not latest_ingest.get("is_latest")
+                and not candidate_only
+                and DatabaseConnection.is_initialized()
+            ):
+                slot_conn = await DatabaseConnection.acquire()
+                try:
+                    slot_row = await slot_conn.fetchrow(
+                        """
+                        SELECT 1
+                        FROM material_slots s
+                        JOIN analysis_jobs j
+                          ON j.structured_document_version_id = s.current_document_version_id
+                        WHERE j.job_uuid = $1
+                        LIMIT 1
+                        """,
+                        job_dir.name,
+                    )
+                    is_authoritative_slot_job = slot_row is not None
+                finally:
+                    await DatabaseConnection.release(slot_conn)
+            if latest_ingest.get("is_latest") or is_authoritative_slot_job or candidate_only:
                 structured_ingest_summary = await run_structured_ingest(
                     job_id=job_dir.name,
                     pdf_path=pdf_path,
