@@ -641,9 +641,9 @@ def _depends_on_tables(item: Any) -> Set[str]:
 
 _V33227_NAME_MISMATCH_CLAUSE_RE = re.compile(
     r"科目名称差异候选(?:（(?P<level>[^）]+)）)?：正文第(?P<page>[^页]*)页写“(?P<actual>[^”]+)”"
-    r"(?:（涉及项“(?P<item_name>[^”]+)”）)?；"
-    r"(?:同款)?表格第[^页]*页编码(?P<code>\d+)写“(?P<expected>[^”]+)”[^。]*。"
-    r"名称不一致，尚未绑定金额(?:；请核对科目名称后确认，不能仅凭金额相同认定一致。)?"
+    r"(?:（涉及项“(?P<item_name>[^”]+)”）)?"
+    r"(?:；(?:同款)?表格第[^页]*页编码(?P<code>\d+)写“(?P<expected>[^”]+)”[^。]*。"
+    r"名称不一致，尚未绑定金额(?:；请核对科目名称后确认，不能仅凭金额相同认定一致。)?)?"
 )
 
 
@@ -748,8 +748,13 @@ def _v33227_name_mismatch_roots(
         c_code = str(clause.get("code") or "").strip()
         raw_page = str(clause.get("page") or "").strip()
         c_page = int(raw_page) if raw_page.isdigit() and int(raw_page) > 0 else None
-        if not c_actual or not c_code:
+        if not c_actual:
             return []
+        if not c_code:
+            known_codes = clause_codes.get((c_actual, c_page))
+            if not known_codes or len(known_codes) != 1:
+                return []
+            c_code = next(iter(known_codes))
         clause_codes.setdefault((c_actual, c_page), set()).add(c_code)
         clause_codes_by_name.setdefault(c_actual, set()).add(c_code)
         clause_hits = [

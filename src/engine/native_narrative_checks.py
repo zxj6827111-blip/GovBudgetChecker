@@ -26,7 +26,7 @@ _METRIC = (r"(?:一般公共预算(?:财政拨款)?支出(?:决算(?:数)?)?"
            r"|机关运行经费支出(?:决算(?:数)?)?"
            r"|本年收入(?:合计|总计|总额)|本年支出(?:合计|总计|总额))")
 _CURRENT = re.compile(
-    rf"(?P<metric>{_METRIC})(?:为|共计|合计为|决算为|是)?"
+    rf"(?P<metric>{_METRIC})(?:[（(]含结转结余[）)])?(?:为|共计|合计为|决算为|是)?"
     rf"(?P<current>{_NUMBER})(?P<unit>{_UNIT})"
 )
 _CHANGE = re.compile(

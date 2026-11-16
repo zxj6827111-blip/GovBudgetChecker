@@ -68,7 +68,7 @@ def _dec(raw):
         return None
 
 
-_DECISION = re.compile(rf'(?:支出决算(?:数)?|决算数)[，,]?(?:为|是)?'
+_DECISION = re.compile(rf'(?:支出决算(?:数)?|决算支出(?:数)?|决算数)[，,]?(?:为|是)?'
                        rf'(?P<amount>{_NUMBER})[，,]?(?:为)?(?P<unit>{_UNIT})')
 _GENERAL_AMOUNT = re.compile(
     rf'一般公共预算(?:财政拨款)?支出(?:决算(?:数)?)?(?:为|共计|合计为|是)?'
@@ -86,7 +86,7 @@ _BARE_EXPENDITURE = re.compile(
     rf'(?P<amount>{_NUMBER})(?P<unit>{_UNIT})')
 # 说明逐项条目的决算金额声明（无基金标签前缀）：「……（项）……支出决算为 N 万元」。
 _FUND_ITEM_DECISION = re.compile(
-    rf'支出决算(?:数)?(?:为|是)?(?P<amount>{_NUMBER})(?P<unit>{_UNIT})')
+    rf'(?:支出决算|决算支出)(?:数)?(?:为|是)?(?P<amount>{_NUMBER})(?P<unit>{_UNIT})')
 _SELF_COUNT = re.compile(
     r'(?:绩效自评(?:的)?(?:20\d{2}年度)?项目|'
     r'(?:开展|组织)?(?:项目支出)?绩效自评(?:项目)?(?:共|涉及)?)'
@@ -864,8 +864,16 @@ def _native_name_variant_code(doc, facts, name, width, parent, paths, aliases):
 
 
 def _is_near_subject_name_candidate(requested: str, actual: str) -> bool:
-    """同款下识别“漏字/多字/多前缀”的唯一差异候选，仅供说明解释，不用于金额绑定。"""
+    """同款下识别“漏字/多字/多前缀/单字替/养老离退休”的唯一差异候选，仅供说明解释，不用于金额绑定。"""
     if not requested or not actual or requested == actual:
+        return False
+    # 同级旧称“离退休”与新称“养老”仅差固定词组（仅供解释，不作金额绑定）
+    if requested.replace('离退休', '养老') == actual or actual.replace('离退休', '养老') == requested:
+        return True
+    if len(actual) == len(requested):
+        # 等长且长度>=6时仅差1个字（如“应急处理” vs “应急处置”）
+        if len(actual) >= 6 and sum(1 for a, b in zip(requested, actual) if a != b) == 1:
+            return True
         return False
     if len(actual) > len(requested):
         gap = len(actual) - len(requested)
@@ -957,6 +965,60 @@ def _kuan_mismatch_reason(doc, facts, item, klass: str, paths: dict) -> str | No
             "名称不一致，尚未绑定金额；请核对科目名称后确认，不能仅凭金额相同认定一致。"
         )
     return '；'.join(clauses)
+
+
+def _klass_mismatch_reason(doc, facts, item, paths: dict) -> str | None:
+    """类级名称无法匹配时，定位同张表唯一拥有对应项级科目的类级行以解释差异（仅供说明，不绑定金额）。"""
+    requested_xiang = _name(item['xiang'])
+    requested_kuan = _name(item['kuan'])
+    if not requested_xiang:
+        return None
+    leaves = [
+        f for f in facts
+        if f.indicator == 'total_actual' and len(paths.get(str(f.subject_code), '')) == 7
+    ]
+    exact = [f for f in leaves if _name(f.subject_name) == requested_xiang]
+    if not exact:
+        exact = [f for f in leaves if _is_near_subject_name_candidate(requested_xiang, _name(f.subject_name))]
+    by_klass: Dict[str, List[Any]] = {}
+    for leaf_f in exact:
+        k_path = paths[str(leaf_f.subject_code)][:3]
+        kuan_path = paths[str(leaf_f.subject_code)][:5]
+        kuan_f = next(
+            (f for f in facts if f.indicator == 'total_actual' and paths.get(str(f.subject_code)) == kuan_path),
+            None,
+        )
+        kuan_name = _name(kuan_f.subject_name) if kuan_f is not None else ''
+        if requested_kuan and kuan_name and not (
+            kuan_name == requested_kuan or _is_near_subject_name_candidate(requested_kuan, kuan_name)
+        ):
+            continue
+        by_klass.setdefault(k_path, []).append(leaf_f)
+    if len(by_klass) != 1:
+        return None
+    klass_path = next(iter(by_klass))
+    klass_facts = [
+        f for f in facts
+        if f.indicator == 'total_actual' and paths.get(str(f.subject_code)) == klass_path
+    ]
+    if len(klass_facts) != 1:
+        return None
+    klass_f = klass_facts[0]
+    shown_klass = re.sub(r'\s+', '', str(klass_f.subject_name or ''))
+    if not _name(shown_klass) or _name(shown_klass) == _name(item['klass']):
+        return None
+    text = _Text.from_pages(doc.page_texts)
+    source = text.refs(item.start(), item.end(), '原文科目')
+    narr_page = source[0]['page'] if source else '?'
+    klass_pages = sorted({
+        ref['physical_page'] for ref in klass_f.extra_dims.get('evidence_refs', [])
+        if ref.get('physical_page')
+    })
+    return (
+        f"科目名称差异候选（类）：正文第{narr_page}页写“{item['klass']}”（涉及项“{item['xiang']}”）；"
+        f"表格第{'、'.join(map(str, klass_pages)) or '?'}页编码{klass_f.subject_code}写“{shown_klass}”。"
+        "名称不一致，尚未绑定金额；请核对科目名称后确认，不能仅凭金额相同认定一致。"
+    )
 
 
 def _cell_refs_on_current_original(doc, refs):
@@ -1425,14 +1487,27 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None, sub_check_id
                 near = {}
                 requested = _name(item[group])
                 if group == 'xiang':
-                    for f in facts:
-                        code = str(f.subject_code)
-                        actual = _name(f.subject_name)
-                        if (f.indicator != 'total_actual' or len(paths.get(code, '')) != 7
-                                or not paths[code].startswith(parent)):
-                            continue
-                        if _is_near_subject_name_candidate(requested, actual):
-                            near[code] = f
+                    # 先认唯一旧称替换候选（如“离退休”↔“养老”），避免被更短的子串（如“事业单位离退休”）抢占
+                    synonym = {
+                        str(f.subject_code): f for f in facts
+                        if f.indicator == 'total_actual' and len(paths.get(str(f.subject_code), '')) == 7
+                        and paths[str(f.subject_code)].startswith(parent)
+                        and (
+                            requested.replace('离退休', '养老') == _name(f.subject_name)
+                            or _name(f.subject_name).replace('离退休', '养老') == requested
+                        )
+                    }
+                    if len(synonym) == 1:
+                        near = synonym
+                    else:
+                        for f in facts:
+                            code = str(f.subject_code)
+                            actual = _name(f.subject_name)
+                            if (f.indicator != 'total_actual' or len(paths.get(code, '')) != 7
+                                    or not paths[code].startswith(parent)):
+                                continue
+                            if _is_near_subject_name_candidate(requested, actual):
+                                near[code] = f
                 if len(near) == 1:
                     candidate = next(iter(near.values()))
                     refs = candidate.extra_dims.get('evidence_refs', [])
@@ -1446,6 +1521,12 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None, sub_check_id
                     _record_text_gap(doc, reason, item, codes=['name_mismatch_confirmed'],
                                      role='说明科目对应金额', sub_check_id=sub_check_id)
                     return None, reason
+                if group == 'klass':
+                    klass_reason = _klass_mismatch_reason(doc, facts, item, paths)
+                    if klass_reason:
+                        _record_text_gap(doc, klass_reason, item, codes=['name_mismatch_confirmed'],
+                                         role='说明科目对应金额', sub_check_id=sub_check_id)
+                        return None, klass_reason
                 if group == 'kuan':
                     kuan_reason = _kuan_mismatch_reason(doc, facts, item, klass, paths)
                     if kuan_reason:

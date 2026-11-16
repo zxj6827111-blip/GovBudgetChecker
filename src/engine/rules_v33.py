@@ -2543,11 +2543,15 @@ def _row_value_v2(
                     return float(v)
         return None
 
+    def _matches_name_key(text_val: str) -> bool:
+        compact_val = re.sub(r"\s+", "", text_val)
+        return any(k in text_val or k in compact_val for k in name_keys)
+
     # ---- 阶段0：row[0] 标签（side="right" 时跳过，row[0] 属左半） ----
     if side != "right":
         for row in table:
             head = str((row[0] if row else "") or "")
-            if not any(k in head for k in name_keys):
+            if not _matches_name_key(head):
                 continue
             pv = _prefer_value(row)
             if pv is not None:
@@ -2579,7 +2583,7 @@ def _row_value_v2(
             if k == 0 or not _v2_is_label_cell(cell):
                 continue
             text = str(cell)
-            if not any(kw in text for kw in name_keys):
+            if not _matches_name_key(text):
                 continue
             if side == "left" and mid is not None and k >= mid:
                 continue
@@ -2600,7 +2604,7 @@ def _row_value_v2(
             continue  # 含数值的行不是纯表头行
         header_cols = [
             c for c, cell in enumerate(hrow)
-            if any(kw in str(cell or "") for kw in name_keys)
+            if _matches_name_key(str(cell or ""))
         ]
         if not header_cols:
             continue
@@ -3451,7 +3455,7 @@ class R33102_TotalSheet_vs_Text(Rule):
         labels = '|'.join(re.escape(alias) for alias in aliases)
         if '收入支出总计' in aliases:
             labels += r'|收入支出总(?=[+-]?\d)'
-        pattern = re.compile(rf'(?:{labels})(?:为|共计|是|[:：])?'
+        pattern = re.compile(rf'(?:{labels})(?:[（(]含结转结余[）)])?(?:为|共计|是|[:：])?'
                              rf'(?P<amount>[+-]?{_NUMBER})(?P<unit>{_UNIT})')
         candidates, identity_rejections = [], []
         frames = _frame_scope_spans(text)
@@ -4477,9 +4481,15 @@ class R33107_BasicExpense_Check(Rule):
         total = ren + gong
         # MR-1a：全文关键词抓数会命中「本年支出合计」（20,323.21）而非
         # 基本支出（14,107.46），修复解析后反而制造假不一致；改为章节内取数
-        sec_text = _final_section_scope(
-            doc, ("基本支出决算情况说明",),
-            exclude_tokens=("政府性基金", "国有资本"),
+        sec_text = (
+            _final_section_scope(
+                doc, ("基本支出决算情况说明",),
+                exclude_tokens=("政府性基金", "国有资本"),
+            )
+            or _final_section_scope(
+                doc, ("财政拨款本支出决算情况说明",),
+                exclude_tokens=("政府性基金", "国有资本"),
+            )
         )
         t_total = (
             near_number(sec_text, ["基本支出", "合计"], target_year=None)
@@ -9567,13 +9577,13 @@ class R33220_Narrative3_T3(Rule):
         # 4. 定位合计行
         total_row = None
         for row in t3_rows:
-            row_txt = "".join([str(c) for c in row if c])
+            row_txt = re.sub(r"\s+", "", "".join([str(c) for c in row if c]))
             if "合计" not in row_txt and "本年支出合计" not in row_txt:
                 continue
             has_numbers = any(parse_number(c) is not None for c in row)
             if not has_numbers:
                 continue
-            first_cells = [str(c or "").strip() for c in row[:3]]
+            first_cells = [re.sub(r"\s+", "", str(c or "")) for c in row[:3]]
             if any(fc in ("合计", "总计", "本年支出合计") for fc in first_cells):
                 total_row = row
                 break
@@ -9792,9 +9802,15 @@ class R33223_Narrative6_T6(Rule):
         nar_public = None
         narrative_page: Optional[int] = None
 
-        scope6 = _final_section_scope(
-            doc, ("基本支出决算情况说明",),
-            exclude_tokens=("政府性基金", "国有资本"),
+        scope6 = (
+            _final_section_scope(
+                doc, ("基本支出决算情况说明",),
+                exclude_tokens=("政府性基金", "国有资本"),
+            )
+            or _final_section_scope(
+                doc, ("财政拨款本支出决算情况说明",),
+                exclude_tokens=("政府性基金", "国有资本"),
+            )
         )
         _num_pat = r'((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)'
         if scope6:
@@ -13967,6 +13983,12 @@ def _nar_repeat_sections(
     toc_line_sets = {index: _toc_line_indexes(text) for index, text in enumerate(texts)}
     starts: List[Tuple[str, int]] = []
     for match in _NAR_REPEAT_SECTION_RE.finditer(merged):
+        # 正文交叉引用（如“同上述“一、收入支出决算总体情况说明”中列示的变动原因”）
+        # 紧接前引号或紧随闭引号，不是正文新章节起始标题，不能截断真实章节。
+        prev_tail = re.sub(r"\s+", "", merged[max(0, match.start() - 4):match.start()])
+        next_head = re.sub(r"\s+", "", merged[match.end():min(len(merged), match.end() + 4)])
+        if (prev_tail and prev_tail[-1] in '“"「『') or (next_head and next_head[0] in '”"」』'):
+            continue
         page = _txt_fund_page_for(offsets, match.start())
         page_idx = page - 1
         if page_idx in toc_pages:
@@ -14572,7 +14594,7 @@ _WP4E_CLAIM_NOUN_RE = re.compile(
 #: 误入；「决算数大于预算数的主要原因」类无金额句读不命中。
 _WP4E_BUDGET_RE = re.compile(
     # 阶段关键词本身也可能被原生 PDF 折行，不能把“年/初预算”降成泛预算身份。
-    r"(?P<role>年\s*初\s*预\s*算(?:\s*数)?|全\s*年\s*预\s*算(?:\s*数)?|调\s*整\s*后?\s*预\s*算(?:\s*数)?|预\s*算(?:\s*数)?)"
+    r"(?P<role>年\s*初\s*(?:支\s*出\s*)?预\s*算(?:\s*数)?(?:\s*(?:总\s*计|合\s*计))?|全\s*年\s*预\s*算(?:\s*数)?(?:\s*(?:总\s*计|合\s*计))?|调\s*整\s*后?\s*预\s*算(?:\s*数)?(?:\s*(?:总\s*计|合\s*计))?|预\s*算(?:\s*数)?)"
     # A native text layer may insert a horizontal gap inside the leading
     # thousands group: 1 10,210.99. Only accept a complete 1–3 digit group,
     # retaining the literal comma-separated groups; do not join amount columns.
@@ -14583,7 +14605,7 @@ _WP4E_BUDGET_RE = re.compile(
 #: 决算」（收入侧不是支出完成率的分子）；measure 词容忍软换行（宜川 Y07
 #: 教训：「支␊出决算为」「决算␊为」）。
 _WP4E_ACTUAL_RE = re.compile(
-    r"(?<!收入)(?:支\s*出\s*)?决\s*算(?:\s*(?:数|执\s*行\s*数?))?\s*(?:为|是)?\s*(?P<amount>\d(?:[\d,，]*\d)?(?:\.\d+)?)\s*"
+    r"(?<!收入)(?:支\s*出\s*决\s*算|决\s*算\s*支\s*出|决\s*算)(?:\s*(?:数|执\s*行\s*数?))?\s*(?:为|是)?\s*(?P<amount>\d(?:[\d,，]*\d)?(?:\.\d+)?)\s*"
     r"(?P<unit>万\s*元|亿\s*元|元)?"
 )
 
@@ -14614,7 +14636,7 @@ _WP4E_SUBCLAUSE_BREAK_RE = re.compile(r"[。；;！？，,、：:]")
 #: 指标为「一般公共预算财政拨款支出」）。软换行先整体去空白再截，避免
 #: 「决算␊为 16.95」把「为 16.95 万元」当成指标名。
 _WP4E_HEAD_CUT_RE = re.compile(
-    r"年\s*初\s*预\s*算|全\s*年\s*预\s*算|调\s*整\s*后?\s*预\s*算|预\s*算(?:\s*数)?|支\s*出\s*决\s*算|决\s*算"
+    r"年\s*初\s*(?:支\s*出\s*)?预\s*算|全\s*年\s*预\s*算|调\s*整\s*后?\s*预\s*算|预\s*算(?:\s*数)?|支\s*出\s*决\s*算|决\s*算(?:\s*支\s*出)?"
 )
 
 #: 条目类款项头（不要求紧邻首句金额——「（项），主要用于…年初预算为X」
@@ -14661,6 +14683,8 @@ def _wp4e_role_key(role_text: str) -> str:
     norm = _txt_fund_norm(role_text)
     if norm.startswith("调整后预算"):
         return "调整预算"
+    if norm.startswith("年初支出预算"):
+        return "年初预算"
     for key in ("年初预算", "全年预算", "调整预算"):
         if norm.startswith(key):
             return key

@@ -19,7 +19,7 @@ def is_general_expenditure_title(title):
     """
     title = re.sub(r'\s+', '', title)
     return ('一般公共预算' in title and '支出决算情况说明' in title
-            and '基本支出' not in title and '三公' not in title)
+            and '基本支出' not in title and '本支出' not in title and '三公' not in title)
 
 
 def sections(doc, match):
@@ -382,7 +382,10 @@ def check_three_public_details(rule, doc, *, require_vehicle_details=True, check
         return finish(rule, [], ['未定位到三公经费决算说明原文'])
     title, begin, end = ranges[0]
     absence_span = _three_public_absence_span(doc, text, begin, end)
-    pattern = re.compile(rf'(?:支出)?(?:决算|预算)?(?:数)?(?:为|是)?(?P<amount>{_NUMBER})(?P<unit>{_UNIT})')
+    pattern = re.compile(
+        rf'(?:支出)?(?:决算|预算)?(?:数)?(?:为|是)?'
+        rf'(?:(?P<amount>{_NUMBER})(?P<unit>{_UNIT})|(?P<zero>0+(?:\.0+)?)(?=[。；;，,、]|$))'
+    )
     issues, unresolved, seen = [], [], set()
     # The concrete-detail subsection takes precedence over its summary.
     detail = re.search(r'[（(]二[）)]具体情况说明', text.compact[begin:end])
@@ -420,7 +423,7 @@ def check_three_public_details(rule, doc, *, require_vehicle_details=True, check
         seen.add(indicator)
         fact, error = select(doc, facts, indicator, code='total', stage='决算', allow_native_blank=True)
         key = f'three_public:detail:{indicator}:{subject.start()}'
-        value = Decimal('0') if absent else _wan(match.group('amount'), match.group('unit'))
+        value = Decimal('0') if (absent or match.group('zero')) else _wan(match.group('amount'), match.group('unit'))
         if error:
             unresolved.append(f'{LABELS[indicator]}：{error}')
             receipt(rule, doc, key, [], status='insufficient_data', formula='text = table', reason=error)

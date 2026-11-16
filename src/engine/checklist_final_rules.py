@@ -47,7 +47,7 @@ def _dec(text: Any) -> Optional[Decimal]:
 # ---------------------------------------------------------------------------
 
 _DETAIL_START_RE = re.compile(r"(?:[（(]三[)）])?一般公共预算财政拨款支出决算具体情况")
-_DETAIL_STOP_RE = re.compile(r"六、|一般公共预算财政拨款基本支出决算情况说明")
+_DETAIL_STOP_RE = re.compile(r"六、|一般公共预算财政拨款(?:基)?本支出决算情况说明")
 _DETAIL_TOTAL_RE = re.compile(
     r"年初预算(?:数)?(?:为|是)?\s*[:：]?\s*" + _AMOUNT + r"\s*万元[，,、\s]*"
     r"支出决算(?:数)?(?:为|是)?\s*[:：]?\s*" + _AMOUNT + r"\s*万元"
@@ -67,9 +67,9 @@ _ITEM_START_RE = re.compile(r"(?:^|(?<=[。；;：:]))(\d{1,2})[、.．](?=[一-
 # 支出决算、决算支出、单说“决算数”。单位可缺省——缺单位不是“没披露”，
 # 而是已披露但不可归一，二者在完整性清单里必须分开。
 _DECL_RE = re.compile(
-    r"(?P<kind>年初预算|支出决算|决算支出|决算数|"
+    r"(?P<kind>年初支出预算|年初预算|支出决算|决算支出|决算数|"
     r"(?:(?<=[。；;：:，,])[ \t]*预算))"
-    r"(?:数)?(?:为|是)?\s*[:：]?\s*"
+    r"(?:数)?(?:总计|合计)?(?:为|是)?\s*[:：]?\s*"
     r"(?P<amount>" + _AMOUNT + r")\s*(?:(?P<bad_unit>万万元|亿亿元|元元|万元万)|(?P<unit>亿元|万元|元))?"
 )
 _AMOUNT_UNIT_FACTOR = {
@@ -77,7 +77,7 @@ _AMOUNT_UNIT_FACTOR = {
     "万元": Decimal("1"),
     "元": Decimal("0.0001"),
 }
-_DECL_BUDGET_KINDS = {"年初预算", "预算"}
+_DECL_BUDGET_KINDS = {"年初支出预算", "年初预算", "预算"}
 _SUBJECT_MARK_RE = re.compile(r"[（(]\s*项\s*[)）]")
 _LEVEL_MARK_RE = re.compile(r"[（(]\s*(?:类|款|项)\s*[)）]")
 _ITEM_NUM_RE = re.compile(r"^\d{1,2}[、.．]\s*")
@@ -92,7 +92,7 @@ _HEADER_AMOUNT_RE = re.compile(
 # 例外声明（无此项/零值/依法不予公开）必须绑定到科目和预算阶段：预算限定语
 # 不能顺带豁免决算，决算限定语也不能豁免预算。通用“无此项”按业务约定覆盖
 # 整个科目，但必须显式记录 scope=subject；带阶段限定语的声明记录 scope=stage。
-_STAGE_BUDGET_RE = re.compile(r"年初预算|年初|预算数|预算")
+_STAGE_BUDGET_RE = re.compile(r"年初支出预算|年初预算|年初|预算数|预算")
 _STAGE_FINAL_RE = re.compile(r"支出决算|决算数|决算|支出")
 _SUBITEM_SCOPE_RE = re.compile(
     r"各\s*[“\"']?\s*项\s*[”\"']?\s*中|下\s*[“\"']?\s*项\s*[”\"']?\s*中"
