@@ -189,9 +189,14 @@ async def publish_compatibility_projection(conn, snapshot, parse_run_id):
         WHERE r.id=$1 FOR UPDATE OF d''', parse_run_id)
     if document is None:
         raise ValueError('published fiscal snapshot has no source document')
-    previous = await conn.fetchrow('SELECT p.*,j.created_at AS job_created_at FROM published_fact_projections p '
-                                   'JOIN analysis_jobs j ON j.job_uuid=p.job_uuid WHERE p.document_id=$1',
-                                   document['document_id'])
+    previous = await conn.fetchrow(
+        'SELECT p.*, j.created_at AS job_created_at, s.created_at AS snapshot_created_at '
+        'FROM published_fact_projections p '
+        'JOIN analysis_jobs j ON j.job_uuid=p.job_uuid '
+        'LEFT JOIN analysis_fact_snapshots s ON s.job_uuid=p.job_uuid AND s.revision_id=p.revision_id '
+        'WHERE p.document_id=$1',
+        document['document_id'],
+    )
     if previous and (previous['job_uuid'], previous['revision_id']) == (snapshot['job_uuid'], snapshot['revision_id']):
         if previous['snapshot_hash'] != snapshot['snapshot_hash']:
             raise ValueError('published compatibility projection version collision')
@@ -201,8 +206,22 @@ async def publish_compatibility_projection(conn, snapshot, parse_run_id):
         await verify_shared_fact_projection(conn, uuid.UUID(receipt['shared_report_id']), snapshot)
         return
     if previous and previous['job_uuid'] != snapshot['job_uuid']:
-        current_created = await conn.fetchval('SELECT created_at FROM analysis_jobs WHERE job_uuid=$1', snapshot['job_uuid'])
-        if current_created is None or previous['job_created_at'] >= current_created:
+        prev_time = (
+            previous.get('snapshot_created_at')
+            or previous.get('updated_at')
+            or previous.get('job_created_at')
+        )
+        curr_snapshot_time = await conn.fetchval(
+            'SELECT created_at FROM analysis_fact_snapshots WHERE job_uuid=$1 AND revision_id=$2',
+            snapshot['job_uuid'],
+            snapshot['revision_id'],
+        )
+        curr_job_created = await conn.fetchval(
+            'SELECT created_at FROM analysis_jobs WHERE job_uuid=$1',
+            snapshot['job_uuid'],
+        )
+        curr_time = curr_snapshot_time or curr_job_created
+        if curr_time is None or (prev_time is not None and prev_time >= curr_time):
             raise ValueError('older job cannot overwrite a newer document fact projection')
 
     from src.services.parse_artifact_store import load_parse_artifact

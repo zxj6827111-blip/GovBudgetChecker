@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.schemas.material_slot import SlotIdentity
 from src.services.org_name_identity import OrgNameIndex
 from src.services.org_storage import OrganizationStorage
 
@@ -153,7 +154,7 @@ async def repair_pg_material_slots(
     try:
         rows = await conn.fetch(
             """
-            SELECT id, subject_org_id, subject_org_name, subject_kind, material_scope,
+            SELECT id, slot_key, subject_org_id, subject_org_name, subject_kind, material_scope,
                    report_kind, fiscal_year, mapping_key, subject_level
             FROM material_slots
             """
@@ -169,8 +170,10 @@ async def repair_pg_material_slots(
             )
             for r in rows
         }
+        existing_slot_keys = {str(r["slot_key"]) for r in rows if r["slot_key"]}
 
         repaired = 0
+        slot_keys_synced = 0
         already_valid = 0
         collisions: List[Dict[str, Any]] = []
         skipped: List[Dict[str, Any]] = []
@@ -179,6 +182,23 @@ async def repair_pg_material_slots(
             old_id = str(r["subject_org_id"] or "").strip()
             if old_id in by_id:
                 already_valid += 1
+                expected_slot_key = SlotIdentity(
+                    subject_org_id=old_id,
+                    subject_kind=r["subject_kind"],
+                    material_scope=r["material_scope"],
+                    report_kind=r["report_kind"],
+                    fiscal_year=r["fiscal_year"],
+                    mapping_key=r["mapping_key"] or "",
+                ).slot_key
+                if str(r["slot_key"] or "") != expected_slot_key and expected_slot_key not in existing_slot_keys:
+                    existing_slot_keys.add(expected_slot_key)
+                    if apply:
+                        await conn.execute(
+                            "UPDATE material_slots SET slot_key = $1, updated_at = NOW() WHERE id = $2",
+                            expected_slot_key,
+                            r["id"],
+                        )
+                    slot_keys_synced += 1
                 continue
 
             preferred = r["subject_level"] if r["subject_level"] in ("department", "unit") else None
@@ -215,22 +235,34 @@ async def repair_pg_material_slots(
                 })
                 continue
 
+            new_slot_key = SlotIdentity(
+                subject_org_id=target.id,
+                subject_kind=r["subject_kind"],
+                material_scope=r["material_scope"],
+                report_kind=r["report_kind"],
+                fiscal_year=r["fiscal_year"],
+                mapping_key=r["mapping_key"] or "",
+            ).slot_key
             existing_keys.add(new_key)
+            if new_slot_key not in existing_slot_keys:
+                existing_slot_keys.add(new_slot_key)
             if apply:
                 await conn.execute(
                     """
                     UPDATE material_slots
                     SET subject_org_id = $1,
                         subject_org_name = $2,
+                        slot_key = $3,
                         subject_level = CASE
-                            WHEN subject_level IN ('unknown', '') OR subject_level IS NULL THEN $3
+                            WHEN subject_level IN ('unknown', '') OR subject_level IS NULL THEN $4
                             ELSE subject_level
                         END,
                         updated_at = NOW()
-                    WHERE id = $4
+                    WHERE id = $5
                     """,
                     target.id,
                     target.name,
+                    new_slot_key,
                     target.level,
                     r["id"],
                 )
@@ -240,6 +272,7 @@ async def repair_pg_material_slots(
             "total": len(rows),
             "already_valid": already_valid,
             "repaired": repaired,
+            "slot_keys_synced": slot_keys_synced,
             "collisions": collisions,
             "skipped": skipped,
         }
