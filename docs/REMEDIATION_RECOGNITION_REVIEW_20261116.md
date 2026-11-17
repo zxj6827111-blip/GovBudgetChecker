@@ -97,6 +97,22 @@
 | 前端构建 | `npm --prefix app run build` | 通过 |
 | 前端 E2E | 隔离构建 `:3101` 跑 obligation-review、review-lifecycle、review-list、full-flow-review-export、ai-scope-explanation、review-layout-batch | **30 passed** |
 
+### 4.1 测试预期变更说明（均为产品契约变更，不是放宽断言）
+
+| 测试 | 原预期 | 新预期 | 原因 |
+| --- | --- | --- | --- |
+| `tests/remediation/test_zc04.py` | schema v2；未完成义务在 `manual_review` | schema v3；未完成义务在 `diagnostics` | 本轮统一结果契约 |
+| `tests/test_dh03a_legacy_fields.py`、`test_u7_same_source_display.py`、`test_obligation_cross_location_coverage.py` | 未完成检查在 `manual_review` | 同字段原样保留，但位置改为 `diagnostics` | 技术诊断退出业务卡片 |
+| `tests/test_report_exports.py` | 结构化待复核在 `manual_review` | 在 `diagnostics`，仍无伪造页码 | 同上；JSON 报告仍完整导出 |
+| `tests/test_review_known_regressions.py`、`tests/test_queue_summary.py` | 全局 review reason 计入参考通知 | 参考通知 0，原因进入 `diagnostics` | 泛化“系统提示”卡片退出业务区 |
+| `tests/test_workflow_rbac.py` | 系统 review reason 可写 workflow 结论 | 返回 404，只保存在 `diagnostics` | 技术异常不要求业务人员逐项表态 |
+| `tests/remediation/test_round6_export_chain.py` | 篡改串使用 `rule_evidence_incomplete` | 改用导出中仍存在的人工决定说明 | 该原因已按契约退出业务导出；防篡改断言不变 |
+| `tests/test_cross_san_gong_econ.py` | 错码只记取数不足、不得出 finding | 仍不得给 reception 出金额比较 finding；另许一条独立编码/名称材料问题 | 方案要求“有原件证据的缺陷形成具体问题” |
+| `app/tests/aiScope.test.ts`、`reviewObligationAdapters.test.ts`、`workbenchAdapters.test.ts` | “未能自动核对”文案与必处理叠加 | “内部检查未完成”范围说明；不叠加必处理 | 页面口径统一 |
+
+所有变更均在对应测试中保留/加强原件证据与“不虚假通过”断言；没有通过扩大容差、
+忽略失败或增加重试来换取通过。
+
 新增/更新测试：
 
 - `tests/test_result_semantics_20261116.py`（5 项）：schema v3、cause_kind、
