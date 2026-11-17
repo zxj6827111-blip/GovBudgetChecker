@@ -7,7 +7,7 @@
 | 起始分支 | `feat/unified-remediation-20261115` |
 | 基线提交 | `612d0c522806d6caf3bf44ed483f9a1fbd1af40c` |
 | 整改分支 | `codex/recognition-review-remediation` |
-| 阶段提交 | `a45c3631`（结果契约）→ `e53f4671`（识别与级联）→ `012c6d50`（页面/计数/导出）→ `18b7807e`（回放工具/报告）→ `30df1309`（测试变更说明）→ `b33a2d6b`（自检修正：真实覆盖状态/legacy_unknown）→ `7c33adc5`（覆盖状态标签修正） |
+| 阶段提交 | `a45c3631`（结果契约）→ `e53f4671`（识别与级联）→ `012c6d50`（页面/计数/导出）→ `18b7807e`（回放工具/报告）→ `30df1309`（测试变更说明）→ `b33a2d6b`（自检修正：真实覆盖状态/legacy_unknown）→ `7c33adc5`（覆盖状态标签修正）→ `0eab8029`（全量流水线回放）→ `33e5867c`（RR-01～RR-05 返工）→ `47a4a1eb`（真实 PG 夹具同步） |
 | 工作区起点 | 仅有 5 份未跟踪金标/基线文档；无已跟踪源码改动，未覆盖其他工作 |
 | 隔离前端验收 | `/tmp/gbc_app_e2e`（源副本 + 主仓库 `node_modules` 软链）构建于 `127.0.0.1:3101` |
 | 隔离 PostgreSQL | Docker 容器 `gbc-remediation-pg-20261116`（`127.0.0.1:55450`） |
@@ -346,13 +346,19 @@ revision 与结果指纹。
   预览/冻结/续跑参数；预览已在本机只读验证（157 槽位，156 ready，
   1 missing_job_dir），未重分析、未写 status.json。
 
-### 本轮新增回归
+### 本轮新增回归与验证
 
 - `tests/test_independent_review_rr01_rr04.py`（7 项）
 - `tests/test_reanalyze_preview_tool_20261117.py`（4 项）
 - `tests/test_bounded_recovery_20261117.py`（5 项）
 - 独立复核反例脚本已重新执行：shared_groups 三例、cascade 两例、
   hidden_gate、review_counts 全部符合上述预期。
+- 后端全量：**6282 passed, 193 skipped**。
+- 真实 PostgreSQL：**97 passed**（`tests/test_review_lifecycle_pg.py` 等，
+  隔离库 55451，45 迁移幂等）。
+- 前端完整单测与生产构建通过；隔离构建 E2E **30 passed**。
+- 只读预览实跑：157 槽位，156 `ready`、1 `missing_job_dir`；未重分析、
+  未写 status.json。
 
 ## 10. 交付物
 
