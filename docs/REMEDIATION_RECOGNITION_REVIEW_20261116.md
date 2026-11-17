@@ -164,10 +164,10 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. .venv/bin/python \
 
 | 案例 | 执行/适用 | pass | fail | insufficient | execution_error |
 | --- | --- | --- | --- | --- | --- |
-| 95c937cc 上海市审计局 | 90/90 | 74 | 13 | 0 | 0 |
-| 05e40add 合作交流办 | 90/90 | 76 | 11 | 0 | 0 |
-| d835cf2a 市政府办公厅 | 90/90 | 81 | 6 | 0 | 0 |
-| 34f7645b 民族宗教局 | 90/90 | 77 | 10 | 0 | 0 |
+| 95c937cc 上海市审计局 | 90/90 | 75 | 13 | 0 | 0 |
+| 05e40add 合作交流办 | 90/90 | 77 | 11 | 0 | 0 |
+| d835cf2a 市政府办公厅 | 90/90 | 82 | 6 | 0 | 0 |
+| 34f7645b 民族宗教局 | 90/90 | 78 | 10 | 0 | 0 |
 
 - 回放使用任务持久化的 `document_profile` 与物理片段页表，四份材料均
   **90/90 规则到达终态**，无 `parse_error` / `insufficient_data` /
@@ -175,7 +175,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. .venv/bin/python \
 - 34f7645b 的义务账本：
   `OBL-INTERNAL-T2-TOTAL` = **completed**（V33-240=fail，失败原因是原件 20805
   明细缺失 837.63 万元的真实材料问题），不再是 `insufficient_data`；
-  `OBL-TXT-T1/T2/T3` 均为 completed。
+  `OBL-TXT-T1/T2/T3/T5/FINAL-DETAIL` 均为 completed。
 - 回放脚本已按物理片段还原 `doc.page_tables`，避免旧规则因回放环境缺页表
   被误判为执行异常；这属于回放工具修正，不改变生产流水线。
 

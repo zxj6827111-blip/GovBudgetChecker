@@ -139,6 +139,40 @@ def _run_job(job_dir: Path, artifact: Dict[str, Any], status: Dict[str, Any]) ->
             for token in ("2013499", "20134:total_actual", "V33-251", ":bad_unit", "income_sources")
         )
     }
+
+    # 同一原件再跑一次全量规则，输出可复现的流水线状态；目标规则单跑结果
+    # 仍在 outcomes 中，二者不混用。
+    from src.engine.check_obligations import build_obligation_ledger
+    from src.engine.pipeline import run_rules_with_outcomes
+    from src.engine.rule_outcome import summarize_rule_outcomes
+
+    pipeline_doc = build_document(str(_pdf_path(job_dir)), page_texts, page_tables, 0)
+    pipeline_doc.parse_artifact = artifact_obj
+    pipeline_doc.fact_context = context
+    if status.get("document_profile"):
+        pipeline_doc.document_profile = DocumentProfile.model_validate(status["document_profile"])
+    report_kind = "final" if "final" in kind else ("budget" if "budget" in kind else "unknown")
+    _, outcomes_all = run_rules_with_outcomes(
+        pipeline_doc, use_ai_assist=False, report_kind=report_kind
+    )
+    summary = summarize_rule_outcomes(outcomes_all)
+    ledger = build_obligation_ledger(
+        None,
+        report_kind=report_kind,
+        rule_execution_summary=summary,
+        fact_receipts=getattr(pipeline_doc, "fact_receipts", None),
+    )
+    key_obligations = {
+        instance.get("obligation_id"): {
+            "status": instance.get("status"),
+            "detail": instance.get("detail"),
+        }
+        for instance in ledger.get("instances", [])
+        if instance.get("obligation_id") in {
+            "OBL-INTERNAL-T2-TOTAL", "OBL-TXT-T1", "OBL-TXT-T2", "OBL-TXT-T3",
+            "OBL-TXT-T5", "OBL-TXT-FINAL-DETAIL",
+        }
+    }
     return {
         "job_id": status.get("job_id"),
         "filename": status.get("filename"),
@@ -146,6 +180,24 @@ def _run_job(job_dir: Path, artifact: Dict[str, Any], status: Dict[str, Any]) ->
         "analysis_revision": status.get("analysis_revision"),
         "outcomes": outcomes,
         "receipts": interesting,
+        "pipeline": {
+            "statuses": {
+                key: summary.get(key)
+                for key in (
+                    "total_rules", "executed", "pass", "fail", "insufficient_data",
+                    "parse_error", "execution_error", "not_applicable",
+                )
+            },
+            "unresolved_rules": [
+                {
+                    "rule_id": item.get("rule_id"),
+                    "status": item.get("status"),
+                    "detail": str(item.get("detail") or "")[:300],
+                }
+                for item in (summary.get("unresolved_rules") or [])
+            ],
+            "key_obligations": key_obligations,
+        },
     }
 
 
