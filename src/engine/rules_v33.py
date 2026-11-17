@@ -1006,7 +1006,14 @@ def _v33_relation_receipt(
         except ValueError:
             structured = {}
         if structured:
-            reason_codes = tuple(structured.get("reason_codes") or ())
+            # 规则显式断言的原因码即使未能定位也保留在回执上（不伪造缺数
+            # 位置，定位门禁继续约束 blocked_by/missing_operands）。
+            # RR-05B：原因码只写在关系回执上时，有界恢复与义务聚合同样
+            # 需要拿到真实失败类型，不能被收敛成 rule_no_reason。
+            reason_codes = tuple(dict.fromkeys([
+                *(str(code) for code in structured.get("reason_codes") or ()),
+                *(str(code) for code in reason_codes if str(code).strip()),
+            ]))
     receipts.append(
         make_fact_receipt(
             rule_code,

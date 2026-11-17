@@ -22,11 +22,12 @@ from src.services.engine_rule_runner import EngineRuleRunner
 _FAILING = {"insufficient_data", "parse_error", "execution_error"}
 
 
-def _make_rule(*, signal_codes, repaired_state_ok: bool = True):
+def _make_rule(*, signal_codes, repaired_state_ok: bool = True, register_gap: bool = True):
     """测试规则：首次执行写 insufficient 回执并抛 RuleDeferred；重跑按修复状态写 pass。
 
-    原因码按真实规则的做法先经 ``record_gap`` 登记可定位失败，回执上的
-    reason_codes 才能通过定位门禁存留下来（RR-05B 的入口场景）。
+    ``register_gap=True`` 按真实规则的做法先经 ``record_gap`` 登记可定位失败；
+    ``False`` 只显式传入原因码（复核探针的合成输入形态）——定位门禁不保留
+    位置，但原因码必须留在回执上供恢复入口使用。
     ``repaired_state_ok=False`` 时即使文档已“修复”，重跑仍写 insufficient——
     用于验证恢复判定以有效回执为准，而不是 rerun 返回了列表。
     """
@@ -42,7 +43,7 @@ def _make_rule(*, signal_codes, repaired_state_ok: bool = True):
             effective = repaired and repaired_state_ok
             from src.engine.rules_v33 import _v33_relation_receipt
 
-            if not effective:
+            if not effective and register_gap:
                 from src.engine.diagnostic_fields import (
                     record_gap,
                     text_missing_operand,
@@ -216,3 +217,54 @@ def test_verify_rejects_when_rerun_skips_a_failing_relation():
     ids = {(r["sub_check_id"], r["status"]) for r in doc.fact_receipts}
     assert ("relation-b", "insufficient_data") in ids
     assert ("relation-a", "insufficient_data") in ids
+
+
+def test_escalation_uses_current_effective_receipt_after_rerun():
+    """函数级镜像：恢复重跑补写 pass 后，聚合只看当前有效回执（RR-05B）。"""
+    from src.engine.rule_outcome import RuleOutcome
+
+    doc = SimpleNamespace(
+        parse_artifact=SimpleNamespace(source_file_hash="a" * 64, parse_run_uid="run-1"),
+        fact_context=SimpleNamespace(file_hash="a" * 64, parse_run_uid="run-1"),
+        fact_receipts=[{
+            "rule_id": "R-test", "sub_check_id": "relation-1",
+            "status": "insufficient_data", "incomplete_reason": "operand missing",
+        }],
+    )
+
+    def rerun():
+        doc.fact_receipts.append({
+            "rule_id": "R-test", "sub_check_id": "relation-1", "status": "pass",
+        })
+        return []
+
+    coordinator = RecoveryCoordinator([
+        RecoveryStrategy("repair", "fp-repair", lambda d: True)
+    ])
+    recovered = coordinator.recover(
+        doc, rule_id="R-test", reason_codes=["operand_missing"], rerun=rerun,
+    )
+    assert recovered == []
+    assert coordinator.records[-1]["status"] == "recovered"
+    outcome = RuleOutcome(rule_id="R-test", status="pass")
+    EngineRuleRunner._escalate_from_relation_receipts(doc, "R-test", 0, outcome)
+    # 聚合取同一关系的当前有效回执：规则结论收敛为 pass，旧失败回执留审计。
+    assert outcome.status == "pass"
+    assert [r["status"] for r in doc.fact_receipts] == ["insufficient_data", "pass"]
+
+
+def test_explicit_receipt_codes_trigger_recovery_without_registration():
+    """原因码只显式传入回执、无 record_gap 登记时恢复同样触发（复核探针形态）。"""
+    rule, calls = _make_rule(signal_codes=[], register_gap=False)
+
+    def repair(document):
+        document.repaired = True
+        return True
+
+    doc, runner, findings = asyncio.run(_run_with(rule, repair))
+    assert calls == ["initial", "rerun"]
+    assert runner._recovery.records[0]["status"] == "recovered"
+    statuses = [receipt["status"] for receipt in doc.fact_receipts]
+    assert statuses == ["pass"]
+    summary = runner.get_rule_execution_summary()
+    assert summary.get("pass") == 1

@@ -286,11 +286,20 @@ class EngineRuleRunner:
         receipts = getattr(document, "fact_receipts", None)
         if not isinstance(receipts, list):
             return
+        # 当前有效回执 = 同一 (rule_id, sub_check_id) 的最后一次写入：
+        # 恢复重跑会补写新回执，旧失败回执只作历史审计，不再参与聚合
+        # （与 _supersede_recovered_receipts 的有效/历史分层一致）。
+        effective: Dict[Tuple[str, str, int], dict] = {}
+        for index, receipt in enumerate(receipts[max(0, receipt_start):]):
+            if not isinstance(receipt, dict) or str(receipt.get("rule_id") or "") != rule_id:
+                continue
+            sub_check = str(receipt.get("sub_check_id") or "")
+            # 无关系标识的回执没有可替换语义，逐条保留，不做覆盖。
+            key = (rule_id, sub_check, index) if not sub_check else (rule_id, sub_check, -1)
+            effective[key] = receipt
         pending = [
-            receipt for receipt in receipts[max(0, receipt_start):]
-            if isinstance(receipt, dict)
-            and str(receipt.get("rule_id") or "") == rule_id
-            and str(receipt.get("status") or "") in {
+            receipt for receipt in effective.values()
+            if str(receipt.get("status") or "") in {
                 STATUS_INSUFFICIENT_DATA, STATUS_PARSE_ERROR, STATUS_EXECUTION_ERROR,
             }
         ]

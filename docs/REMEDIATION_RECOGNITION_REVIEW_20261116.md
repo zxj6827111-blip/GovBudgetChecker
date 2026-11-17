@@ -437,29 +437,46 @@ revision 与结果指纹。
 - `engine_rule_runner` 的恢复输入改为信号原因码与本次关系回执原因码的
   并集（原因码只写在关系回执上时恢复同样触发）；重跑包进
   `rule_identity_requirements`（与首次执行同一身份约束）。
+- `_v33_relation_receipt` 保留规则显式断言的原因码：定位门禁继续约束
+  `blocked_by`/`missing_operands`（不伪造缺数位置），但显式原因码不再被
+  收敛成 `rule_no_reason`——复核探针的合成输入（原因码只在回执上、无
+  登记记录）因此同样能进入恢复入口。
 - 恢复成功后旧失败回执移出 `fact_receipts`（按 sub_check_id 被重跑回执
   覆盖的才移出），下游聚合只看当前有效回执；失败历史留存于
   `stats.recovery_superseded_receipts` 与 `document.superseded_fact_receipts`；
-  未被重跑覆盖的关系回执继续阻塞，已有 partial findings 不丢失。
+  `_escalate_from_relation_receipts` 改按同一 `(rule_id, sub_check_id)` 的
+  最后一次写入聚合（当前有效回执语义下沉到聚合层，未重跑或仍失败的
+  关系继续阻塞，已有 partial findings 不丢失）。
 - 接入范围如实受限：协调器只接入 EngineRuleRunner 双模式入口；legacy
   单模式 pipeline 未接入（模块 docstring 明示）。
-- 集成回归：`tests/test_recovery_runner_integration_20261117.py`（4 项，
-  真实 `EngineRuleRunner.run_rules` + 隔离假 I/O）：回执原因码入口、
-  恢复后收敛为 pass、重跑仍未完成保持 insufficient_data、未覆盖关系
-  不清理旧回执；`test_bounded_recovery_20261117.py` 增至 8 项。
+- 集成回归：`tests/test_recovery_runner_integration_20261117.py`（6 项，
+  真实 `EngineRuleRunner.run_rules` + 隔离假 I/O）：回执原因码入口（登记
+  与仅显式两种形态）、恢复后收敛为 pass、重跑仍未完成保持
+  insufficient_data、未覆盖关系不清理旧回执、聚合取当前有效回执；
+  `test_bounded_recovery_20261117.py` 增至 8 项。
 
 ### 11.5 验证记录
 
 - 复核方定向集 + 本轮新增回归（14 文件）：**186 passed**；恢复协调器与
-  真实 runner 集成：**11 passed**。
-- 后端全量：`tests/`（不含 `tests/remediation`）**3673 passed, 167 skipped**；
-  `tests/remediation` 全目录 **2634 passed, 26 skipped**；合计 **6307 passed**。
+  真实 runner 集成：**12 passed**。
+- 后端全量（含 `tests/remediation`）：**6308 passed, 193 skipped**。
 - 真实 PostgreSQL（隔离容器 55452，随机 schema，迁移幂等）：**164 passed**。
 - V33-251 消费方与回放类（checklist/dh03b/catalog/golden/replay/bench）：
   114 passed。
+- 复核方自有探针在新 HEAD 复跑（副本运行，未改动其证据目录）：
+  - `explicit_budget_components`：`budget:group fail`、`final:item_sum
+    insufficient_data`，决算组回执不再 pass；
+  - `similar_but_different_component`：`final:group insufficient_data`；
+  - 两个部分页相交级联：`roots=[]`、未归并 `remaining=1`；
+  - `recovery_receipts` / runner 探针两例：`recovered` 且规则收敛 `pass`；
+  - `failed_run_checkpoint`：`outcome=failed`、断点不复用（`[]`）；
+  - `checkpoint_wrong_revision`：旧批次断点不跳过（`run_calls=1`）。
 - ruff、mypy：改动文件全部通过。
 - 前端未改动（上一轮单测/构建/E2E 结论仍有效）。
 - 未执行存量重分析、未合并 main、未部署远程（遵照复核建议）。
+- 断点接口说明：`_load_checkpoint` 由“已完成 job_id 集合”改为“完整回执
+  记录列表”，跳过判定统一走 `_resumable_checkpoint_record`（批次指纹 +
+  结果 revision 匹配）——复核探针如引用旧接口需按新语义断言。
 - 说明：一次全量套件中 `test_department_stats_prefers_merged_issue_total`
   的失败复现为两套 pytest 并发运行对共享组织目录（data/*.json）的读写
   竞争；单进程顺序运行下该用例及全量均通过，与业务代码改动无关。
