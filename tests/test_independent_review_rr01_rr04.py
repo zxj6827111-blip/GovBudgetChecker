@@ -80,6 +80,102 @@ def test_shared_component_unrelated_name_keeps_subject_gap():
     assert any("共享分项" in message for message in messages)
 
 
+# ---- 2026-11-17 第二次独立复核 RR-01 扩展边界 ----
+
+
+def test_shared_positive_control_still_passes_group_and_section_sum():
+    """正控：裸金额分项按决算口径、组算术与章节加总仍 pass。"""
+    receipts, _ = _run_shared(SHARED_TEXT)
+    group = next(
+        value for key, value in receipts.items()
+        if key.startswith("V33-251:final:group:")
+    )
+    assert group["status"] == "pass"
+    # 未归属的组内子项不再被清空，改为在回执原因中留痕。
+    assert "未逐一对应科目" in str(group.get("incomplete_reason") or "")
+    assert receipts["V33-251:final:item_sum"]["status"] == "pass"
+
+
+def test_explicit_budget_components_do_not_prove_final_disclosure():
+    """第二次复核反例 A：分项显式写“年初预算为”，不得证明逐项决算已披露。"""
+    budget_enum = SHARED_TEXT.replace(
+        "其中：机关事业单位基本养老保险缴费支出 985.78 万元，"
+        "机关事业单位职业年金 492.39 万元，"
+        "其他行政事业单位离退休支出 10.2 万元，事业单位离退休 566.77 万元。",
+        "其中：机关事业单位基本养老保险缴费支出年初预算为 985.78 万元，"
+        "机关事业单位职业年金年初预算为 492.39 万元，"
+        "其他行政事业单位离退休支出年初预算为 10.2 万元，"
+        "事业单位离退休年初预算为 566.77 万元。",
+    )
+    assert budget_enum != SHARED_TEXT
+    receipts, _ = _run_shared(budget_enum)
+    final_groups = [
+        value for key, value in receipts.items()
+        if key.startswith("V33-251:final:group:")
+    ]
+    assert all(value["status"] != "pass" for value in final_groups)
+    assert receipts["V33-251:final:item_sum"]["status"] != "pass"
+    # 预算口径独立出组回执：四个预算分项之和 2055.14 与组级预算 2064.21 差 9.07。
+    budget_groups = [
+        value for key, value in receipts.items()
+        if key.startswith("V33-251:budget:group:")
+    ]
+    assert budget_groups, "预算分项应有独立的组级回执"
+    assert all(value["status"] == "fail" for value in budget_groups)
+    assert any("组内分项合计" in str(value.get("incomplete_reason") or "")
+               for value in budget_groups)
+
+
+def test_similar_component_name_is_candidate_not_binding():
+    """第二次复核反例 B：名称相似不构成金额身份，组回执不得 pass。"""
+    receipts, messages = _run_shared(SHARED_TEXT.replace(
+        "其中：机关事业单位基本养老保险缴费支出 985.78",
+        "其中：机关事业单位基本养老保险基金补助 985.78",
+    ))
+    group = next(
+        value for key, value in receipts.items()
+        if key.startswith("V33-251:final:group:")
+    )
+    assert group["status"] == "insufficient_data"
+    assert "未能对应到项级科目" in str(group.get("incomplete_reason") or "")
+    assert receipts["V33-251:final:item_sum"]["status"] == "insufficient_data"
+    assert any("名称相似" in message or "共享分项" in message
+               for message in messages)
+
+
+def test_mixed_role_components_leave_bare_amounts_unresolved():
+    """显式“年初预算”与裸金额混排：裸金额角色无法证明，不得参与组内算术。"""
+    receipts, _ = _run_shared(SHARED_TEXT.replace(
+        "其中：机关事业单位基本养老保险缴费支出 985.78 万元，",
+        "其中：机关事业单位基本养老保险缴费支出年初预算为 985.78 万元，",
+    ))
+    groups = [
+        value for key, value in receipts.items()
+        if key.startswith("V33-251:") and ":group:" in key
+    ]
+    assert groups
+    assert all(value["status"] != "pass" for value in groups)
+    assert any("未写明金额阶段" in str(value.get("incomplete_reason") or "")
+               for value in groups)
+
+
+def test_duplicate_component_names_are_ambiguous_not_bound():
+    """重复名称：同名分项同时命中同一科目时判歧义，不再按数量放行。"""
+    receipts, _ = _run_shared(SHARED_TEXT.replace(
+        "其中：机关事业单位基本养老保险缴费支出 985.78 万元，机关事业单位职业年金 492.39 万元，",
+        "其中：机关事业单位基本养老保险缴费支出 985.78 万元，"
+        "机关事业单位基本养老保险缴费支出 986.00 万元，",
+    ))
+    groups = [
+        value for key, value in receipts.items()
+        if key.startswith("V33-251:") and ":group:" in key
+    ]
+    assert groups
+    assert all(value["status"] != "pass" for value in groups)
+    assert any("歧义" in str(value.get("incomplete_reason") or "")
+               for value in groups)
+
+
 def _finding(issue_id: str, rule_id: str, page: int, message: str, **location):
     return {
         "id": issue_id, "rule_id": rule_id, "source": "rule", "severity": "warn",
@@ -113,6 +209,184 @@ def test_cascade_rejects_unrelated_page_and_independent_reasons():
     row = {"rule_findings": [finding]}
     assert cascade_root_issue_ids(item, row, {"name-on-page-2"}) == []
     assert blocking_coverage_obligations([item], row, visible_issue_ids={"name-on-page-2"}) == [item]
+
+
+# ---- 2026-11-17 第二次独立复核 RR-02 扩展边界 ----
+
+
+def test_cascade_rejects_partial_page_intersection_in_name_branch():
+    """根问题移到部分相交页（40）后，第41页独立表缺数仍不得被整条归并。"""
+    item = _obligation(
+        detail="第40页乙单位正文存在主体冲突；第41页独立项目金额尚未提取",
+        reason_codes=["subject_conflict", "operand_missing"],
+        missing_operands=[{"source": "table", "page": 41, "row_key": "独立项目"}],
+    )
+    finding = _finding(
+        "name-on-page-40", "CMM-017", 40, "第40页甲单位名称多字：甲单位位",
+        actual_name="甲单位位", expected_name="甲单位",
+    )
+    row = {"rule_findings": [finding]}
+    assert cascade_root_issue_ids(item, row, {"name-on-page-40"}) == []
+    assert blocking_coverage_obligations([item], row, visible_issue_ids={"name-on-page-40"}) == [item]
+
+
+def test_cascade_rejects_partial_page_intersection_in_v33251_branch():
+    """V33-251 分支同样走守卫：第40页相交 + 第41页表映射失败仍整条保留。"""
+    item = _obligation(
+        detail="V33-251:budget:item_sum 第40页乙科目预算未提取；第41页另一表的读取映射失败",
+        checkers=["V33-251", "V33-106"],
+        reason_codes=["item_disclosure_missing", "operand_missing"],
+        blocked_by=[{"ref": "V33-251:budget:item_sum", "reason_code": "operand_missing"}],
+        missing_operands=[
+            {"source": "text", "page": 40, "row_key": "乙科目"},
+            {"source": "table", "page": 41, "row_key": "独立科目"},
+        ],
+    )
+    finding = _finding(
+        "budget-on-page-40", "V33-251", 40, "第40页甲科目年初预算未逐项列示",
+        checklist_item="C-11", subject_name="甲科目",
+    )
+    finding["location"].pop("defect_type", None)
+    row = {"rule_findings": [finding]}
+    assert cascade_root_issue_ids(item, row, {"budget-on-page-40"}) == []
+    assert blocking_coverage_obligations([item], row, visible_issue_ids={"budget-on-page-40"}) == [item]
+
+
+def test_cascade_rejects_same_page_different_subject():
+    """同页不同主体：甲单位名称问题承接不了同页乙单位的主体冲突。"""
+    item = _obligation(
+        detail="第40页乙单位正文存在主体冲突",
+        reason_codes=["subject_conflict"],
+        missing_operands=[{"source": "text", "page": 40, "row_key": "乙单位"}],
+    )
+    finding = _finding(
+        "name-on-page-40", "CMM-017", 40, "第40页甲单位名称多字：甲单位位",
+        actual_name="甲单位位", expected_name="甲单位",
+    )
+    row = {"rule_findings": [finding]}
+    assert cascade_root_issue_ids(item, row, {"name-on-page-40"}) == []
+
+
+def test_cascade_allows_same_page_same_subject_name_merge():
+    """同页同主体的主体冲突仍由名称问题承接（不误伤真实同源）。"""
+    item = _obligation(
+        detail="第40页甲单位正文存在主体冲突，金额关系尚未完成",
+        reason_codes=["subject_conflict"],
+        missing_operands=[{"source": "text", "page": 40, "row_key": "甲单位"}],
+    )
+    finding = _finding(
+        "name-on-page-40", "CMM-017", 40, "第40页甲单位名称多字：甲单位位",
+        actual_name="甲单位位", expected_name="甲单位",
+    )
+    row = {"rule_findings": [finding]}
+    assert cascade_root_issue_ids(item, row, {"name-on-page-40"}) == ["name-on-page-40"]
+
+
+def test_cascade_rejects_same_page_different_subject_v33251():
+    """V33-251：同页不同科目（乙科目 vs 甲科目）不承接。"""
+    item = _obligation(
+        detail="V33-251:budget:item_sum 第40页乙科目预算未提取",
+        checkers=["V33-251"],
+        reason_codes=["item_disclosure_missing", "operand_missing"],
+        blocked_by=[{"ref": "V33-251:budget:item_sum", "reason_code": "operand_missing"}],
+        missing_operands=[{"source": "text", "page": 40, "row_key": "乙科目"}],
+    )
+    finding = _finding(
+        "budget-on-page-40", "V33-251", 40, "第40页甲科目年初预算未逐项列示",
+        checklist_item="C-11", subject_name="甲科目",
+    )
+    finding["location"].pop("defect_type", None)
+    row = {"rule_findings": [finding]}
+    assert cascade_root_issue_ids(item, row, {"budget-on-page-40"}) == []
+
+
+def test_cascade_without_pages_keeps_single_root_only():
+    """无页码证据：唯一根候选可承接，多个根候选保守保留。"""
+    finding = _finding(
+        "name-only", "CMM-017", 3, "第3页甲单位名称多字：甲单位位",
+        actual_name="甲单位位", expected_name="甲单位",
+    )
+    row = {"rule_findings": [finding]}
+    item = _obligation(
+        detail="甲单位正文存在主体冲突",
+        reason_codes=["subject_conflict"],
+    )
+    item2 = _obligation(
+        detail="第40页乙单位正文存在主体冲突",
+        reason_codes=["subject_conflict"],
+        missing_operands=[{"source": "table", "page": 41, "row_key": "独立项目"}],
+    )
+    # 名称分支：义务无可核对来源页时不跨页兜底（既有纪律）。
+    assert cascade_root_issue_ids(item, row, {"name-only"}) == []
+    # 守卫层：无页码 + 多根候选时拒绝；这里只有一个候选但义务携带独立表来源。
+    assert cascade_root_issue_ids(item2, row, {"name-only"}) == []
+
+
+def test_cascade_execution_error_code_always_blocks_subject_branches():
+    """execution_error 属独立原因，任何主体类分支都不得承接。"""
+    finding = _finding(
+        "name-on-page-40", "CMM-017", 40, "第40页甲单位名称多字：甲单位位",
+        actual_name="甲单位位", expected_name="甲单位",
+    )
+    row = {"rule_findings": [finding]}
+    item = _obligation(
+        detail="第40页甲单位正文存在主体冲突；规则执行中断",
+        reason_codes=["subject_conflict", "execution_error"],
+        missing_operands=[{"source": "text", "page": 40, "row_key": "甲单位"}],
+    )
+    assert cascade_root_issue_ids(item, row, {"name-on-page-40"}) == []
+
+
+def test_composite_obligation_records_partial_root_association():
+    """复合义务保守保留时，已确定的部分关联与未覆盖独立页如实入档。"""
+    from src.services.obligation_finding_coverage import cascade_partial_associations
+
+    finding = _finding(
+        "name-on-page-40", "CMM-017", 40, "第40页甲单位名称多字：甲单位位",
+        actual_name="甲单位位", expected_name="甲单位",
+    )
+    row = {"rule_findings": [finding]}
+    item = _obligation(
+        detail="第40页甲单位正文存在主体冲突；第41页另一表的读取映射失败",
+        reason_codes=["subject_conflict", "table_mapping_incomplete"],
+        missing_operands=[
+            {"source": "text", "page": 40, "row_key": "甲单位"},
+            {"source": "table", "page": 41, "row_key": "另一表"},
+        ],
+    )
+    assert cascade_root_issue_ids(item, row, {"name-on-page-40"}) == []
+    partial = cascade_partial_associations(item, row, {"name-on-page-40"})
+    assert partial.get("root_issue_ids") == ["name-on-page-40"]
+    assert partial.get("uncovered_independent_pages") == [41]
+
+
+def test_cascade_rejects_same_page_different_table_reading_failure():
+    """同页不同表：主体类根问题不能解释同页另一张表的映射失败。"""
+    finding = _finding(
+        "name-on-page-41", "CMM-017", 41, "第41页甲单位名称多字：甲单位位",
+        actual_name="甲单位位", expected_name="甲单位",
+    )
+    row = {"rule_findings": [finding]}
+    item = _obligation(
+        detail="第41页甲单位正文存在主体冲突；第41页收入明细表映射失败",
+        reason_codes=["subject_conflict", "table_mapping_incomplete"],
+        missing_operands=[{"source": "table", "page": 41, "row_key": "收入明细"}],
+    )
+    assert cascade_root_issue_ids(item, row, {"name-on-page-41"}) == []
+
+
+def test_cascade_multiple_root_candidates_without_pages_are_rejected():
+    """无页码证据：多个根候选（单位缺陷分支）保守保留，不批量吞并。"""
+    findings = [
+        _finding("unit-1", "CMM-011", 5, "第5页金额单位重复：万万元"),
+        _finding("unit-2", "CMM-011", 5, "第5页金额单位重复：万万元"),
+    ]
+    row = {"rule_findings": findings}
+    item = _obligation(
+        detail="金额单位重复（万万元），相关合计尚未完成",
+        reason_codes=["operand_missing"],
+    )
+    assert cascade_root_issue_ids(item, row, {"unit-1", "unit-2"}) == []
 
 
 def test_v33251_cascade_requires_same_page_not_just_same_stage():

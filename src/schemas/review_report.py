@@ -411,7 +411,10 @@ def build_review_report(payload: Mapping[str, Any]) -> Dict[str, Any]:
     }
     from types import SimpleNamespace
 
-    from src.services.obligation_finding_coverage import cascade_root_issue_ids
+    from src.services.obligation_finding_coverage import (
+        cascade_partial_associations,
+        cascade_root_issue_ids,
+    )
 
     for item in coverage_instances:
         if not isinstance(item, Mapping):
@@ -453,6 +456,20 @@ def build_review_report(payload: Mapping[str, Any]) -> Dict[str, Any]:
                 )
             except Exception:  # noqa: BLE001 - 关联失败保持技术诊断，不影响报告生成
                 roots = []
+            if not roots:
+                # 复合义务无法整条归并时保守保留，同时把已确定的部分关联
+                # 写进诊断（不把整条归为 upstream_material_defect）。
+                try:
+                    partial = cascade_partial_associations(
+                        SimpleNamespace(**record),
+                        cascade_row,
+                        visible_issue_ids=visible_issue_ids,
+                        structured_ingest=structured_ingest,
+                    )
+                except Exception:  # noqa: BLE001 - 部分关联只是补充信息
+                    partial = {}
+                if partial:
+                    record["partial_root_association"] = partial
         diagnostics.append(
             annotate_diagnostic(
                 record,

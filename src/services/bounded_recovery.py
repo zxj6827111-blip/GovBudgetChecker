@@ -3,10 +3,16 @@
 本模块不发明新的解析算法；它把既有恢复能力按策略登记，并负责：
 
 - 只对取数/证据绑定类原因尝试恢复，材料缺陷与执行异常不在此重试；
+- 恢复输入来自信号原因码与关系回执原因码的并集（由调用方合并传入）；
 - 策略指纹 + 原件哈希 + parse_run_uid + 规则/关系 去重，同一路径最多一次；
 - 一次协调最多 2 个策略，且不增加 AI/OCR 客户端层重试；
 - 恢复后重新验证原件哈希与解析身份，记录尝试前后原因、耗时和影响范围；
-- 恢复失败保留原回执，不清理 reason_code。
+- 恢复是否成功以重算后的有效状态为准（``verify`` 回调），rerun 返回列表
+  不等于恢复生效；失败历史保留原回执，不清理 reason_code。
+
+接入范围（如实受限）：当前只接入 EngineRuleRunner 的双模式规则执行入口
+（重跑经过同一规则身份约束与文档状态）；legacy 单模式 pipeline 路径未接入
+本协调器，不声称所有运行路径均已具备恢复闭环。
 
 策略实现由调用方注入；默认注册一个基于既有原生网格的“空表影子表”恢复。
 """
@@ -113,8 +119,14 @@ class RecoveryCoordinator:
         reason_codes: Iterable[str],
         relation_key: str = "",
         rerun: Optional[Callable[[], Any]] = None,
+        verify: Optional[Callable[[Any], bool]] = None,
     ) -> Optional[Any]:
-        """尝试恢复并可选重跑；返回重跑结果（成功恢复时）或 None。"""
+        """尝试恢复并可选重跑；返回重跑结果（成功恢复时）或 None。
+
+        ``verify`` 在重跑返回后校验实际效果（如重算后的有效关系回执）；
+        返回 False 视为恢复未生效，保留原失败回执并记录 not_recovered。
+        恢复是否成功以重新计算后的有效状态为准，不能只看 rerun 返回了结果。
+        """
         codes = [str(code) for code in reason_codes if str(code).strip()]
         if not codes or not (set(codes) & RECOVERABLE_REASON_CODES):
             return None
@@ -171,6 +183,15 @@ class RecoveryCoordinator:
             except BaseException as exc:  # noqa: BLE001 - 恢复后的旧失败保留
                 attempt.error = f"rerun_{type(exc).__name__}: {exc}"
                 continue
+            if verify is not None:
+                try:
+                    verified = bool(verify(result))
+                except Exception as exc:  # noqa: BLE001 - 校验失败按未恢复处理
+                    verified = False
+                    attempt.error = f"verify_{type(exc).__name__}: {exc}"
+                if not verified:
+                    attempt.error = attempt.error or "rerun_relations_still_incomplete"
+                    continue
             self._record(rule_id, relation_key, "recovered", attempts)
             return result
         self._record(rule_id, relation_key, "not_recovered", attempts)

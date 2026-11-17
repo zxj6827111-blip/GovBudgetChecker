@@ -325,9 +325,16 @@ def _exception_evidence(exceptions: Sequence[Dict[str, Any]], locate) -> List[Di
 
 
 _GROUP_ENUM_RE = re.compile(r"其中\s*[:：]")
+# 共享“其中”分项：分项金额前显式写明的阶段词（年初预算/支出决算…）必须保留，
+# 组级合计的存在不能倒推分项角色；裸金额按本段落（支出决算具体情况）的决算口径记账。
 _GROUP_ITEM_AMOUNT_RE = re.compile(
     r"(?P<name>[\u4e00-\u9fff“”\"'（）()]{2,40}?)"
+    r"(?P<stage>年初支出预算|年初预算|支出决算|决算数|决算支出|决算)?"
+    r"(?:数)?(?:为|是)?\s*[:：]?\s*"
     r"(?P<amount>\d[\d,]*(?:\.\d+)?)\s*(?P<unit>亿元|万元|元)"
+)
+_GROUP_ENUM_PREFIX_STAGE_RE = re.compile(
+    r"^\s*(年初支出预算|年初预算|支出决算|决算数|决算支出|决算)数?\s*[:：]"
 )
 
 
@@ -357,12 +364,41 @@ def _clause_subject_name(joined: str, clause: Dict[str, Any]) -> str:
     return re.sub(r"[\s，,。；;：:]+", "", head)
 
 
-def _group_subject_name_matches(left: str, right: str) -> bool:
-    """共享“其中”分项的科目名与子句科目名：允许后缀省略与长公共前缀。"""
-    def norm(value: str) -> str:
-        return re.sub(r"(?:支出|经费)$", "", re.sub(r"\s+", "", value or ""))
+# 已核准的科目同义片段：差异必须落在名称结尾、且前缀完全一致才可绑定。
+# 这是固定词表，不是通用前缀相似度阈值；新变体必须逐对核准并检查歧义。
+_GROUP_SUBJECT_VARIANTS = frozenset({("养老", "离退休")})
 
-    left, right = norm(left), norm(right)
+
+def _group_subject_norm(value: str) -> str:
+    return re.sub(r"(?:支出|经费)$", "", re.sub(r"\s+", "", value or ""))
+
+
+def _group_subject_variant_match(left: str, right: str) -> bool:
+    """同义片段替换：两侧共同前缀之后、名称结尾处的片段在核准表内。"""
+    common = 0
+    for a, b in zip(left, right, strict=False):
+        if a != b:
+            break
+        common += 1
+    for cut in range(1, common + 1):
+        pair = (left[cut:], right[cut:])
+        if pair in _GROUP_SUBJECT_VARIANTS or pair[::-1] in _GROUP_SUBJECT_VARIANTS:
+            return True
+    return False
+
+
+def _group_subject_name_matches(left: str, right: str) -> bool:
+    """共享“其中”分项的科目名与子句科目名：只认文本上可证明的对应。
+
+    可证明的形态（全部满足才绑定金额身份）：
+    - 归一（去空白、去句尾“支出/经费”）后完全一致；
+    - 一方是另一方的前缀省略（较短名 ≥4 字），如“机关事业单位职业年金”
+      省略“缴费支出”后缀；
+    - 差异是已核准同义片段（``_GROUP_SUBJECT_VARIANTS``）在结尾的替换。
+    名称相似但不属于上述形态的，只作候选提示（见
+    ``_group_subject_name_candidate``），不确认金额身份。
+    """
+    left, right = _group_subject_norm(left), _group_subject_norm(right)
     if not left or not right:
         return False
     if left == right:
@@ -370,8 +406,19 @@ def _group_subject_name_matches(left: str, right: str) -> bool:
     shorter, longer = sorted((left, right), key=len)
     if len(shorter) >= 4 and longer.startswith(shorter):
         return True
-    # “其他行政事业单位养老”与“其他行政事业单位离退休”这类同组异名：
-    # 只在共同前缀足够长时视为同组候选，避免无关项目仅因字数相同被绑定。
+    return _group_subject_variant_match(left, right)
+
+
+def _group_subject_name_candidate(left: str, right: str) -> bool:
+    """名称相似但身份未证实的候选（仅用于提示，不参与金额绑定）。"""
+    left, right = _group_subject_norm(left), _group_subject_norm(right)
+    if not left or not right or left == right:
+        return False
+    shorter, longer = sorted((left, right), key=len)
+    if len(shorter) >= 4 and longer.startswith(shorter):
+        return False
+    if _group_subject_variant_match(left, right):
+        return False
     common = 0
     for a, b in zip(shorter, longer, strict=False):
         if a != b:
@@ -389,13 +436,19 @@ def _shared_group_disclosures(
 
     只在同一编号条目内、确有“其中：”枚举、且至少两个项级子句时生效。
     返回：
-    - ``final_disclosed``：已由共享枚举逐项列示的项级子句起点；
+    - ``final_disclosed``：已由共享枚举逐项列示决算金额的项级子句起点；
     - ``budget_not_itemized``：只有组级年初预算、未逐项列示的子句起点；
     - ``components``：组内分项金额记录位置（不计入章节分项加总）；
     - ``totals``：组级合计金额记录位置（计入章节加总一次）；
     - ``untrusted_totals``：组内分项之和与组级合计不一致的合计记录位置；
-    - ``group_checks``：逐组的科目绑定与算术核对记录。
-    任何一步身份不足都不推断；缺科目、错角色和组内差额分别留结论。
+    - ``group_checks``：逐组、逐阶段的科目绑定与算术核对记录。
+
+    金额角色规则（2026-11-17 第二次独立复核 RR-01）：
+    - 分项角色从原文提取并逐项保留；组级合计的存在不倒推分项角色；
+    - 枚举句以阶段词开头（“其中：年初预算：…”）时裸金额跟随该阶段；
+    - 枚举全部为裸金额时按本段落（支出决算具体情况）的决算口径记账；
+    - 显式阶段词与裸金额混排时，裸金额角色无法证明，不参与组内算术，
+      单独记入 ``unresolved_role_components``；预算与决算分别生成组回执。
     """
     result: Dict[str, Any] = {
         "final_disclosed": set(),
@@ -433,12 +486,16 @@ def _shared_group_disclosures(
             name = re.sub(r"\s+", "", name).strip("“”\"'（）()")
             if not name:
                 continue
+            stage_word = match.group("stage") or ""
             per_item.append({
                 "name": name,
                 "raw": match.group("amount"),
                 "unit": match.group("unit"),
                 "value_wan": value * factor,
                 "pos": enum_start + match.start(),
+                "role": ("budget" if stage_word in _DECL_BUDGET_KINDS else "final")
+                if stage_word else None,
+                "stage_word": stage_word,
             })
         if len(per_item) < 2:
             continue
@@ -453,109 +510,195 @@ def _shared_group_disclosures(
             ]
         if len(subject_clauses) < 2:
             continue
-        # 组级合计：枚举句之后仍属同一编号条目的预算/决算声明。
+        # 组级合计：枚举句之后仍属同一编号条目的预算/决算声明；按阶段分开取。
         total_positions = {
             int(record["pos"]) for record in records
             if enum_end <= int(record["pos"]) < item_end
             and record.get("kind") in {"budget", "final"}
         }
-        final_total = any(
-            record_by_pos[pos].get("kind") == "final" for pos in total_positions
-        )
-        budget_total = any(
-            record_by_pos[pos].get("kind") == "budget" for pos in total_positions
-        )
-        # “其中”分项在本版式下是决算分项；预算仍只有组级合计时，
-        # 不能把组级预算复制到每个科目。
-        components_kind = "final" if final_total else ("budget" if budget_total else None)
-        if components_kind is None:
-            continue
-        total_pos = next(
-            (pos for pos in sorted(total_positions)
-             if record_by_pos[pos].get("kind") == components_kind),
-            None,
-        )
-        total_record = record_by_pos.get(total_pos) if total_pos is not None else None
-        component_positions = {
-            int(record["pos"]) for record in records
-            if enum_start <= int(record["pos"]) < enum_end
-            and record.get("kind") == components_kind
+        prefix_stage = None
+        prefix_match = _GROUP_ENUM_PREFIX_STAGE_RE.match(enum_text)
+        if prefix_match:
+            prefix_stage = (
+                "budget" if prefix_match.group(1) in _DECL_BUDGET_KINDS else "final"
+            )
+        explicit_roles = {item["role"] for item in per_item if item["role"]}
+        for item in per_item:
+            if item["role"] is not None:
+                item["role_source"] = "explicit"
+            elif prefix_stage is not None:
+                item["role"] = prefix_stage
+                item["role_source"] = "enum_prefix"
+            elif explicit_roles:
+                # 显式阶段词与裸金额混排：裸金额角色无法证明，不参与组内算术。
+                item["role"] = "unresolved"
+                item["role_source"] = "mixed_unresolved"
+            else:
+                # 全部裸金额：按本段落（支出决算具体情况）的决算口径记账。
+                item["role"] = "final"
+                item["role_source"] = "section_default"
+        stage_items: Dict[str, List[Dict[str, Any]]] = {
+            "budget": [item for item in per_item if item["role"] == "budget"],
+            "final": [item for item in per_item if item["role"] == "final"],
         }
-
-        subject_bindings: List[Dict[str, Any]] = []
-        for clause in subject_clauses:
-            name = _clause_subject_name(joined, clause)
-            clause_start, clause_end = int(clause["start"]), int(clause["end"])
-            own = [
-                record for record in records
-                if clause_start <= int(record["pos"]) < clause_end
-                and record.get("kind") == components_kind
-                and not record.get("group_component")
-            ]
-            matched = [
-                item for item in per_item
-                if name and _group_subject_name_matches(item["name"], name)
-            ]
-            subject_bindings.append({
-                "clause_start": clause_start,
-                "name": name,
-                "own": bool(own),
-                "matched": matched,
-            })
-
-        unbound_subjects = [
-            binding["name"] for binding in subject_bindings
-            if binding["name"] and not binding["own"] and not binding["matched"]
+        unresolved_role_items = [
+            item for item in per_item if item["role"] == "unresolved"
         ]
-        all_subjects_matched = all(
-            binding["own"] or binding["matched"]
-            for binding in subject_bindings if binding["name"]
-        )
-        # 多出来的分项（如组内再分“事业单位离退休”）只在所有标题科目
-        # 均已绑定时允许作为组内子项留痕；不能拿数量相等掩盖错科目。
-        unbound_components = [
-            item for item in per_item
-            if not any(
-                binding["name"] and _group_subject_name_matches(item["name"], binding["name"])
-                for binding in subject_bindings
-            )
-        ]
-        if all_subjects_matched:
-            unbound_components = []
+        mixed_roles = bool(stage_items["budget"] and stage_items["final"])
+        bindings_by_stage: Dict[str, List[Dict[str, Any]]] = {}
 
-        group_sum = sum((item["value_wan"] for item in per_item), Decimal(0))
-        stated_total = total_record.get("value_wan") if total_record else None
-        arithmetic_status = "unchecked"
-        arithmetic_reason = ""
-        if stated_total is not None:
-            envelope = display_envelope(
-                [format(group_sum, "f"), format(stated_total, "f")]
-            )
-            difference = group_sum - stated_total
-            if abs(difference) <= envelope:
-                arithmetic_status = "pass"
-            else:
-                arithmetic_status = "fail"
-                arithmetic_reason = (
-                    f"组内分项合计{format(group_sum, 'f')}与组级合计"
-                    f"{format(stated_total, 'f')}不一致，差{format(abs(difference), 'f')}"
-                )
-                if total_pos is not None:
-                    result["untrusted_totals"].add(total_pos)
-
-        # 每个有科目名的子句分别判定；重叠切分产生的无名字段不在这里记缺口。
-        for binding in subject_bindings:
-            if not binding["name"]:
+        for stage in ("budget", "final"):
+            items = stage_items[stage]
+            bindings: List[Dict[str, Any]] = []
+            for clause in subject_clauses:
+                clause_start, clause_end = int(clause["start"]), int(clause["end"])
+                name = _clause_subject_name(joined, clause)
+                own = [
+                    record for record in records
+                    if clause_start <= int(record["pos"]) < clause_end
+                    and not (enum_start <= int(record["pos"]) < enum_end)
+                    and record.get("kind") == stage
+                ]
+                matched = [
+                    item for item in items
+                    if name and _group_subject_name_matches(item["name"], name)
+                ]
+                matched_ids = {id(item) for item in matched}
+                candidates = [
+                    item for item in items
+                    if name and id(item) not in matched_ids
+                    and _group_subject_name_candidate(item["name"], name)
+                ]
+                bindings.append({
+                    "clause_start": clause_start,
+                    "name": name,
+                    "own": bool(own),
+                    "matched": matched,
+                    "candidates": candidates,
+                })
+            # 绑定必须唯一：一个分项只对应一个科目、一个科目只对应一个分项；
+            # 多对一或重复名称一律判歧义、全部不绑定（核准别名同样要过此关）。
+            ambiguous_names: List[str] = []
+            component_bindings: Dict[int, List[int]] = {}
+            for index, binding in enumerate(bindings):
+                for item in binding["matched"]:
+                    component_bindings.setdefault(id(item), []).append(index)
+            for item_id, indexes in component_bindings.items():
+                if len(set(indexes)) > 1:
+                    item = next(entry for entry in items if id(entry) == item_id)
+                    ambiguous_names.append(item["name"])
+                    for index in set(indexes):
+                        bindings[index]["matched"] = [
+                            entry for entry in bindings[index]["matched"]
+                            if id(entry) != item_id
+                        ]
+            clause_component_count: Dict[int, int] = {}
+            for index, binding in enumerate(bindings):
+                clause_component_count[index] = len({id(entry) for entry in binding["matched"]})
+            for index, count in clause_component_count.items():
+                if count > 1:
+                    binding = bindings[index]
+                    for entry in binding["matched"]:
+                        ambiguous_names.append(entry["name"])
+                    binding["matched"] = []
+            bindings_by_stage[stage] = bindings
+            if not items:
                 continue
-            if binding["own"] or binding["matched"]:
-                result["final_disclosed"].add(binding["clause_start"])
+            total_pos = next(
+                (pos for pos in sorted(total_positions)
+                 if record_by_pos[pos].get("kind") == stage),
+                None,
+            )
+            total_record = record_by_pos.get(total_pos) if total_pos is not None else None
+            component_positions = {
+                int(record["pos"]) for record in records
+                if enum_start <= int(record["pos"]) < enum_end
+                and record.get("kind") == stage
+            }
+            unbound_subjects = [
+                binding["name"] for binding in bindings
+                if binding["name"] and not binding["own"] and not binding["matched"]
+            ]
+            bound_component_ids = {
+                id(item) for binding in bindings for item in binding["matched"]
+            }
+            # 未归属分项如实保留，不再因“标题科目都有对应”整体清空；
+            # 组算术成立时它们按组内子项留痕，写入回执原因。
+            unbound_components = [
+                item["name"] for item in items if id(item) not in bound_component_ids
+            ]
+            name_candidates = [
+                {"component": item["name"], "subject": binding["name"]}
+                for binding in bindings
+                for item in binding["candidates"]
+            ]
+            group_sum = sum((item["value_wan"] for item in items), Decimal(0))
+            stated_total = total_record.get("value_wan") if total_record else None
+            arithmetic_status = "unchecked"
+            arithmetic_reason = ""
+            if stated_total is None:
+                arithmetic_status = "insufficient_data"
+                arithmetic_reason = (
+                    "共享分项缺少同阶段组级合计，无法核对组内分项算术"
+                )
             else:
-                for clause in subject_clauses:
-                    if int(clause["start"]) == binding["clause_start"]:
-                        clause["group_component_unbound"] = True
-                        break
-        if budget_total:
-            for binding in subject_bindings:
+                envelope = display_envelope(
+                    [format(group_sum, "f"), format(stated_total, "f")]
+                )
+                difference = group_sum - stated_total
+                if abs(difference) <= envelope:
+                    arithmetic_status = "pass"
+                else:
+                    arithmetic_status = "fail"
+                    arithmetic_reason = (
+                        f"组内分项合计{format(group_sum, 'f')}与组级合计"
+                        f"{format(stated_total, 'f')}不一致，差{format(abs(difference), 'f')}"
+                    )
+                    if total_pos is not None:
+                        result["untrusted_totals"].add(total_pos)
+
+            # 每个有科目名的子句分别判定；重叠切分产生的无名字段不在这里记缺口。
+            for binding in bindings:
+                if not binding["name"]:
+                    continue
+                if binding["own"] or binding["matched"]:
+                    if stage == "final":
+                        result["final_disclosed"].add(binding["clause_start"])
+                elif stage == "final":
+                    # 共享枚举里没有能对应到本科目的决算分项：不能按“数量够了”
+                    # 认定已披露，保留具体缺口。
+                    for clause in subject_clauses:
+                        if int(clause["start"]) == binding["clause_start"]:
+                            clause["group_component_unbound"] = True
+                            break
+
+            check = {
+                "item_start": item_start,
+                "kind": stage,
+                "anchor_pos": enum_start,
+                "component_positions": sorted(component_positions),
+                "component_items": items,
+                "stated_total_wan": str(stated_total) if stated_total is not None else None,
+                "component_sum_wan": format(group_sum, "f"),
+                "arithmetic_status": arithmetic_status,
+                "reason": arithmetic_reason,
+                "unbound_subjects": unbound_subjects,
+                "unbound_components": unbound_components,
+                "unresolved_role_components": [
+                    item["name"] for item in unresolved_role_items
+                ],
+                "ambiguous_bindings": list(dict.fromkeys(ambiguous_names)),
+                "name_candidates": name_candidates,
+                "mixed_roles": mixed_roles,
+                "total_pos": total_pos,
+            }
+            result["group_checks"].append(check)
+            result["components"].update(component_positions)
+        result["totals"].update(total_positions)
+        # 逐项年初预算缺口：只有组级预算合计、子句既没有自己的预算声明、
+        # 也没有绑定到预算分项时才记“未逐项列示”；不把组级预算复制到科目。
+        if any(record_by_pos[pos].get("kind") == "budget" for pos in total_positions):
+            for binding in bindings_by_stage.get("budget") or []:
                 if not binding["name"]:
                     continue
                 clause_start = binding["clause_start"]
@@ -567,31 +710,14 @@ def _shared_group_disclosures(
                 if clause is None:
                     continue
                 clause_end = int(clause["end"])
-                has_budget = any(
+                has_budget = bool(binding["matched"]) or any(
                     clause_start <= int(record["pos"]) < clause_end
+                    and not (enum_start <= int(record["pos"]) < enum_end)
                     and record.get("kind") == "budget"
                     for record in records
                 )
                 if not has_budget:
                     result["budget_not_itemized"].add(clause_start)
-
-        check = {
-            "item_start": item_start,
-            "kind": components_kind,
-            "anchor_pos": enum_start,
-            "component_positions": sorted(component_positions),
-            "component_items": per_item,
-            "stated_total_wan": str(stated_total) if stated_total is not None else None,
-            "component_sum_wan": format(group_sum, "f"),
-            "arithmetic_status": arithmetic_status,
-            "reason": arithmetic_reason,
-            "unbound_subjects": unbound_subjects,
-            "unbound_components": [item["name"] for item in unbound_components],
-            "total_pos": total_pos,
-        }
-        result["group_checks"].append(check)
-        result["components"].update(component_positions)
-        result["totals"].update(total_positions)
     # 有组级合计时，组内分项只作为合计的构成证据，不重复加总。
     if result["totals"]:
         result["components"] -= result["totals"]
@@ -1110,29 +1236,54 @@ class R33251_FunctionalDetailCompleteness(Rule):
         for check in accounting.get("group_checks") or []:
             kind = str(check.get("kind") or "")
             relation = f"V33-251:{kind}:group:{check.get('item_start')}"
-            problems = []
+            blocking = []
+            hints = []
             if check.get("arithmetic_status") == "fail":
-                problems.append(str(check.get("reason") or "组内分项与组级合计不一致"))
+                blocking.append(str(check.get("reason") or "组内分项与组级合计不一致"))
+            elif check.get("arithmetic_status") == "insufficient_data":
+                blocking.append(
+                    str(check.get("reason") or "组内分项缺少同阶段组级合计，无法核对算术")
+                )
             if check.get("unbound_subjects"):
-                problems.append(
+                blocking.append(
                     "共享分项未能对应到项级科目："
                     + "、".join(str(value) for value in check["unbound_subjects"])
                 )
-            if check.get("unbound_components"):
-                problems.append(
-                    "共享分项中存在无法归属的条目："
-                    + "、".join(str(value) for value in check["unbound_components"])
+                # 标题科目存在未绑定时，无法归属的分项是错配证据，一并列入。
+                if check.get("unbound_components"):
+                    blocking.append(
+                        "共享分项中存在无法归属的条目："
+                        + "、".join(str(value) for value in check["unbound_components"])
+                    )
+            if check.get("ambiguous_bindings"):
+                blocking.append(
+                    "共享分项与科目对应存在歧义（重复名称或一名多配）："
+                    + "、".join(str(value) for value in check["ambiguous_bindings"])
                 )
-            if problems:
-                message = "；".join(problems) + "。"
+            if check.get("unresolved_role_components"):
+                blocking.append(
+                    "共享分项未写明金额阶段，无法纳入组内核对："
+                    + "、".join(str(value) for value in check["unresolved_role_components"])
+                )
+            if check.get("name_candidates"):
+                hints.append(
+                    "名称相似但身份未证实，不作金额绑定："
+                    + "、".join(
+                        f"{entry.get('component')}↔{entry.get('subject')}"
+                        for entry in check["name_candidates"] if isinstance(entry, dict)
+                    )
+                )
+            if blocking:
+                message = "；".join([*blocking, *hints]) + "。"
+                arithmetic_fail = check.get("arithmetic_status") == "fail"
                 relation_receipt(
                     self, doc, relation, [],
-                    status="fail" if check.get("arithmetic_status") == "fail" else "insufficient_data",
+                    status="fail" if arithmetic_fail else "insufficient_data",
                     formula="sum(shared components) == group total (万元)",
                     reason=message,
                     reason_codes=(
                         ["item_sum_mismatch"]
-                        if check.get("arithmetic_status") == "fail"
+                        if arithmetic_fail
                         else ["item_disclosure_missing"]
                     ),
                 )
@@ -1144,14 +1295,23 @@ class R33251_FunctionalDetailCompleteness(Rule):
                     check_relation_id=f"{self.code}:{relation.split(':', 1)[1]}",
                 ))
             else:
+                pass_reason = (
+                    f"组内分项合计{check.get('component_sum_wan')}万元"
+                    f"与组级合计{check.get('stated_total_wan')}万元一致"
+                )
+                if check.get("unbound_components"):
+                    pass_reason += (
+                        "（另有未逐一对应科目的组内分项，已按组级合计核对留痕："
+                        + "、".join(str(value) for value in check["unbound_components"])
+                        + "）"
+                    )
+                if hints:
+                    pass_reason += "（" + "；".join(hints) + "）"
                 relation_receipt(
                     self, doc, relation, [],
                     status="pass",
                     formula="sum(shared components) == group total (万元)",
-                    reason=(
-                        f"组内分项合计{check.get('component_sum_wan')}万元"
-                        f"与组级合计{check.get('stated_total_wan')}万元一致"
-                    ),
+                    reason=pass_reason,
                 )
         listed_final = sum(1 for record in records if record["kind"] == "final")
         for key, label, kind, checklist in (

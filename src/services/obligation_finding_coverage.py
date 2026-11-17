@@ -1003,6 +1003,55 @@ def _table_reading_cascade_root(
 
 _V33251_KIND_RE = re.compile(r"V33-251:(?P<kind>budget|final)")
 
+# 义务/问题文本中的主体线索：以固定后缀结尾的连续汉字（科目/单位/机构等）。
+_SUBJECT_TOKEN_RE = re.compile(
+    r"[\u4e00-\u9fff]{2,24}?(?:科目|单位|部门|局|中心|馆|所|学校|医院|大队|支队)"
+)
+
+
+def _subject_tokens_from_prose(text: str) -> Set[str]:
+    return set(_SUBJECT_TOKEN_RE.findall(str(text or "")))
+
+
+def _obligation_subject_tokens(item: Any) -> Set[str]:
+    """义务侧可识别主体：detail 文本线索 + 缺数操作数里的行/科目标识。"""
+    tokens = _subject_tokens_from_prose(str(getattr(item, "detail", None) or ""))
+    for operand in getattr(item, "missing_operands", None) or []:
+        if isinstance(operand, Mapping):
+            for key in ("row_key", "subject_name", "name"):
+                value = str(operand.get(key) or "").strip()
+                if value:
+                    tokens.add(value)
+                    tokens.update(_subject_tokens_from_prose(value))
+    return tokens
+
+
+def _finding_subject_tokens(finding: Mapping[str, Any]) -> Set[str]:
+    """根问题侧可识别主体：location 显式主体字段 + 消息文本线索。"""
+    location = _json_dict(finding.get("location"))
+    tokens: Set[str] = set()
+    for key in ("subject_name", "actual_name", "expected_name", "name"):
+        value = str(location.get(key) or "").strip()
+        if value:
+            tokens.add(value)
+    message = " ".join(
+        str(finding.get(key) or "") for key in ("message", "title")
+    )
+    tokens.update(_subject_tokens_from_prose(message))
+    return tokens
+
+
+def _subjects_conflict(left: Set[str], right: Set[str]) -> bool:
+    """两侧都有可识别主体、且没有任何一对互为包含时，判定不是同一主体。
+
+    任一侧提取不到主体就不下结论（不能因文本省略而误拒真实同源）。
+    """
+    if not left or not right:
+        return False
+    return not any(
+        one in other or other in one for one in left for other in right
+    )
+
 
 def _v33251_defect_cascade_roots(
     item: Any,
@@ -1032,6 +1081,7 @@ def _v33251_defect_cascade_roots(
     for text in texts:
         pages.update(int(match.group(1)) for match in re.finditer(r"第(\d+)页", text))
     checklist = {"budget": "C-11", "final": "C-12"}
+    obligation_subjects = _obligation_subject_tokens(item)
     roots: List[str] = []
     for finding in _current_rule_findings(result_row):
         if not isinstance(finding, dict) or not is_formal_finding(finding):
@@ -1044,6 +1094,10 @@ def _v33251_defect_cascade_roots(
         if rule_id != "V33-251" and "V33-251" not in related:
             continue
         location = _json_dict(finding.get("location"))
+        # 科目身份：页码相交只是必要线索；两侧都能识别主体且互不包含时，
+        # 这是另一个科目的披露问题，不能承接本义务的未完成关系。
+        if _subjects_conflict(obligation_subjects, _finding_subject_tokens(finding)):
+            continue
         item_code = str(location.get("checklist_item") or "")
         if not any(checklist[kind] == item_code for kind in kinds):
             continue
@@ -1080,6 +1134,7 @@ def _subject_name_cascade_roots(
     pages = {
         int(match.group(1)) for match in re.finditer(r"第(\d+)页", detail)
     }
+    obligation_subjects = _obligation_subject_tokens(item)
     candidates: List[tuple] = []
     for finding in _current_rule_findings(result_row):
         if not isinstance(finding, dict) or not is_formal_finding(finding):
@@ -1090,6 +1145,9 @@ def _subject_name_cascade_roots(
         message = str(finding.get("message") or finding.get("title") or "")
         if not (str(finding.get("rule_id") or "") == "CMM-017"
                 or ("单位名称" in message and ("不一致" in message or "多字" in message))):
+            continue
+        # 主体身份：同页不同单位（甲单位的问题承接不了乙单位的冲突）不算根问题。
+        if _subjects_conflict(obligation_subjects, _finding_subject_tokens(finding)):
             continue
         location = _json_dict(finding.get("location"))
         finding_pages = _finding_pages(location)
@@ -1190,12 +1248,38 @@ def _obligation_pages(item: Any) -> Set[int]:
     return pages
 
 
+def _independent_source_pages(item: Any) -> Set[int]:
+    """义务中携带独立来源证据的页：表实例缺数，或操作数自带独立读取原因。
+
+    这类来源不能被主体/阶段类根问题解释；除非根问题证据覆盖到同一页，
+    否则整条义务保守保留（页码相交不能代替因果覆盖）。
+    """
+    pages: Set[int] = set()
+    for operand in getattr(item, "missing_operands", None) or []:
+        if not isinstance(operand, Mapping):
+            continue
+        page = operand.get("page")
+        if not (isinstance(page, int) and not isinstance(page, bool) and page > 0):
+            continue
+        source = str(operand.get("source") or "").strip()
+        operand_codes = {
+            str(code).strip()
+            for code in (operand.get("reason_codes") or [])
+            if str(code).strip()
+        }
+        if source == "table" or (operand_codes & _INDEPENDENT_REASON_CODES):
+            pages.add(page)
+    return pages
+
+
 def _guarded_roots(item: Any, roots: Sequence[str], result_row: Any, structured_ingest: Any = None,
                    *, allow_reading_codes: bool = False) -> List[str]:
     """根问题必须覆盖义务中的独立原因与来源范围，否则保留未完成义务。
 
-    一个根问题不能解释另一张表的读取失败、执行异常或完全不同页的独立缺数；
+    一个根问题不能解释另一张表的读取失败、执行异常或不同页的独立缺数；
     这类义务必须继续留在未完成清单，不能被“已关联根问题”整体移除。
+    页码相交只是必要线索：根问题证据未覆盖的来源页若携带独立来源
+    （表实例缺数/独立读取原因），整条义务保守保留并如实留在未归并清单。
     """
     root_ids = list(dict.fromkeys(str(root) for root in roots if str(root or "").strip()))
     if not root_ids:
@@ -1218,15 +1302,20 @@ def _guarded_roots(item: Any, roots: Sequence[str], result_row: Any, structured_
         if finding:
             root_pages.update(_finding_pages(_json_dict(finding.get("location"))))
     structured = _json_dict(structured_ingest)
-    for item in structured.get("review_items") or []:
-        if not isinstance(item, Mapping) or str(item.get("id") or "") not in root_ids:
+    for entry in structured.get("review_items") or []:
+        if not isinstance(entry, Mapping) or str(entry.get("id") or "") not in root_ids:
             continue
-        page = item.get("page") or item.get("page_number")
+        page = entry.get("page") or entry.get("page_number")
         if isinstance(page, int) and not isinstance(page, bool) and page > 0:
             root_pages.add(page)
     pages = _obligation_pages(item)
     if pages:
         if not root_pages or not (pages & root_pages):
+            return []
+        uncovered = pages - root_pages
+        if uncovered and (uncovered & _independent_source_pages(item)):
+            # 部分页相交：未被根问题证据覆盖的页还有独立的表实例缺数，
+            # 不能整条归并；已确定的部分关联由未归并清单自身的原因码保留。
             return []
     elif len(root_ids) > 1:
         return []
@@ -1257,10 +1346,11 @@ def cascade_root_issue_ids(
         return _guarded_roots(item, [reading_root], result_row, structured_ingest, allow_reading_codes=True)
     v33251_roots = _v33251_defect_cascade_roots(item, result_row, visible)
     if v33251_roots:
-        return v33251_roots
+        # 与其他分支同一约束流程：独立原因/来源范围守卫不再被分支提前返回绕过。
+        return _guarded_roots(item, v33251_roots, result_row, structured_ingest)
     name_roots = _subject_name_cascade_roots(item, result_row, visible)
     if name_roots:
-        return name_roots
+        return _guarded_roots(item, name_roots, result_row, structured_ingest)
     unit_roots = _unit_defect_cascade_roots(item, result_row, visible)
     if unit_roots:
         return _guarded_roots(item, unit_roots, result_row, structured_ingest)
@@ -1283,6 +1373,66 @@ def cascade_root_issue_id(
         structured_ingest=structured_ingest,
     )
     return roots[0] if roots else None
+
+
+def cascade_partial_associations(
+    item: Any,
+    result_row: Any,
+    visible_issue_ids: Optional[Iterable[str]] = None,
+    *,
+    structured_ingest: Any = None,
+) -> Dict[str, Any]:
+    """复合义务无法整条归并时，记录已确定的部分根问题关联（2026-11-17 RR-02）。
+
+    义务保守保留在未归并清单，不归为 upstream_material_defect；但页码/主体
+    部分相交的候选根问题与仍未被根问题证据覆盖的独立来源页，如实写进
+    ``partial_root_association``，供报告层与人工复核定位。只读，不改状态。
+    """
+    if str(getattr(item, "status", "") or "") != "insufficient_data":
+        return {}
+    visible = set(visible_issue_ids) if visible_issue_ids is not None else None
+    candidates: List[str] = []
+    for root in (
+        _missing_or_empty_table_cascade_root(item, result_row, visible),
+        _missing_section_cascade_root(item, result_row, visible),
+        _table_reading_cascade_root(
+            item, result_row, visible, structured_ingest=structured_ingest
+        ),
+    ):
+        if root:
+            candidates.append(str(root))
+    candidates.extend(_v33251_defect_cascade_roots(item, result_row, visible))
+    candidates.extend(_subject_name_cascade_roots(item, result_row, visible))
+    candidates.extend(_unit_defect_cascade_roots(item, result_row, visible))
+    candidates.extend(_v33227_name_mismatch_roots(item, result_row, visible))
+    candidate_ids = [str(value) for value in dict.fromkeys(candidates) if str(value).strip()]
+    if not candidate_ids:
+        return {}
+    findings = {
+        str(finding.get("id") or ""): finding
+        for finding in _current_rule_findings(result_row)
+        if isinstance(finding, dict)
+    }
+    root_pages: Set[int] = set()
+    for root_id in candidate_ids:
+        finding = findings.get(root_id)
+        if finding:
+            root_pages.update(_finding_pages(_json_dict(finding.get("location"))))
+    structured = _json_dict(structured_ingest)
+    for entry in structured.get("review_items") or []:
+        if not isinstance(entry, Mapping) or str(entry.get("id") or "") not in candidate_ids:
+            continue
+        page = entry.get("page") or entry.get("page_number")
+        if isinstance(page, int) and not isinstance(page, bool) and page > 0:
+            root_pages.add(page)
+    pages = _obligation_pages(item)
+    uncovered = sorted(
+        (pages & _independent_source_pages(item)) - root_pages
+    ) if pages else []
+    return {
+        "root_issue_ids": candidate_ids,
+        "uncovered_independent_pages": uncovered,
+    }
 
 
 def _missing_or_empty_table_cascade_root(

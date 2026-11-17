@@ -97,3 +97,47 @@ def test_rerun_failure_keeps_failed_attempt_and_original_contract():
     record = coordinator.records[0]
     assert record["status"] == "not_recovered"
     assert "still broken" in (record["attempts"][0]["error"] or "")
+
+
+def test_verify_false_means_not_recovered_even_when_rerun_returns():
+    """恢复是否成功以重算后的有效状态为准：verify 不过就算 rerun 返回也不算。"""
+    coordinator = RecoveryCoordinator([
+        RecoveryStrategy("fake", "fp", lambda document: True),
+    ])
+    assert coordinator.recover(
+        _doc(), rule_id="V33-TEST", reason_codes=["operand_missing"],
+        rerun=lambda: "ok", verify=lambda result: False,
+    ) is None
+    record = coordinator.records[0]
+    assert record["status"] == "not_recovered"
+    assert record["attempts"][0]["error"] == "rerun_relations_still_incomplete"
+    # 同一策略指纹仍被占用：不重复尝试。
+    assert coordinator.recover(
+        _doc(), rule_id="V33-TEST", reason_codes=["operand_missing"],
+        rerun=lambda: "ok", verify=lambda result: True,
+    ) is None
+
+
+def test_verify_true_and_verify_error_paths():
+    coordinator = RecoveryCoordinator([
+        RecoveryStrategy("fake", "fp", lambda document: True),
+    ])
+    assert coordinator.recover(
+        _doc(), rule_id="V33-TEST", reason_codes=["operand_missing"],
+        rerun=lambda: "ok", verify=lambda result: True,
+    ) == "ok"
+    assert coordinator.records[0]["status"] == "recovered"
+
+    def broken_verify(_result):
+        raise RuntimeError("verifier exploded")
+
+    coordinator2 = RecoveryCoordinator([
+        RecoveryStrategy("fake", "fp", lambda document: True),
+    ])
+    assert coordinator2.recover(
+        _doc(), rule_id="V33-TEST", reason_codes=["operand_missing"],
+        rerun=lambda: "ok", verify=broken_verify,
+    ) is None
+    record = coordinator2.records[0]
+    assert record["status"] == "not_recovered"
+    assert "verifier exploded" in (record["attempts"][0]["error"] or "")

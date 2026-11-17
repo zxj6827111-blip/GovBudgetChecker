@@ -7,6 +7,16 @@
 - ``--freeze-out``：把预览结果写成冻结选集，后续按精确版本/哈希关联；
 - ``--freeze-list``：实际重分析只处理冻结选集，冻结项缺失或版本变化会留回执；
 - ``--checkpoint``：每完成一份追加 JSONL，重跑时跳过已完成项。
+
+断点身份纪律（2026-11-17 第二次独立复核 RR-05A）：
+
+- 完成与否按最终任务状态分类：``status=error``（流水线异常被捕获后正常
+  返回）或非终态一律记 failed，不能把“没抛异常”当 completed；
+- 断点回执记录批次指纹（选集身份 + AI 策略）、输入/结果 revision、原件
+  哈希与文档版本；只有“本批次确已完成、且当前行仍是该批次产物”的条目
+  才允许跳过，旧批次或其他配置的断点不静默复用；
+- 同批次恢复时先按断点识别“本批已产生的新 revision”，不先报
+  ``frozen_revision_changed``；不同批次或版本变化仍按处置原因跳过。
 """
 
 from __future__ import annotations
@@ -160,18 +170,89 @@ def _load_freeze_list(path: Path) -> List[Dict[str, Any]]:
     return [dict(item) for item in slots if isinstance(item, dict)]
 
 
-def _load_checkpoint(path: Path) -> set[str]:
-    completed: set[str] = set()
+#: 有有效结果、可记“完成执行”的终态；与覆盖完整性分开统计。
+_TERMINAL_OK_STATUSES = frozenset({"done", "review_required", "degraded"})
+TOOL_VERSION = "reanalyze_current_slots/2"
+
+
+def _selection_fingerprint(
+    entries: List[Dict[str, Any]], *, ai_policy: str, recover_stale_active: bool
+) -> str:
+    """同一批次（选集身份 + 运行策略）的指纹；跨批次断点不得静默复用。"""
+    canonical = [
+        {
+            "job_uuid": str(item.get("job_uuid") or ""),
+            "slot_id": str(item.get("slot_id") or ""),
+            "document_version_id": item.get("document_version_id"),
+            "file_hash": item.get("file_hash"),
+            "analysis_revision": item.get("analysis_revision"),
+        }
+        for item in entries
+    ]
+    canonical.sort(key=lambda entry: entry["job_uuid"])
+    blob = json.dumps(
+        {
+            "tool": TOOL_VERSION,
+            "ai_policy": ai_policy,
+            "recover_stale_active": bool(recover_stale_active),
+            "targets": canonical,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def _load_checkpoint(path: Path) -> List[Dict[str, Any]]:
+    """逐行读取断点回执；只解析结构完整的 JSONL 行，不按 job_id 去重。"""
+    records: List[Dict[str, Any]] = []
     if not path.is_file():
-        return completed
+        return records
     for line in path.read_text(encoding="utf-8").splitlines():
         try:
             item = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if item.get("outcome") == "completed" and item.get("job_id"):
-            completed.add(str(item["job_id"]))
-    return completed
+        if isinstance(item, dict) and item.get("job_id"):
+            records.append(item)
+    return records
+
+
+def _resumable_checkpoint_record(
+    records: List[Dict[str, Any]],
+    *,
+    batch_fingerprint: str,
+    job_id: str,
+    file_hash: Any,
+    document_version_id: Any,
+    result_revision: Any,
+) -> bool:
+    """仅当“本批次确已完成、且当前行仍是该批次产物”时才允许跳过。
+
+    - outcome 必须是 completed（error/failed/未终态一律重跑）；
+    - 批次指纹必须一致（旧批次/其他配置的断点不静默复用）；
+    - 结果 revision 必须等于当前行的 analysis_revision：中间有人重跑过、
+      或断点属于旧版本批次时，当前状态已不是该断点描述的状态。
+    """
+    for record in records:
+        if str(record.get("job_id") or "") != str(job_id or ""):
+            continue
+        if record.get("outcome") != "completed":
+            continue
+        if record.get("batch_fingerprint") != batch_fingerprint:
+            continue
+        if file_hash and record.get("file_hash") not in (None, file_hash):
+            continue
+        if document_version_id is not None and record.get("document_version_id") not in (
+            None,
+            document_version_id,
+        ):
+            continue
+        if not result_revision or record.get("result_revision") != result_revision:
+            continue
+        return True
+    return False
 
 
 async def _append_checkpoint(path: Path, record: Dict[str, Any], lock: asyncio.Lock) -> None:
@@ -186,6 +267,8 @@ async def _run_one(
     *,
     recover_stale_active: bool,
     ai_policy: str,
+    batch_fingerprint: str = "",
+    row: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     job_dir = runtime.UPLOAD_ROOT / job_id
     if not job_dir.is_dir():
@@ -210,6 +293,16 @@ async def _run_one(
         status_data["error"] = "recovered_orphaned_active_state_before_reanalyze"
         runtime.write_json_file(status_path, status_data)
 
+    row = row or {}
+    record: Dict[str, Any] = {
+        "job_id": job_id,
+        "batch_fingerprint": batch_fingerprint,
+        "input_revision": str(row.get("analysis_revision") or status_data.get("analysis_revision") or ""),
+        "file_hash": row.get("file_hash"),
+        "document_version_id": row.get("current_document_version_id"),
+        "ai_mode": "ai" if is_ai else "local",
+    }
+
     body: Optional[Dict[str, Any]] = None
     if is_ai and ai_policy == "force_local":
         body = {
@@ -223,24 +316,41 @@ async def _run_one(
         prep = await runtime.reanalyze_job(job_id, body)
         await api_main._run_pipeline(job_dir)
         after = runtime.get_job_status_payload(job_id)
-        return {
-            "job_id": job_id,
-            "outcome": "completed",
-            "status": after.get("status"),
-            "analysis_revision": after.get("analysis_revision"),
-            "check_method": prep.get("check_method"),
-            "review_reasons": [
-                r.get("code") for r in (after.get("review_reasons") or []) if isinstance(r, dict)
-            ],
-            "elapsed_s": round(time.monotonic() - t0, 2),
-        }
+        final_status = str(after.get("status") or "").strip().lower()
+        record.update({
+            "result_revision": after.get("analysis_revision"),
+            "status": final_status,
+        })
+        # 流水线异常会被捕获并写成 status=error 后正常返回：
+        # 完成与否必须按最终任务状态分类，不能把“没抛异常”当成功。
+        if final_status in {"error", "failed", "cancelled"}:
+            record.update({
+                "outcome": "failed",
+                "error": str(after.get("error") or "") or f"final_status={final_status}",
+            })
+        elif final_status not in _TERMINAL_OK_STATUSES:
+            record.update({
+                "outcome": "failed",
+                "error": f"final_status_not_terminal:{final_status or 'missing'}",
+            })
+        else:
+            record.update({
+                "outcome": "completed",
+                "coverage_status": str(after.get("quality_status") or ""),
+                "review_reasons": [
+                    r.get("code") for r in (after.get("review_reasons") or []) if isinstance(r, dict)
+                ],
+                "check_method": prep.get("check_method"),
+            })
+        record["elapsed_s"] = round(time.monotonic() - t0, 2)
+        return record
     except Exception as exc:  # noqa: BLE001
-        return {
-            "job_id": job_id,
+        record.update({
             "outcome": "failed",
             "error": f"{type(exc).__name__}: {exc}",
             "elapsed_s": round(time.monotonic() - t0, 2),
-        }
+        })
+        return record
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -297,7 +407,7 @@ async def _run(args: argparse.Namespace) -> int:
     runtime._job_queue = _NoopQueue()
     checkpoint_path = Path(args.checkpoint) if args.checkpoint else None
     checkpoint_lock = asyncio.Lock()
-    resumed = _load_checkpoint(checkpoint_path) if checkpoint_path else set()
+    checkpoint_records = _load_checkpoint(checkpoint_path) if checkpoint_path else []
     try:
         conn = await DatabaseConnection.acquire()
         try:
@@ -307,10 +417,24 @@ async def _run(args: argparse.Namespace) -> int:
         by_job = {str(row.get("job_uuid") or ""): row for row in rows}
         by_slot = {str(row.get("slot_id") or ""): row for row in rows}
         selection_errors: List[Dict[str, Any]] = []
+        skipped_results: List[Dict[str, Any]] = []
 
+        def _identity(row: Dict[str, Any]) -> Dict[str, Any]:
+            return {
+                "job_uuid": str(row.get("job_uuid") or ""),
+                "slot_id": str(row.get("slot_id") or ""),
+                "document_version_id": row.get("current_document_version_id"),
+                "file_hash": row.get("file_hash"),
+                "analysis_revision": row.get("analysis_revision"),
+            }
+
+        targets: List[str] = []
+        target_rows: Dict[str, Dict[str, Any]] = {}
         if args.freeze_list:
             frozen = _load_freeze_list(Path(args.freeze_list))
-            targets: List[str] = []
+            batch_fingerprint = _selection_fingerprint(
+                frozen, ai_policy=args.ai_policy, recover_stale_active=args.recover_stale_active
+            )
             for entry in frozen:
                 job_id = str(entry.get("job_uuid") or "").strip()
                 slot_id = str(entry.get("slot_id") or "").strip()
@@ -319,6 +443,21 @@ async def _run(args: argparse.Namespace) -> int:
                     selection_errors.append({
                         "slot_id": slot_id or None, "job_id": job_id or None,
                         "outcome": "skipped", "reason": "frozen_slot_missing",
+                    })
+                    continue
+                # 同批次已完成且当前行仍是其产物 → 直接跳过；
+                # 本批产生的新 revision 不能先报 frozen_revision_changed。
+                if _resumable_checkpoint_record(
+                    checkpoint_records,
+                    batch_fingerprint=batch_fingerprint,
+                    job_id=str(row.get("job_uuid") or ""),
+                    file_hash=row.get("file_hash"),
+                    document_version_id=row.get("current_document_version_id"),
+                    result_revision=row.get("analysis_revision"),
+                ):
+                    skipped_results.append({
+                        "slot_id": row.get("slot_id"), "job_id": row.get("job_uuid"),
+                        "outcome": "skipped", "reason": "checkpoint_completed",
                     })
                     continue
                 mismatch = None
@@ -335,23 +474,46 @@ async def _run(args: argparse.Namespace) -> int:
                     })
                     continue
                 targets.append(str(row.get("job_uuid")))
-        elif args.job_id:
-            targets = list(dict.fromkeys(args.job_id))
+                target_rows[str(row.get("job_uuid"))] = row
         else:
-            targets = [str(row.get("job_uuid")) for row in rows if row.get("job_uuid")]
+            if args.job_id:
+                wanted = list(dict.fromkeys(args.job_id))
+                rows = [row for row in rows if str(row.get("job_uuid") or "") in wanted]
+            batch_fingerprint = _selection_fingerprint(
+                [_identity(row) for row in rows],
+                ai_policy=args.ai_policy,
+                recover_stale_active=args.recover_stale_active,
+            )
+            for row in rows:
+                job_id = str(row.get("job_uuid") or "")
+                if not job_id:
+                    continue
+                if _resumable_checkpoint_record(
+                    checkpoint_records,
+                    batch_fingerprint=batch_fingerprint,
+                    job_id=job_id,
+                    file_hash=row.get("file_hash"),
+                    document_version_id=row.get("current_document_version_id"),
+                    result_revision=row.get("analysis_revision"),
+                ):
+                    skipped_results.append({
+                        "slot_id": row.get("slot_id"), "job_id": job_id,
+                        "outcome": "skipped", "reason": "checkpoint_completed",
+                    })
+                    continue
+                targets.append(job_id)
+                target_rows[job_id] = row
 
         targets = list(dict.fromkeys(targets))
-        pending_targets = [jid for jid in targets if jid not in resumed]
+        pending_targets = targets
         print(
-            f"Target jobs: {len(targets)} (resume_skip={len(targets) - len(pending_targets)}, "
+            f"Target jobs: {len(targets)} (resume_skip={len(skipped_results)}, "
             f"ai_policy={args.ai_policy}, concurrency={args.concurrency})",
             flush=True,
         )
         sem = asyncio.Semaphore(max(1, args.concurrency))
         results: List[Dict[str, Any]] = list(selection_errors)
-        results.extend({
-            "job_id": jid, "outcome": "skipped", "reason": "checkpoint_completed",
-        } for jid in targets if jid in resumed)
+        results.extend(skipped_results)
 
         async def _worker(idx: int, jid: str) -> Dict[str, Any]:
             async with sem:
@@ -359,6 +521,8 @@ async def _run(args: argparse.Namespace) -> int:
                     jid,
                     recover_stale_active=args.recover_stale_active,
                     ai_policy=args.ai_policy,
+                    batch_fingerprint=batch_fingerprint,
+                    row=target_rows.get(jid),
                 )
                 print(
                     f"[{idx}/{len(pending_targets)}] {jid[:8]} -> {res.get('outcome')} "
@@ -376,18 +540,23 @@ async def _run(args: argparse.Namespace) -> int:
         ]
         results.extend(await asyncio.gather(*tasks))
 
+        completed_results = [r for r in results if r["outcome"] == "completed"]
         summary: Dict[str, Any] = {
             "total": len(results),
-            "completed": sum(1 for r in results if r["outcome"] == "completed"),
+            "completed": len(completed_results),
+            # 覆盖完整性与“完成执行”分开统计：review_required/degraded
+            # 属于完成执行，但仍有未完成覆盖或降级事项。
+            "coverage_incomplete": sum(
+                1 for r in completed_results if r.get("status") != "done"
+            ),
             "skipped": sum(1 for r in results if r["outcome"] == "skipped"),
             "failed": sum(1 for r in results if r["outcome"] == "failed"),
             "statuses": {},
             "results": results,
         }
-        for r in results:
-            if r["outcome"] == "completed":
-                st = str(r.get("status") or "unknown")
-                summary["statuses"][st] = summary["statuses"].get(st, 0) + 1
+        for r in completed_results:
+            st = str(r.get("status") or "unknown")
+            summary["statuses"][st] = summary["statuses"].get(st, 0) + 1
         print(
             "SUMMARY:",
             json.dumps({k: v for k, v in summary.items() if k != "results"}, ensure_ascii=False),

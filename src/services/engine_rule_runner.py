@@ -6,7 +6,7 @@
 import logging
 import time
 import uuid
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from src.schemas.issues import JobContext, AnalysisConfig, IssueItem
 from src.services.check_progress import update_progress
@@ -30,6 +30,11 @@ from src.utils.provenance import ENGINE_VERSION
 from src.utils.rule_text import default_rule_suggestion, infer_rule_title
 
 logger = logging.getLogger(__name__)
+
+#: 关系回执上的未完成态：恢复后的有效回执不得仍是这些状态（RR-05B）。
+_FAILING_RECEIPT_STATUSES = frozenset({
+    STATUS_INSUFFICIENT_DATA, STATUS_PARSE_ERROR, STATUS_EXECUTION_ERROR,
+})
 
 
 class EngineRuleRunner:
@@ -342,6 +347,101 @@ class EngineRuleRunner:
             if refs:
                 receipt["issue_refs"] = list(dict.fromkeys([*(receipt.get("issue_refs") or []), *refs]))
 
+    @staticmethod
+    def _make_recovery_rerun(document: Optional[Document], rule_id: str, rule_obj: Any):
+        """恢复后的重跑必须经过与首次执行相同的规则身份约束。"""
+
+        def _rerun() -> Any:
+            from src.engine.rule_identity import rule_identity_requirements
+
+            with rule_identity_requirements(document, str(rule_id)):
+                return rule_obj.apply(document)
+
+        return _rerun
+
+    @staticmethod
+    def _make_receipt_verifier(
+        document: Optional[Document],
+        receipt_start: int,
+        failing_relations: Set[str],
+    ):
+        """恢复是否成功以重算后的有效关系回执为准，不看 rerun 是否返回了列表。
+
+        原先失败的每条关系必须有重跑后写下的新回执、且不再是未完成态；
+        未被重跑覆盖的关系按仍失败处理，继续阻塞。
+        """
+        if not failing_relations:
+            return None
+
+        def _verify(_result: Any) -> bool:
+            receipts = getattr(document, "fact_receipts", None) or []
+            last_by_relation: Dict[str, dict] = {}
+            for receipt in receipts[max(0, receipt_start):]:
+                if isinstance(receipt, dict) and receipt.get("sub_check_id"):
+                    last_by_relation[str(receipt["sub_check_id"])] = receipt
+            for relation in failing_relations:
+                receipt = last_by_relation.get(relation)
+                if receipt is None:
+                    return False
+                if str(receipt.get("status") or "") in _FAILING_RECEIPT_STATUSES:
+                    return False
+            return True
+
+        return _verify
+
+    def _supersede_recovered_receipts(
+        self,
+        document: Optional[Document],
+        receipt_start: int,
+        pre_recovery_count: int,
+    ) -> None:
+        """恢复成功后区分历史尝试回执与当前有效回执（RR-05B）。
+
+        被重跑回执覆盖的旧失败回执移出 ``fact_receipts``（下游聚合只看当前
+        有效回执），失败历史留存审计（stats.recovery_superseded_receipts 与
+        document.superseded_fact_receipts）；未被重跑覆盖的关系回执继续留在
+        有效集合中阻塞，已有 partial findings 不受影响。
+        """
+        if document is None:
+            return
+        receipts = getattr(document, "fact_receipts", None)
+        if not isinstance(receipts, list):
+            return
+        start = max(0, int(receipt_start))
+        recovery_start = max(start, int(pre_recovery_count))
+        if recovery_start > len(receipts):
+            recovery_start = len(receipts)
+        rewritten_ids = {
+            str(receipt.get("sub_check_id") or "")
+            for receipt in receipts[recovery_start:]
+            if isinstance(receipt, dict) and receipt.get("sub_check_id")
+        }
+        if not rewritten_ids:
+            return
+        keep: List[Any] = []
+        superseded: List[dict] = []
+        for index, receipt in enumerate(receipts):
+            if (
+                start <= index < recovery_start
+                and isinstance(receipt, dict)
+                and str(receipt.get("sub_check_id") or "") in rewritten_ids
+            ):
+                superseded.append(receipt)
+            else:
+                keep.append(receipt)
+        if not superseded:
+            return
+        document.fact_receipts = keep
+        audit = getattr(document, "superseded_fact_receipts", None)
+        if not isinstance(audit, list):
+            audit = []
+            try:
+                document.superseded_fact_receipts = audit
+            except Exception:
+                audit = []
+        audit.extend(superseded)
+        self._stats.setdefault("recovery_superseded_receipts", []).extend(superseded)
+
     def _resolve_report_kind(
         self,
         job_context: JobContext,
@@ -491,14 +591,46 @@ class EngineRuleRunner:
                 except RuleOutcomeSignal as signal:
                     # 有界恢复：只对取数/绑定类原因尝试一次既有恢复策略，
                     # 成功后重跑本条规则；材料缺陷与执行异常不在此重试。
+                    # 恢复输入同时来自信号与本次已登记的关系回执（RR-05B：
+                    # 原因码只写在关系回执上时，恢复也要能触发）。
+                    attempt_receipts = [
+                        receipt
+                        for receipt in (getattr(document, "fact_receipts", None) or [])[receipt_start:]
+                        if isinstance(receipt, dict)
+                    ]
+                    receipt_reason_codes = [
+                        str(code).strip()
+                        for receipt in attempt_receipts
+                        for code in (receipt.get("reason_codes") or [])
+                        if str(code).strip()
+                    ]
+                    failing_relations = {
+                        str(receipt.get("sub_check_id") or "")
+                        for receipt in attempt_receipts
+                        if receipt.get("sub_check_id")
+                        and str(receipt.get("status") or "") in _FAILING_RECEIPT_STATUSES
+                    }
+                    recovery_relation_key = str(getattr(signal, "sub_check_id", "") or "")
+                    if not recovery_relation_key and failing_relations:
+                        recovery_relation_key = sorted(failing_relations)[0]
+                    pre_recovery_receipt_count = len(getattr(document, "fact_receipts", None) or [])
                     recovered = self._recovery.recover(
                         document,
                         rule_id=str(rule_id),
-                        reason_codes=getattr(signal, "reason_codes", []) or [],
-                        relation_key=str(getattr(signal, "sub_check_id", "") or ""),
-                        rerun=lambda rule_obj=rule_obj: rule_obj.apply(document),
+                        reason_codes=list(dict.fromkeys([
+                            *(getattr(signal, "reason_codes", []) or []),
+                            *receipt_reason_codes,
+                        ])),
+                        relation_key=recovery_relation_key,
+                        rerun=self._make_recovery_rerun(document, rule_id, rule_obj),
+                        verify=self._make_receipt_verifier(
+                            document, receipt_start, failing_relations
+                        ),
                     )
                     if recovered is not None:
+                        self._supersede_recovered_receipts(
+                            document, receipt_start, pre_recovery_receipt_count
+                        )
                         recovered_issues = list(recovered or [])
                         from src.engine.rules_v33 import apply_delivery_suppressions
 
