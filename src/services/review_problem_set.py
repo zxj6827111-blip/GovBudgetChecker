@@ -49,7 +49,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from src.schemas.review_lifecycle import (
     PROBLEM_SOURCE_FINDING,
@@ -298,6 +298,18 @@ def _structured_issues(
     return collected
 
 
+def _is_confirmed_business_finding(item: Mapping[str, Any]) -> bool:
+    """与 ReviewReport v3 的 confirmed issue 条件逐项一致。"""
+    status = str(item.get("evidence_status") or "").strip().lower()
+    verification = item.get("evidence_verification")
+    verification = verification if isinstance(verification, Mapping) else {}
+    return (
+        status in {"complete", "verified"}
+        and str(verification.get("status") or "").strip().lower() == "verified"
+        and verification.get("source_identity_complete") is True
+    )
+
+
 def collect_review_problems(
     *,
     job_uuid: str,
@@ -319,8 +331,9 @@ def collect_review_problems(
         merged_result=merged_result,
         result=result,
     )
-    structured = _structured_issues(job_uuid=job_uuid, structured_ingest=structured_ingest)
-    combined = _dedupe_by_id([*display, *structured])
+    # schema v3：结构化识别项已进入 diagnostics，不再是业务问题；
+    # 不再让旧 structured source 在后台升格为强制门禁项。
+    combined = _dedupe_by_id([*display])
 
     ignored = {_text(item) for item in ignored_issue_ids if _text(item)}
 
@@ -331,7 +344,6 @@ def collect_review_problems(
             # 与工作台可见集合保持一致：页面看不到的条目不参与门禁，
             # 否则会出现"页面上没有这条问题，却永远完不成复核"的死局。
             continue
-        structured_item = _text(item.get("source")) == PROBLEM_SOURCE_STRUCTURED_REVIEW
         members = []
         for container in (item, item.get("location") if isinstance(item.get("location"), dict) else {}):
             for key in ("merged_issue_ids", "member_issue_ids"):
@@ -342,22 +354,16 @@ def collect_review_problems(
         problems.append(
             ReviewProblem(
                 issue_id=issue_id,
-                source=(
-                    PROBLEM_SOURCE_STRUCTURED_REVIEW
-                    if structured_item
-                    else PROBLEM_SOURCE_FINDING
-                ),
+                source=PROBLEM_SOURCE_FINDING,
                 title=_text(item.get("title")) or _text(item.get("message")),
                 severity=_text(item.get("severity")),
-                # 结构化待复核项没有 evidence_status，恒为正式项；
-                # finding 是否正式由 evidence guard 唯一决定。
+                # 与 ReviewReport v3 同一口径：只有来源身份和证据绑定
+                # 均已核实的 finding 才是正式问题；旧 severity/缺元数据
+                # 的 finding 只能作为参考候选，不能继续阻塞完成复核。
                 is_formal=(
-                    True
-                    if structured_item
-                    else (
-                        not bool(item.get("_merge_candidate_review"))
-                        and is_formal_finding(item)
-                    )
+                    not bool(item.get("_merge_candidate_review"))
+                    and is_formal_finding(item)
+                    and _is_confirmed_business_finding(item)
                 ),
                 member_issue_ids=members,
             )

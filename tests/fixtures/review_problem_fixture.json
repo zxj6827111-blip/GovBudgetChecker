@@ -41,6 +41,11 @@
           "location": {
             "page": 2,
             "table": "T1"
+          },
+          "evidence_status": "complete",
+          "evidence_verification": {
+            "status": "verified",
+            "source_identity_complete": true
           }
         },
         {
@@ -82,6 +87,11 @@
           "location": {
             "page": 3,
             "section": "一、总体情况"
+          },
+          "evidence_status": "complete",
+          "evidence_verification": {
+            "status": "verified",
+            "source_identity_complete": true
           }
         },
         {
@@ -106,6 +116,11 @@
           "location": {
             "page": 4,
             "table": "T3"
+          },
+          "evidence_status": "complete",
+          "evidence_verification": {
+            "status": "verified",
+            "source_identity_complete": true
           }
         }
       ],
@@ -143,31 +158,26 @@
   "issue_ids_in_order": [
     "ai-1",
     "ai-degraded",
-    "rule-1",
-    "T1:low_confidence",
-    "facts:none"
+    "rule-1"
   ],
   "blocking_issue_ids_in_order": [
     "ai-1",
-    "rule-1",
-    "T1:low_confidence",
-    "facts:none"
+    "rule-1"
   ],
   "decisions": {
     "ai-1": "confirmed",
-    "rule-1": "no_issue",
-    "T1:low_confidence": "in_package"
+    "rule-1": "no_issue"
   },
   "expected_counts": {
-    "total": 4,
+    "total": 2,
     "confirmed": 1,
     "no_issue": 1,
-    "in_package": 1,
-    "pending": 1,
+    "in_package": 0,
+    "pending": 0,
     "needs_review": 0
   },
   "expected_blocking": {
-    "pending_findings": 1,
+    "pending_findings": 0,
     "needs_review_findings": 0
   }
 }

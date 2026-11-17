@@ -560,6 +560,12 @@ def _resolve_cascaded_quality_blockers(
         ignored_issue_ids=[],
     )
     visible_ids = {problem.issue_id for problem in problems}
+    # 结构化诊断根仍是表格读取连带项的根问题；它们不是业务问题，
+    # 但计算连带时必须在可见集合内，否则受影响的义务会被重新阻塞。
+    if isinstance(structured_ingest, dict):
+        for item in structured_ingest.get("review_items") or []:
+            if isinstance(item, dict) and item.get("id"):
+                visible_ids.add(str(item["id"]))
     all_items = list(coverage.items)
     raw_blocking = [
         item

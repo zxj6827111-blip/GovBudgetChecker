@@ -42,6 +42,9 @@ class EngineRuleRunner:
             "failed_rules": 0,
         }
         self._outcomes: List[RuleOutcome] = []
+        from src.services.bounded_recovery import RecoveryCoordinator
+
+        self._recovery = RecoveryCoordinator()
 
     @staticmethod
     def _normalize_severity(raw_severity: Any) -> str:
@@ -486,6 +489,51 @@ class EngineRuleRunner:
                     logger.debug(f"Rule {rule_id} found {len(findings)} issues")
 
                 except RuleOutcomeSignal as signal:
+                    # 有界恢复：只对取数/绑定类原因尝试一次既有恢复策略，
+                    # 成功后重跑本条规则；材料缺陷与执行异常不在此重试。
+                    recovered = self._recovery.recover(
+                        document,
+                        rule_id=str(rule_id),
+                        reason_codes=getattr(signal, "reason_codes", []) or [],
+                        relation_key=str(getattr(signal, "sub_check_id", "") or ""),
+                        rerun=lambda rule_obj=rule_obj: rule_obj.apply(document),
+                    )
+                    if recovered is not None:
+                        recovered_issues = list(recovered or [])
+                        from src.engine.rules_v33 import apply_delivery_suppressions
+
+                        recovered_issues = apply_delivery_suppressions(document, recovered_issues)
+                        findings, conversion_errors = self._convert_and_locate_issues(
+                            issues=recovered_issues,
+                            rule_id=rule_id,
+                            document=document,
+                            rule_version=rule_version,
+                            bbox_locator=bbox_locator,
+                        )
+                        self._link_relation_receipts(document, rule_id, receipt_start, findings)
+                        all_findings.extend(findings)
+                        self._stats["total_findings"] += len(findings)
+                        if conversion_errors:
+                            self._stats["failed_rules"] += 1
+                            detail = (
+                                f"{len(conversion_errors)} 个 finding 转换失败，"
+                                f"异常类型={sorted(set(conversion_errors))}"
+                            )
+                            self._outcomes.append(RuleOutcome(
+                                rule_id=str(rule_id), status=STATUS_PARSE_ERROR,
+                                detail=detail, partial_findings_count=len(findings),
+                                unresolved_reasons=[detail],
+                            ))
+                        else:
+                            self._stats["successful_rules"] += 1
+                            outcome = RuleOutcome(
+                                rule_id=str(rule_id),
+                                status="fail" if findings else "pass",
+                            )
+                            self._escalate_from_relation_receipts(
+                                document, str(rule_id), receipt_start, outcome)
+                            self._outcomes.append(outcome)
+                        continue
                     # 非 fail 结局（insufficient_data/not_applicable 等）：
                     # 保留已确认的 partial_issues，原因双保留
                     partial_list = list(getattr(signal, "partial_issues", []) or [])
@@ -606,6 +654,7 @@ class EngineRuleRunner:
         # IR-01：交付抑制台账随统计收割（双模式路径可持久化对账）
         self._stats["delivery_suppressions"] = list(
             getattr(document, "delivery_suppression_ledger", None) or [])
+        self._stats["recovery"] = list(self._recovery.records)
         if getattr(document, "fact_context", None) is not None:
             try:
                 self._stats["fact_context_summary"] = document.fact_context.summary()

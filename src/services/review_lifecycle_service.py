@@ -553,6 +553,21 @@ def _unresolved_obligations(state: ReviewState) -> List[CoverageObligationItem]:
     ]
 
 
+def _cascade_visible_issue_ids(state: ReviewState) -> set[str]:
+    """问题集合 + 结构化诊断根 id。
+
+    结构化识别项已退出业务问题集合，但它们仍是“某张表读取失败”的根问题；
+    计算连带义务时必须可见，否则受它影响的义务会重新变成阻塞项。
+    """
+    visible = {problem.issue_id for problem in state.problems}
+    structured = state.analysis.structured_ingest
+    if isinstance(structured, dict):
+        for item in structured.get("review_items") or []:
+            if isinstance(item, dict) and item.get("id"):
+                visible.add(str(item["id"]))
+    return visible
+
+
 def _blocking_obligations(state: ReviewState) -> List[CoverageObligationItem]:
     """补核待办：未完成的阻塞义务，去掉已被同源正式问题覆盖的副本。
 
@@ -568,7 +583,7 @@ def _blocking_obligations(state: ReviewState) -> List[CoverageObligationItem]:
     return blocking_coverage_obligations(
         state.coverage_items,
         state.analysis.result_row,
-        visible_issue_ids={problem.issue_id for problem in state.problems},
+        visible_issue_ids=_cascade_visible_issue_ids(state),
         structured_ingest=state.analysis.structured_ingest,
     )
 
@@ -837,7 +852,7 @@ def _obligation_review_block(state: ReviewState) -> "ObligationReviewBlock":
     cascaded = cascaded_coverage_obligations(
         state.coverage_items,
         state.analysis.result_row,
-        visible_issue_ids={problem.issue_id for problem in state.problems},
+        visible_issue_ids=_cascade_visible_issue_ids(state),
         structured_ingest=state.analysis.structured_ingest,
     )
     cascade_groups = []

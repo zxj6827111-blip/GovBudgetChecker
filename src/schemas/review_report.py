@@ -536,11 +536,30 @@ def build_review_report(payload: Mapping[str, Any]) -> Dict[str, Any]:
     output = report.to_dict()
     output["conclusion"].update(review_report_counts(output, payload.get("ignored_issue_ids") or []))
     output["conclusion"]["issue_total"] = output["conclusion"]["review_issue_total"]
+    from src.schemas.review_lifecycle import RESOLVED_ISSUE_STATUSES
+
+    decision_status: Dict[str, str] = {}
+    for decision in _mapping_list(payload.get("human_decisions")):
+        issue_id = str(decision.get("issue_id") or "").strip()
+        if not issue_id:
+            continue
+        decision_status[issue_id] = str(
+            decision.get("status") or decision.get("decision") or ""
+        ).strip()
+    ignored_ids = {
+        str(value) for value in (payload.get("ignored_issue_ids") or []) if str(value)
+    }
     pending_formal = 0
+    seen_issue_ids: set[str] = set()
     for item in confirmed_issues:
-        decision = _mapping(item.get("human_decision"))
-        status = str(decision.get("status") or "").strip()
-        if not status or status == "pending":
+        issue_id = str(item.get("id") or "").strip()
+        if not issue_id or issue_id in ignored_ids or issue_id in seen_issue_ids:
+            continue
+        seen_issue_ids.add(issue_id)
+        status = decision_status.get(issue_id, "")
+        # 与完成门禁同一纪律：confirmed/no_issue/in_package 才减待处理；
+        # needs_review、缺决定和未知值都必须继续计入。
+        if status not in RESOLVED_ISSUE_STATUSES:
             pending_formal += 1
     output["processing_summary"] = build_processing_summary(
         status=payload.get("status"),

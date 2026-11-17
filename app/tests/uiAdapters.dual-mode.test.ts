@@ -275,22 +275,14 @@ const structuredReviewProblems = toUiProblems({
     ],
   },
 } as any);
-assert.equal(structuredReviewProblems.length, 3, "structured review items must appear beside rule findings");
-assert.deepEqual(
-  structuredReviewProblems.slice(1).map((problem) => problem.id),
-  ["review-low-confidence", "review-missing-table"],
-  "structured review identifiers should remain stable for workflow actions",
-);
-assert.deepEqual(
-  structuredReviewProblems.slice(1).map((problem) => problem.category),
-  ["结构化识别复核", "结构化识别复核"],
-);
-assert.equal(structuredReviewProblems[1].page, 29);
-assert.equal(structuredReviewProblems[1].severity, "manual_review");
+assert.equal(structuredReviewProblems.length, 1, "structured review items are diagnostics, not business problems");
+assert.equal(structuredReviewProblems[0].id, "rule-1");
+assert.ok(!structuredReviewProblems.some((problem) => problem.id.startsWith("review-")),
+  "technical structured identifiers must not appear in the business problem list");
 assert.equal(
   getDisplayIssueTotal({ merged_issue_total: 20, issue_total: 20, review_item_count: 4 }),
-  24,
-  "task totals must include structured review items instead of hiding them",
+  20,
+  "task totals must not add technical structured review items",
 );
 
 const reportIssues = toUiProblems({

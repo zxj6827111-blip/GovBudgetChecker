@@ -373,10 +373,16 @@ def test_zc06_review_lifecycle_does_not_count_ai_candidate_as_formal() -> None:
         fact_ids=[],
     )
     summary = FindingsMerger(AnalysisConfig()).merge_findings([ai], [rule])
+    rule_payload = rule.model_dump()
+    # 真实流水线由 evidence_guard 写入来源核验；v3 正式问题必须具备该条件。
+    rule_payload["evidence_status"] = "complete"
+    rule_payload["evidence_verification"] = {
+        "status": "verified", "source_identity_complete": True,
+    }
     problems = collect_review_problems(
         job_uuid="job-zc06",
         ai_findings=[ai.model_dump()],
-        rule_findings=[rule.model_dump()],
+        rule_findings=[rule_payload],
         merged_result=summary.model_dump(),
     )
     by_id = {item.issue_id: item for item in problems}

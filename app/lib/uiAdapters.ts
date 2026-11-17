@@ -366,7 +366,8 @@ export function getDisplayIssueTotal(
   }
   const merged = Number(job.merged_issue_total);
   const ruleAndAiTotal = Number.isFinite(merged) ? merged : toNumber(job.issue_total, 0);
-  return ruleAndAiTotal + toNumber(job.review_item_count, 0);
+  // 结构化识别项属于技术诊断，不计入业务问题总数。
+  return ruleAndAiTotal;
 }
 
 export function getHighRiskCount(job: Pick<JobSummaryRecord, "issue_error">): number {
@@ -1043,9 +1044,8 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
     : null;
   const issues = dedupeIssuesById([
     ...(canonicalIssues ?? collectDisplayIssues(result)),
-    ...(canonicalIssues
-      ? collectReviewReportManualIssues(reviewReport)
-      : collectStructuredReviewIssues(detail)),
+    // v3：结构化识别项属于技术诊断，不再进入业务问题集合。
+    ...(canonicalIssues ? collectReviewReportManualIssues(reviewReport) : []),
   ]);
   const includeEvidencePreview = options.includeEvidencePreview ?? true;
 

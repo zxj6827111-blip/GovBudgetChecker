@@ -85,7 +85,7 @@
 
 | 层级 | 命令 | 结果 |
 | --- | --- | --- |
-| 后端全量 | `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. .venv/bin/pytest -p no:cacheprovider -q` | **6266 passed, 193 skipped** |
+| 后端全量 | `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. .venv/bin/pytest -p no:cacheprovider -q` | **6282 passed, 193 skipped** |
 | 真实 PostgreSQL | `TESTING=true GOVBUDGET_TEST_DATABASE_URL=postgresql://govbudget_ci:govbudget_ci@localhost:55450/fiscal_ci pytest tests/test_review_lifecycle_pg.py tests/test_obligation_review_pg.py tests/test_material_slot_migration_pg.py -q -m real_database` | **97 passed** |
 | 隔离库迁移 | `DATABASE_URL=...55450... .venv/bin/python scripts/run_db_migrations.py` | 45 个迁移全部应用；第二遍 0 个（幂等 PASS） |
 | Ruff | `.venv/bin/python -m ruff check .` | All checks passed |
@@ -233,14 +233,22 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. .venv/bin/python \
 ### 9.1 发布前备份
 
 ```bash
-# 1) 数据库与当前结果
-.venv/bin/python scripts/backup_all.py --output backups/20261117_pre_remediation
-# 2) 记录当前版本指针、服务 PID、前端构建哈希
+# 1) 数据库、上传目录、审计日志与版本指针（backup_all.py 必须有 create 子命令）
+.venv/bin/python scripts/backup_all.py create --output backups/20261117_pre_remediation
+# 2) 记录当前服务 PID、启动时间与前端构建哈希
 ps -o pid,lstart,command -p $(lsof -tiTCP:18743 -sTCP:LISTEN)
 shasum -a 256 api/main.py app/.next/BUILD_ID 2>/dev/null || true
-# 3) 原件哈希与人工记录清单（只读导出）
-.venv/bin/python scripts/reanalyze_current_slots.py --dry-run --output backups/20261117_slots_freeze.json
+# 3) 只读预览全部当前槽位，并写出冻结选集
+.venv/bin/python scripts/reanalyze_current_slots.py \
+  --all-current-slots --preview \
+  --output backups/20261117_slots_preview.json \
+  --freeze-out backups/20261117_slots_frozen.json
 ```
+
+预览逐槽位输出：slot_id、当前文档版本、原件哈希、任务/revision、AI 模式、
+当前状态、人工记录数、结果指纹、处置与原因；不会调用重分析或写 status.json。
+冻结选集只包含 `ready` / `ready_recover_active`，每项绑定精确版本、文件哈希、
+revision 与结果指纹。
 
 ### 9.2 发布
 
@@ -249,8 +257,19 @@ shasum -a 256 api/main.py app/.next/BUILD_ID 2>/dev/null || true
 2. 重启前端：结束 :3000 的 `next dev`，重新运行 `npm --prefix app run dev`；
    后端 18743 使用 `api.main:app --reload --reload-dir api --reload-dir src` 继续热加载。
 3. 用代表材料做冒烟：95c937cc、05e40add、d835cf2a、0ed5318c、edb56827、34f7645b。
-4. 再按冻结清单串行重分析存量（默认并发 1，可中断续跑），生成新 revision；
-   不覆盖旧结论、不手工改计数。
+4. 按冻结清单串行重分析存量（默认并发 1、AI 模式 inherit、断点续跑），生成新 revision；
+   不覆盖旧结论、不手工改计数：
+
+```bash
+.venv/bin/python scripts/reanalyze_current_slots.py \
+  --freeze-list backups/20261117_slots_frozen.json \
+  --checkpoint backups/20261117_reanalysis.jsonl \
+  --ai-policy inherit --concurrency 1 \
+  --output backups/20261117_reanalysis_report.json
+```
+
+5. 冻结项缺失、文档版本/文件哈希/revision 变化会逐项留在 `results`（不会消失）；
+   已完成项在 checkpoint 中跳过，未完成原因、状态与 review_reasons 均保留。
 
 ### 9.3 回滚
 
@@ -259,6 +278,81 @@ shasum -a 256 api/main.py app/.next/BUILD_ID 2>/dev/null || true
 3. 如需回退当前版本指针，先做版本条件校验；已产生新人工决定时禁止整库还原
    （整库恢复仅用于停止业务写入且已保存新增记录的灾难恢复）；
 4. 复核回滚后列表、详情、导出的计数一致性。
+
+## 9A. 2026-11-17 独立复核 RR-01～RR-05 返工
+
+独立复核对 `0eab8029` 提出 3 类 P1 与 2 类 P2。本轮逐项返工，反例保留为正式回归。
+
+### RR-01 共享分项：科目绑定 + 组级算术
+
+- 去掉“`len(per_item) >= len(subject_clauses)` 即放行”的数量兜底。
+- 每个 `（项）` 科目必须由自己的声明或同名/同组候选分项绑定；无绑定科目
+  保留 `group_component_unbound` 缺口，不再报“已披露”。
+- 新增组级回执 `V33-251:{budget|final}:group:{item_start}`：
+  - 组内分项之和与组级合计一致 → `pass`；
+  - 不一致 → `fail`，组级合计标 `group_total_conflict`，不再作为章节加总数；
+  - 科目无法绑定 → `insufficient_data`。
+- 组内分项仍不重复计入章节加总；组级合计只有在可核对时才进入章节加总。
+- 反例验证：985.78→1.00 时组回执 `fail`、章节决算回执 `insufficient_data`；
+  换成“其他无关项目”时组回执 `insufficient_data`、章节回执 `insufficient_data`；
+  正例仍为组 `pass`、章节 `pass`。
+
+### RR-02 根问题级联：来源与独立原因约束
+
+- 名称级联禁止“只有一个候选”跨页兜底；必须与义务的来源页相交。
+- V33-251 级联同时要求 stage、checklist item 与来源页/科目范围一致。
+- 新增 `_guarded_roots`：义务含执行/映射/行列读取等独立原因，或来源页不在
+  根问题范围内时，整条义务保留在未完成清单，不被根问题移除。
+- 结构化诊断根仍可用于“表格读取连带”计算，但不会因此成为业务问题。
+- 反例验证：第 2 页名称问题不再归并第 40/41 页独立义务；第 5 页 V33-251
+  预算问题不再归并第 40/41 页另一科目/另一表失败；未归并清单保持 1。
+
+### RR-03 页面与后台门禁统一
+
+- `collect_review_problems` 使用与 ReviewReport v3 相同的正式问题条件：
+  `evidence_status` 已核实、`evidence_verification.status=verified`、
+  `source_identity_complete=true`；缺元数据的旧 finding 只作候选。
+- 结构化识别项退出业务问题集合；`_find_structured_review_item` 仍直接扫描
+  原始 `review_items`，历史人工决定可读回、可投影，但不再阻塞门禁。
+- 前端 `toUiProblems` 的 legacy 分支同样不再合成结构化业务卡片；
+  `getDisplayIssueTotal` 不再把 `review_item_count` 加入业务问题总数。
+- 反例验证：结构化技术项报告 issues=0、manual_review=0、diagnostics=1，
+  后台 `pending_findings` 也为 0；旧未确证候选在页面和后台都不计正式问题。
+
+### RR-04 review_summary 待处理数
+
+- `pending_formal_issue_total` 复用正式问题可见集合与人工决定状态：
+  - `confirmed` / `no_issue` / `in_package` 减待处理；
+  - `needs_review`、缺决定、未知状态均计入；
+  - `ignored_issue_ids` 中的问题不计入正式总数和待处理数。
+- 反例验证：needs_review → pending=1；ignored → formal=0、pending=0。
+
+### RR-05 源头诊断、有界恢复与发布工具
+
+- `diagnostic_fields.rule_level_entry`：`未提取到/未识别到/未找到/未定位/
+  无法绑定` 不再伪造 `text_statement_absent` 和说明章节缺数位置，改为
+  `table_mapping_incomplete` 上游原因；只有明确“未披露/未写明/未明示”
+  才保留说明缺失语义。
+- 新增 `src/services/bounded_recovery.py` 并接入 `engine_rule_runner`：
+  - 只对取数/绑定类原因尝试恢复，材料缺陷/执行异常不重试；
+  - 策略指纹 + 原件哈希 + parse_run_uid + 规则/关系去重，同一路径只一次；
+  - 每次最多 2 个策略；恢复后重新校验来源身份，失败保留原回执；
+  - 记录策略、耗时、前后原因、是否改变、来源是否复核；
+  - 默认接入既有“空表影子表”原生恢复策略。
+- `reanalyze_current_slots.py`：新增只读预览 `--preview` / `--dry-run`、
+  `--freeze-out` 冻结选集、`--freeze-list` 精确版本校验、`--checkpoint`
+  断点续跑、`--output` 报告；默认并发改为 1、AI 策略改为 inherit。
+- 交付文档命令已改为 `backup_all.py create --output ...` 和实际存在的
+  预览/冻结/续跑参数；预览已在本机只读验证（157 槽位，156 ready，
+  1 missing_job_dir），未重分析、未写 status.json。
+
+### 本轮新增回归
+
+- `tests/test_independent_review_rr01_rr04.py`（7 项）
+- `tests/test_reanalyze_preview_tool_20261117.py`（4 项）
+- `tests/test_bounded_recovery_20261117.py`（5 项）
+- 独立复核反例脚本已重新执行：shared_groups 三例、cascade 两例、
+  hidden_gate、review_counts 全部符合上述预期。
 
 ## 10. 交付物
 

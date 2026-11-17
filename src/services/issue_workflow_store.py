@@ -645,27 +645,24 @@ def _find_structured_review_item(
     id 的合成规则与 ``review_problem_set`` / 前端 ``toUiProblems`` 逐字同源：
     真数据里 ``review_items`` 都自带 id，合成只用于缺 id 的历史数据。
     """
-    from src.services.review_problem_set import collect_review_problems
+    from src.services.review_problem_set import _structured_issues
 
     job_id = str(payload.get("job_id") or "").strip()
-    for problem in collect_review_problems(
-        job_uuid=job_id,
-        ai_findings=None,
-        rule_findings=None,
-        merged_result=None,
-        structured_ingest=payload.get("structured_ingest"),
+    # 结构化项已退出业务问题集合，但历史人工决定仍需可读回；
+    # 定位直接扫描原始 review_items，不经过 collect_review_problems 的
+    # 业务分类（否则旧决定会在投影/读回时消失）。
+    for problem in _structured_issues(
+        job_uuid=job_id, structured_ingest=payload.get("structured_ingest")
     ):
-        if problem.issue_id != issue_id:
+        if str(problem.get("id") or "") != issue_id:
             continue
-        # 复用既有更新路径：写入的记录字段（title/severity/page）与普通 finding 一致，
-        # 不需要为结构化条目发明第二套记录形态。
         return {
-            "id": problem.issue_id,
-            "source": problem.source,
-            "rule_id": f"STRUCTURED-{problem.issue_id.split(':')[0].upper()}",
-            "severity": problem.severity or "manual_review",
-            "title": problem.title,
-            "message": problem.title,
+            "id": str(problem.get("id") or ""),
+            "source": str(problem.get("source") or "structured_ingest"),
+            "rule_id": str(problem.get("rule_id") or "STRUCTURED-REVIEW"),
+            "severity": str(problem.get("severity") or "manual_review"),
+            "title": str(problem.get("title") or problem.get("message") or "结构化识别待复核"),
+            "message": str(problem.get("message") or problem.get("title") or "结构化识别待复核"),
         }
     return None
 

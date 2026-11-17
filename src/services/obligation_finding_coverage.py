@@ -1023,6 +1023,14 @@ def _v33251_defect_cascade_roots(
     }
     if not kinds:
         return []
+    pages: Set[int] = set()
+    for operand in getattr(item, "missing_operands", None) or []:
+        if isinstance(operand, Mapping):
+            page = operand.get("page")
+            if isinstance(page, int) and not isinstance(page, bool) and page > 0:
+                pages.add(page)
+    for text in texts:
+        pages.update(int(match.group(1)) for match in re.finditer(r"第(\d+)页", text))
     checklist = {"budget": "C-11", "final": "C-12"}
     roots: List[str] = []
     for finding in _current_rule_findings(result_row):
@@ -1037,8 +1045,16 @@ def _v33251_defect_cascade_roots(
             continue
         location = _json_dict(finding.get("location"))
         item_code = str(location.get("checklist_item") or "")
-        if any(checklist[kind] == item_code for kind in kinds):
-            roots.append(issue_id)
+        if not any(checklist[kind] == item_code for kind in kinds):
+            continue
+        finding_pages = _finding_pages(location)
+        if pages:
+            if not finding_pages or not (pages & finding_pages):
+                continue
+        elif len(roots) >= 1:
+            # 无页码证据时只接受唯一根问题，不按“同阶段”批量吞并。
+            continue
+        roots.append(issue_id)
     return list(dict.fromkeys(roots))
 
 
@@ -1080,13 +1096,14 @@ def _subject_name_cascade_roots(
         candidates.append((issue_id, finding_pages))
     if not candidates:
         return []
+    if not pages:
+        # 没有可核对的来源页时不跨页兜底；名称问题必须在义务所指范围内。
+        return []
     matched = [
         issue_id for issue_id, finding_pages in candidates
-        if not pages or not finding_pages or (pages & finding_pages)
+        if finding_pages and (pages & finding_pages)
     ]
-    if matched:
-        return list(dict.fromkeys(matched))
-    return [candidates[0][0]] if len(candidates) == 1 else []
+    return list(dict.fromkeys(matched))
 
 
 _UNIT_DEFECT_TEXT_RE = re.compile(
@@ -1153,6 +1170,69 @@ def _unit_defect_cascade_roots(
     return list(dict.fromkeys(roots))
 
 
+_INDEPENDENT_REASON_CODES = frozenset({
+    "execution_error", "parse_error", "table_mapping_incomplete",
+    "column_identity_unconfirmed", "column_width_drift", "cell_low_confidence",
+    "cell_unbound", "row_code_missing", "row_level_unresolved",
+    "cell_blank_semantics_unknown",
+})
+
+
+def _obligation_pages(item: Any) -> Set[int]:
+    pages: Set[int] = set()
+    for operand in getattr(item, "missing_operands", None) or []:
+        if isinstance(operand, Mapping):
+            page = operand.get("page")
+            if isinstance(page, int) and not isinstance(page, bool) and page > 0:
+                pages.add(page)
+    for text in (str(getattr(item, "detail", None) or ""),):
+        pages.update(int(match.group(1)) for match in re.finditer(r"第(\d+)页", text))
+    return pages
+
+
+def _guarded_roots(item: Any, roots: Sequence[str], result_row: Any, structured_ingest: Any = None,
+                   *, allow_reading_codes: bool = False) -> List[str]:
+    """根问题必须覆盖义务中的独立原因与来源范围，否则保留未完成义务。
+
+    一个根问题不能解释另一张表的读取失败、执行异常或完全不同页的独立缺数；
+    这类义务必须继续留在未完成清单，不能被“已关联根问题”整体移除。
+    """
+    root_ids = list(dict.fromkeys(str(root) for root in roots if str(root or "").strip()))
+    if not root_ids:
+        return []
+    codes = {
+        str(code).strip()
+        for code in (getattr(item, "reason_codes", None) or [])
+        if str(code).strip()
+    }
+    if not allow_reading_codes and (codes & _INDEPENDENT_REASON_CODES):
+        return []
+    findings = {
+        str(finding.get("id") or ""): finding
+        for finding in _current_rule_findings(result_row)
+        if isinstance(finding, dict)
+    }
+    root_pages: Set[int] = set()
+    for root in root_ids:
+        finding = findings.get(root)
+        if finding:
+            root_pages.update(_finding_pages(_json_dict(finding.get("location"))))
+    structured = _json_dict(structured_ingest)
+    for item in structured.get("review_items") or []:
+        if not isinstance(item, Mapping) or str(item.get("id") or "") not in root_ids:
+            continue
+        page = item.get("page") or item.get("page_number")
+        if isinstance(page, int) and not isinstance(page, bool) and page > 0:
+            root_pages.add(page)
+    pages = _obligation_pages(item)
+    if pages:
+        if not root_pages or not (pages & root_pages):
+            return []
+    elif len(root_ids) > 1:
+        return []
+    return root_ids
+
+
 def cascade_root_issue_ids(
     item: Any,
     result_row: Any,
@@ -1166,15 +1246,15 @@ def cascade_root_issue_ids(
     visible = set(visible_issue_ids) if visible_issue_ids is not None else None
     table_root = _missing_or_empty_table_cascade_root(item, result_row, visible)
     if table_root is not None:
-        return [table_root]
+        return _guarded_roots(item, [table_root], result_row, structured_ingest, allow_reading_codes=True)
     section_root = _missing_section_cascade_root(item, result_row, visible)
     if section_root is not None:
-        return [section_root]
+        return _guarded_roots(item, [section_root], result_row, structured_ingest, allow_reading_codes=True)
     reading_root = _table_reading_cascade_root(
         item, result_row, visible, structured_ingest=structured_ingest
     )
     if reading_root is not None:
-        return [reading_root]
+        return _guarded_roots(item, [reading_root], result_row, structured_ingest, allow_reading_codes=True)
     v33251_roots = _v33251_defect_cascade_roots(item, result_row, visible)
     if v33251_roots:
         return v33251_roots
@@ -1183,8 +1263,9 @@ def cascade_root_issue_ids(
         return name_roots
     unit_roots = _unit_defect_cascade_roots(item, result_row, visible)
     if unit_roots:
-        return unit_roots
-    return _v33227_name_mismatch_roots(item, result_row, visible)
+        return _guarded_roots(item, unit_roots, result_row, structured_ingest)
+    name_roots = _v33227_name_mismatch_roots(item, result_row, visible)
+    return _guarded_roots(item, name_roots, result_row, structured_ingest)
 
 
 def cascade_root_issue_id(
