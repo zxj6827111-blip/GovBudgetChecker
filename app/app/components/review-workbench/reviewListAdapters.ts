@@ -82,5 +82,14 @@ export function nextReviewItem(items: ReviewListItem[], jobId: string, returnTo:
   if (url.pathname !== "/review") return null;
   const filtered = filterReviewList(items, reviewListFilters(url.searchParams)).filter(item => item.job_id);
   const current = filtered.findIndex(item => item.job_id === jobId);
-  return current >= 0 ? filtered[current + 1] ?? null : filtered.find(item => item.job_id !== jobId) ?? null;
+  if (current < 0) return filtered.find(item => item.job_id !== jobId) ?? null;
+  // 列表按状态优先级排序；进入工作台会自动开始复核，当前条目随即变成
+  // in_progress 并排到待复核条目之后。若仍只取"当前之后"，打开第一条待复核
+  // 后就会永远没有下一份。因此末尾时回退到同筛选内**仍待复核**的条目；
+  // 已在复核中的条目不参与回退，避免两个进行中条目来回跳。
+  const nextInOrder = filtered[current + 1];
+  if (nextInOrder) return nextInOrder;
+  const stillPending = (item: ReviewListItem) =>
+    item.review_status === "pending" || item.review_status === "invalidated";
+  return filtered.slice(0, current).find(stillPending) ?? null;
 }

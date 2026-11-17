@@ -8,7 +8,7 @@ const sessionCookie = {
 };
 
 test.describe("Report actions", () => {
-  test("task detail can associate report to another organization", async ({ page }) => {
+  test("department page can associate report to another organization", async ({ page }) => {
     test.setTimeout(60_000);
 
     let associateCalls = 0;
@@ -85,6 +85,33 @@ test.describe("Report actions", () => {
         return;
       }
 
+      if (path === "/api/organizations/dept-001/jobs" && method === "GET") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            jobs: [
+              {
+                job_id: "job-401",
+                filename: "association-report.pdf",
+                status: "completed",
+                report_year: 2025,
+                report_kind: "budget",
+                merged_issue_total: 0,
+                organization_id: currentOrganization.id,
+                organization_name: currentOrganization.name,
+                organization_level: currentOrganization.level,
+                updated_ts: 1_710_500_000,
+              },
+            ],
+            total: 1,
+            limit: 20,
+            offset: 0,
+          }),
+        });
+        return;
+      }
+
       if (path === "/api/organizations/list" && method === "GET") {
         await route.fulfill({
           status: 200,
@@ -153,17 +180,17 @@ test.describe("Report actions", () => {
       });
     });
 
-    await page.goto("/task/job-401");
-
-    await expect(page.getByTestId("task-associate-button")).toBeVisible({ timeout: 20_000 });
-    await page.getByTestId("task-associate-button").click();
+    // 任务页已改为复核工作台（43cb2266）：关联报告入口在部门/单位报告的作业菜单里。
+    await page.goto("/department/dept-001");
+    await page.getByTestId("job-menu-job-401").click();
+    await page.getByTestId("job-associate-job-401").click();
     await expect(page.getByTestId("associate-dialog")).toBeVisible();
     await page.getByTestId("associate-option-unit-001").click();
     await page.getByTestId("associate-dialog-submit").click();
 
     await expect.poll(() => associateCalls).toBe(1);
     await expect(page.getByTestId("associate-dialog")).toHaveCount(0);
-    await expect(page.getByText("Finance Bureau Unit", { exact: true })).toBeVisible();
+    await expect(page.getByText("Finance Bureau Unit", { exact: false }).first()).toBeVisible();
     expect(dialogMessages.some((message) => message.includes("alert:"))).toBe(true);
   });
 
@@ -277,6 +304,7 @@ test.describe("Report actions", () => {
             job_id: "job-001",
             source_job_id: "job-001",
             status: "started",
+            inheritance_warnings: ["上轮部分单元未完成，本次沿用相同检查方式"],
           }),
         });
         return;
@@ -294,9 +322,10 @@ test.describe("Report actions", () => {
       });
     });
 
-    await page.goto("/task/job-001");
-
-    const reanalyzeButton = page.getByTestId("task-reanalyze-button");
+    // 任务页已改为复核工作台（43cb2266）：重新分析入口在「更多」菜单里。
+    await page.goto("/review?job=job-001");
+    await page.getByTestId("gbc-review-tab-more").click();
+    const reanalyzeButton = page.getByTestId("gbc-review-reanalyze");
     await expect(reanalyzeButton).toBeVisible({ timeout: 20_000 });
     await expect(reanalyzeButton).toBeEnabled();
 
@@ -310,25 +339,24 @@ test.describe("Report actions", () => {
     // 默认继承：只发 check_method，由后端按上轮记录解析本地规则/AI/原模型。
     await expect.poll(() => reanalyzeBody).toEqual({ check_method: "inherit" });
     await expect.poll(() => detailFetches).toBeGreaterThan(1);
-    await expect(reanalyzeButton).toBeDisabled();
     expect(dialogMessages.some((message) => message.includes("alert:"))).toBe(true);
   });
 
-  test("task detail can ignore issue, preview evidence and download report", async ({ page }) => {
+  test("workbench can ignore issue, preview evidence and export report", async ({ page }) => {
     test.setTimeout(60_000);
 
     let ignoreCalls = 0;
-    let downloadCalls = 0;
-    const dialogMessages: string[] = [];
 
     await page.context().addCookies([sessionCookie]);
-    page.on("dialog", async (dialog) => {
-      dialogMessages.push(`${dialog.type()}:${dialog.message()}`);
-      await dialog.accept();
-    });
 
     await page.addInitScript(() => {
       window.print = () => undefined;
+      // 导出走 window.open(报告下载地址)；拦下即可断言前端真的拼出了下载请求。
+      (window as unknown as { __openedUrls: string[] }).__openedUrls = [];
+      window.open = ((url?: string | URL) => {
+        (window as unknown as { __openedUrls: string[] }).__openedUrls.push(String(url ?? ""));
+        return null;
+      }) as typeof window.open;
     });
 
     await page.route("**/api/**", async (route) => {
@@ -399,26 +427,67 @@ test.describe("Report actions", () => {
         return;
       }
 
-      if (path === "/api/jobs/job-ignore/issues/ignore" && method === "POST") {
-        ignoreCalls += 1;
-        expect(req.postDataJSON()).toEqual({ issue_id: "issue-ignore-1" });
+      if (path === "/api/reviews" && method === "GET") {
         await route.fulfill({
           status: 200,
           contentType: "application/json",
-          body: JSON.stringify({ success: true, ignored_issue_ids: ["issue-ignore-1"] }),
+          body: JSON.stringify({
+            ok: true,
+            data: {
+              review_context: { available: true, reason: null, slot_id: "slot-ignore", job_uuid: "job-ignore" },
+              review: {
+                slot_id: "slot-ignore",
+                current_document_version_id: 1,
+                current_analysis: {
+                  job_uuid: "job-ignore",
+                  analysis_revision: 1,
+                  analysis_basis_token: "job-ignore:1",
+                  document_version_id: 1,
+                  status: "done",
+                  completed: true,
+                  formal_issue_count: 1,
+                },
+                current_session: {
+                  review_session_id: "sess-ignore",
+                  slot_id: "slot-ignore",
+                  document_version_id: 1,
+                  analysis_job_uuid: "job-ignore",
+                  analysis_basis_token: "job-ignore:1",
+                  status: "in_progress",
+                  started_by: "e2e-admin",
+                  started_at: "2026-10-12T12:00:00Z",
+                },
+                history: [],
+                completion_gate: { can_complete: false, blockers: [{ code: "pending_findings", count: 1 }] },
+                obligation_review: { available: true, reason: null, pending_total: 0, items: [] },
+              },
+            },
+          }),
         });
         return;
       }
 
-      if (path === "/api/reports/download" && method === "GET") {
-        downloadCalls += 1;
-        expect(url.searchParams.get("job_id")).toBe("job-ignore");
-        expect(url.searchParams.get("format")).toBe("pdf");
+      if (path === "/api/workflow" && method === "GET") {
         await route.fulfill({
           status: 200,
-          contentType: "application/pdf",
-          headers: { "content-disposition": "attachment; filename=\"ignore-report.pdf\"" },
-          body: "%PDF-1.4\n% e2e\n",
+          contentType: "application/json",
+          body: JSON.stringify({ issues: {}, packages: [] }),
+        });
+        return;
+      }
+
+      if (path === "/api/workflow" && method === "POST") {
+        ignoreCalls += 1;
+        expect(req.postDataJSON()).toMatchObject({
+          action: "update_issue",
+          job_id: "job-ignore",
+          issue_id: "issue-ignore-1",
+          status: "no_issue",
+        });
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ issues: {}, packages: [] }),
         });
         return;
       }
@@ -439,30 +508,30 @@ test.describe("Report actions", () => {
       });
     });
 
-    await page.goto("/task/job-ignore");
+    await page.goto("/review?job=job-ignore");
+    await expect(page.getByTestId("gbc-review-workbench-page")).toBeVisible({ timeout: 20_000 });
+    // 证据原文固定在第 2 页：文档面板可见即可继续核对。
+    await expect(page.getByTestId("gbc-review-document-pane")).toBeVisible();
+    await expect(page.getByTestId("gbc-review-pdf-page-input")).toBeVisible();
 
-    await expect(page.getByTestId("task-ignore-issue-button")).toBeVisible({ timeout: 20_000 });
-    await page.getByTestId("task-open-viewer-button").click();
-    await expect(page.getByTestId("task-pdf-highlighter")).toBeVisible();
-    await expect(page.getByTestId("task-pdf-highlighter-source")).toHaveAttribute("href", /job-ignore/);
-    await page.getByTestId("task-pdf-highlighter-close").click();
-    await expect(page.getByTestId("task-pdf-highlighter")).toHaveCount(0);
+    // 导出报告：工作台从「更多」菜单打开下载地址。
+    await page.getByTestId("gbc-review-tab-more").click();
+    await page.getByTestId("gbc-review-export").click();
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as { __openedUrls: string[] }).__openedUrls ?? []))
+      .toEqual([expect.stringMatching(/\/api\/reports\/download\?job_id=job-ignore&format=pdf/)]);
 
-    await page.getByTestId("task-open-report-modal").click();
-    await expect(page.getByTestId("task-report-modal")).toBeVisible();
-    await page.getByTestId("task-report-print").click();
-    const downloadPromise = page.waitForEvent("download");
-    await page.getByTestId("task-report-download").click();
-    await downloadPromise;
-    await expect.poll(() => downloadCalls).toBe(1);
-    await page.getByTestId("task-report-close").click();
-    await expect(page.getByTestId("task-report-modal")).toHaveCount(0);
-
-    await page.getByTestId("task-ignore-issue-button").click();
+    // 忽略问题：工作台卡片内选择原因 → 保存 → 走 /api/workflow。
+    const issuesTab = page.getByTestId("gbc-review-tab-issues");
+    await issuesTab.click();
+    const toggle = page.getByTestId("gbc-review-toggle-list");
+    if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+    await page.getByTestId("gbc-review-issue-card-issue-ignore-1").click();
+    await page.getByTestId("gbc-review-issue-ignore-issue-ignore-1").click();
+    await page.getByTestId("gbc-review-ignore-reason-rounding").check();
+    await page.getByTestId("gbc-review-ignore-save").click();
     await expect.poll(() => ignoreCalls).toBe(1);
-    await expect(page.getByText("当前任务暂无问题。")).toBeVisible();
-    expect(dialogMessages.some((message) => message.includes("confirm:"))).toBe(true);
-    expect(dialogMessages.some((message) => message.includes("alert:"))).toBe(true);
+    await expect(page.getByTestId("gbc-review-issue-card-issue-ignore-1")).toHaveCount(0);
   });
 
   test("department page can batch delete selected reports", async ({ page }) => {

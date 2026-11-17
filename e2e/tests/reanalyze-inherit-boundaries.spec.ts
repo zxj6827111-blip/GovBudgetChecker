@@ -115,16 +115,22 @@ async function installTaskMocks(page: Page, kind: "normal" | "history-unknown" |
   return bodies;
 }
 
+/** 任务页已改为复核工作台（43cb2266）：重新分析入口在「更多」菜单里。 */
+async function openReanalyzeFromWorkbench(page: Page) {
+  await page.goto("/review?job=job-001");
+  await page.getByTestId("gbc-review-tab-more").click();
+  const button = page.getByTestId("gbc-review-reanalyze");
+  await expect(button).toBeEnabled({ timeout: 20_000 });
+  await button.click();
+}
+
 for (const kind of ["history-unknown", "model-deleted"] as const) {
   test(`继承不可用时（${kind}）不自动改选，等用户主动选择第二项`, async ({ page }) => {
     test.setTimeout(60_000);
     await page.context().addCookies([sessionCookie]);
     const bodies = await installTaskMocks(page, kind);
 
-    await page.goto("/task/job-001");
-    const button = page.getByTestId("task-reanalyze-button");
-    await expect(button).toBeEnabled({ timeout: 20_000 });
-    await button.click();
+    await openReanalyzeFromWorkbench(page);
 
     const inherit = page.getByTestId("reanalyze-method-picker-inherit");
     const ai = page.getByTestId("reanalyze-method-picker-ai");
@@ -150,10 +156,7 @@ test("继承可用时默认选中按上次方式并可直接提交（对照）",
   await page.context().addCookies([sessionCookie]);
   const bodies = await installTaskMocks(page, "normal");
 
-  await page.goto("/task/job-001");
-  const button = page.getByTestId("task-reanalyze-button");
-  await expect(button).toBeEnabled({ timeout: 20_000 });
-  await button.click();
+  await openReanalyzeFromWorkbench(page);
 
   await expect(page.getByTestId("reanalyze-method-picker-inherit")).toBeChecked();
   await expect(page.getByTestId("reanalyze-method-picker-ai")).not.toBeChecked();

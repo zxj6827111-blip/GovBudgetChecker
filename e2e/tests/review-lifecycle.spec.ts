@@ -302,19 +302,18 @@ async function openIssueList(page: Page) {
 }
 
 test.describe("Review lifecycle (WP3-A)", () => {
-  test("主链路：进入→显式开始复核→确认问题→完成→刷新仍显示已完成", async ({ page }) => {
+  test("主链路：进入自动开始复核→确认问题→完成→刷新仍显示已完成", async ({ page }) => {
     const state = freshState({ completionBlockers: [{ code: "pending_findings", count: 1 }] });
     await page.context().addCookies([sessionCookie]);
     await installMocks(page, state);
 
     await page.goto(`/review?job=${JOB_ID}`);
-    if (state.autoStartAllowed && !state.activeSession && !state.history.some(item => item.status === "completed")) {
-      await expect(page.getByTestId("gbc-review-preview-notice")).toBeVisible();
-      expect(state.startCalls).toBe(0);
-      await page.getByTestId("gbc-review-start").click();
-    }
+    // 43cb2266 起：进入工作台自动开始复核；预览态与手动「开始复核」已移除。
+    await expect(page.getByTestId("gbc-review-lifecycle-badge")).toContainText("复核中");
+    await expect(page.getByTestId("gbc-review-preview-notice")).toHaveCount(0);
+    expect(state.startCalls).toBeGreaterThan(0);
 
-    // 1. 显式开始后才显示复核中，浏览预览不会写入会话
+    // 1. 自动开始后显示复核中
     await expect(page.getByTestId("gbc-review-workbench-page")).toBeVisible();
     await expect(page.getByTestId("gbc-review-lifecycle-badge")).toContainText("复核中");
     expect(state.startCalls).toBeGreaterThan(0);
@@ -347,11 +346,7 @@ test.describe("Review lifecycle (WP3-A)", () => {
     await page.context().addCookies([sessionCookie]);
     await installMocks(page, state);
     await page.goto(`/review?job=${JOB_ID}`);
-    if (state.autoStartAllowed && !state.activeSession && !state.history.some(item => item.status === "completed")) {
-      await expect(page.getByTestId("gbc-review-preview-notice")).toBeVisible();
-      expect(state.startCalls).toBe(0);
-      await page.getByTestId("gbc-review-start").click();
-    }
+    await expect(page.getByTestId("gbc-review-lifecycle-badge")).toContainText("复核中");
 
     await expect(page.getByTestId("gbc-review-lifecycle-badge")).toContainText("复核中");
     await expect(page.getByTestId("gbc-review-complete")).toBeDisabled();
@@ -413,11 +408,7 @@ test.describe("Review lifecycle (WP3-A)", () => {
         });
       });
       await page.goto(`/review?job=${JOB_ID}`);
-    if (state.autoStartAllowed && !state.activeSession && !state.history.some(item => item.status === "completed")) {
-      await expect(page.getByTestId("gbc-review-preview-notice")).toBeVisible();
-      expect(state.startCalls).toBe(0);
-      await page.getByTestId("gbc-review-start").click();
-    }
+      // 自动开始复核后直接操作问题卡片。
       await expect(page.getByTestId("gbc-review-lifecycle-badge")).toContainText("复核中");
       await page.getByTestId("gbc-review-issue-confirm-FIN-1").click();
 

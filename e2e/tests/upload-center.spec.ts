@@ -216,14 +216,15 @@ test.describe("Upload center (Task 5)", () => {
     await expect(hint).toContainText("1200 页");
   });
 
-  test("REGRESSION: the pre-analysis confirmation banner text is preserved verbatim", async ({ page }) => {
+  test("REGRESSION: the auto-archive banner text is preserved verbatim", async ({ page }) => {
     await page.context().addCookies([sessionCookie]);
     await installUploadCenterMocks(page);
     await gotoUploadPage(page);
 
     const banner = page.getByTestId("gbc-upload-preanalysis-banner");
-    await expect(banner).toContainText("系统不会把无法识别的年份写成默认值");
-    await expect(banner).toContainText("低置信度元数据将在任务进入规则分析前要求人工确认");
+    // 43cb2266 起：上传即自动归档识别并直接入队，不再有"分析前人工确认"闸门。
+    await expect(banner).toContainText("按 PDF 原件自动识别单位、年度、文种与口径并直接入队分析");
+    await expect(banner).toContainText("若新单位尚未收录，提交时会自动建档绑定");
   });
 
   test("uploading a PDF runs preflight and shows a real 校验通过 badge", async ({ page }) => {
@@ -324,7 +325,7 @@ test.describe("Upload center (Task 5)", () => {
   // 前置修复 1：分析前确认闸门（决策 B——真的实现这个闸门，让文案成立）
   // -------------------------------------------------------------------------
 
-  test("REGRESSION: needs_confirmation file blocks submission, and the submit button is disabled", async ({
+  test("REGRESSION: needs_confirmation no longer blocks submission; auto-register path is offered", async ({
     page,
   }) => {
     const uploadRequests: Array<Record<string, unknown>> = [];
@@ -342,16 +343,17 @@ test.describe("Upload center (Task 5)", () => {
     const row = page.locator('[data-testid^="gbc-upload-file-row-"]').first();
     await expect(row).toContainText("需要确认", { timeout: 10_000 });
 
-    // 核心反例：存在未解决的 needs_confirmation 文件时，提交按钮必须被禁用。
-    await expect(page.getByTestId("gbc-upload-submit")).toBeDisabled();
-    // 拦截原因必须明确写出来，不能只是禁用按钮却不说明为什么。
-    await expect(page.getByTestId("gbc-upload-confirmation-blocking-notice")).toContainText("1 个文件需要确认");
+    // 43cb2266 起：新单位/待补齐项不再拦提交，由系统自动建档绑定；
+    // 页面仍须明确写出这条路径，不能只把按钮从禁用改成可用。
+    await expect(page.getByTestId("gbc-upload-submit")).toBeEnabled();
+    await expect(page.getByTestId("gbc-upload-confirmation-blocking-notice")).toContainText("新单位或待补齐项");
+    await expect(page.getByTestId("gbc-upload-confirmation-blocking-notice")).toContainText("自动建档绑定");
 
-    // 确认过程中不应该发生任何真实上传请求（防止"看起来禁用了，其实点了也会提交"）。
+    // 未点击提交前不应该发生任何真实上传请求。
     expect(uploadRequests.length).toBe(0);
   });
 
-  test("REGRESSION: filling the missing year via the per-file 补齐 form unblocks submission and the real value reaches the backend", async ({
+  test("REGRESSION: filling the missing year via the per-file 补齐 form reaches the backend", async ({
     page,
   }) => {
     const uploadRequests: Array<Record<string, unknown>> = [];
@@ -371,7 +373,6 @@ test.describe("Upload center (Task 5)", () => {
 
     const row = page.locator('[data-testid^="gbc-upload-file-row-"]').first();
     await expect(row).toContainText("需要确认", { timeout: 10_000 });
-    await expect(page.getByTestId("gbc-upload-submit")).toBeDisabled();
 
     // 单文件补齐：点击"补齐"展开表单，只填年份（该文件只缺年份，其它字段已识别正确）。
     const toggleButton = page.locator('[data-testid^="gbc-upload-file-confirm-toggle-"]').first();
@@ -552,7 +553,9 @@ test.describe("Upload center failure diagnostics (fix A)", () => {
     // 结果上传一份决算材料却被按"部门预算"提交。修复后必须停在"需要确认"。
     const row = page.locator('[data-testid^="gbc-upload-file-row-"]').first();
     await expect(row).toContainText("需要确认", { timeout: 10_000 });
-    await expect(page.getByTestId("gbc-upload-submit")).toBeDisabled();
+    // 提交不再被"需要确认"拦截（可走自动建档绑定），但文件不得被悄悄补成 dept_budget。
+    await expect(page.getByTestId("gbc-upload-submit")).toBeEnabled();
+    await expect(page.getByTestId("gbc-upload-preset-doctype")).toHaveValue("");
     expect(uploadRequests.length).toBe(0);
   });
 

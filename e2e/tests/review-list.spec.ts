@@ -115,16 +115,15 @@ test("一级入口先显示清单，角标统计真实复核待办", async ({ pa
   expect(state.writes).toEqual([]);
 });
 
-test("预览不创建会话，显式开始后返回仍保留筛选", async ({ page }) => {
+test("进入工作台自动开始复核，返回后仍保留筛选", async ({ page }) => {
   const state = await mocks(page);
   await page.goto("/review?year=2026&q=部门甲");
   await expect(page.getByTestId("gbc-review-list-table").locator("tbody tr")).toHaveCount(2);
   await page.getByTestId("gbc-review-list-open-a").click();
-  await expect(page.getByTestId("gbc-review-preview-notice")).toBeVisible();
-  expect(state.writes).toEqual([]);
-  await expect(page.getByTestId("gbc-review-start")).toBeEnabled();
-  await page.getByTestId("gbc-review-start").click();
+  // 43cb2266 起：进入工作台自动开始会话，不再有预览态与手动「开始复核」。
   await expect(page.getByTestId("gbc-review-lifecycle-badge")).toContainText("复核中");
+  await expect(page.getByTestId("gbc-review-preview-notice")).toHaveCount(0);
+  await expect(page.getByTestId("gbc-review-start")).toHaveCount(0);
   expect(state.writes).toEqual(["/api/reviews/slot-a/start"]);
   await expect(page.getByTestId("gbc-review-complete")).toBeDisabled();
   await page.getByTestId("gbc-review-back-button").click();
@@ -167,7 +166,7 @@ test("从处理队列查看材料后返回队列并保留筛选", async ({ page 
   await mocks(page);
   await page.goto("/queue?q=示例教育局&year=2026&kind=budget&status=review_required");
   await page.getByTestId("gbc-workbench-queue-review-a").click();
-  await expect(page.getByTestId("gbc-review-preview-notice")).toBeVisible();
+  await expect(page.getByTestId("gbc-review-lifecycle-badge")).toContainText("复核中");
   await page.getByTestId("gbc-review-back-button").click();
   await expect(page.getByTestId("gbc-queue-search")).toHaveValue("示例教育局");
   await expect(page.getByTestId("gbc-queue-year-filter")).toHaveValue("2026");
