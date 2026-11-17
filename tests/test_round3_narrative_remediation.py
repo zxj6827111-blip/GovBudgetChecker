@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from types import SimpleNamespace
+from typing import Any, List
 
 import pytest
 
@@ -34,7 +35,7 @@ from src.services.obligation_finding_coverage import _v33227_name_mismatch_roots
 
 
 def test_row_value_v2_and_r33220_accept_spaced_heji() -> None:
-    table = [
+    table: List[List[Any]] = [
         ["项目", None, "合计", "基本支出", "项目支出"],
         ["合 计", None, "1,909.88", "1,836.21", "73.67"],
         ["201", "一般公共服务支出", "1,909.88", "1,836.21", "73.67"],
@@ -47,7 +48,9 @@ def test_row_value_v2_and_r33220_accept_spaced_heji() -> None:
         "本年支出合计1,909.88万元，其中：基本支出1,836.21万元，占96.14%；"
         "项目支出73.67万元，占3.86%。"
     )
-    doc = build_document("/tmp/spaced_heji_t3.pdf", [page_t3, page_s3], [[table], []], 1000)
+    page: List[List[List[Any]]] = [table]
+    page_tables: List[List[List[List[Any]]]] = [page, []]
+    doc = build_document("/tmp/spaced_heji_t3.pdf", [page_t3, page_s3], page_tables, 1000)
     doc.report_kind = "final"
     issues = R33220_Narrative3_T3().apply(doc)
     assert issues == []
