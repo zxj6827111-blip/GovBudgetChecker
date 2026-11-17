@@ -391,13 +391,15 @@ def test_report_export_includes_structured_review_item_without_fake_page(
     assert response.status_code == 200
     payload = response.json()
     assert payload["issues"] == []
+    # 2026-11-16：技术性结构化复核项进入 diagnostics，不再进入业务问题/必处理。
     structured_reviews = [
-        item for item in payload["review_report"]["manual_review"]
+        item for item in payload["review_report"]["diagnostics"]
         if item.get("record_type") == "structured_review"
     ]
     assert structured_reviews[0]["id"] == "review-1"
     assert structured_reviews[0]["severity"] == "manual_review"
-    assert structured_reviews[0].get("page") is None
+    assert structured_reviews[0].get("location", {}).get("page") is None
+    assert structured_reviews[0]["cause_kind"] == "extraction_failure"
 
 
 def test_report_download_word_format_is_supported(

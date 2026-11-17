@@ -32,8 +32,11 @@ def test_material_counts_keep_tips_and_review_reasons_separate():
     assert report["conclusion"]["issue_total"] == 3
     assert review_report_counts(report) == {
         "review_issue_total": 3, "review_candidate_total": 3, "formal_issue_total": 3,
-        "tip_total": 3, "review_notice_total": 3,
+        "tip_total": 3, "review_notice_total": 0,
     }
+    # 全局处理原因进入 diagnostics，不再生成业务参考卡片。
+    assert len([item for item in report["diagnostics"]
+                if item.get("record_type") == "processing_notice"]) == 3
     assert review_report_counts(report, ["0"])["review_issue_total"] == 2
     legacy = build_review_report({"job_id": "legacy", "result": {"rule_findings": [
         {"severity": "info"}, {"severity": "manual_review"},

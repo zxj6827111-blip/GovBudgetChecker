@@ -6,6 +6,16 @@ import dataclasses
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional
 
+from src.schemas.result_semantics import (
+    CAUSE_EXECUTION_FAILURE,
+    CAUSE_EXTRACTION_FAILURE,
+    CAUSE_IDENTITY_CONFLICT,
+    CAUSE_LEGACY_UNKNOWN,
+    annotate_diagnostic,
+    processing_summary as build_processing_summary,
+    review_summary as build_review_summary,
+)
+
 
 @dataclass
 class ReviewReport:
@@ -24,6 +34,11 @@ class ReviewReport:
     candidate_findings: List[Dict[str, Any]] = field(default_factory=list)
     #: R2-06：结构化交付抑制台账（规则→政策/关系/理由），读取与导出可对账。
     delivery_suppressions: List[Dict[str, Any]] = field(default_factory=list)
+    #: schema v3：技术诊断与执行/覆盖状态。诊断只作内部维护与材料层汇总，
+    #: 不进入业务问题队列，也不要求用户逐条表态。
+    diagnostics: List[Dict[str, Any]] = field(default_factory=list)
+    processing_summary: Dict[str, Any] = field(default_factory=dict)
+    review_summary: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return dataclasses.asdict(self)
@@ -45,6 +60,9 @@ class ReviewReport:
             merge_conflicts=_mapping_list(payload.get("merge_conflicts")),
             candidate_findings=_mapping_list(payload.get("candidate_findings")),
             delivery_suppressions=_mapping_list(payload.get("delivery_suppressions")),
+            diagnostics=_mapping_list(payload.get("diagnostics")),
+            processing_summary=_mapping(payload.get("processing_summary")),
+            review_summary=_mapping(payload.get("review_summary")),
         )
 
 
@@ -273,10 +291,9 @@ def build_review_report(payload: Mapping[str, Any]) -> Dict[str, Any]:
         for item in merged.get("candidate_issue_ids", [])
         if str(item or "").strip()
     } if isinstance(merged.get("candidate_issue_ids"), list) else set()
-    manual_review = [
-        {"record_type": "review_reason", **item}
-        for item in _mapping_list(payload.get("review_reasons"))
-    ]
+    # 全局处理原因进入 diagnostics；业务参考区只保留具体候选/冲突，
+    # 不再生成“系统提示”式泛化卡片。
+    manual_review: List[Dict[str, Any]] = []
     for item in source_issues:
         severity = str(item.get("severity") or "").strip().lower()
         if severity == "info" or _is_rounding_hint(item) or _is_confirmed_material_finding(item):
@@ -336,6 +353,9 @@ def build_review_report(payload: Mapping[str, Any]) -> Dict[str, Any]:
     structured_ingest = payload.get("structured_ingest")
     if not isinstance(structured_ingest, Mapping):
         structured_ingest = _mapping(result.get("structured_ingest"))
+    # schema v3：结构化识别待复核、全局处理原因和未完成义务都进入 diagnostics。
+    # 这些记录保留内部完成度，但不再伪装成业务材料问题或强制人工任务。
+    diagnostics: List[Dict[str, Any]] = []
     for item in _mapping_list(structured_ingest.get("review_items")):
         table_code = str(item.get("table_code") or "").strip()
         raw_page = item.get("page") or item.get("page_number")
@@ -345,17 +365,24 @@ def build_review_report(payload: Mapping[str, Any]) -> Dict[str, Any]:
             page = None
         if page is not None and page <= 0:
             page = None
-        manual_review.append(
+        review_type = str(item.get("type") or "").strip()
+        cause_kind = (
+            CAUSE_IDENTITY_CONFLICT
+            if any(token in review_type for token in ("identity", "org", "subject"))
+            else CAUSE_EXTRACTION_FAILURE
+        )
+        diagnostics.append(
             {
                 **item,
                 "record_type": "structured_review",
-                "id": item.get("id") or f"structured-review:{table_code or len(manual_review) + 1}",
+                "id": item.get("id") or f"structured-review:{table_code or len(diagnostics) + 1}",
                 "title": item.get("title") or (
                     f"结构化识别待复核：{table_code}"
                     if table_code else "结构化识别结果待复核"
                 ),
                 "message": item.get("message") or "该结构化识别项需要人工复核。",
                 "severity": item.get("severity") or "manual_review",
+                "cause_kind": cause_kind,
                 "location": {
                     key: value
                     for key, value in {"page": page, "table": table_code or None}.items()
@@ -364,33 +391,82 @@ def build_review_report(payload: Mapping[str, Any]) -> Dict[str, Any]:
                 "suggestion": item.get("recommended_action") or "请核对原始 PDF 后确认。",
             }
         )
-    for item in coverage_dict.get("instances", []) if isinstance(coverage_dict.get("instances"), list) else []:
+
+    coverage_instances = (
+        coverage_dict.get("instances")
+        if isinstance(coverage_dict.get("instances"), list)
+        else []
+    )
+    # 根问题关联只在报告层用同一次分析的正式问题做证据判定；找不到就保持
+    # extraction_failure，不按中文提示猜“材料缺陷”。
+    cascade_row = {
+        "job_id": job_id,
+        "rule_findings": [],
+        "issues": {"all": list(confirmed_issues)},
+    }
+    visible_issue_ids = {
+        str(item.get("id") or "")
+        for item in confirmed_issues
+        if str(item.get("id") or "")
+    }
+    from types import SimpleNamespace
+
+    from src.services.obligation_finding_coverage import cascade_root_issue_ids
+
+    for item in coverage_instances:
         if not isinstance(item, Mapping):
             continue
         if str(item.get("status") or "") in {"completed", "not_applicable"}:
             continue
-        manual_review.append(
+        record = {
+            "record_type": "unfinished_check",
+            "obligation_id": item.get("obligation_id"),
+            "title": item.get("title"),
+            "status": item.get("status"),
+            "reason": item.get("reason_label") or item.get("reason"),
+            "detail": item.get("detail") or item.get("gap_note"),
+            # DH-02：结构化卡点原样进入诊断，不在这里翻译或推断。
+            "reason_codes": list(item.get("reason_codes") or []),
+            "blocked_by": [dict(value) for value in item.get("blocked_by") or []],
+            "missing_operands": [dict(value) for value in item.get("missing_operands") or []],
+            "candidates": [dict(value) for value in item.get("candidates") or []],
+            "next_action": item.get("next_action"),
+            "root_cause_key": item.get("root_cause_key"),
+            "card_summary": item.get("card_summary"),
+            "suggested_actions": [dict(value) for value in item.get("suggested_actions") or []],
+            "legacy_same_source_keys": list(item.get("legacy_same_source_keys") or []),
+            "legacy_coverage_terms": list(item.get("legacy_coverage_terms") or []),
+        }
+        roots: List[str] = []
+        try:
+            roots = cascade_root_issue_ids(
+                SimpleNamespace(**record),
+                cascade_row,
+                visible_issue_ids=visible_issue_ids,
+                structured_ingest=structured_ingest,
+            )
+        except Exception:  # noqa: BLE001 - 关联失败保持技术诊断，不影响报告生成
+            roots = []
+        diagnostics.append(
+            annotate_diagnostic(
+                record,
+                schema_version=3,
+                root_issue_ids=roots,
+                legacy=not record["reason_codes"]
+                and not record["blocked_by"]
+                and not record["missing_operands"],
+            )
+        )
+    for raw_reason in _mapping_list(payload.get("review_reasons")):
+        code = str(raw_reason.get("code") or "").strip()
+        diagnostics.append(
             {
-                "record_type": "unfinished_check",
-                "obligation_id": item.get("obligation_id"),
-                "title": item.get("title"),
-                "status": item.get("status"),
-                "reason": item.get("reason_label") or item.get("reason"),
-                "detail": item.get("detail") or item.get("gap_note"),
-                # DH-02：结构化卡点原样进入约定导出块，不在这里翻译或推断。
-                "reason_codes": list(item.get("reason_codes") or []),
-                "blocked_by": [dict(value) for value in item.get("blocked_by") or []],
-                "missing_operands": [dict(value) for value in item.get("missing_operands") or []],
-                "candidates": [dict(value) for value in item.get("candidates") or []],
-                "next_action": item.get("next_action"),
-                "root_cause_key": item.get("root_cause_key"),
-                # R2.2 计划 §7 承接字段：卡片摘要与建议动作原样进入导出块；
-                # 旧结果缺键时保持 None/空，不在这里编造默认文案。
-                "card_summary": item.get("card_summary"),
-                "suggested_actions": [dict(value) for value in item.get("suggested_actions") or []],
-                # DH-03a：旧兼容字段原样进入导出块；只作 UI 提示。
-                "legacy_same_source_keys": list(item.get("legacy_same_source_keys") or []),
-                "legacy_coverage_terms": list(item.get("legacy_coverage_terms") or []),
+                **raw_reason,
+                "record_type": "processing_notice",
+                "id": raw_reason.get("id") or f"processing:{code or len(diagnostics) + 1}",
+                "title": raw_reason.get("title") or _processing_reason_title(code),
+                "message": raw_reason.get("message") or "本次检查存在处理状态说明。",
+                "cause_kind": _processing_reason_cause(code),
             }
         )
 
@@ -415,7 +491,7 @@ def build_review_report(payload: Mapping[str, Any]) -> Dict[str, Any]:
             }
 
     report = ReviewReport(
-        schema_version=2,
+        schema_version=3,
         job_id=job_id,
         analysis_revision=payload.get("analysis_revision"),
         metadata={
@@ -451,11 +527,76 @@ def build_review_report(payload: Mapping[str, Any]) -> Dict[str, Any]:
         candidate_findings=candidate_findings,
         delivery_suppressions=_mapping_list(
             result.get("delivery_suppressions") or meta.get("delivery_suppressions")),
+        diagnostics=diagnostics,
     )
     output = report.to_dict()
     output["conclusion"].update(review_report_counts(output, payload.get("ignored_issue_ids") or []))
     output["conclusion"]["issue_total"] = output["conclusion"]["review_issue_total"]
+    pending_formal = 0
+    for item in confirmed_issues:
+        decision = _mapping(item.get("human_decision"))
+        status = str(decision.get("status") or "").strip()
+        if not status or status == "pending":
+            pending_formal += 1
+    output["processing_summary"] = build_processing_summary(
+        status=payload.get("status"),
+        obligation_coverage=coverage if isinstance(coverage, Mapping) else None,
+        diagnostics=output["diagnostics"],
+        formal_issue_total=output["conclusion"]["review_issue_total"],
+    )
+    overall = _mapping(payload.get("overall_status") or meta.get("review_status"))
+    output["review_summary"] = build_review_summary(
+        formal_issue_total=output["conclusion"]["review_issue_total"],
+        pending_formal_issue_total=pending_formal,
+        candidate_total=output["conclusion"]["review_candidate_total"],
+        review_status=overall.get("review_status"),
+        signoff_state=overall.get("signoff_state"),
+        coverage_state=output["processing_summary"]["coverage_state"],
+    )
+    # 导出/页面使用同一时点的口径快照；CSV 的 conclusion_json 也随附。
+    output["conclusion"]["processing_summary"] = output["processing_summary"]
+    output["conclusion"]["review_summary"] = output["review_summary"]
     return output
+
+
+def _processing_reason_title(code: str) -> str:
+    return {
+        "table_reading_incomplete": "部分表格读取未完成",
+        "fact_identity_incomplete": "部分数据身份不完整",
+        "low_page_coverage": "部分页面未覆盖",
+        "scanned_pages_detected": "存在扫描页",
+        "unknown_report_kind": "报告类型未识别",
+        "unknown_report_year": "报告年度未识别",
+        "ai_assist_required_but_failed": "语义复核未完成",
+        "evidence_incomplete_findings": "部分候选缺少可定位证据",
+        "correction_overlay_incomplete": "人工校正未完全生效",
+        "structured_ingest_failed": "结构化保存失败",
+        "missing_required_table": "核心表未识别",
+        "ambiguous_table_schema": "表结构识别存在歧义",
+        "fact_materialization_empty": "表格未生成可用事实",
+        "rule_evidence_incomplete": "部分问题证据不完整",
+        "rule_execution_error": "部分规则执行异常",
+        "rules_insufficient_data": "部分规则取数不足",
+        "check_obligations_incomplete": "部分检查关系未完成",
+        "rules_not_executed": "部分规则未执行",
+        "report_type_mismatch": "报告类型不一致",
+        "org_scope_pending": "汇总口径待确认",
+    }.get(code, "处理状态说明")
+
+
+def _processing_reason_cause(code: str) -> str:
+    if code in {
+        "table_reading_incomplete", "fact_identity_incomplete", "low_page_coverage",
+        "scanned_pages_detected", "unknown_report_kind", "unknown_report_year",
+        "missing_required_table", "ambiguous_table_schema", "fact_materialization_empty",
+        "rules_insufficient_data", "check_obligations_incomplete", "rules_not_executed",
+    }:
+        return CAUSE_EXTRACTION_FAILURE
+    if code in {"report_type_mismatch", "org_scope_pending"}:
+        return CAUSE_IDENTITY_CONFLICT
+    if code == "evidence_incomplete_findings":
+        return CAUSE_EXTRACTION_FAILURE
+    return CAUSE_EXECUTION_FAILURE
 
 
 def _collect_findings(result: Mapping[str, Any]) -> List[Dict[str, Any]]:

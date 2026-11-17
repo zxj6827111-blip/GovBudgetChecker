@@ -122,7 +122,7 @@ def test_unfinished_check_export_carries_fields():
         "rule_findings": [],
         "issues": {"critical": [], "error": [], "warn": [], "info": [], "tips": []},
     })
-    unfinished = [record for record in report["manual_review"]
+    unfinished = [record for record in report["diagnostics"]
                   if record.get("record_type") == "unfinished_check"]
     assert unfinished, "决算画像应至少有一条未完成检查"
     for record in unfinished:

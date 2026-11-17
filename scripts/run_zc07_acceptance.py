@@ -1503,8 +1503,10 @@ def _evaluate_export_agreement(manifest: dict[str, Any], root: Path) -> dict[str
                 if suffix == ".json":
                     payload = _read_json(path)
                     report = payload.get("review_report")
-                    if not isinstance(report, dict) or report.get("schema_version") != 2:
-                        raise ValueError("canonical review_report/schema_version=2 缺失")
+                    # schema 3（2026-11-16）增加 diagnostics/processing_summary，
+                    # 旧 v2 报告仍可读；导出对账接受当前或旧版 canonical 报告。
+                    if not isinstance(report, dict) or report.get("schema_version") not in (2, 3):
+                        raise ValueError("canonical review_report/schema_version=2 或 3 缺失")
                     revision = str(report.get("analysis_revision") or "")
                     if not revision or str(payload.get("analysis_revision") or "") != revision:
                         raise ValueError("analysis_revision 缺失或与 canonical report 不一致")
