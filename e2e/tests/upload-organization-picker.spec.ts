@@ -32,14 +32,36 @@ async function installMocks(page: Page, options: { noCandidates?: boolean; failD
       }
       body = { tree };
     }
-    if (url.pathname === "/api/documents/preflight") body = {
-      report_year: 2024, doc_type: "dept_final", page_count: 27, current: null,
-      suggestions: options.noCandidates ? [] : [
-        { organization_id: "letters-dept", organization_name: "上海市信访办公室", level: "department", confidence: 0.7 },
-        { organization_id: "ancestor-only", organization_name: "仅可见的上级部门", level: "department", confidence: 0.6 },
-      ],
-      binding_decision: { reasons: [{ code: "scope_undetermined" }] },
-    };
+    if (url.pathname === "/api/documents/preflight") {
+      // 与真实预检契约一致：带 selected_org_id 的复核请求返回该组织为 current，
+      // 并回传 selected_org_validation；否则保持低置信度（current=null）。
+      const raw = request.postDataBuffer()?.toString("utf8") ?? "";
+      const selected = /name="selected_org_id"\r?\n\r?\n([^\r\n]+)/.exec(raw)?.[1]?.trim() || null;
+      const selectedPath = selected === "district-unit"
+        ? "上海市 › 普陀区 › 上海市信访办公室 › 上海市信访办公室单位"
+        : "上海市 › 上海市信访办公室 › 上海市信访办公室单位";
+      body = {
+        report_year: 2024, doc_type: "dept_final", page_count: 27,
+        current: selected
+          ? {
+              organization_id: selected,
+              organization_name: "上海市信访办公室单位",
+              level: "unit",
+              confidence: 1,
+              organization_path: selectedPath,
+              organization_source: "manual_override",
+            }
+          : null,
+        suggestions: options.noCandidates ? [] : [
+          { organization_id: "letters-dept", organization_name: "上海市信访办公室", level: "department", confidence: 0.7 },
+          { organization_id: "ancestor-only", organization_name: "仅可见的上级部门", level: "department", confidence: 0.6 },
+        ],
+        binding_decision: { reasons: [{ code: "scope_undetermined" }] },
+        ...(selected
+          ? { selected_org_validation: { ok: true, selected_org_id: selected } }
+          : {}),
+      };
+    }
     if (url.pathname === "/api/documents/upload") {
       uploads.push(request.postDataBuffer()?.toString("utf8") ?? "");
       body = { job_id: "upload-confirmed-unit" };
@@ -127,11 +149,12 @@ test.describe("Upload organization candidate confirmation", () => {
     await panel.getByTestId("gbc-upload-confirm-save").click();
     await expect(page.getByTestId("gbc-upload-confirmed-organization")).toHaveCount(1);
     await expect(triggers).toHaveCount(1);
-    await expect(page.getByTestId("gbc-upload-submit")).toBeDisabled();
+    // 43cb2266 起：剩余待确认文件不再拦提交（可走自动建档绑定）。
+    await expect(page.getByTestId("gbc-upload-submit")).toBeEnabled();
     await triggers.first().click();
     await expect(panel.getByTestId("gbc-upload-confirm-save")).toBeDisabled();
     await panel.getByTestId("gbc-upload-confirm-cancel").click();
-    await expect(page.getByTestId("gbc-upload-submit")).toBeDisabled();
+    await expect(page.getByTestId("gbc-upload-submit")).toBeEnabled();
   });
 
   test("目录失败可重试，无候选直接搜索，窄屏不横向溢出", async ({ page }) => {

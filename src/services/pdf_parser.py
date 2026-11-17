@@ -119,7 +119,9 @@ from src.services.input_processing_identity import (
 )
 
 PARSER_FINGERPRINT = (
-    "pdfplumber-cells-v31-parse-identity-"
+    # v32：词块与页文本统一改走视觉行重组（D1 阅读顺序修复），
+    # 同行粗体金额不再被行聚类排到正文之后；指纹随实现清单自动失效旧缓存。
+    "pdfplumber-cells-v32-visual-line-"
     + parse_implementation_manifest()["sha256"][:16]
 )
 
@@ -288,30 +290,46 @@ class PDFParser:
             # 保留原生文字块及其页坐标，供规则上下文与证据层共享。
             # 文本抽取异常时只影响该页文字块，不丢弃可用的表格片段。
             try:
-                words = page.extract_words() or []
+                words = page.extract_words(extra_attrs=("fontname", "size")) or []
             except Exception:
-                words = []
+                try:
+                    words = page.extract_words() or []
+                except Exception:
+                    words = []
             from src.services.table_reading_assessment import collect_page_probe
             reading_probes.append(collect_page_probe(page, page_number, page_text, words))
-            for word_index, word in enumerate(words):
-                text = str(word.get("text") or "").strip()
-                if not text:
-                    continue
-                bbox_values = [word.get("x0"), word.get("top"), word.get("x1"), word.get("bottom")]
-                try:
-                    bbox = tuple(float(value) for value in bbox_values)
-                except (TypeError, ValueError):
-                    bbox = None
-                text_blocks.append(
-                    ParsedTextBlock(
-                        block_uid=f"native-p{page_number}-w{word_index}",
-                        page_number=page_number,
-                        text=text,
-                        bbox=bbox if bbox and bbox[2] > bbox[0] and bbox[3] > bbox[1] else None,
-                        confidence=None,
-                        extraction_method="native_text",
+            # 视觉行重组（D1）：pdfplumber 按 top 差聚行，同一行内粗体/异字号
+            # 词块基线偏移超容差会被排到正文之后，金额与单位在证据层分离。
+            # 仅做行级聚类重排，词块本身（文本、bbox、字体）不变。
+            from src.services.visual_line_reassembly import cluster_words_into_lines
+
+            word_lines = cluster_words_into_lines(words)
+            word_index = 0
+            for line in word_lines:
+                for word in line:
+                    text = str(word.get("text") or "").strip()
+                    if not text:
+                        continue
+                    bbox_values = [word.get("x0"), word.get("top"), word.get("x1"), word.get("bottom")]
+                    try:
+                        bbox = tuple(float(value) for value in bbox_values)
+                    except (TypeError, ValueError):
+                        bbox = None
+                    font_name = word.get("fontname")
+                    font_size = word.get("size")
+                    text_blocks.append(
+                        ParsedTextBlock(
+                            block_uid=f"native-p{page_number}-w{word_index}",
+                            page_number=page_number,
+                            text=text,
+                            bbox=bbox if bbox and bbox[2] > bbox[0] and bbox[3] > bbox[1] else None,
+                            confidence=None,
+                            extraction_method="native_text",
+                            font_name=str(font_name) if font_name else None,
+                            font_size=float(font_size) if font_size is not None else None,
+                        )
                     )
-                )
+                    word_index += 1
             previous = [t for t in self._coalesce_tables(fragments)
                         if t.extraction_method != 'page_text_fallback']
             current = self._extract_tables_from_page(
@@ -553,13 +571,11 @@ class PDFParser:
         best_candidates, decisions = resolve_empty_table_shadows(best_candidates, page.extract_text() or "")
         self._reconstruction_decisions.extend(decisions)
         footer = self._extract_native_basic_footer(page, page_number)
-        # 网格里的合计标签可能粘上相邻折行字（如「出\n公用经费合计」），按包含判断已有该行。
-        if footer is not None and not any(
-            any("人员经费合计" in normalize_text(str(value or "")) for value in row)
-            and any("公用经费合计" in normalize_text(str(value or "")) for value in row)
-            for candidate in best_candidates for row in candidate.rows
-        ):
+        # 网格里的合计标签可能粘上相邻折行字（如「出\n公用经费合计」），按包含判断已有该行；
+        # 若只是 text 候选把“人员经费合计 金额 公用经费合计”粘在同一格，仍应采用精确 native_footer 并移除影子 text 表。
+        if footer is not None and not self._has_complete_basic_footer(best_candidates):
             best_candidates.append(footer)
+            best_candidates = self._drop_native_and_footer_text_shadows(best_candidates)
         placeholder = self._build_page_text_placeholder(page, page_number, best_candidates)
         if (placeholder is not None and continuation is not None
                 and continuation.table_code == placeholder.table_code
@@ -577,6 +593,94 @@ class PDFParser:
                            for candidate in best_candidates]
 
         return sorted(best_candidates, key=lambda item: (item.page_number, item.bbox[1], item.bbox[0]))
+
+    def _has_complete_basic_footer(self, candidates: Sequence[ParsedTable]) -> bool:
+        """已有原生网格或独立成列的合计行时，不再重复追加 native_footer。"""
+        for candidate in candidates:
+            if candidate.extraction_method in {"lines", "lines_strict"}:
+                if any(
+                    any("人员经费合计" in normalize_text(str(value or "")) for value in row)
+                    and any("公用经费合计" in normalize_text(str(value or "")) for value in row)
+                    for row in candidate.rows
+                ):
+                    return True
+                continue
+            for row in candidate.rows:
+                norms = [normalize_text(str(value or "")) for value in row]
+                renyuan_cols = [
+                    idx for idx, cell in enumerate(norms)
+                    if "人员经费合计" in cell and "公用经费" not in cell and self._parse_numeric(cell) is None
+                ]
+                gongyong_cols = [
+                    idx for idx, cell in enumerate(norms)
+                    if "公用经费合计" in cell and "人员经费" not in cell and self._parse_numeric(cell) is None
+                ]
+                num_cols = [
+                    idx for idx, cell in enumerate(norms)
+                    if self._parse_numeric(cell) is not None
+                ]
+                if renyuan_cols and gongyong_cols and set(renyuan_cols).isdisjoint(gongyong_cols) and len(num_cols) >= 2:
+                    return True
+        return False
+
+    def _drop_native_and_footer_text_shadows(self, candidates: Sequence[ParsedTable]) -> List[ParsedTable]:
+        """当 native_footer 与原生网格共同覆盖粘连 text 候选（允许附带注记行）时，移除该 text 影子表。"""
+        footers = [c for c in candidates if c.extraction_method == "native_footer" and c.bbox]
+        if not footers:
+            return list(candidates)
+        structured = [c for c in candidates if c.extraction_method in {"lines", "lines_strict", "native_footer"} and c.bbox]
+        covered_numbers: set[str] = set()
+        covered_fragments: set[str] = set()
+        for item in structured:
+            for row in item.rows:
+                for val in row:
+                    raw_val = str(val or "")
+                    covered_numbers.update(re.findall(r"\d[\d,]*\.\d+|\d+", raw_val))
+                    text_val = normalize_text(raw_val)
+                    covered_numbers.update(re.findall(r"\d[\d,]*\.\d+|\d+", text_val))
+                    norm = re.sub(r"\s+", "", text_val)
+                    if norm:
+                        covered_fragments.add(norm)
+                        covered_numbers.update(re.findall(r"\d[\d,]*\.\d+|\d+", norm))
+        text_frags = sorted(
+            (re.sub(r"\d[\d,]*\.\d+|\d+", "", f) for f in covered_fragments),
+            key=len,
+            reverse=True,
+        )
+        kept: List[ParsedTable] = []
+        for cand in candidates:
+            if not (cand.extraction_method == "text" and cand.table_code.startswith("UNKNOWN_") and cand.bbox):
+                kept.append(cand)
+                continue
+            overlaps_footer = any(
+                min(cand.bbox[2], f.bbox[2]) > max(cand.bbox[0], f.bbox[0])
+                and min(cand.bbox[3], f.bbox[3]) > max(cand.bbox[1], f.bbox[1])
+                for f in footers
+            )
+            if not overlaps_footer:
+                kept.append(cand)
+                continue
+            shadow_ok = True
+            for row in cand.rows:
+                row_text = "".join(re.sub(r"\s+", "", normalize_text(str(v or ""))) for v in row)
+                if not row_text or row_text.startswith(("注:", "注：", "说明:", "说明：")):
+                    continue
+                # 保留单元格内与单元格间的空格再提取数字，防止 "310 99" 被 normalize_text 拼接成 "31099"。
+                spaced_row = " ".join(str(v or "") for v in row)
+                row_nums = re.findall(r"\d[\d,]*\.\d+|\d+", spaced_row)
+                if not all(n in covered_numbers for n in row_nums):
+                    shadow_ok = False
+                    break
+                remainder = re.sub(r"\d[\d,]*\.\d+|\d+", "", row_text)
+                for frag in text_frags:
+                    if frag:
+                        remainder = remainder.replace(frag, "")
+                if remainder:
+                    shadow_ok = False
+                    break
+            if not shadow_ok:
+                kept.append(cand)
+        return kept
 
     _BILATERAL_TOTAL_LABELS = {"总计", "收入总计", "支出总计"}
 
@@ -1081,7 +1185,8 @@ class PDFParser:
                 for index in range(len(merged) - 1, -1, -1):
                     candidate = merged[index]
                     if candidate.table_code == "FIN_06_basic_expenditure":
-                        if table.page_number - self._last_page_number(candidate) == 1:
+                        if (table.page_number - self._last_page_number(candidate) == 1
+                                or self._is_native_footer_follow_on(candidate, table)):
                             previous_index = index
                         break
                     if not candidate.table_code.startswith("UNKNOWN_"):
@@ -1585,7 +1690,8 @@ class PDFParser:
         return round(0.4 * richness + 0.35 * numeric_ratio + 0.25 * width_score, 4)
 
     def _is_continuation_table(self, previous: ParsedTable, current: ParsedTable) -> bool:
-        if current.page_number - self._last_page_number(previous) != 1:
+        if (current.page_number - self._last_page_number(previous) != 1
+                and not self._is_native_footer_follow_on(previous, current)):
             return False
         final_nonempty_row = next(
             (
@@ -2103,7 +2209,8 @@ class PDFParser:
 
     def _align_native_total_footer(self, previous: ParsedTable, current: ParsedTable) -> ParsedTable:
         if (previous.table_code != "FIN_06_basic_expenditure"
-                or current.page_number - self._last_page_number(previous) != 1
+                or not (current.page_number - self._last_page_number(previous) == 1
+                        or self._is_native_footer_follow_on(previous, current))
                 or current.extraction_method not in {"lines", "lines_strict", "native_footer"}
                 or len(current.rows) != 1 or len(current.rows[0]) != 4
                 or normalize_text(str(current.rows[0][0] or "")) != "人员经费合计"
@@ -2283,6 +2390,34 @@ class PDFParser:
     def _last_page_number(self, table: ParsedTable) -> int:
         cell_pages = [cell.page_number for cell in table.cells if getattr(cell, "page_number", None)]
         return max(cell_pages) if cell_pages else table.page_number
+
+    def _is_native_footer_follow_on(self, previous: ParsedTable, current: ParsedTable) -> bool:
+        """判断当前 native_footer 是否紧接前续 FIN_06 表体（次页孤立，或同页续表行正下方）。"""
+        if (
+            previous.table_code != "FIN_06_basic_expenditure"
+            or current.extraction_method != "native_footer"
+        ):
+            return False
+        delta = current.page_number - self._last_page_number(previous)
+        if delta == 1:
+            return True
+        if delta != 0 or not previous.cells or not current.cells:
+            return False
+        prev_has_footer = any(
+            any("人员经费合计" in normalize_text(str(value or "")) for value in row)
+            and any("公用经费合计" in normalize_text(str(value or "")) for value in row)
+            for row in previous.rows
+        )
+        if prev_has_footer:
+            return False
+        same_page_bottom = max(
+            (cell.bbox[3] for cell in previous.cells if cell.page_number == current.page_number and cell.bbox),
+            default=None,
+        )
+        footer_top = current.bbox[1] if current.bbox else None
+        if same_page_bottom is None or footer_top is None:
+            return False
+        return same_page_bottom <= footer_top + 2.0
 
     def _headers_look_repeated(self, previous: ParsedTable, current: ParsedTable) -> bool:
         previous_headers = normalize_text(

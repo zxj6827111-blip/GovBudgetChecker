@@ -98,6 +98,7 @@ import {
   countFormalProblems,
   classifyFindingSources,
   extractTotalPageCount,
+  isFormalProblem,
   resolveProblemTargetPage,
   resolveWorkbenchHeaderBadge,
   workflowViewForJob,
@@ -169,10 +170,10 @@ function persistDocumentShare(value: number) {
   persistPreference(DOCUMENT_SHARE_KEY, String(value));
 }
 
-export function ReviewWorkbenchPage() {
+export function ReviewWorkbenchPage({ initialJobId }: { initialJobId?: string } = {}) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const jobId = searchParams.get("job") ?? "";
+  const jobId = initialJobId || (searchParams.get("job") ?? "");
   const returnTo = safeReviewReturnPath(searchParams.get("returnTo"));
 
   const [detail, setDetail] = useState<JobDetailRecord | null>(null);
@@ -224,6 +225,10 @@ export function ReviewWorkbenchPage() {
   const [reviewContext, setReviewContext] = useState<ReviewContextState>({ kind: "loading" });
   /** 正在提交复核写动作（开始/完成/重开）。 */
   const [reviewBusy, setReviewBusy] = useState(false);
+  /** 正在批量确认待处理问题。 */
+  const [bulkConfirmBusy, setBulkConfirmBusy] = useState(false);
+  /** 自动开启复核会话的去重键（slotId:jobId），避免重复调用 start。 */
+  const autoStartedReviewKeyRef = useRef<string | null>(null);
   /** 服务端拒绝完成时的业务原因（逐条显示，不是一句"HTTP 409"）。 */
   const [reviewBlockers, setReviewBlockers] = useState<ReviewErrorDetail | null>(null);
   /** 复核写动作失败的非门禁原因（网络/权限/服务不可用）。 */
@@ -620,10 +625,11 @@ export function ReviewWorkbenchPage() {
     // 只说证据是什么、哪条规则；问题标题已在右侧，不在这里重复。
     const source = selectedProblem.source === "ai" ? "大模型" : selectedProblem.source === "rule" ? "本地规则"
       : selectedProblem.source === "obligation" ? "未能自动核对" : "";
+    const mappedRole = ref ? evidenceRoleLabel(ref.role) : "";
     const label = calcRow
       ? `${calcRow.role} · ${calcRow.row.label} · ${calcRow.row.valueText} 万元`
-      : ref && (ref.role === "parent" || ref.role === "child" || ref.valueText)
-        ? [evidenceRoleLabel(ref.role), ref.valueText ? `${ref.valueText} 万元` : ""].filter(Boolean).join(" · ")
+      : ref && (ref.role === "parent" || ref.role === "child" || ref.valueText || mappedRole !== ref.role || ref.quoteText)
+        ? [mappedRole, ref.valueText ? `${ref.valueText} 万元` : ""].filter(Boolean).join(" · ")
         : [source, selectedProblem.source === "obligation" ? selectedProblem.check : selectedProblem.ruleId].filter(Boolean).join(" · ");
     return { label, page: highlightedProblem.page };
   }, [activeTab, selectedProblem, selectedEvidenceRefKey, highlightedProblem]);
@@ -746,6 +752,81 @@ export function ReviewWorkbenchPage() {
     [mutateWorkflow, workflowIssues, workflowNotes],
   );
 
+  const requiredPendingProblemIds = useMemo(
+    () =>
+      problems
+        .filter(
+          (problem) =>
+            isFormalProblem(problem) &&
+            !["confirmed", "no_issue", "in_package"].includes(workflowStatusByIssueId[problem.id] ?? ""),
+        )
+        .map((problem) => problem.id),
+    [problems, workflowStatusByIssueId],
+  );
+
+  const handleConfirmAllPending = useCallback(async () => {
+    if (
+      !jobId ||
+      bulkConfirmBusy ||
+      reviewBusy ||
+      isReanalyzing ||
+      reviewContext.kind !== "available" ||
+      reviewContext.review.current_analysis.job_uuid !== jobId ||
+      !canDecideObligations(reviewContext.review) ||
+      requiredPendingProblemIds.length === 0
+    ) {
+      return;
+    }
+    setBulkConfirmBusy(true);
+    setReviewNotice(null);
+    try {
+      const response = await fetch("/api/workflow", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "batch_update_issues",
+          job_id: jobId,
+          issue_ids: requiredPendingProblemIds,
+          status: "confirmed",
+        }),
+      });
+      if (activeJobIdRef.current !== jobId) return;
+      if (response.ok) {
+        loadSeqRef.current += 1;
+        reviewLoadSeqRef.current += 1;
+        workflowLoadSeqRef.current += 1;
+        invalidateReviewReads(jobId);
+        setReviewBlockers(null);
+        setWorkflowIssues((prev) => {
+          const next = { ...prev };
+          for (const id of requiredPendingProblemIds) {
+            next[id] = { issue_id: id, status: "confirmed" };
+          }
+          return next;
+        });
+        setLastSavedAt(new Date());
+        setLastIssueDecision(null);
+        await Promise.all([loadReviewContext(), loadWorkflow()]);
+      } else {
+        let body: unknown = null;
+        try {
+          body = await response.json();
+        } catch {
+          body = null;
+        }
+        const parsed = parseReviewErrorDetail(body);
+        setReviewNotice(parsed?.message ?? `批量确认未完成（HTTP ${response.status}），请刷新后核对。`);
+        await loadReviewContext();
+      }
+    } catch {
+      if (activeJobIdRef.current === jobId) {
+        setReviewNotice("批量确认服务暂时不可用，请稍后重试。");
+      }
+    } finally {
+      setBulkConfirmBusy(false);
+    }
+  }, [bulkConfirmBusy, isReanalyzing, jobId, loadReviewContext, loadWorkflow, requiredPendingProblemIds, reviewBusy, reviewContext]);
+
   const handleUndoIssueDecision = useCallback(async (): Promise<boolean> => {
     if (!lastIssueDecision) return false;
     if (workflowIssues[lastIssueDecision.problem.id]?.status !== lastIssueDecision.status) {
@@ -833,6 +914,22 @@ export function ReviewWorkbenchPage() {
     const result = await submitReviewAction(reviewContext.review.slot_id, "start");
     if (result.ok) await Promise.all([loadReviewContext(), loadWorkflow()]);
   }, [jobId, loadReviewContext, loadWorkflow, reviewContext, submitReviewAction]);
+
+  // 进入未开始复核的工作台时自动开启复核会话，消除手动点“开始复核”的额外步骤。
+  useEffect(() => {
+    if (
+      reviewBusy ||
+      reviewContext.kind !== "available" ||
+      reviewContext.review.current_analysis.job_uuid !== jobId ||
+      !canStartReview(reviewContext.review)
+    ) {
+      return;
+    }
+    const startKey = `${reviewContext.review.slot_id}:${jobId}`;
+    if (autoStartedReviewKeyRef.current === startKey) return;
+    autoStartedReviewKeyRef.current = startKey;
+    void handleStartReview();
+  }, [handleStartReview, jobId, reviewBusy, reviewContext]);
 
   /** 重新复核：显式 reopen（旧完成记录转失效，另起一条新会话）。 */
   const handleReopenReview = useCallback(async () => {
@@ -1013,8 +1110,7 @@ export function ReviewWorkbenchPage() {
   const invalidated = latestInvalidatedSession(reviewData);
   const completeButton = resolveCompleteButtonState(reviewData, statusCounts.pending);
   /**
-   * 人工补核（WP3-B）已并入「必须处理」：页签数字 = 待处理正式问题 + 待处理补核，
-   * 与服务端完成门禁的两类阻塞一一对应。老后端/旧数据没有补核块时只计问题。
+   * 复核门禁仅针对“系统检出的正式问题”；未能自动核对条目已移入参考区。
    */
   const pendingObligations = currentReviewJob ? pendingObligationCount(reviewData) : null;
   const requiredTotal = countFormalProblems(problems);
@@ -1025,8 +1121,8 @@ export function ReviewWorkbenchPage() {
     obligationTotal: pendingObligations === null ? null : Math.max(obligationItemCount, pendingObligations),
     obligationPending: pendingObligations,
   };
-  const requiredPending = statusCounts.pending + statusCounts.needsReview + (pendingObligations ?? 0);
-  const referenceCount = problems.length - requiredTotal;
+  const requiredPending = statusCounts.pending + statusCounts.needsReview;
+  const referenceCount = reviewProblems.length - requiredTotal;
   const blockerLines = describeBlockers(reviewBlockers?.blockers ?? []);
   /**
    * 服务端算出的门禁阻塞：每一条原因都必须常驻可见，而不是等用户点了按钮才出现
@@ -1360,6 +1456,9 @@ export function ReviewWorkbenchPage() {
                 readOnly={!canEditReview}
                 readOnlyHint={readOnlyHint}
                 savedAtText={savedAtText}
+                pendingConfirmCount={requiredPendingProblemIds.length}
+                onConfirmAllPending={handleConfirmAllPending}
+                bulkConfirmBusy={bulkConfirmBusy}
                 textSize={textSize}
                 onToggleTextSize={() => {
                   const next: ReviewTextSize = textSize === "large" ? "standard" : "large";
@@ -1410,7 +1509,7 @@ export function ReviewWorkbenchPage() {
                 onClose={() => setInfoPanel(false)}
                 onShowRequired={() => openIssueQueue("required", "all")}
                 onShowReference={(source) => openIssueQueue("reference", source ?? "all")}
-                onRecheck={jobId ? () => router.push(`/task/${jobId}` as Route) : undefined}
+                onRecheck={jobId ? () => setIsReanalyzeDialogOpen(true) : undefined}
                 focusSection={infoPanelSection}
               />
             ) : null}

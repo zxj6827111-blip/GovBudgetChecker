@@ -200,11 +200,11 @@ def fact_bound_table_rows(doc, table_name, *, strict_unknown_values=False):
             # 双边总表无标签侧的结构空白是版式占位，不参与“金额未知”判定。
             if (cell.row_idx, cell.col_idx) in padding_positions:
                 continue
-            # 有金额的业务行中，缺失分项不能被旧规则的 `or 0` 静默吞掉。
+            # 有金额的业务行中，缺失分项不能被旧规则的 `or 0` 静默吞掉；
+            # 非严格投影（如供 R33CrossSanGongEcon 自检空白单元格来源）保持 ""，
+            # 严格算术投影（strict_unknown_values=True）则按约定 U-5 将认证空白写为 "0"。
             if strict_unknown_values and any(c.numeric_value is not None and c.col_idx in measure_columns
                    for c in table.cells if c.row_idx == cell.row_idx):
-                # 原件网格认证空白 + 空白值约定（U-5）：按 0 写入投影行，
-                # 让按列位取数的旧规则拿到显式 0，而不是被跳过的空串。
                 from .cell_value_policy import interpret_cell_value
                 zero, _presence, _basis = interpret_cell_value(
                     "", native_blank_verified=bool(getattr(cell, "native_blank_verified", False)),

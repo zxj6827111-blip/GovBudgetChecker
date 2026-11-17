@@ -254,3 +254,46 @@ def test_system_review_lookup_rejects_unknown_ids_and_unfinished_checks(client: 
             "issue_id": issue_id, "status": "confirmed",
         })
         assert response.status_code == 404
+
+
+def test_batch_update_issues_updates_multiple_findings_and_syncs_report(client: TestClient):
+    org_id = _create_org("batch-update-unit")
+    _create_job("job-batch-1", "seed", org_id, "issue-1")
+    runtime.merge_job_status(runtime.UPLOAD_ROOT / "job-batch-1", {
+        "result": {
+            "issues": {
+                "all": [
+                    {"id": "issue-1", "severity": "medium", "title": "问题1"},
+                    {"id": "issue-2", "severity": "high", "title": "问题2"},
+                ]
+            }
+        }
+    })
+    token = _login(client, "admin", ADMIN_PASSWORD)
+    response = client.post("/api/workflow", headers=_headers(token), json={
+        "action": "batch_update_issues",
+        "job_id": "job-batch-1",
+        "issue_ids": ["issue-1", "issue-2"],
+        "status": "confirmed",
+    })
+    assert response.status_code == 200, response.text
+    issues = response.json()["issues"]
+    assert issues["job-batch-1::issue-1"]["status"] == "confirmed"
+    assert issues["job-batch-1::issue-2"]["status"] == "confirmed"
+    report = runtime.get_job_status_payload("job-batch-1")["review_report"]
+    by_id = {entry["issue_id"]: entry for entry in report["human_decisions"]}
+    assert by_id["issue-1"]["status"] == "confirmed"
+    assert by_id["issue-2"]["status"] == "confirmed"
+    ignore_resp = client.post("/api/workflow", headers=_headers(token), json={
+        "action": "batch_update_issues",
+        "job_id": "job-batch-1",
+        "issue_ids": ["issue-2"],
+        "status": "no_issue",
+        "note": "batch ignore reason",
+    })
+    assert ignore_resp.status_code == 200
+    assert ignore_resp.json()["issues"]["job-batch-1::issue-2"]["status"] == "no_issue"
+    synced_report = runtime.get_job_status_payload("job-batch-1")["review_report"]
+    synced_by_id = {entry["issue_id"]: entry for entry in synced_report["human_decisions"]}
+    assert synced_by_id["issue-2"]["status"] == "no_issue"
+

@@ -17,6 +17,7 @@
  */
 "use client";
 
+import { AlertTriangle } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -26,6 +27,8 @@ import { normalizeUiTaskStatus } from "@/lib/uiAdapters";
 import { ReanalyzeMethodDialog, type ReanalyzeMethodValue } from "@/components/ReanalyzeMethodPicker";
 import { publishJobCounts } from "@/lib/jobListEvents";
 import { fetchJobPage, type JobPageView } from "@/lib/jobListViews";
+import { dispatchOrgTreeRefresh } from "@/lib/orgTreeEvents";
+import { requestQueueBatchDelete, requestQueueDelete } from "./queueBatchActions";
 
 import { OrganizationFilterSelect } from "../workspace/OrganizationFilterSelect";
 import { PollRefreshStatus } from "../workspace/PollRefreshStatus";
@@ -97,8 +100,45 @@ export function QueuePage() {
   const [runDialogJob, setRunDialogJob] = useState<JobSummaryRecord | null>(null);
   const [isBatchDialogOpen, setIsBatchDialogOpen] = useState(false);
   const [busyJobIds, setBusyJobIds] = useState<Set<string>>(() => new Set());
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [pendingDeleteJobs, setPendingDeleteJobs] = useState<JobSummaryRecord[] | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const batchRunningRef = useRef(false);
+  const deletingRef = useRef(false);
   const busyJobIdsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/auth/me", { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) return null;
+        return (await response.json()) as { user?: { is_admin?: boolean } };
+      })
+      .then((payload) => {
+        if (!active) return;
+        setIsAdmin(Boolean(payload?.user?.is_admin));
+      })
+      .catch(() => {
+        if (!active) return;
+        setIsAdmin(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!pendingDeleteJobs || isDeleting) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setPendingDeleteJobs(null);
+        setDeleteError(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [pendingDeleteJobs, isDeleting]);
 
   /** 最新分页视图的旁路引用：轮询决策每次续排时实时读取，不受闭包过期影响。 */
   const viewRef = useRef<JobPageView | null>(null);
@@ -174,18 +214,18 @@ export function QueuePage() {
   const selectedJobs = useMemo(() => runnableJobs.filter((job) => selectedIds.has(String(job.job_id))), [runnableJobs, selectedIds]);
 
   useEffect(() => {
-    if (!view || isBatchRunning) return;
+    if (!view || isBatchRunning || isDeleting) return;
     // 选中项只能是当前筛选下仍可运行的任务（跨页保留，来自接口的 runnable 列表）。
     const eligible = new Set(runnableJobs.map((job) => String(job.job_id)));
     setSelectedIds((previous) => {
       const next = new Set(Array.from(previous).filter((id) => eligible.has(id)));
       return next.size === previous.size ? previous : next;
     });
-  }, [view, runnableJobs, isBatchRunning]);
+  }, [view, runnableJobs, isBatchRunning, isDeleting]);
 
   // 筛选变化后页码重置到第一页（否则可能停留在超出范围的空页）
   const updateFilters = useCallback((patch: Partial<QueuePageFilters>) => {
-    if (batchRunningRef.current) return;
+    if (batchRunningRef.current || deletingRef.current) return;
     setFilters((prev) => ({ ...prev, ...patch }));
     setPage(1);
     setSelectedIds(new Set());
@@ -217,7 +257,7 @@ export function QueuePage() {
 
   const handleRunJob = useCallback(
     async (jobId: string) => {
-      if (batchRunningRef.current || busyJobIdsRef.current.has(jobId)) return;
+      if (batchRunningRef.current || deletingRef.current || busyJobIdsRef.current.has(jobId)) return;
       const job = viewRef.current?.items.find((item) => String(item.job_id) === jobId);
       if (!job || !canRunQueueJob(job)) return;
       // 首次分析没有上轮可继承，直接启动；重分析先经统一检查方式对话框。
@@ -231,7 +271,7 @@ export function QueuePage() {
   );
 
   const handleBatchRun = useCallback(async (method: ReanalyzeMethodValue) => {
-    if (batchRunningRef.current || busyJobIdsRef.current.size > 0) return;
+    if (batchRunningRef.current || deletingRef.current || busyJobIdsRef.current.size > 0) return;
     const targets = selectedJobs;
     if (targets.length === 0) return;
     batchRunningRef.current = true;
@@ -252,6 +292,96 @@ export function QueuePage() {
     }
   }, [selectedJobs, reloadNow]);
 
+  const handleRequestSingleDelete = useCallback((jobId: string) => {
+    if (!isAdmin || batchRunningRef.current || deletingRef.current || busyJobIdsRef.current.has(jobId)) return;
+    const job = viewRef.current?.items.find((item) => String(item.job_id) === jobId);
+    if (!job || normalizeUiTaskStatus(job.status) === "analyzing") return;
+    setDeleteError(null);
+    setPendingDeleteJobs([job]);
+  }, [isAdmin]);
+
+  const handleRequestBatchDelete = useCallback(() => {
+    if (!isAdmin || batchRunningRef.current || deletingRef.current || busyJobIdsRef.current.size > 0) return;
+    if (selectedJobs.length === 0) return;
+    const itemsById = new Map(
+      (viewRef.current?.items ?? []).map((item) => [String(item.job_id), item] as const),
+    );
+    const targets = selectedJobs.map((job) => itemsById.get(String(job.job_id)) ?? job);
+    setDeleteError(null);
+    setPendingDeleteJobs(targets);
+  }, [isAdmin, selectedJobs]);
+
+  const handleConfirmDelete = useCallback(async () => {
+    if (!pendingDeleteJobs || pendingDeleteJobs.length === 0 || deletingRef.current) return;
+    const targets = pendingDeleteJobs;
+    const targetIds = targets.map((job) => String(job.job_id));
+    deletingRef.current = true;
+    setIsDeleting(true);
+    setDeleteError(null);
+    setBatchResult(null);
+    setRunNotice(null);
+    try {
+      if (targets.length === 1) {
+        const target = targets[0];
+        const targetId = String(target.job_id);
+        busyJobIdsRef.current.add(targetId);
+        setBusyJobIds(new Set(busyJobIdsRef.current));
+        try {
+          const result = await requestQueueDelete(targetId, fetch);
+          if (!result.ok) {
+            setDeleteError(result.error ?? "删除未成功，请重试。");
+            return;
+          }
+          const label = target.filename ?? targetId;
+          const resetExtra = result.resetBaselineSlotIds.length > 0
+            ? `，已重置 ${result.resetBaselineSlotIds.length} 个关联台账栏位状态`
+            : "";
+          setSelectedIds((previous) => {
+            if (!previous.has(targetId)) return previous;
+            const next = new Set(previous);
+            next.delete(targetId);
+            return next;
+          });
+          setPendingDeleteJobs(null);
+          setRunNotice(`已删除任务：${label}${resetExtra}。`);
+          dispatchOrgTreeRefresh();
+          reloadNow();
+        } finally {
+          busyJobIdsRef.current.delete(targetId);
+          setBusyJobIds(new Set(busyJobIdsRef.current));
+        }
+        return;
+      }
+
+      const result = await requestQueueBatchDelete(targetIds, fetch);
+      if (!result.ok) {
+        setDeleteError(result.error ?? "批量删除未成功，请重试。");
+        return;
+      }
+      const deletedSet = new Set(result.deletedJobIds);
+      if (deletedSet.size > 0) {
+        setSelectedIds((previous) => new Set(Array.from(previous).filter((id) => !deletedSet.has(id))));
+        dispatchOrgTreeRefresh();
+        reloadNow();
+      }
+      setPendingDeleteJobs(null);
+      const resetExtra = result.resetBaselineSlotIds.length > 0
+        ? `，重置 ${result.resetBaselineSlotIds.length} 个关联台账栏位`
+        : "";
+      if (result.failedCount > 0) {
+        const firstReason = result.failed[0]?.detail ? `（首个失败原因：${result.failed[0].detail}）` : "";
+        setRunNotice(
+          `批量删除完成：成功删除 ${result.deletedCount} 个任务${resetExtra}，${result.failedCount} 个失败${firstReason}。`,
+        );
+      } else {
+        setRunNotice(`已批量删除 ${result.deletedCount} 个任务${resetExtra}。`);
+      }
+    } finally {
+      deletingRef.current = false;
+      setIsDeleting(false);
+    }
+  }, [pendingDeleteJobs, reloadNow]);
+
   return (
     <div className="p-8" data-testid="gbc-queue-page">
       <SectionTitle
@@ -259,7 +389,7 @@ export function QueuePage() {
         desc={`查看机器分析的运行记录、阶段进度与异常。当前正在处理 ${view ? view.status_counts.analyzing : "—"} 次分析；侧边栏角标表示正在处理数，列表保留历史记录。`}
       />
 
-      <fieldset disabled={isBatchRunning} className="mt-6 mb-3 min-w-0 border-0 p-0">
+      <fieldset disabled={isBatchRunning || isDeleting} className="mt-6 mb-3 min-w-0 border-0 p-0">
       <legend className="sr-only">处理队列筛选</legend>
       <div className="flex flex-wrap items-center gap-2">
         <input
@@ -354,17 +484,26 @@ export function QueuePage() {
         <Button
           variant="ghost"
           size="sm"
-          disabled={isBatchRunning || busyJobIds.size > 0 || runnableJobs.length === 0}
+          disabled={isBatchRunning || isDeleting || busyJobIds.size > 0 || runnableJobs.length === 0}
           onClick={() => setSelectedIds(new Set(runnableJobs.map((job) => String(job.job_id))))}
           data-testid="gbc-queue-select-filtered"
         >全选筛选结果{view === null ? "" : `（${runnableJobs.length}）`}</Button>
-        <Button variant="ghost" size="sm" disabled={isBatchRunning || selectedJobs.length === 0} onClick={() => setSelectedIds(new Set())} data-testid="gbc-queue-clear-selection">清空选择</Button>
+        <Button variant="ghost" size="sm" disabled={isBatchRunning || isDeleting || selectedJobs.length === 0} onClick={() => setSelectedIds(new Set())} data-testid="gbc-queue-clear-selection">清空选择</Button>
         <Button
           size="sm"
           onClick={() => setIsBatchDialogOpen(true)}
-          disabled={isBatchRunning || busyJobIds.size > 0 || selectedJobs.length === 0}
+          disabled={isBatchRunning || isDeleting || busyJobIds.size > 0 || selectedJobs.length === 0}
           data-testid="gbc-queue-batch-run"
         >{isBatchRunning ? `提交中 ${batchProgress?.completed ?? 0}/${batchProgress?.total ?? selectedJobs.length}` : `批量重新运行（${selectedJobs.length}）`}</Button>
+        {isAdmin ? (
+          <Button
+            variant="danger"
+            size="sm"
+            onClick={handleRequestBatchDelete}
+            disabled={isBatchRunning || isDeleting || busyJobIds.size > 0 || selectedJobs.length === 0}
+            data-testid="gbc-queue-batch-delete"
+          >{isDeleting ? "删除中…" : `批量删除（${selectedJobs.length}）`}</Button>
+        ) : null}
         <span className="w-full text-xs text-slate-500">勾选可跨页保留；全选覆盖当前筛选的全部页。运行中的任务自动跳过，待分析任务会启动首次分析。</span>
       </div>
       {isBatchRunning && batchProgress ? (
@@ -426,12 +565,13 @@ export function QueuePage() {
           jobs={view.items}
           onReanalyze={(jobId) => void handleRunJob(jobId)}
           onStartAnalysis={(jobId) => void handleRunJob(jobId)}
-          actionsDisabled={isBatchRunning}
+          onDelete={isAdmin ? handleRequestSingleDelete : undefined}
+          actionsDisabled={isBatchRunning || isDeleting}
           busyJobIds={busyJobIds}
           selection={{
             selectedIds,
             canSelect: canRunQueueJob,
-            disabled: isBatchRunning || busyJobIds.size > 0,
+            disabled: isBatchRunning || isDeleting || busyJobIds.size > 0,
             onToggleJob: (jobId) => setSelectedIds((previous) => {
               const next = new Set(previous);
               if (next.has(jobId)) next.delete(jobId); else next.add(jobId);
@@ -486,6 +626,101 @@ export function QueuePage() {
             if (!isBatchRunning) setIsBatchDialogOpen(false);
           }}
         />
+      ) : null}
+      {pendingDeleteJobs ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="gbc-queue-delete-modal-title"
+          data-testid="gbc-queue-delete-modal"
+          onClick={(event) => {
+            if (event.target === event.currentTarget && !isDeleting) {
+              setPendingDeleteJobs(null);
+              setDeleteError(null);
+            }
+          }}
+        >
+          <div className="w-full max-w-lg rounded-md border border-border bg-white p-6 shadow-xl">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-danger-50 text-danger-600">
+                <AlertTriangle className="h-5 w-5" aria-hidden="true" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h2 id="gbc-queue-delete-modal-title" className="text-base font-semibold text-slate-900">
+                  {pendingDeleteJobs.length === 1
+                    ? "确认删除该任务？"
+                    : `确认批量删除 ${pendingDeleteJobs.length} 个任务？`}
+                </h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  此操作将永久删除所选任务的本地目录（含 PDF 与分析产物）、数据库分析与复核记录，并重置或清理关联的报告台账记录，删除后无法恢复。
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4 max-h-56 overflow-y-auto rounded-md border border-border bg-slate-50 p-3">
+              <ul className="space-y-2 text-xs text-slate-700">
+                {pendingDeleteJobs.slice(0, 20).map((job) => {
+                  const id = String(job.job_id);
+                  const displayName = job.filename ?? id;
+                  const meta = [job.organization_name, job.report_year ? `${job.report_year}年` : null]
+                    .filter(Boolean)
+                    .join(" · ");
+                  return (
+                    <li
+                      key={id}
+                      className="flex flex-col gap-0.5 border-b border-border/60 pb-1.5 last:border-b-0 last:pb-0"
+                    >
+                      <span className="break-all font-medium text-slate-800">{displayName}</span>
+                      <span className="break-all text-slate-500">
+                        {meta ? `${meta} · ` : ""}任务 ID：{id}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+              {pendingDeleteJobs.length > 20 ? (
+                <p className="mt-2 text-xs text-slate-500">
+                  其余 {pendingDeleteJobs.length - 20} 个任务已省略显示，确认后将一并删除。
+                </p>
+              ) : null}
+            </div>
+
+            {deleteError ? (
+              <div
+                role="alert"
+                data-testid="gbc-queue-delete-error"
+                className="mt-3 rounded-md border border-danger-200 bg-danger-50 px-3 py-2 text-xs text-danger-700"
+              >
+                {deleteError}
+              </div>
+            ) : null}
+
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={isDeleting}
+                onClick={() => {
+                  setPendingDeleteJobs(null);
+                  setDeleteError(null);
+                }}
+                data-testid="gbc-queue-delete-cancel"
+              >
+                取消
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
+                disabled={isDeleting}
+                onClick={() => void handleConfirmDelete()}
+                data-testid="gbc-queue-delete-confirm"
+              >
+                {isDeleting ? "删除中…" : pendingDeleteJobs.length === 1 ? "确认删除" : `确认删除（${pendingDeleteJobs.length}）`}
+              </Button>
+            </div>
+          </div>
+        </div>
       ) : null}
     </div>
   );

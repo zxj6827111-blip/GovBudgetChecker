@@ -214,10 +214,11 @@ def column_shift_issue(rule, doc, title: str, table_code: str, detection: Dict[s
         f'请回源文件核对列位后重新导出。'
     )
     pages = _fact_pages(doc, detection.get("fact_ids") or [])
-    location = {
+    verbatim_quote, ref_page = _column_shift_verbatim_quote(doc, title, detection, pages)
+    location: Dict[str, Any] = {
         "table": title,
         "table_code": table_code,
-        "page": pages[0] if pages else None,
+        "page": ref_page or (pages[0] if pages else None),
         "pages": pages,
         "column_shift": {
             "direction": detection["direction"],
@@ -229,9 +230,48 @@ def column_shift_issue(rule, doc, title: str, table_code: str, detection: Dict[s
             "rows_mismatched": detection["rows_mismatched"],
         },
     }
-    return rule._issue(message, location, "error", evidence_text=message,
+    if verbatim_quote and ref_page:
+        location["table_refs"] = [{"role": f"{title}错位原表位置", "page": ref_page, "span": verbatim_quote}]
+    return rule._issue(message, location, "error", evidence_text=verbatim_quote,
                        check_relation_id=f'{rule.code}:{table_code}:column_shift',
                        fact_ids=detection.get("fact_ids"))
+
+
+def _column_shift_verbatim_quote(
+    doc: Any, title: str, detection: Dict[str, Any], pages: Sequence[int]
+) -> Tuple[Optional[str], Optional[int]]:
+    """从原表物理页提取真实存在的合计/表题原文片段，禁止把诊断说明当原文。"""
+    from .checklist_support import unique_quote
+
+    page_texts = list(getattr(doc, "page_texts", None) or [])
+    if not page_texts:
+        return None, pages[0] if pages else None
+    candidates: List[str] = []
+    for pair in detection.get("pairs") or []:
+        total = pair.get("total")
+        if total is not None:
+            candidates.append(f"{float(total):,.2f}")
+            candidates.append(f"{float(total):.2f}")
+    for key in ("total_label", "missing_label"):
+        for pair in detection.get("pairs") or []:
+            label = str(pair.get(key) or "").strip()
+            if label:
+                candidates.append(label)
+    if title:
+        candidates.append(title)
+    probe_pages = list(pages) if pages else list(range(1, len(page_texts) + 1))
+    for pno in probe_pages:
+        if not (1 <= pno <= len(page_texts)):
+            continue
+        raw = str(page_texts[pno - 1] or "")
+        for token in candidates:
+            idx = raw.find(token)
+            if idx >= 0:
+                quote = unique_quote(raw, idx, idx + len(token), min_len=6, max_len=160)
+                if quote:
+                    return quote, pno
+    first_page = pages[0] if pages else None
+    return None, first_page
 
 
 def column_shift_hint(title: str, rule_code: str) -> str:

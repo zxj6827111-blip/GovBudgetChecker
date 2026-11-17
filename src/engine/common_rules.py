@@ -2566,6 +2566,8 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
             return min(len(merged_text), end + 40)
 
         refs: List[Dict[str, Any]] = []
+        from .checklist_support import unique_quote
+
         for role, span_start, span_end, fallback_page, fallback_span in (
             ("增减句", match.start(), _sentence_end(0, match.end()), unit_page,
              re.sub(r"\s+", "", match.group(0))),
@@ -2580,10 +2582,31 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
                 )
             if fragments:
                 for fragment in fragments:
+                    frag_page = fragment["page"]
+                    frag_span = fragment["span"]
+                    if (
+                        merged_text
+                        and page_offsets
+                        and span_start is not None
+                        and span_end is not None
+                        and 1 <= frag_page <= len(page_offsets)
+                    ):
+                        p_start = page_offsets[frag_page - 1]
+                        p_end = (
+                            page_offsets[frag_page] - 1
+                            if frag_page < len(page_offsets)
+                            else len(merged_text)
+                        )
+                        local_l = max(0, span_start - p_start)
+                        local_r = min(p_end - p_start, span_end - p_start)
+                        frag_span = (
+                            unique_quote(merged_text[p_start:p_end], local_l, local_r)
+                            or frag_span
+                        )
                     refs.append({
                         "role": role,
-                        "page": fragment["page"],
-                        "span": fragment["span"],
+                        "page": frag_page,
+                        "span": frag_span,
                         "section": section_title if role == "增减句" else current.get("section"),
                     })
             else:

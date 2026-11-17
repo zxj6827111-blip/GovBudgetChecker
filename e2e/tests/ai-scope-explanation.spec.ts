@@ -200,34 +200,23 @@ test.describe("AI scope and explanation visibility", () => {
     await page.screenshot({ path: test.info().outputPath("ai-scope-partial.png") });
   });
 
-  test("任务页把检查范围压成一行，详情就地展开，重新分析经对话框选择检查方式", async ({ page }) => {
+  test("重新分析经「更多」菜单打开检查方式对话框：继承默认并展示上轮完成状态", async ({ page }) => {
     await page.context().addCookies([sessionCookie]);
     await installMocks(page, partialMeta);
-    await page.goto(`/task/${JOB_ID}`);
-    const scope = page.getByTestId("task-ai-scope");
-    await expect(scope).toBeVisible({ timeout: 15_000 });
-    await expect(scope.getByTestId("task-ai-scope-headline")).toContainText("有效完成 3/4");
-    await expect(scope.getByTestId("task-ai-scope-failed-groups")).toContainText("说明一致性第13-14、20页");
-    await expect(scope.getByTestId("task-ai-scope-details")).toHaveCount(0);
-    expect((await scope.boundingBox())?.height ?? 999).toBeLessThan(40);
-
-    const toggle = scope.getByTestId("task-ai-scope-details-toggle");
-    await toggle.click();
-    await expect(toggle).toHaveAttribute("aria-expanded", "true");
-    await expect(scope.getByTestId("task-ai-scope-failed-units")).toContainText("server_error");
-    await expect(scope.getByTestId("task-ai-scope-failed-units")).toContainText("已尝试 2 次");
+    // 任务页已改为复核工作台（43cb2266）：检查范围看顶栏 AI 标识（见上一用例），
+    // 重新分析入口在「更多」菜单里。
+    await page.goto(`/review?job=${JOB_ID}`);
+    await expect(page.getByTestId("gbc-review-workbench-page")).toBeVisible({ timeout: 15_000 });
 
     // 检查方式选择收进对话框：默认按上次方式，展示上轮部分完成状态。
-    const header = page.getByTestId("task-summary-header");
-    await expect(header.getByTestId("task-reanalyze-button")).toBeVisible();
-    await header.getByTestId("task-reanalyze-button").click();
+    await page.getByTestId("gbc-review-tab-more").click();
+    await page.getByTestId("gbc-review-reanalyze").click();
     const dialog = page.getByTestId("reanalyze-method-dialog");
     await expect(dialog).toBeVisible();
     await expect(dialog.getByTestId("reanalyze-method-picker-inherit")).toBeChecked();
     await expect(dialog.getByTestId("reanalyze-method-picker-execution-hint")).toContainText("部分完成");
     await dialog.getByTestId("reanalyze-method-cancel").click();
     await expect(dialog).toHaveCount(0);
-    await page.screenshot({ path: test.info().outputPath("ai-scope-task-inline.png") });
   });
 
   test("纯规则任务明确写“文字语义未执行”，不显示成覆盖完整", async ({ page }) => {

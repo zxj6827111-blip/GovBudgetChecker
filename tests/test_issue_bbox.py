@@ -450,3 +450,74 @@ async def test_engine_rule_runner_records_issue_conversion_failure_as_parse_erro
     summary = runner.get_rule_execution_summary()
     assert summary["parse_error"] == 1
     assert summary["pass"] == 0
+
+
+def test_pdf_bbox_locator_authenticates_interleaved_wrapped_table_span(tmp_path: Path) -> None:
+    fitz = pytest.importorskip("fitz")
+    pdfplumber = pytest.importorskip("pdfplumber")
+    from src.services.pdf_page_extract import extract_visible_text_from_page
+
+    pdf_path = tmp_path / "wrapped-t5.pdf"
+    document = fitz.open()
+    try:
+        page = document.new_page()
+        # Stream order puts code before wrapped name, while visual line order interleaves them.
+        page.insert_text((100, 130), "20805", fontsize=11, fontname="helv")
+        page.insert_text((180, 123), "行政事业单位", fontsize=11, fontname="china-s")
+        page.insert_text((180, 137), "养老支出", fontsize=11, fontname="china-s")
+        page.insert_text((300, 130), "162.00", fontsize=11, fontname="helv")
+        page.insert_text((380, 130), "162.00", fontsize=11, fontname="helv")
+        document.save(pdf_path)
+    finally:
+        document.close()
+
+    with pdfplumber.open(pdf_path) as pdf:
+        page_text = extract_visible_text_from_page(pdf.pages[0])
+    quote = "行政事业单位\n20805 162.00 162.00\n养老支出"
+    start = page_text.index(quote)
+    end = start + len(quote)
+    source_hash = hashlib.sha256(pdf_path.read_bytes()).hexdigest()
+    source_block_id = f"native:p1:s{start}:e{end}"
+    evidence_id = hashlib.sha1(
+        f"{source_hash}|1|{source_block_id}|{quote}".encode("utf-8")
+    ).hexdigest()[:16]
+    ref = {
+        "page": 1,
+        "physical_page": 1,
+        "text": quote,
+        "quote": quote,
+        "file_hash": source_hash,
+        "source_method": "native_text",
+        "source_block_id": source_block_id,
+        "source_span": [start, end],
+        "source_identity_status": "verified",
+        "evidence_id": evidence_id,
+        "location_level": "exact_span",
+        "verification_status": "verified",
+    }
+    item = IssueItem(
+        id="rule:v33-227:wrapped",
+        source="rule",
+        rule_id="V33-227",
+        severity="medium",
+        title="说明5功能分类类款项名称与T5不一致",
+        message="说明5款级科目名称与T5不一致（208-05）",
+        evidence=[dict(ref)],
+        location={"page": 1, "table_refs": [dict(ref)]},
+        metrics={},
+        tags=[],
+    )
+
+    locator = PDFBBoxLocator(str(pdf_path))
+    try:
+        updated = locator.locate(item)
+    finally:
+        locator.close()
+
+    assert updated.verification_status == "verified"
+    assert updated.bbox is not None
+    assert updated.evidence[0]["verification_status"] == "verified"
+    assert updated.evidence[0]["bbox"] == updated.bbox
+    assert updated.location["table_refs"][0]["verification_status"] == "verified"
+    assert updated.location["table_refs"][0]["bbox"] == updated.bbox
+

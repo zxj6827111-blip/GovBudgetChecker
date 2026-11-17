@@ -711,7 +711,7 @@ def detect_cover_facts(page_texts: Sequence[str], directory: Sequence[Any] = ())
         # 并沿用下方的多主体/括号完整性检查，不能从正文或文件名补出发布者。
         suffix = r"(?:委员会|办公厅|办公室|管理局|监督管理局|财政局|局|厅|部|医院|学校|中学|小学|校|幼儿园|红十字会|学院|大学|中心|人民法院|人民检察院|办事处|秘书处|街道|镇|乡|馆|队|会|委|宫|所|站|院|园|政府|室|监狱|团|社|场|台|基地|机关|管理处|营地)"
         def valid(name):
-            return bool(re.fullmatch(r"[\u4e00-\u9fff]{3,100}" + suffix, name)) and not re.search(r"^关于|目录|附件|部分|项目支出|情况|说明|预算|决算", name)
+            return bool(re.fullmatch(r"[\u4e00-\u9fff]{3,100}" + suffix, name)) and not re.search(r"关于|会议文件|目录|附件|部分|项目支出|情况|说明|预算|决算", name)
         # 嵌套括号是正式名称的一部分；栈式验证仅取括号外文本作语法检查，输出仍保留全部原文。
         depth, balanced, outside = 0, True, []
         for char in block:
@@ -762,6 +762,13 @@ def detect_cover_facts(page_texts: Sequence[str], directory: Sequence[Any] = ())
             identity_index = OrgNameIndex(directory)
             if any(identity_index.compare(block, organization_name(org)).equivalent for org in directory):
                 cover_org_name = block
+
+    if not cover_org_name and cover_title and re.search(r"关于.+(?:预算|决算)", normalize_cover_line(cover_title)):
+        for raw_line in lines[:20]:
+            cand = normalize_cover_line(raw_line)
+            if re.fullmatch(r"[\u4e00-\u9fff]{2,15}(?:镇|乡)财政所", cand):
+                cover_org_name = cand
+                break
 
     if not scope_hint:
         if re.search(r"本级|本部", cover_org_name):

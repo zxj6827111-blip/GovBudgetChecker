@@ -21,8 +21,12 @@ def labels_covered_by_native_cells(table, row_index, columns):
     if ordered != list(range(min(columns), max(columns) + 1)):
         return False
     enclosing = [cell for cell in cells if cell.col_idx == ordered[0] and cell.bbox
-                 and cell.extraction_method in {'lines', 'lines_strict'} and not cell.ocr_provenance]
+                 and cell.extraction_method in {'lines', 'lines_strict', 'native_footer'}
+                 and not cell.ocr_provenance]
     if len(enclosing) != 1:
+        return False
+    is_native_footer = enclosing[0].extraction_method == 'native_footer'
+    if is_native_footer and re.sub(r'\s+', '', enclosing[0].raw_text or '') not in {'人员经费合计', '公用经费合计'}:
         return False
     proofs = set()
     for index in range(table.header_row_count, len(table.rows)):
@@ -34,8 +38,13 @@ def labels_covered_by_native_cells(table, row_index, columns):
                or cell.extraction_method not in {'lines', 'lines_strict'} or cell.ocr_provenance
                or cell.col_span != 1 for cell in source):
             continue
-        if (all(abs(left.bbox[2] - right.bbox[0]) <= .5 for left, right in zip(source, source[1:], strict=False))
-                and abs(enclosing[0].bbox[0] - source[0].bbox[0]) <= .5
+        if not all(abs(left.bbox[2] - right.bbox[0]) <= .5 for left, right in zip(source, source[1:], strict=False)):
+            continue
+        if is_native_footer:
+            if (source[0].bbox[0] - .5 <= enclosing[0].bbox[0]
+                    and enclosing[0].bbox[2] <= source[-1].bbox[2] + .5):
+                proofs.add(index)
+        elif (abs(enclosing[0].bbox[0] - source[0].bbox[0]) <= .5
                 and abs(enclosing[0].bbox[2] - source[-1].bbox[2]) <= .5):
             proofs.add(index)
     return len(proofs) >= 2

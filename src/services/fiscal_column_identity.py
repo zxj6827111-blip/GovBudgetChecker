@@ -23,25 +23,84 @@ def header_paths(fragment):
     # 框进表格的表题、编制单位行横跨全表，不能当作每一列的父表头。
     preamble = ({index for index, row in enumerate(rows) if is_table_preamble_row(row)}
                 if fragment.extraction_method in {"lines", "lines_strict"} else set())
-    paths = []
+    # 行分组锚：非空格按几何跨度（bbox 覆盖到的列中心，即合并格/跨列文本的
+    # 记录跨度）圈定覆盖区间。用途有二：
+    # 1) 上一行的分组边界——行内空占位格向左延续父级文本时不得跨组
+    #    （三公矩阵「公务接待费」分组下的空行不得继承左邻「运行维护费」）；
+    # 2) 候选父格自身的记录跨度——bbox 覆盖 ≥2 列中心说明物理跨度仍在，
+    #    外推不得越出该跨度；只有单列覆盖（父行画竖线、跨度被切碎）才允许
+    #    向左自由延续（过宽总表把「财政拨款支出」挤到下页时，首页的
+    #    「财政拨款收入」不能越过自身跨度去覆盖支出侧空列）。
+    column_centers = []
     for col in range(width):
         boxes = ([cell.bbox for cell in geometry_cells if cell.col_idx == col and cell.bbox]
                  or [cell.bbox for cell in fragment.cells if cell.col_idx == col and cell.bbox])
         narrow = min(boxes, key=lambda b: b[2] - b[0]) if boxes else None
-        center = (narrow[0] + narrow[2]) / 2 if narrow else None
+        column_centers.append((narrow[0] + narrow[2]) / 2 if narrow else None)
+    row_anchors, row_anchor_spans = [], []
+    for row_idx, row in enumerate(rows):
+        anchors, spans = {}, {}
+        for anchor_col, value in enumerate(row):
+            if not str(value or ""):
+                continue
+            cell = cells.get((row_idx, anchor_col))
+            box = getattr(cell, "bbox", None) if cell is not None else None
+            covered = set()
+            if box:
+                for index, center in enumerate(column_centers):
+                    if center is not None and box[0] < center < box[2]:
+                        covered.add(index)
+            if anchor_col not in covered:
+                covered.add(anchor_col)
+            spans[anchor_col] = covered
+            for index in covered:
+                anchors.setdefault(index, anchor_col)
+        row_anchors.append(anchors)
+        row_anchor_spans.append(spans)
+    paths = []
+    for col in range(width):
+        center = column_centers[col]
         path = []
+        leaf_row = rows[-1] if rows else []
+        leaf_label = str(leaf_row[col] or "") if col < len(leaf_row) else ""
         for row_idx, row in enumerate(rows):
             if row_idx in preamble:
                 path.append("")
                 continue
             text = str(row[col] or "") if col < len(row) else ""
             own = cells.get((row_idx, col))
-            if not text and center is not None and (own is None or own.bbox is None):
+            if not text and center is not None and (
+                own is None or own.bbox is None or not str(own.raw_text or "").strip()
+            ):
                 spanning = [cell for cell in fragment.cells
                             if cell.row_idx == row_idx and cell.bbox and cell.raw_text
                             and cell.bbox[0] < center < cell.bbox[2]]
                 if len(spanning) == 1:
                     text = spanning[0].raw_text
+            if not text and row_idx + 1 < len(rows) and leaf_label:
+                # 合并父表头在物理网格里只落首子列：父行画竖线时（如财政拨款
+                # 收入支出决算总表的「收入｜支出」父行），其余子列是带边框的
+                # 空占位格，几何跨度恢复无从下手。此时父级身份按同行左侧最近
+                # 非空格延续——该列在叶表头行有自己的非空标签，说明它是同一
+                # 父组下的真实数据列；叶表头行不外推，叶子是该列自己的标签，
+                # 空叶不得继承左邻叶子文本。
+                upper = row_anchors[row_idx - 1] if row_idx > 0 else None
+                group = upper.get(col) if upper is not None else None
+                spans_here = row_anchor_spans[row_idx]
+                for left in range(col - 1, -1, -1):
+                    left_text = str(row[left] or "") if left < len(row) else ""
+                    if not left_text:
+                        continue
+                    if upper is not None and upper.get(left) != group:
+                        # 左候选格属上一行的另一分组：本列与它不同组，不得借用。
+                        break
+                    recorded = spans_here.get(left)
+                    if recorded and len(recorded) >= 2 and col not in recorded:
+                        # 候选父格的物理跨度已被网格记录且未覆盖本列：
+                        # 空列属于缺失的父表头（如被挤到下页），不得越界借用。
+                        break
+                    text = left_text
+                    break
             path.append(normalize_text(text))
         paths.append(path)
     # 基金/国资表可能把支出子表头与收入合计数印在同一行。
@@ -137,15 +196,40 @@ def canonical_column_mappings(fragment, rule):
 
     # Paired summary ledgers have distinct literal income/expenditure sides.
     if rule.code in {"FIN_01_income_expenditure_total", "FIN_04_fiscal_grant_total"}:
+        # 并列收支总表的顶层合并表头（如“收入”/“支出”、“财政拨款收入”/“财政拨款支出”）
+        # 在 pdfplumber 切分单元格后常只落在左侧第一列；沿顶行向右侧非维度列传递，碰到下一组表头或维度列即停。
+        paired_paths = [list(path) for path in paths]
+        current_group = ""
+        for col, path in enumerate(paired_paths):
+            top = path[0] if path else ""
+            if col in dimensions:
+                current_group = ""
+                continue
+            if top.startswith(("收入", "支出", "财政拨款收入", "财政拨款支出", "本年收入", "本年支出")):
+                current_group = top
+            elif top:
+                current_group = ""
+            elif current_group and path and any(path):
+                path[0] = current_group
+
         result = []
-        for col, path in enumerate(paths):
+        first_expenditure_col = next(
+            (
+                col
+                for col, path in enumerate(paired_paths)
+                if col not in dimensions
+                and (any(part.startswith("支出") or "财政拨款支出" in part for part in path) or "合计" in path)
+            ),
+            len(paired_paths),
+        )
+        for col, path in enumerate(paired_paths):
             if col in dimensions:
                 continue
-            if any(part.startswith("收入") for part in path) and any("决算数" in part for part in path):
+            if any(part.startswith("收入") or "财政拨款收入" in part for part in path) and any("决算数" in part for part in path):
                 result.append(mapping(col, "income_actual"))
-            elif any(part.startswith("支出") for part in path) and "合计" in path:
+            elif any(part.startswith("支出") or "财政拨款支出" in part for part in path) and "合计" in path:
                 result.append(mapping(col, "expenditure_actual"))
-            elif any(part.startswith("支出") for part in path) and any(part == "决算数" for part in path):
+            elif any(part.startswith("支出") or "财政拨款支出" in part for part in path) and any(part == "决算数" for part in path):
                 result.append(mapping(col, "expenditure_actual"))
             # 预算版财政拨款收支总表：父表头是「财政拨款收入 / 财政拨款支出」，
             # 收入侧阶段词是「预算数」。只认这两个完整父表头，不放宽决算版判据。
@@ -153,6 +237,13 @@ def canonical_column_mappings(fragment, rule):
                 result.append(mapping(col, "income_actual"))
             elif "财政拨款支出" in path and "合计" in path:
                 result.append(mapping(col, "expenditure_actual"))
+            elif (
+                rule.code == "FIN_04_fiscal_grant_total"
+                and col < first_expenditure_col
+                and any(part == "决算数" for part in path)
+                and not any("支出" in part for part in path)
+            ):
+                result.append(mapping(col, "income_actual"))
             elif (rule.code == "FIN_04_fiscal_grant_total" and path[-1:] == ["合计"]
                   and not any("收入" in part for part in path)):
                 # 横向过宽的总表会把「财政拨款支出」父表头挤到下一页，

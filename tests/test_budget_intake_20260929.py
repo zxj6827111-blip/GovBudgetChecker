@@ -158,8 +158,10 @@ EXPECTED_BUD_STATUS = {
     "jianguanwei": {"BUD-105": "pass", "BUD-107": "fail", "BUD-108": "fail", "BUD-109": "pass"},
     "chengguan": {"BUD-105": "pass", "BUD-107": "pass", "BUD-108": "fail", "BUD-109": "pass"},
     # ZC-02（SYS-02）多页续表恢复后：T3 第三页行被读全，
-    # BUD-108 从 not_applicable（缺数据结构性不适用）变为真实 pass
-    "wenlvju": {"BUD-105": "pass", "BUD-107": "pass", "BUD-108": "pass", "BUD-109": "pass"},
+    # BUD-108 从 not_applicable（缺数据结构性不适用）变为真实 pass；
+    # fiscal_subject_names 补齐历史别名候选映射后，BUD-109 真实检出
+    # 207-99 表格“其他文化旅游体育与传媒支出”与说明“其他文化体育与传媒支出”不一致，由 pass 改为 fail。
+    "wenlvju": {"BUD-105": "pass", "BUD-107": "pass", "BUD-108": "pass", "BUD-109": "fail"},
 }
 
 

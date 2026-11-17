@@ -14,7 +14,14 @@ const items = [item("a", 2026), item("b", 2025), item("c", 2026, "in_progress"),
 const filters = reviewListFilters(new URLSearchParams("year=2026&q=同名&page=2"));
 assert.deepEqual(filterReviewList(items, filters).map(i => i.job_id), ["a", "c"]);
 assert.equal(nextReviewItem(items, "a", reviewListPath(filters))?.job_id, "c", "下一份仍须符合财政年度与关键词");
-assert.equal(nextReviewItem(items, "c", reviewListPath(filters)), null, "不能跨出清单或循环到第一份");
+// 自动开始复核后当前条目变为 in_progress 并排到待复核之后：末尾时回退到同筛选内
+// 仍待复核的条目；不回退到已在复核中的条目（避免两个进行中条目来回跳）。
+assert.equal(nextReviewItem(items, "c", reviewListPath(filters))?.job_id, "a", "末尾回退到同筛选内仍待复核的条目");
+assert.equal(
+  nextReviewItem([item("x", 2026, "in_progress"), item("y", 2026, "in_progress")], "y", reviewListPath(filters)),
+  null,
+  "不回退到已在复核中的条目",
+);
 assert.equal(nextReviewItem(items, "a", "/queue"), null);
 for (const path of ["https://example.com", "//example.com", "/\\example.com", "/login", "/review/../../login"]) assert.equal(safeReviewReturnPath(path), "/review");
 assert.equal(safeReviewReturnPath("/review?job=bad&returnTo=bad&year=2025"), "/review?year=2025");

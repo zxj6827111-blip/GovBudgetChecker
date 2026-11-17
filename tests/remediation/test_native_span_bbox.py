@@ -148,3 +148,27 @@ def test_span_and_nested_table_reference_use_the_same_geometry_gate(tmp_path):
     assert result.evidence[0]["location_level"] == "exact_span"
     assert result.location["table_refs"][0]["location_level"] == "exact_span"
     assert result.location["table_refs"][0]["bbox"] == result.evidence[0]["bbox"]
+
+
+def test_duplicate_short_quote_resolved_by_unique_context(tmp_path):
+    path, texts, digest = source(
+        tmp_path,
+        [[
+            "Section 1 vehicle fee ratio 95.26%",
+            "Section 2 reception fee ratio 95.26%",
+        ]],
+    )
+    assert _native_span("95.26%", 1, texts, digest) is None
+    ref = _native_span(
+        "95.26%",
+        1,
+        texts,
+        digest,
+        context="Section 2 reception fee ratio 95.26%",
+    )
+    assert ref is not None
+    assert ref["source_identity_status"] == "verified"
+    result = locate(path, [ref])
+    assert result.bbox is not None
+    assert result.evidence[0]["location_level"] == "exact_span"
+

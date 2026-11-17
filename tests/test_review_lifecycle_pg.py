@@ -592,18 +592,21 @@ async def test_degraded_findings_are_displayed_but_do_not_block(review_db):
 # ==== 门禁：检查覆盖 ========================================================
 
 
-async def test_coverage_unavailable_blocks_completion(review_db):
-    """§四十六：没有可信覆盖 ⇒ 不能证明可完成，禁止把"未知"当成"0 条阻塞"。"""
+async def test_coverage_unavailable_allows_signoff_without_claiming_clean(review_db):
+    """签核分离（Step 3）：覆盖不可用不再拦完成，但台账仍如实标注不可用。"""
     schema, pool = review_db
     async with _conn(schema, pool) as conn:
         ctx = await _make_reviewable_slot(conn, findings=[], result_meta={})
         await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
         state = await review_lifecycle_service.load_review_by_slot(conn, ctx["slot_id"])
-    assert [item.code for item in state.completion_gate.blockers] == ["coverage_unavailable"]
+    assert state.completion_gate.can_complete is True
+    assert state.completion_gate.blockers == []
+    assert state.obligation_review.available is False
+    assert state.obligation_review.reason == "coverage_unavailable"
 
 
-async def test_blocking_obligations_block_completion(review_db):
-    """§四十七：WP3-A 还没有人工补核能力，因此 blocking > 0 必须阻塞完成。"""
+async def test_blocking_obligations_do_not_block_signoff(review_db):
+    """签核分离（Step 3）：阻塞义务不再拦完成，但完成快照必须如实记下未处理数。"""
     schema, pool = review_db
     async with _conn(schema, pool) as conn:
         ctx = await _make_reviewable_slot(
@@ -611,29 +614,45 @@ async def test_blocking_obligations_block_completion(review_db):
         )
         await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
         state = await review_lifecycle_service.load_review_by_slot(conn, ctx["slot_id"])
-    assert [item.code for item in state.completion_gate.blockers] == ["blocking_obligations"]
-    assert state.completion_gate.blockers[0].count == 4
+        completed = await review_lifecycle_service.complete_review(
+            conn, ctx["slot_id"], actor="r"
+        )
+    assert state.completion_gate.blockers == []
+    coverage = completed.session.review_result["coverage"]
+    assert coverage["blocking_count"] == 4
+    assert coverage["blocking_engine_total"] == 4
+    assert coverage["blocking_obligations_closed_by"] == "automatic_only"
 
 
 # ==== 门禁：身份与口径 ======================================================
 
 
-async def test_identity_unresolved_and_caliber_conflict_block(review_db):
-    """§三十七/§三十八：身份未确认、口径有未裁决冲突时，start 与 complete 都不允许。"""
+async def test_identity_unresolved_and_caliber_conflict_do_not_block_signoff(review_db):
+    """签核分离（Step 3）：身份未确认、口径冲突不再拦开复核与完成，由签字人自担结论。"""
     schema, pool = review_db
     async with _conn(schema, pool) as conn:
-        unresolved = await _make_reviewable_slot(conn, findings=[], slot_fields={"fiscal_year": None})
-        with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
-            await review_lifecycle_service.start_review(conn, unresolved["slot_id"], actor="r")
-    assert [item.code for item in excinfo.value.blockers] == ["identity_unresolved"]
+        unresolved = await _make_reviewable_slot(
+            conn, findings=[], slot_fields={"fiscal_year": None}
+        )
+        await review_lifecycle_service.start_review(conn, unresolved["slot_id"], actor="r")
+        state_unresolved = await review_lifecycle_service.load_review_by_slot(
+            conn, unresolved["slot_id"]
+        )
+        await review_lifecycle_service.complete_review(conn, unresolved["slot_id"], actor="r")
+    assert state_unresolved.completion_gate.blockers == []
+    assert state_unresolved.completion_gate.can_complete is True
 
     async with _conn(schema, pool) as conn:
         conflict = await _make_reviewable_slot(
             conn, findings=[], slot_fields={"caliber_conflict_candidate": "summary"}
         )
-        with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
-            await review_lifecycle_service.start_review(conn, conflict["slot_id"], actor="r")
-    assert [item.code for item in excinfo.value.blockers] == ["caliber_conflict"]
+        await review_lifecycle_service.start_review(conn, conflict["slot_id"], actor="r")
+        state_conflict = await review_lifecycle_service.load_review_by_slot(
+            conn, conflict["slot_id"]
+        )
+        await review_lifecycle_service.complete_review(conn, conflict["slot_id"], actor="r")
+    assert state_conflict.completion_gate.blockers == []
+    assert state_conflict.completion_gate.can_complete is True
 
 
 async def test_analysis_not_finished_blocks_start(review_db):
@@ -982,7 +1001,9 @@ async def test_analysis_completion_moves_slot_to_review_required(review_db):
 
     status = await _slot_status(schema, pool, slot_id)
     assert status["status"] == "review_required"
-    assert status["status_reason"] == "findings_pending"
+    # 签核分离（Step 3）：自动检查无待处理工作 ⇒ awaiting_signoff，
+    # 与仍有 finding/补核待处理的 findings_pending 区分。
+    assert status["status_reason"] == "awaiting_signoff"
 
 
 async def test_slot_sync_keeps_completed_when_review_already_completed(review_db):

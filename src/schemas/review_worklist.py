@@ -17,6 +17,7 @@ class ReviewWorklistItem(BaseModel):
     fiscal_year: Optional[int] = None
     report_kind: str = "unknown"
     review_status: str
+    signoff_only: bool = False
     pending_findings: Optional[int] = None
     pending_checks: Optional[int] = None
     reviewer: Optional[str] = None

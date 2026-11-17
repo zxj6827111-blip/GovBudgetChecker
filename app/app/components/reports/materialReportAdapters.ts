@@ -127,3 +127,80 @@ export function versionSource(version: MaterialVersion): string | null {
 export function materialScopeLabel(value?: string): string {
   return ({ department_summary: "部门汇总", unit_self: "单位本级", government: "政府本级" } as Record<string,string>)[value ?? ""] ?? "材料口径待确认";
 }
+
+export interface MaterialReportDeleteSummary {
+  requested_slot_count: number;
+  requested_job_count: number;
+  deleted_slot_ids: string[];
+  reset_baseline_slot_ids: string[];
+  updated_slot_ids: string[];
+  deleted_version_ids: number[];
+  deleted_document_ids: number[];
+  deleted_job_ids: string[];
+  deleted_review_session_count: number;
+  failed?: Array<{ id: string; detail: string }>;
+}
+
+export function buildMaterialDeleteTargets(items: MaterialReport[]): {
+  slotIds: string[];
+  jobIds: string[];
+} {
+  const slotIds: string[] = [];
+  const jobIds: string[] = [];
+  const seenSlots = new Set<string>();
+  const seenJobs = new Set<string>();
+
+  for (const item of items) {
+    if (item.slot_id) {
+      if (!seenSlots.has(item.slot_id)) {
+        seenSlots.add(item.slot_id);
+        slotIds.push(item.slot_id);
+      }
+      continue;
+    }
+    const jobId = item.job_id || item.current_version?.source_job_id || "";
+    if (jobId && !seenJobs.has(jobId)) {
+      seenJobs.add(jobId);
+      jobIds.push(jobId);
+    }
+  }
+
+  return { slotIds, jobIds };
+}
+
+export function materialReportDisplayTitle(item: MaterialReport): string {
+  const yearText = item.fiscal_year ? `${item.fiscal_year} 年` : "年度待确认 · ";
+  const kindText =
+    item.report_kind === "final"
+      ? "决算"
+      : item.report_kind === "budget"
+        ? "预算"
+        : "类型待确认报告";
+  return `${item.organization_name ?? "主体待确认"} · ${yearText}${kindText}`;
+}
+
+export function formatMaterialDeleteSuccess(summary: MaterialReportDeleteSummary): string {
+  const failedCount = summary.failed?.length ?? 0;
+  const succeededCount = Math.max(
+    0,
+    summary.requested_slot_count + summary.requested_job_count - failedCount,
+  );
+  const details: string[] = [];
+  if (summary.deleted_version_ids.length > 0) {
+    details.push(`清理 ${summary.deleted_version_ids.length} 个文件版本`);
+  }
+  if (summary.deleted_job_ids.length > 0) {
+    details.push(`删除 ${summary.deleted_job_ids.length} 个分析任务`);
+  }
+  if (summary.deleted_review_session_count > 0) {
+    details.push(`清理 ${summary.deleted_review_session_count} 条复核记录`);
+  }
+  if (summary.reset_baseline_slot_ids.length > 0) {
+    details.push(`${summary.reset_baseline_slot_ids.length} 项监督基线已重置为待提交`);
+  }
+  const base = succeededCount > 0 ? `已删除 ${succeededCount} 份报告` : "已完成报告清理";
+  if (failedCount > 0) {
+    details.push(`另有 ${failedCount} 项未删除`);
+  }
+  return details.length > 0 ? `${base}（${details.join("，")}）。` : `${base}。`;
+}

@@ -2,6 +2,7 @@ import { getSeverityMeta } from "@/lib/issueSeverity";
 import type { Problem, ProblemEvidenceRef } from "@/lib/mock";
 import { cn } from "@/lib/utils";
 import { evidenceExcerptLabel } from "@/lib/evidenceIdentity";
+import { evidenceRoleLabel } from "../review-workbench/reviewReadingAdapters";
 
 import ProblemPreviewFrame from "./ProblemPreviewFrame";
 import { buildProblemPdfPageUrl } from "./problemPreview";
@@ -37,9 +38,7 @@ export default function EvidencePanel({
   }) ?? [];
 
   const renderEvidenceRef = (ref: ProblemEvidenceRef) => {
-    const roleLabel = ref.role === "parent" ? "合计项"
-      : ref.role === "child" ? "明细项"
-        : ref.role;
+    const roleLabel = evidenceRoleLabel(ref.role);
     return (
       <button
         key={ref.key}
@@ -55,6 +54,7 @@ export default function EvidencePanel({
         )}
       >
         <span className="font-medium">{roleLabel}</span>
+        {ref.quoteText ? <span> · “{ref.quoteText}”</span> : null}
         <span> · {ref.locationText}</span>
         {ref.valueText ? <span> · 金额 {ref.valueText} 万元</span> : null}
         {ref.bbox ? <span className="text-success-700"> · 可精确框选</span> : null}

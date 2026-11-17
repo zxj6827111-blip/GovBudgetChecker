@@ -154,6 +154,7 @@ const REASON_LABELS: Record<string, string> = {
   analysis_running: "分析进行中",
   analysis_failed: "分析失败，需重试或人工处理",
   findings_pending: "存在待人工处理的问题",
+  awaiting_signoff: "自动检查已完成，待人工签字结案",
   review_in_progress: "人工复核进行中",
   review_completed: "人工复核已完成",
   caliber_conflict: "材料口径存在冲突",

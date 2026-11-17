@@ -1,5 +1,6 @@
 """PostgreSQL connection management with schema support."""
 
+import asyncio
 import os
 import asyncpg
 from typing import Optional
@@ -45,7 +46,7 @@ class DatabaseConnection:
             url,
             min_size=2,
             max_size=10,
-            command_timeout=60
+            command_timeout=180
         )
         
         # Initialize schema on first connection
@@ -86,12 +87,26 @@ class DatabaseConnection:
     @classmethod
     async def acquire(cls) -> asyncpg.Connection:
         """Acquire a connection from the pool with schema set.
-        
-        Returns:
-            A database connection with search_path configured.
+
+        池耗尽时必须可见地失败（D5）：池上限 10 而任务 worker 可能 ≥10，
+        无超时的 acquire 会无限挂起，把"数据库不可用"伪装成"任务卡死"。
+        超时由 GOVBUDGET_POOL_ACQUIRE_TIMEOUT 控制（秒，默认 30）。
         """
         pool = await cls.get_pool()
-        conn = await pool.acquire()
+        timeout = float(os.getenv("GOVBUDGET_POOL_ACQUIRE_TIMEOUT") or 30)
+        try:
+            conn = await asyncio.wait_for(pool.acquire(), timeout=timeout)
+        except asyncio.TimeoutError as exc:
+            size = getattr(pool, "_size", None)
+            idle = None
+            try:
+                idle = pool.get_idle_size()
+            except Exception:  # noqa: BLE001 - 取证尽力而为，不掩盖原错误
+                pass
+            raise TimeoutError(
+                f"database connection pool acquire timed out after {timeout:.0f}s "
+                f"(pool_size={size}, idle={idle}); workers may exceed pool capacity"
+            ) from exc
         await conn.execute(f'SET search_path TO "{cls._schema}", public')
         return conn
     

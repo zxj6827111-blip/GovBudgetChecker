@@ -1021,6 +1021,17 @@ function readExpenditureContext(value: unknown): Problem["expenditureContext"] {
     })) };
 }
 
+function normalizeEvidenceQuoteText(raw: unknown): string | undefined {
+  const text = String(raw ?? "")
+    .replace(
+      /([\u4e00-\u9fff\u3000-\u303f\uff00-\uffef])\s*\n+\s*([\u4e00-\u9fff\u3000-\u303f\uff00-\uffef])/g,
+      "$1$2",
+    )
+    .replace(/\s+/g, " ")
+    .trim();
+  return text || undefined;
+}
+
 export function toUiProblems(detail: JobDetailRecord, options: { includeEvidencePreview?: boolean } = {}): Problem[] {
   const result = isRecord(detail.result) ? detail.result : {};
   const reviewReport = isRecord(detail.review_report) ? detail.review_report : {};
@@ -1088,18 +1099,22 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
           ref.code ?? ref.subject_code, ref.subject_name ?? ref.subject]
           .map((item) => String(item ?? "").trim())
           .filter((item, labelIndex, all) => Boolean(item) && all.indexOf(item) === labelIndex);
+        const valueText = ref.current_value !== undefined && ref.current_value !== null
+          ? String(ref.current_value)
+          : ref.value === undefined || ref.value === null ? undefined : String(ref.value);
+        const rawQuoteText = normalizeEvidenceQuoteText(ref.quote ?? ref.text_snippet ?? ref.text ?? ref.span);
+        const quoteText = rawQuoteText && rawQuoteText !== valueText ? rawQuoteText : undefined;
         return [{
           key: `${String(ref.role ?? `定位 ${refIndex + 1}`)}|${refPage}|${refIndex}`,
           role: String(ref.role ?? `定位 ${refIndex + 1}`),
+          ...(quoteText ? { quoteText } : {}),
           relationId: ref.relation_id == null ? undefined : String(ref.relation_id),
           operandId: ref.operand_id == null ? undefined : String(ref.operand_id),
           sourceCellId: ref.source_cell_id == null ? undefined : String(ref.source_cell_id),
           blankAsZero: ref.blank_as_zero === true && verificationStatus === "verified" && locationLevel === "exact_cell",
           page: Math.floor(refPage),
           locationText: [`第 ${Math.floor(refPage)} 页`, ...labels].join(" · "),
-          valueText: ref.current_value !== undefined && ref.current_value !== null
-            ? String(ref.current_value)
-            : ref.value === undefined || ref.value === null ? undefined : String(ref.value),
+          valueText,
           bbox,
           locationLevel,
           verificationStatus,
@@ -1126,9 +1141,11 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
         ? rawLocation.evidence_pairs.filter(isRecord).flatMap((ref, refIndex) => {
             const refPage = toNumber(ref.page);
             if (!Number.isFinite(refPage) || refPage <= 0) return [];
+            const quoteText = normalizeEvidenceQuoteText(ref.quote ?? ref.text_snippet ?? ref.text ?? ref.span);
             return [{
               key: `pair|${Math.floor(refPage)}|${refIndex}`,
               role: `跨段证据 ${refIndex + 1}`,
+              ...(quoteText ? { quoteText } : {}),
               page: Math.floor(refPage),
               locationText: [`第 ${Math.floor(refPage)} 页`, String(ref.table_or_section ?? "").trim()].filter(Boolean).join(" · "),
               locationLevel: "region",

@@ -64,6 +64,20 @@ _TITLE_OWNER_PREFIX_RE = re.compile(
 )
 
 
+def _equivalent_owner_names(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    from src.services.org_name_identity import identity_name, compare_org_names
+
+    if compare_org_names(left, right).equivalent:
+        return True
+    base_left = re.sub(r"\((?:本级|本部)\)$", "", identity_name(left))
+    base_right = re.sub(r"\((?:本级|本部)\)$", "", identity_name(right))
+    return bool(base_left and base_left == base_right and compare_org_names(base_left, base_right).equivalent)
+
+
 def _owner_rejection_reason(fact: FiscalFact, organization: Optional[str]) -> Optional[str]:
     expected = _organization_key(organization)
     actual = _organization_key(fact.org_name)
@@ -76,12 +90,12 @@ def _owner_rejection_reason(fact: FiscalFact, organization: Optional[str]) -> Op
     title = _organization_key((fact.extra_dims or {}).get("source_table_title"))
     title = re.sub(r"^(?:20\d{2}年(?:度)?)+", "", title)
     original_owner = _TITLE_OWNER_PREFIX_RE.match(title)
-    if original_owner and original_owner.group(1) != expected:
+    if original_owner and not _equivalent_owner_names(original_owner.group(1), expected):
         return (
             "候选事实原始表题主体与当前材料主体不一致："
             f"{original_owner.group(1)} ≠ {organization}"
         )
-    if not actual or expected == actual:
+    if not actual or _equivalent_owner_names(expected, actual):
         return None
     if title.startswith(expected) and re.match(_FISCAL_TITLE_BOUNDARY, title[len(expected):]):
         return None

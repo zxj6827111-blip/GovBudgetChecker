@@ -334,17 +334,29 @@ def record_failure(doc: Any, texts: Any, entry: Mapping[str, Any]) -> None:
             bucket.setdefault(text, []).append(dict(entry))
 
 
-def lookup_failure(doc: Any, text: Any) -> List[Dict[str, Any]]:
+def _matches_sub_check(entry: Mapping[str, Any], target_sub_check: str) -> bool:
+    if not target_sub_check:
+        return True
+    recorded = str(entry.get("_sub_check_id") or "").strip()
+    return not recorded or recorded == target_sub_check
+
+
+def lookup_failure(doc: Any, text: Any, *, sub_check_id: Any = None) -> List[Dict[str, Any]]:
     """按失败文本取回登记的结构化事实；先精确匹配，再按最长包含匹配。"""
     if doc is None or not str(text or "").strip():
         return []
     target = str(text)
+    target_sub = str(sub_check_id or "").strip()
     bucket = _registry(doc)
     if not bucket:
         return []
     with _REGISTRY_LOCK:
         if target in bucket:
-            return [dict(item) for item in bucket[target]]
+            return [
+                dict(item)
+                for item in bucket[target]
+                if _matches_sub_check(item, target_sub)
+            ]
         hits: List[tuple] = []
         for known, entries in bucket.items():
             if len(known) >= 4 and known in target:
@@ -354,7 +366,11 @@ def lookup_failure(doc: Any, text: Any) -> List[Dict[str, Any]]:
         hits.sort(reverse=True)
         matched: List[Dict[str, Any]] = []
         for _, known in hits:
-            matched.extend(dict(item) for item in bucket[known])
+            matched.extend(
+                dict(item)
+                for item in bucket[known]
+                if _matches_sub_check(item, target_sub)
+            )
         return matched
 
 
@@ -363,19 +379,23 @@ def lookup_failure(doc: Any, text: Any) -> List[Dict[str, Any]]:
 _RULE_LEVEL_PATTERNS = (
     # 表已识别但没有任何可用金额事实 = 空表/缺表（材料侧），与
     # native_table_arithmetic 的同一句话映射保持一致；不能报成列映射故障。
-    (("没有可用金额事实",), "table_missing", "instance_uid"),
-    (("结构化表模型不可用", "结构化表模型"), "table_mapping_incomplete", "instance_uid"),
+    (("没有可用金额事实", "缺失或无可解析行", "表缺失"), "table_missing", "instance_uid"),
+    (("结构化表模型不可用", "结构化表模型", "未读取或列未映射"), "table_mapping_incomplete", "instance_uid"),
     (("未定位到唯一的", "结构化表"), "table_missing", "instance_uid"),
     (("解析存在不确定",), "table_mapping_incomplete", "instance_uid"),
-    (("金额单位未识别", "金额单位不一致"), "scope_unconfirmed", "fund_scope"),
+    (("金额单位未识别", "金额单位不一致", "金额单位未知"), "scope_unconfirmed", "fund_scope"),
+    (("表头仅披露“预算数”", "显式预算阶段证据"), "scope_unconfirmed", "budget_stage"),
+    (("封面文种缺少独立依据",), "scope_unconfirmed", "org_scope"),
+    (("封面主体与所选组织不一致",), "subject_conflict", "organization"),
     (("财政年度",), "scope_unconfirmed", "year"),
-    (("列身份", "列组", "未绑定", "缺列", "列宽", "未登记「决算数」列", "列段内未定位", "未定位到功能分类"),
+    (("列身份", "列组", "未绑定", "未唯一绑定", "缺列", "列宽", "未登记「决算数」列", "列段内未定位", "未定位到功能分类"),
      "column_identity_unconfirmed", "column"),
-    (("行身份", "行未", "重复行", "合计行", "层级", "科目编码"), "row_level_unresolved", "row"),
+    (("行身份", "行未", "重复行", "合计行", "层级", "科目编码", "完整原始行缺失", "缺少关键行"),
+     "row_level_unresolved", "row"),
     (("身份不一致", "行内编码与名称", "编码与名称指向不同"), "row_level_unresolved", "row"),
     (("没有唯一当前事实",), "cell_unbound", "cell"),
     (("识别状态不可作操作数",), "cell_low_confidence", "cell"),
-    (("缺少明确可用数值", "不能按零", "为横线", "分项有空白"), "cell_blank_semantics_unknown", "cell"),
+    (("缺少明确可用数值", "不能按零", "为横线", "分项有空白", "空白且无独立取数依据"), "cell_blank_semantics_unknown", "cell"),
     (("存在多个实例",), "table_mapping_incomplete", "instance_uid"),
     (("来源表仍有未完成读取",), "table_mapping_incomplete", "instance_uid"),
     (("识别风险阻断",), "cell_low_confidence", "cell"),
@@ -390,6 +410,7 @@ _SECTION_HINTS = (
     ("功能分类", ("支出决算情况说明", "功能分类")),
     ("人员经费", ("基本支出情况说明", "人员经费")),
     ("公用经费", ("基本支出情况说明", "公用经费")),
+    ("说明四", ("财政拨款收入支出决算总体情况说明", "决算情况说明")),
     ("财政拨款收支总计", ("财政拨款收支总表", "财政拨款")),
     ("决算情况说明", ("决算情况说明",)),
     ("三公", ("三公",)),
@@ -553,13 +574,36 @@ def rule_level_entry(text: Any, rule_id: Any = None, doc: Any = None) -> Dict[st
                 "missing_operands": [],
                 "candidates": [],
             }
-    if any(token in value for token in ("未提取到", "未识别到", "未披露", "无法绑定", "未定位", "未找到")):
+    if any(token in value for token in ("多个不一致的本期金额披露", "无法确定比较基期", "基期交叉验证不可完成")):
+        page = _section_page(doc, value) if doc is not None else None
+        return {
+            "reason_codes": ["comparison_identity_unresolved"],
+            "blocked_by": [],
+            "missing_operands": [text_missing_operand(
+                section="决算情况说明", role=value[:40] or "同比比较口径", page=page,
+                row_key=None, column="比较基期", stage="决算")],
+            "candidates": [],
+        }
+    if any(token in value for token in ("未在表内定位到同名同级", "基本支出表未列")):
+        page = _section_page(doc, value) if doc is not None else None
+        return {
+            "reason_codes": ["subject_name_unlocated"],
+            "blocked_by": [],
+            "missing_operands": [text_missing_operand(
+                section="基本支出/功能分类表", role=value[:40] or "表内科目", page=page,
+                row_key=None, column="科目名称", stage="决算")],
+            "candidates": [],
+        }
+    if any(token in value for token in (
+        "未提取到", "未识别到", "未披露", "无法绑定", "未定位", "未找到",
+        "未明示", "未写明", "缺少显式决算金额", "年度未识别到", "属于其他年度",
+    )):
         page = _section_page(doc, value) if doc is not None else None
         return {
             "reason_codes": ["text_statement_absent"],
             "blocked_by": [],
             "missing_operands": [text_missing_operand(
-                section="决算情况说明", role=value[:40] or "说明金额", page=page,
+                section="决算情况说明", role=value[:40] or "说明表述", page=page,
                 row_key=None, column="说明表述", stage="决算")],
             "candidates": [],
         }
@@ -576,7 +620,7 @@ def diagnostics_for_texts(doc: Any, texts: Iterable[Any], *, rule_id: Any = None
     merged: List[Dict[str, Any]] = []
     seen = set()
     for text in texts or []:
-        for entry in lookup_failure(doc, text):
+        for entry in lookup_failure(doc, text, sub_check_id=sub_check_id):
             try:
                 finalized = finalize(
                     entry, rule_id=rule_id, sub_check_id=sub_check_id, obligation_id=obligation_id
@@ -606,6 +650,52 @@ def diagnostics_for_texts(doc: Any, texts: Iterable[Any], *, rule_id: Any = None
     return merged
 
 
+def _operand_physical_key(item: Any) -> str:
+    """去掉关系身份附加字段后的物理位置键，用于合并同一缺数位置。"""
+    if not isinstance(item, Mapping):
+        return canonical(item)
+    stripped = {
+        key: value
+        for key, value in item.items()
+        if key not in {"check_relation_id", "sub_check_id", "rule_id"}
+    }
+    return canonical(stripped)
+
+
+def _operand_has_relation_identity(item: Any) -> bool:
+    return isinstance(item, Mapping) and bool(
+        item.get("check_relation_id") or item.get("sub_check_id")
+    )
+
+
+def _merge_missing_operands(
+    target: List[Dict[str, Any]],
+    incoming: Sequence[Any],
+) -> None:
+    """合并 missing_operands，同一物理位置优先保留带关系 ID 的条目而不重复。"""
+    known_exact = {canonical(item) for item in target}
+    by_physical: Dict[str, int] = {}
+    for index, item in enumerate(target):
+        by_physical.setdefault(_operand_physical_key(item), index)
+    for item in incoming or ():
+        exact = canonical(item)
+        if exact in known_exact:
+            continue
+        phys = _operand_physical_key(item)
+        stamped = _operand_has_relation_identity(item)
+        if phys in by_physical:
+            existing_index = by_physical[phys]
+            if not stamped:
+                continue
+            if not _operand_has_relation_identity(target[existing_index]):
+                target[existing_index] = dict(item)
+                known_exact.add(exact)
+                continue
+        target.append(dict(item))
+        known_exact.add(exact)
+        by_physical.setdefault(phys, len(target) - 1)
+
+
 def merge_entry(entry: Mapping[str, Any], extra: Mapping[str, Any]) -> Dict[str, Any]:
     """合并两条登记事实（用于同一关系的多个缺口）。"""
     result = {
@@ -617,12 +707,13 @@ def merge_entry(entry: Mapping[str, Any], extra: Mapping[str, Any]) -> Dict[str,
         "missing_operands": [dict(item) for item in entry.get("missing_operands") or []],
         "candidates": [dict(item) for item in entry.get("candidates") or []],
     }
-    for field in ("blocked_by", "missing_operands", "candidates"):
+    for field in ("blocked_by", "candidates"):
         known = {canonical(item) for item in result[field]}
         for item in extra.get(field) or []:
             if canonical(item) not in known:
                 result[field].append(dict(item))
                 known.add(canonical(item))
+    _merge_missing_operands(result["missing_operands"], extra.get("missing_operands") or [])
     return result
 
 
@@ -642,12 +733,13 @@ def aggregate(diagnostics: Sequence[Mapping[str, Any]], *, rule_id: Any = None,
         for code in diag.get("reason_codes") or []:
             if str(code) and str(code) not in codes:
                 codes.append(str(code))
-        for field, bucket in (("blocked_by", blocked), ("missing_operands", missing), ("candidates", candidates)):
+        for field, bucket in (("blocked_by", blocked), ("candidates", candidates)):
             known = {canonical(item) for item in bucket}
             for item in diag.get(field) or []:
                 if canonical(item) not in known:
                     bucket.append(dict(item))
                     known.add(canonical(item))
+        _merge_missing_operands(missing, diag.get("missing_operands") or [])
     if not codes:
         return None
     entry = {
@@ -661,6 +753,9 @@ def aggregate(diagnostics: Sequence[Mapping[str, Any]], *, rule_id: Any = None,
         entry["reason_codes"] = [code for code in codes if code != "operand_missing"] or ["rule_no_reason"]
     if "operand_ambiguous" in codes and len(candidates) < 2:
         entry["reason_codes"] = [code for code in entry["reason_codes"] if code != "operand_ambiguous"] or ["rule_no_reason"]
+    specific_codes = [code for code in entry["reason_codes"] if code != "rule_no_reason"]
+    if specific_codes:
+        entry["reason_codes"] = specific_codes
     result: Dict[str, Any] = {
         "reason_codes": entry["reason_codes"],
         "blocked_by": blocked,
@@ -741,7 +836,7 @@ def fields_for_text(doc: Any, text: Any, *, status: Any = "insufficient_data", r
     优先使用失败发生处登记的结构化事实；规则显式传入的原因码只在仍能形成
     可定位诊断时并入（否则保留已登记的可定位诊断，避免把汇总变成不可解释）。
     """
-    entries = lookup_failure(doc, text)
+    entries = lookup_failure(doc, text, sub_check_id=sub_check_id)
     if entries:
         base = entries[0]
         for extra in entries[1:]:
@@ -866,9 +961,10 @@ def record_gap(doc: Any, texts: Any, *, reason_codes: Sequence[str],
                missing_operands: Sequence[Mapping[str, Any]] = (),
                candidates: Sequence[Mapping[str, Any]] = (),
                blocked_by: Sequence[Mapping[str, Any]] = (),
-               preferred_action: Any = None) -> None:
+               preferred_action: Any = None,
+               sub_check_id: Any = None) -> None:
     """登记一条取数缺口；字段组合由 finalize 校验，不合法则不登记（不影响结论）。"""
-    entry = {
+    entry: Dict[str, Any] = {
         "reason_codes": [str(code) for code in reason_codes],
         "blocked_by": [dict(item) for item in blocked_by],
         "missing_operands": [dict(item) for item in missing_operands],
@@ -880,6 +976,9 @@ def record_gap(doc: Any, texts: Any, *, reason_codes: Sequence[str],
         finalize(entry)
     except ValueError:
         return
+    clean_sub_check = str(sub_check_id or "").strip()
+    if clean_sub_check:
+        entry["_sub_check_id"] = clean_sub_check
     record_failure(doc, texts, entry)
 
 

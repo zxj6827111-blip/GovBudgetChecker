@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 
 import type { JobSummaryRecord } from "../lib/uiAdapters";
-import { canRunQueueJob, requestQueueRun, runQueueBatch, type QueueBatchProgress } from "../app/components/queue/queueBatchActions";
+import {
+  canRunQueueJob,
+  requestQueueBatchDelete,
+  requestQueueDelete,
+  requestQueueRun,
+  runQueueBatch,
+  type QueueBatchProgress,
+} from "../app/components/queue/queueBatchActions";
 import { ANALYZE_START_REQUEST_BODY } from "../app/components/workspace/uploadCenterAdapters";
 import {
   DEFAULT_QUEUE_FILTERS,
@@ -287,4 +294,129 @@ async function testBatchRuns() {
   assert.deepEqual(warned.warnings, [{jobId: "warn-1", filename: "甲.pdf", messages: [warning]}], "批量结果逐条保留告警及材料名");
   console.log("queuePageAdapters.test.ts: 批量提交、部分失败、状态与接口边界通过");
 }
-void testBatchRuns().catch((error) => { console.error(error); process.exitCode = 1; });
+
+async function testDeleteActions() {
+  // 1. 单条删除：空 jobId 不发请求
+  let called = 0;
+  const emptySingle = await requestQueueDelete("   ", async () => {
+    called += 1;
+    return new Response(null, {status: 500});
+  });
+  assert.equal(called, 0);
+  assert.equal(emptySingle.ok, false);
+  assert.equal(emptySingle.error, "缺少任务 ID，无法删除。");
+
+  // 2. 单条删除：对中文及特殊字符做 URL 编码，解析 reset_baseline_slot_ids 等字段
+  let deletedUrl = "";
+  let deletedMethod = "";
+  const okSingle = await requestQueueDelete("diag-普陀 1", async (url, init) => {
+    deletedUrl = String(url);
+    deletedMethod = String(init?.method ?? "GET");
+    return new Response(
+      JSON.stringify({
+        success: true,
+        job_id: "diag-普陀 1",
+        deleted_slot_ids: ["slot-a"],
+        reset_baseline_slot_ids: ["slot-base"],
+        updated_slot_ids: [],
+        deleted_version_ids: [12],
+      }),
+      {status: 200},
+    );
+  });
+  assert.equal(deletedUrl, "/api/jobs/diag-%E6%99%AE%E9%99%80%201");
+  assert.equal(deletedMethod, "DELETE");
+  assert.deepEqual(okSingle, {
+    ok: true,
+    jobId: "diag-普陀 1",
+    deleted: true,
+    deletedSlotIds: ["slot-a"],
+    resetBaselineSlotIds: ["slot-base"],
+    updatedSlotIds: [],
+    deletedVersionIds: [12],
+  });
+
+  // 3. 单条删除：403 / 404 / 409 / success:false / 网络错误均给出可读提示
+  const forbidden = await requestQueueDelete("j1", async () => new Response(JSON.stringify({detail: "Admin required"}), {status: 403}));
+  assert.equal(forbidden.ok, false);
+  assert.equal(forbidden.error, "登录已失效或只有管理员可以删除任务。");
+
+  const missing = await requestQueueDelete("j1", async () => new Response(JSON.stringify({detail: "job_id does not exist"}), {status: 404}));
+  assert.equal(missing.ok, false);
+  assert.equal(missing.error, "任务已不存在，请刷新队列后确认。");
+
+  const conflict = await requestQueueDelete(
+    "j1",
+    async () => new Response(JSON.stringify({detail: "该报告存在正在执行的分析任务，请等待分析完成后再删除"}), {status: 409}),
+  );
+  assert.equal(conflict.ok, false);
+  assert.equal(conflict.error, "该报告存在正在执行的分析任务，请等待分析完成后再删除");
+
+  const netErr = await requestQueueDelete("j1", async () => {
+    throw new Error("socket closed");
+  });
+  assert.equal(netErr.ok, false);
+  assert.equal(netErr.error, "网络请求失败，请检查连接后重试。");
+
+  // 4. 批量删除：空数组不请求，自动去重且保留部分成功明细
+  let batchCalled = 0;
+  const emptyBatch = await requestQueueBatchDelete(["  ", ""], async () => {
+    batchCalled += 1;
+    return new Response(null, {status: 500});
+  });
+  assert.equal(batchCalled, 0);
+  assert.equal(emptyBatch.ok, false);
+
+  let batchBody: unknown = null;
+  const partialBatch = await requestQueueBatchDelete([" a ", "b", "a"], async (url, init) => {
+    assert.equal(String(url), "/api/jobs/batch-delete");
+    assert.equal(init?.method, "POST");
+    batchBody = JSON.parse(String(init?.body ?? "{}"));
+    return new Response(
+      JSON.stringify({
+        success: true,
+        requested_count: 2,
+        deleted_count: 1,
+        failed_count: 1,
+        deleted_job_ids: ["a"],
+        failed: [{job_id: "b", status_code: 409, detail: "任务正在运行中"}],
+        deleted_slot_ids: [],
+        reset_baseline_slot_ids: ["slot-9"],
+        updated_slot_ids: [],
+        deleted_version_ids: [],
+      }),
+      {status: 200},
+    );
+  });
+  assert.deepEqual(batchBody, {job_ids: ["a", "b"]});
+  assert.equal(partialBatch.ok, true);
+  assert.equal(partialBatch.deletedCount, 1);
+  assert.equal(partialBatch.failedCount, 1);
+  assert.deepEqual(partialBatch.deletedJobIds, ["a"]);
+  assert.deepEqual(partialBatch.resetBaselineSlotIds, ["slot-9"]);
+  assert.equal(partialBatch.failed[0]?.detail, "任务正在运行中");
+
+  // 5. 批量删除全部失败（200 且 success: false, deleted_count: 0）判定失败并带出首个失败原因
+  const allFailedBatch = await requestQueueBatchDelete(["b"], async () => {
+    return new Response(
+      JSON.stringify({
+        success: false,
+        requested_count: 1,
+        deleted_count: 0,
+        failed_count: 1,
+        deleted_job_ids: [],
+        failed: [{job_id: "b", status_code: 409, detail: "运行中禁止删除"}],
+      }),
+      {status: 200},
+    );
+  });
+  assert.equal(allFailedBatch.ok, false);
+  assert.equal(allFailedBatch.error, "运行中禁止删除");
+
+  console.log("queuePageAdapters.test.ts: 单条与批量删除（编码/权限/冲突/部分失败/网络异常）通过");
+}
+
+void Promise.all([testBatchRuns(), testDeleteActions()]).catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

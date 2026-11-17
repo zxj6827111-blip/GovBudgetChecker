@@ -219,7 +219,7 @@ test.describe("关键流程：上传 → 等待 → 复核 → 导出", () => {
     await expect.poll(() => downloadCalls, { timeout: 20_000 }).toBe(1);
   });
 
-  test("终态 review_required 必须显示为需人工复核，而不是分析完成", async ({ page }) => {
+  test("终态 review_required 必须显示为需要人工复核，而不是分析完成", async ({ page }) => {
     test.setTimeout(90_000);
     const reviewJobId = "job-review-required-2026";
 
@@ -262,8 +262,8 @@ test.describe("关键流程：上传 → 等待 → 复核 → 导出", () => {
 
     await page.goto(`/task/${reviewJobId}`);
 
-    // 正例：新状态被如实展示
-    await expect(page.getByText("需人工复核").first()).toBeVisible({ timeout: 30_000 });
+    // 正例：新状态被如实展示（任务页已改为复核工作台，徽标文案为「需要人工复核」）
+    await expect(page.getByText("需要人工复核").first()).toBeVisible({ timeout: 30_000 });
     // 反例：绝不能出现"分析完成"字样——那正是整改前的虚假成功
     await expect(page.getByText("分析完成", { exact: false })).toHaveCount(0);
   });

@@ -30,6 +30,7 @@ from src.services.analysis_result_store import (
 )
 from src.services.org_matcher import get_org_matcher
 from src.services.audit_log import append_audit_event
+from src.services.material_report_deletion import delete_jobs_with_related_records
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -348,41 +349,26 @@ async def batch_delete_jobs(request: Request):
     if not job_ids:
         raise HTTPException(status_code=400, detail="job_ids is required")
 
-    deleted: list[str] = []
-    failed: list[Dict[str, Any]] = []
-    for job_id in job_ids:
-        try:
-            runtime.delete_job(job_id)
-            deleted.append(job_id)
-        except HTTPException as exc:
-            failed.append(
-                {
-                    "job_id": job_id,
-                    "status_code": exc.status_code,
-                    "detail": exc.detail,
-                }
-            )
-        except Exception as exc:
-            failed.append(
-                {
-                    "job_id": job_id,
-                    "status_code": 500,
-                    "detail": str(exc),
-                }
-            )
+    actor = str(user.get("username") or "")
+    deletion_summary = await delete_jobs_with_related_records(job_ids, actor=actor)
+    deleted = list(deletion_summary.get("deleted_job_ids") or [])
+    failed = list(deletion_summary.get("failed") or [])
 
     if deleted:
         clear_department_stats_cache()
 
     append_audit_event(
         action="jobs.batch_delete",
-        actor=str(user.get("username") or ""),
+        actor=actor,
         result="success" if not failed else "partial_success",
         resource_type="job_batch",
         details={
             "requested_count": len(job_ids),
             "deleted_count": len(deleted),
             "failed_count": len(failed),
+            "deleted_version_count": len(deletion_summary.get("deleted_version_ids") or []),
+            "deleted_slot_count": len(deletion_summary.get("deleted_slot_ids") or []),
+            "reset_baseline_slot_count": len(deletion_summary.get("reset_baseline_slot_ids") or []),
         },
     )
     return {
@@ -392,6 +378,10 @@ async def batch_delete_jobs(request: Request):
         "failed_count": len(failed),
         "deleted_job_ids": deleted,
         "failed": failed,
+        "deleted_slot_ids": deletion_summary.get("deleted_slot_ids") or [],
+        "reset_baseline_slot_ids": deletion_summary.get("reset_baseline_slot_ids") or [],
+        "updated_slot_ids": deletion_summary.get("updated_slot_ids") or [],
+        "deleted_version_ids": deletion_summary.get("deleted_version_ids") or [],
     }
 
 
@@ -631,16 +621,35 @@ async def get_job_org_suggestions(
 @router.delete("/api/jobs/{job_id}")
 async def delete_job(job_id: str, request: Request):
     _, _, user = require_admin(request)
-    runtime.delete_job(job_id)
+    actor = str(user.get("username") or "")
+    deletion_summary = await delete_jobs_with_related_records([job_id], actor=actor)
+    if deletion_summary.get("deleted_count", 0) <= 0 and deletion_summary.get("failed"):
+        first_error = deletion_summary["failed"][0]
+        raise HTTPException(
+            status_code=int(first_error.get("status_code") or 404),
+            detail=first_error.get("detail") or "job_id does not exist",
+        )
     clear_department_stats_cache()
     append_audit_event(
         action="jobs.delete",
-        actor=str(user.get("username") or ""),
+        actor=actor,
         result="success",
         resource_type="job",
-        details={"job_id": job_id},
+        details={
+            "job_id": job_id,
+            "deleted_version_count": len(deletion_summary.get("deleted_version_ids") or []),
+            "deleted_slot_count": len(deletion_summary.get("deleted_slot_ids") or []),
+            "reset_baseline_slot_count": len(deletion_summary.get("reset_baseline_slot_ids") or []),
+        },
     )
-    return {"success": True, "job_id": job_id}
+    return {
+        "success": True,
+        "job_id": job_id,
+        "deleted_slot_ids": deletion_summary.get("deleted_slot_ids") or [],
+        "reset_baseline_slot_ids": deletion_summary.get("reset_baseline_slot_ids") or [],
+        "updated_slot_ids": deletion_summary.get("updated_slot_ids") or [],
+        "deleted_version_ids": deletion_summary.get("deleted_version_ids") or [],
+    }
 
 
 @router.post("/api/jobs/{job_id}/associate")
@@ -836,8 +845,14 @@ async def confirm_material_dimensions(job_id:str,body:MaterialDimensionsRequest,
 
 
 # ---------------------------------------------------------------------------
-# D4：整份确认门禁与报告三分类（读取接口；confirm_report 写侧默认关闭）
+# D4：整份确认门禁与报告三分类（默认开启，可通过 GOVBUDGET_CONFIRM_REPORT_ENABLED=false 关闭）
 # ---------------------------------------------------------------------------
+
+
+def _confirm_report_enabled() -> bool:
+    raw = str(os.getenv("GOVBUDGET_CONFIRM_REPORT_ENABLED") or "true").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
 
 @router.get("/api/jobs/{job_id}/report-confirmation")
 async def get_report_confirmation(job_id: str, request: Request):
@@ -856,9 +871,7 @@ async def get_report_confirmation(job_id: str, request: Request):
     )
     from api import runtime
 
-    enabled = str(os.getenv("GOVBUDGET_CONFIRM_REPORT_ENABLED") or "").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
+    enabled = _confirm_report_enabled()
     job_dir = runtime.UPLOAD_ROOT / str(job_id)
 
     def _read():
@@ -893,9 +906,7 @@ async def confirm_report(job_id: str, body: ConfirmReportRequest, request: Reque
     _, _, user, _initial_payload = require_job_access(request, job_id)
     from src.services.report_confirmation_gate import confirm_report_atomic
 
-    enabled = str(os.getenv("GOVBUDGET_CONFIRM_REPORT_ENABLED") or "").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
+    enabled = _confirm_report_enabled()
     result = await run_in_threadpool(
         lambda: confirm_report_atomic(
             job_id,

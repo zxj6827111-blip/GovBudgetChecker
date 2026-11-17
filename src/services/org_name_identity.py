@@ -36,25 +36,63 @@ def organization_name(org: Any) -> str:
     return str(name or serialized or "")
 
 
+def _admin_variants(name: str) -> set[str]:
+    """生成规范行政前缀变体，仅用于等价主体归一，不移除任何身份后缀标记。"""
+    variants = {name}
+    if "人民政府" in name and "街道办事处" in name:
+        variants.add(name.replace("人民政府", "", 1))
+    if name.startswith("中国共产党") and "委员会" in name:
+        variants.add(re.sub(r"^中国共产党(.+?)委员会", r"中共\1委", name))
+        variants.add(re.sub(r"^中国共产党(.+?)委员会", r"中共\1委员会", name))
+    elif name.startswith("中共") and "委员会" in name:
+        variants.add(re.sub(r"^中共(.+?)委员会", r"中共\1委", name))
+        variants.add(re.sub(r"^中共(.+?)委员会", r"中国共产党\1委员会", name))
+    elif name.startswith("中共") and "委" in name:
+        variants.add(re.sub(r"^中共(.+?)委", r"中共\1委员会", name, count=1))
+        variants.add(re.sub(r"^中共(.+?)委", r"中国共产党\1委员会", name, count=1))
+    if name.startswith("中国共产主义青年团"):
+        variants.add("共青团" + name[len("中国共产主义青年团"):])
+    elif name.startswith("共青团"):
+        variants.add("中国共产主义青年团" + name[len("共青团"):])
+    return {v for v in variants if v}
+
+
+def _split_multi_agency_alias(name: str) -> tuple[str, list[str]] | None:
+    marker = re.search(r"\((本级|机关|部门|单位|筹)\)$", name)
+    if marker:
+        return None
+    alias = re.fullmatch(r"(.+)\(([^()]*)\)", name)
+    if not alias:
+        return None
+    parts = [p.strip() for p in re.split(r"[、，,]", alias[2]) if p.strip()]
+    if not parts:
+        return None
+    if all(
+        len(p) >= 4
+        and re.search(r"局|厅|中心|委员会|办公室|院|馆|所|站|处|队|学校|大学|政府", p)
+        for p in parts
+    ):
+        return alias[1], parts
+    return None
+
+
 def _names(org: Any) -> set[str]:
     name = identity_name(organization_name(org))
-    names = {name} if name else set()
+    names = _admin_variants(name) if name else set()
     marker = re.search(r"\((本级|机关|部门|单位|筹)\)$", name)
     for keyword in _field(org, "keywords", []) or []:
         key = identity_name(keyword)
         key_marker = re.search(r"\((本级|机关|部门|单位|筹)\)$", key)
         # 目录关键词也不能把本级/筹等身份标记抹掉。
         if (marker.group() if marker else None) == (key_marker.group() if key_marker else None):
-            names.add(key)
-    alias = re.fullmatch(r"(.+)\(([^()]*)\)", name)
-    if (
-        alias
-        and not marker
-        and len(alias[2]) >= 4
-        and re.search(r"局|厅|中心|委员会|办公室|院|馆|所|站|处|队|学校|大学|政府", alias[2])
-    ):
-        # 仅末尾完整机构名是括号别名；（上海）、（林业）等正式组成不拆。
-        names.update(alias.groups())
+            names.update(_admin_variants(key))
+    multi = _split_multi_agency_alias(name)
+    if multi:
+        # 仅末尾完整机构名（含多牌合署、或顿号分隔列表）是括号别名；（上海）、（林业）等正式组成不拆。
+        primary, parts = multi
+        names.update(_admin_variants(primary))
+        for part in parts:
+            names.update(_admin_variants(part))
     return {item for item in names if item}
 
 
@@ -73,9 +111,34 @@ class OrgNameIndex:
 
     def __init__(self, directory: Iterable[Any] = ()):
         self.owners: dict[str, set[int]] = {}
+        self._owner_identities: list[str] = []
+        self._org_aliases_by_identity: dict[int, set[str]] = {}
         for index, org in enumerate(directory):
-            for name in _names(org):
-                self.owners.setdefault(_region_key(name), set()).add(index)
+            self._owner_identities.append(identity_name(organization_name(org)))
+            aliases = {_region_key(n) for n in _names(org)}
+            self._org_aliases_by_identity[id(org)] = aliases
+            for key in aliases:
+                self.owners.setdefault(key, set()).add(index)
+
+    def matches_org(self, text: Any, org: Any) -> NameComparison:
+        """判断文本是否精确等价于候选组织（支持该组织独占别名，不跨越竞争主体）。"""
+        comp = self.compare(text, organization_name(org))
+        if comp.equivalent:
+            return comp
+        key = _region_key(identity_name(text))
+        aliases = self._org_aliases_by_identity.get(id(org))
+        if aliases is None:
+            aliases = {_region_key(n) for n in _names(org)}
+        if key and key in aliases:
+            owners = self.owners.get(key, set())
+            if self._same_canonical_owners(owners):
+                return NameComparison(True, "exclusive_org_keyword")
+        return comp
+
+    def _same_canonical_owners(self, owners: set[int]) -> bool:
+        if len(owners) <= 1:
+            return len(owners) == 1
+        return len({self._owner_identities[idx] for idx in owners}) == 1
 
     def compare(self, left: Any, right: Any) -> NameComparison:
         a, b = identity_name(left), identity_name(right)
@@ -83,9 +146,26 @@ class OrgNameIndex:
             return NameComparison(False, "empty")
         if a == b:
             return NameComparison(True, "format_or_identity_marker")
+        if a in _admin_variants(b) or b in _admin_variants(a):
+            if not self.owners or (
+                _region_key(a) not in self.owners
+                or _region_key(b) not in self.owners
+                or self.owners.get(_region_key(a)) == self.owners.get(_region_key(b))
+            ):
+                return NameComparison(True, "admin_prefix_variant")
+        for cand, other in ((a, b), (b, a)):
+            multi = _split_multi_agency_alias(cand)
+            if multi:
+                primary, _ = multi
+                if identity_name(primary) == other or other in _admin_variants(primary):
+                    # 只有目录里没有互不相干的另一个同名全称竞争者时，才将合署多牌括号视为等价。
+                    other_owners = self.owners.get(_region_key(other), set())
+                    cand_owners = self.owners.get(_region_key(cand), set())
+                    if not cand_owners or not other_owners or cand_owners == other_owners:
+                        return NameComparison(True, "parenthetical_multi_agency_alias")
         owners_a = self.owners.get(_region_key(a), set())
         owners_b = self.owners.get(_region_key(b), set())
-        if len(owners_a) == len(owners_b) == 1 and owners_a == owners_b:
+        if owners_a and owners_a == owners_b and self._same_canonical_owners(owners_a):
             return NameComparison(True, "unique_directory_alias_or_region")
         return NameComparison(False, "different_or_ambiguous")
 

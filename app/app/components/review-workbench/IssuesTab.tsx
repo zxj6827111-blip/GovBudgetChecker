@@ -118,6 +118,10 @@ export interface IssuesTabProps {
   /** 放大解释：原文栏变窄但保留，解释区变宽。 */
   focusMode: boolean;
   onToggleFocus: () => void;
+  /** 必须处理队列待确认的问题数与批量确认回调。 */
+  pendingConfirmCount?: number;
+  onConfirmAllPending?: () => void;
+  bulkConfirmBusy?: boolean;
 }
 
 export interface IssueDecisionNotice {
@@ -211,6 +215,9 @@ export function IssuesTab({
   onToggleTextSize,
   focusMode,
   onToggleFocus,
+  pendingConfirmCount = 0,
+  onConfirmAllPending,
+  bulkConfirmBusy = false,
 }: IssuesTabProps) {
   const [sourceView, setSourceView] = useState<SourceView>("all");
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all");
@@ -515,6 +522,17 @@ export function IssuesTab({
             <ChevronRight className="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
+        {queue === "required" && !readOnly && pendingConfirmCount > 0 && onConfirmAllPending ? (
+          <button
+            type="button"
+            onClick={onConfirmAllPending}
+            disabled={bulkConfirmBusy || submittingIssueId !== null}
+            data-testid="gbc-review-confirm-all-pending"
+            className="rounded-md border border-primary-300 bg-primary-50 px-2 py-1 text-xs font-medium text-primary-700 hover:bg-primary-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {bulkConfirmBusy ? "确认中…" : `一键确认全部待处理（${pendingConfirmCount}）`}
+          </button>
+        ) : null}
         <button
           type="button"
           className={`ml-auto inline-flex items-center gap-0.5 rounded-md px-1.5 py-1 text-xs hover:bg-surface-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 ${textSize === "large" ? "bg-primary-50 text-primary-700" : "text-slate-600"}`}

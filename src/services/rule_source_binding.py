@@ -21,16 +21,25 @@ def _indexed_text(text):
     return "".join(chars), positions
 
 
-def _native_span(quote, page, pages, file_hash):
+def _native_span(quote, page, pages, file_hash, *, context=None):
     if type(page) is not int or not 1 <= page <= len(pages) or not quote:
         return None
     original = pages[page - 1]
     haystack, offsets = _indexed_text(original)
     needle, _ = _indexed_text(quote)
-    if not needle or haystack.count(needle) != 1:
+    if not needle:
         return None
-    start = haystack.index(needle)
-    begin, end = offsets[start], offsets[start + len(needle) - 1] + 1
+    if haystack.count(needle) != 1:
+        if not context:
+            return None
+        ctx_needle, _ = _indexed_text(context)
+        if not ctx_needle or haystack.count(ctx_needle) != 1 or needle not in ctx_needle:
+            return None
+        start = haystack.index(ctx_needle)
+        begin, end = offsets[start], offsets[start + len(ctx_needle) - 1] + 1
+    else:
+        start = haystack.index(needle)
+        begin, end = offsets[start], offsets[start + len(needle) - 1] + 1
     actual = original[begin:end]
     source_id = f"native:p{page}:s{begin}:e{end}"
     return {"page": page, "physical_page": page, "text": actual,
@@ -48,8 +57,8 @@ def _literal_ref_sources(ref, pages, file_hash):
     Only a literal that actually crosses pages and includes that declared page
     can be repaired; a wrong single-page reference remains unresolved.
     """
-    quote, page = ref.get('span'), ref.get('page')
-    direct = _native_span(quote, page, pages, file_hash)
+    quote, page, context = ref.get('span'), ref.get('page'), ref.get('context')
+    direct = _native_span(quote, page, pages, file_hash, context=context)
     if direct is not None:
         return [direct]
     if not quote or type(page) is not int:
@@ -65,7 +74,26 @@ def _literal_ref_sources(ref, pages, file_hash):
     for number, original in enumerate(pages, 1):
         left, right = max(begin, offset), min(end, offset + len(original))
         if left < right and merged[left:right].strip():
-            literal = _native_span(merged[left:right], number, pages, file_hash)
+            slice_text = merged[left:right]
+            literal = _native_span(slice_text, number, pages, file_hash)
+            if literal is None:
+                # 整段跨页唯一命中时，已知本页的精确局部偏移；若单页切片在该页重复，
+                # 仅在当前页沿行边界向外扩展至在本页唯一后绑定。
+                page_haystack, _ = _indexed_text(original)
+                eb = max(0, left - offset)
+                ee = min(len(original), right - offset)
+                while ee - eb <= 400:
+                    frag_needle, _ = _indexed_text(original[eb:ee])
+                    if frag_needle and page_haystack.count(frag_needle) == 1:
+                        literal = _native_span(original[eb:ee], number, pages, file_hash)
+                        break
+                    prev_nl = original.rfind('\n', 0, max(0, eb - 1))
+                    next_nl = original.find('\n', ee + 1)
+                    nb = 0 if prev_nl < 0 else prev_nl + 1
+                    ne = len(original) if next_nl < 0 else next_nl
+                    if (nb, ne) == (eb, ee) or ne - nb > 400:
+                        break
+                    eb, ee = nb, ne
             if literal is None:
                 return []
             parts.append(literal)
@@ -452,7 +480,27 @@ def bind_rule_sources(result, *, page_texts, source_file_hash, artifact=None, fa
         elif old:
             evidence = [_native_span(item.get('quote') or item.get('text') or item.get('text_snippet'),
                                      item.get('page') or item.get('physical_page') or location.get('page'),
-                                     page_texts, source_file_hash) for item in old]
+                                     page_texts, source_file_hash,
+                                     context=item.get('context') or location.get('context')) for item in old]
+        if not has_operands and (not evidence or any(item is None for item in evidence)) and refs:
+            spanned_refs = [ref for ref in refs if ref.get("span") and type(ref.get("page")) is int]
+            if spanned_refs and len(spanned_refs) < len(refs):
+                partial_ev, partial_lit = [], []
+                for ref in spanned_refs:
+                    sources = _literal_ref_sources(ref, page_texts, source_file_hash)
+                    if not sources:
+                        partial_ev.append(None)
+                        continue
+                    for literal in sources:
+                        literal.update(role=ref.get('role'), table=ref.get('table'), section=ref.get('section'))
+                        partial_ev.append(literal)
+                        literal_ref = {**ref, **literal, 'span': literal['quote']}
+                        if 'source_cell_id' in literal_ref:
+                            literal_ref['declared_source_cell_id'] = literal_ref.pop('source_cell_id')
+                        partial_lit.append(literal_ref)
+                if partial_ev and not any(item is None for item in partial_ev):
+                    evidence = partial_ev
+                    literal_refs = [*partial_lit, *[ref for ref in refs if not (ref.get("span") and type(ref.get("page")) is int)]]
         if not has_operands and (not evidence or any(item is None for item in evidence)):
             evidence = []
             if (artifact is not None and fact_context is not None

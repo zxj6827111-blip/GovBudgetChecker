@@ -144,6 +144,8 @@ MATERIAL_LEDGER_ROUTES = frozenset(
         ("GET", "/api/materials/search"),
         ("GET", "/api/materials/reports"),
         ("GET", "/api/materials/reports/{slot_id}/history"),
+        ("POST", "/api/materials/reports/batch-delete"),
+        ("DELETE", "/api/materials/reports/{slot_id}"),
         ("GET", "/api/materials/expected/template"),
         ("POST", "/api/materials/expected/preview"),
         ("POST", "/api/materials/expected/import"),
@@ -152,13 +154,11 @@ MATERIAL_LEDGER_ROUTES = frozenset(
 
 
 def test_material_http_route_surface_is_exactly_the_planned_set():
-    """材料台账的 HTTP 接口面恰好是计划中的八条只读接口。
+    """材料台账的 HTTP 接口面恰好是计划中的只读接口与已登记写接口。
 
     WP1 阶段这里是"一条都没有"；WP2-A 变成"精确三条"；WP2-B 变成"精确七条"
     （单位时间轴 + 槽位详情 + 版本历史 + 处理记录）；WP2-C 变成"精确八条"
-    （多一条全局搜索）。
-    复核生命周期（WP3）、应收基线（WP9）的接口**不在本轮范围内**，
-    多出来就会被这条测试拦住。
+    （多一条全局搜索）。后续新增部门报告、应收导入与管理员报告删除入口。
     """
     # 主管端也包含 /materials 子路径，但不属于材料台账的接口族。
     actual = {row for row in _route_surface() if row[1].startswith("/api/materials/")}
@@ -167,9 +167,11 @@ def test_material_http_route_surface_is_exactly_the_planned_set():
         f"少了 {sorted(MATERIAL_LEDGER_ROUTES - actual)}"
     )
     assert all(
-        method == "GET" for method, path in actual if "/expected/" not in path
-    ), "既有台账接口仍为只读；WP9 写入仅限已登记的 expected 路径"
-    assert len(actual) == 13
+        method == "GET"
+        for method, path in actual
+        if "/expected/" not in path and not path.startswith("/api/materials/reports")
+    ), "既有台账接口仍为只读；写入仅限已登记的 expected 与 reports 删除路径"
+    assert len(actual) == 15
 
 
 def test_supervision_http_route_surface_is_registered():

@@ -1914,7 +1914,10 @@ def _blocking_obligation_total(job_id: str, status_data: Dict[str, Any], ignored
             ignored_issue_ids=ignored_issue_ids or [],
         )
         return len(blocking_coverage_obligations(
-            list(coverage.items), result, visible_issue_ids={problem.issue_id for problem in problems},
+            list(coverage.items),
+            result,
+            visible_issue_ids={problem.issue_id for problem in problems},
+            structured_ingest=status_data.get("structured_ingest"),
         ))
     except Exception:
         logger.exception("Failed to count blocking obligations for %s", job_id)
@@ -3240,6 +3243,12 @@ def delete_job(job_id: str) -> Dict[str, Any]:
                 require_org_storage().unlink_job(job_id)
             except Exception:
                 logger.exception("Failed to unlink job during delete: %s", job_id)
+        try:
+            from src.services.issue_workflow_store import purge_workflow_records_for_jobs
+
+            purge_workflow_records_for_jobs([job_id])
+        except Exception:
+            logger.exception("Failed to purge workflow records during delete: %s", job_id)
     except HTTPException:
         raise
     except Exception as exc:

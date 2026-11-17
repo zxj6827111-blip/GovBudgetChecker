@@ -269,19 +269,13 @@ async def persist_parse_artifact(
                     _json([cell.to_dict() for cell in fragment.cells]),
                 )
 
+        # D5：逐格 INSERT 在大产物上是数千次顺序往返，是统一入库事务被拉长的
+        # 主因之一；改为 executemany 批量执行（同语句、同 ON CONFLICT 语义，
+        # 只减少网络往返），单事务时长随之显著缩短。
+        cell_rows = []
         for fragment, cell in artifact.cells():
             instance_uid = _instance_uid_for(artifact, fragment)
-            await conn.execute(
-                """
-                INSERT INTO parse_table_cells (
-                    parse_run_id, instance_uid, row_idx, col_idx,
-                    raw_text, normalized_text, numeric_value, normalized_value_wan,
-                    unit_hint, presence, page_number, bbox, is_header,
-                    confidence, extraction_method, row_span, col_span,
-                    origin_fragment_uid, origin_row_idx, ocr_provenance, origin_col_idx
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
-                ON CONFLICT (parse_run_id, instance_uid, row_idx, col_idx) DO NOTHING
-                """,
+            cell_rows.append((
                 parse_run_id,
                 instance_uid,
                 cell.row_idx,
@@ -303,8 +297,23 @@ async def persist_parse_artifact(
                 cell.origin_row_idx,
                 _json(cell.ocr_provenance),
                 cell.origin_col_idx,
+            ))
+        if cell_rows:
+            await conn.executemany(
+                """
+                INSERT INTO parse_table_cells (
+                    parse_run_id, instance_uid, row_idx, col_idx,
+                    raw_text, normalized_text, numeric_value, normalized_value_wan,
+                    unit_hint, presence, page_number, bbox, is_header,
+                    confidence, extraction_method, row_span, col_span,
+                    origin_fragment_uid, origin_row_idx, ocr_provenance, origin_col_idx
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+                ON CONFLICT (parse_run_id, instance_uid, row_idx, col_idx) DO NOTHING
+                """,
+                cell_rows,
             )
 
+        evidence_rows = []
         for block in artifact.text_blocks:
             evidence = EvidenceRef(
                 file_hash=artifact.source_file_hash,
@@ -316,15 +325,7 @@ async def persist_parse_artifact(
                 verification_status="unverified",
                 location_level="exact_span" if block.bbox else "unresolved",
             )
-            await conn.execute(
-                """
-                INSERT INTO parse_evidence (
-                    parse_run_id, evidence_id, file_hash, physical_page,
-                    source_block_id, quote, bbox, source_method,
-                    verification_status, location_level
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                ON CONFLICT (parse_run_id, evidence_id) DO NOTHING
-                """,
+            evidence_rows.append((
                 parse_run_id,
                 evidence.evidence_id,
                 evidence.file_hash,
@@ -335,6 +336,18 @@ async def persist_parse_artifact(
                 evidence.source_method,
                 evidence.verification_status,
                 evidence.location_level,
+            ))
+        if evidence_rows:
+            await conn.executemany(
+                """
+                INSERT INTO parse_evidence (
+                    parse_run_id, evidence_id, file_hash, physical_page,
+                    source_block_id, quote, bbox, source_method,
+                    verification_status, location_level
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                ON CONFLICT (parse_run_id, evidence_id) DO NOTHING
+                """,
+                evidence_rows,
             )
 
     return parse_run_id

@@ -284,6 +284,39 @@ def _select(doc, view, code, indicator):
                  if any(ref.get('source_cell_id') == cell_id
                         for ref in (f.extra_dims or {}).get('evidence_refs', []))]
         if len(bound) == 1:
+            # C5 收口（第二轮复验）：其余候选绑定的是**重复印格**——仅当它们
+            # 与保留事实同码同值（同对象同值重复）时，作为"合并了哪两侧"的
+            # 证明随保留事实留痕（幂等，receipt 侧持久交付）；异值/身份冲突
+            # 不留合并痕迹，仍按各自证据走拒绝或人工路径。
+            duplicates = [f for f in candidates if f is not bound[0]]
+            if duplicates and all(
+                    str(f.raw_value) == str(bound[0].raw_value)
+                    and str(f.normalized_value) == str(bound[0].normalized_value)
+                    and f.unit == bound[0].unit
+                    and f.subject_code == bound[0].subject_code
+                    and f.indicator == bound[0].indicator
+                    for f in duplicates):
+                extra = getattr(bound[0], 'extra_dims', None)
+                if isinstance(extra, dict):
+                    traces = extra.setdefault('same_value_duplicate_cells', [])
+                    seen_cells = {trace.get('source_cell_id') for trace in traces}
+                    for duplicate in duplicates:
+                        for ref in (duplicate.extra_dims or {}).get('evidence_refs', []):
+                            if (isinstance(ref, dict) and ref.get('source_cell_id')
+                                    and ref.get('source_cell_id') not in seen_cells):
+                                seen_cells.add(ref.get('source_cell_id'))
+                                traces.append({
+                                    'duplicate_fact_uid': duplicate.fact_uid,
+                                    'kept_fact_uid': bound[0].fact_uid,
+                                    'subject_code': duplicate.subject_code,
+                                    'indicator': duplicate.indicator,
+                                    'source_cell_id': ref.get('source_cell_id'),
+                                    'physical_page': ref.get('physical_page'),
+                                    'quote': ref.get('quote'),
+                                    'file_hash': ref.get('file_hash'),
+                                    'value': str(duplicate.raw_value),
+                                    'basis': 'same_object_same_value_duplicate_row',
+                                })
             candidates = bound
     if cell is None or not str(cell.raw_text or '').strip() or len(candidates) != 1:
         reason = f'{table.title}科目{code}/{indicator}原始单元格或当前事实缺失、不唯一'

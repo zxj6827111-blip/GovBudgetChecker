@@ -39,6 +39,35 @@ def _normalize_org_name(value: Any) -> str:
     return identity_name(value)
 
 
+def _cover_benji_matches_selected_unit(
+    cover_name: str, organization: Dict[str, Any], directory
+) -> bool:
+    """封面写「部门名（本级）」而所选是无后缀同名 unit 子记录时的本级对应判定。
+
+    依据组织目录核实（与 org_binding_decision 的同名 unit 映射同口径）：
+    所选 unit 的父部门身份与封面去掉「（本级）」后的名称一致、且所选
+    unit 名称与该父部门完全同名。带「（本级）」后缀的目录记录由既有
+    字面比较直接通过，不经本函数。
+    """
+    suffix = "(本级)"
+    if not cover_name.endswith(suffix):
+        return False
+    bare = cover_name[: -len(suffix)]
+    if str(organization.get("level") or "").strip().lower() != "unit":
+        return False
+    if identity_name(organization_name(organization)) != bare:
+        return False
+    parent_id = str(organization.get("department_id") or organization.get("parent_id") or "")
+    if not parent_id:
+        return False
+    return any(
+        getattr(org, "id", None) == parent_id
+        and getattr(org, "level", "") == "department"
+        and identity_name(organization_name(org)) == bare
+        for org in directory
+    )
+
+
 def _organization_binding_conflict(
     preflight: Dict[str, Any], organization: Optional[Dict[str, Any]]
 ) -> Optional[Dict[str, str]]:
@@ -61,12 +90,13 @@ def _organization_binding_conflict(
     if cover_name and cover_name not in _GENERIC_COVER_NAMES and selected_name:
         directory = runtime.require_org_storage().get_all() if runtime.ORG_AVAILABLE else []
         if not compare_org_names(cover_name, selected_name, directory).equivalent and cover_name not in selected_name:
-            return {
-                "code": "organization_cover_conflict",
-                "cover_org_name": str(preflight.get("cover_org_name") or ""),
-                "selected_org_name": organization_name(organization),
-                "message": "PDF 封面组织与所选组织不一致，已拒绝建立组织绑定。",
-            }
+            if not _cover_benji_matches_selected_unit(cover_name, organization, directory):
+                return {
+                    "code": "organization_cover_conflict",
+                    "cover_org_name": str(preflight.get("cover_org_name") or ""),
+                    "selected_org_name": organization_name(organization),
+                    "message": "PDF 封面组织与所选组织不一致，已拒绝建立组织绑定。",
+                }
     if scope_hint == "department" and level == "unit":
         return {
             "code": "organization_scope_conflict",
@@ -182,6 +212,7 @@ def _inspect_document_preflight(
     pdf_path: Optional[Any] = None,
     top_n: int = 5,
     include_matches: bool = True,
+    selected_org_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     page_texts: List[str] = []
     page_count: Optional[int] = None
@@ -257,7 +288,175 @@ def _inspect_document_preflight(
         # UI 重建第二批 Task 5：待上传文件列表需要显示真实页数。解析失败时为
         # None（未知），前端必须显示"—"而不是猜一个数字或干脆显示 0 页。
         "page_count": page_count,
+        **_selected_org_validation(cover, selected_org_id),
     }
+
+
+def _selected_org_validation(
+    cover: Dict[str, Any], selected_org_id: Optional[str]
+) -> Dict[str, Any]:
+    """预检与提交共判（机构归属整改）：把人工/批量补齐组织的冲突校验前移。
+
+    与最终提交（``_handle_upload``→``_organization_binding_conflict``）完全
+    同一判断：封面组织名/层级提示 vs 所选组织。有冲突时预检结果直接携带
+    ``selected_org_validation.ok=false`` 与冲突原因，前端不得显示"校验通过"；
+    无所选组织时该键为空，保持既有响应形态。
+    """
+    if not selected_org_id or not str(selected_org_id).strip():
+        return {}
+    if not runtime.ORG_AVAILABLE:
+        return {}
+    storage = runtime.require_org_storage()
+    org = storage.get_by_id(str(selected_org_id).strip())
+    if org is None:
+        return {
+            "selected_org_validation": {
+                "ok": False,
+                "code": "organization_not_found",
+                "message": "所选组织在组织目录中不存在，请重新选择。",
+            }
+        }
+    candidate = _serialize_match_candidate(org, 1.0, "manual")
+    preflight_view = {
+        "cover_org_name": str(cover.get("cover_org_name") or ""),
+        "cover_org_label": str(cover.get("cover_org_label") or ""),
+        "scope_hint": str(cover.get("scope_hint") or ""),
+    }
+    conflict = _organization_binding_conflict(preflight_view, candidate)
+    return {
+        "selected_org_validation": {
+            "ok": conflict is None,
+            **(conflict or {}),
+            "selected_org_id": candidate.get("organization_id"),
+            "selected_org_name": candidate.get("organization_name"),
+            "selected_level": candidate.get("level") or "",
+        }
+    }
+
+
+def _ensure_org_entry(
+    storage: Any,
+    *,
+    name: str,
+    level: str,
+    parent_id: Optional[str],
+    keywords: Optional[List[str]] = None,
+) -> Any:
+    target_id_name = identity_name(name)
+    for existing in storage.get_all():
+        if (
+            getattr(existing, "level", None) == level
+            and identity_name(getattr(existing, "name", "")) == target_id_name
+            and (parent_id is None or getattr(existing, "parent_id", None) == parent_id)
+        ):
+            return existing
+    org_id = runtime.Organization.generate_id(name, level)
+    existing_by_id = storage.get_by_id(org_id)
+    if existing_by_id is not None:
+        return existing_by_id
+    new_org = runtime.Organization(
+        id=org_id,
+        name=name,
+        level=level,
+        parent_id=parent_id,
+        keywords=list(dict.fromkeys([name, *(keywords or [])])),
+    )
+    return storage.add(new_org)
+
+
+def _auto_register_missing_organization(
+    resolved_preflight: Dict[str, Any],
+    *,
+    filename: str,
+) -> Optional[Any]:
+    """当组织库尚未收录新单位时，依据原件提取的主体名称与口径自动建档。"""
+    if not runtime.ORG_AVAILABLE:
+        return None
+    bd = resolved_preflight.get("binding_decision") or {}
+    if bd.get("decision") == "bound":
+        return None
+    reasons = bd.get("reasons") or []
+    reason_code = str((reasons[0] or {}).get("code") or "") if reasons else ""
+    if reason_code not in {"directory_missing_org", "scope_undetermined"}:
+        return None
+    report_kind = str(resolved_preflight.get("report_kind") or "")
+    if report_kind == "non_budget":
+        return None
+
+    raw_name = str(resolved_preflight.get("cover_org_name") or "").strip()
+    if not raw_name or raw_name in _GENERIC_COVER_NAMES or len(raw_name) < 4:
+        return None
+    if re.fullmatch(r"[\u4e00-\u9fff]{2,6}(?:市|区|县|省)", raw_name):
+        return None
+    from src.services.org_storage import organization_name_warning
+    if organization_name_warning(raw_name):
+        return None
+
+    bd_scope = bd.get("scope")
+    scope_hint = str(resolved_preflight.get("scope_hint") or "").strip()
+    doc_type = str(resolved_preflight.get("doc_type") or "").strip()
+    cover_title = str(resolved_preflight.get("cover_title") or "")
+    if bd_scope in {"department", "unit"}:
+        inferred_scope = bd_scope
+    elif scope_hint in {"department", "unit"}:
+        inferred_scope = scope_hint
+    elif doc_type in {"dept_budget", "dept_final"} or "部门" in (cover_title + filename):
+        inferred_scope = "department"
+    else:
+        inferred_scope = "unit"
+
+    storage = runtime.require_org_storage()
+    all_orgs = storage.get_all()
+    district_parent_id: Optional[str] = None
+    for candidate in all_orgs:
+        if getattr(candidate, "level", None) == "district":
+            d_name = str(getattr(candidate, "name", "") or "")
+            if d_name and d_name in raw_name:
+                district_parent_id = candidate.id
+                break
+
+    base_dept_name = re.sub(r"[（(](?:本级|本部)[)）]$", "", raw_name).strip() or raw_name
+    created_or_found: Optional[Any] = None
+    if inferred_scope == "department":
+        created_or_found = _ensure_org_entry(
+            storage,
+            name=base_dept_name,
+            level="department",
+            parent_id=district_parent_id,
+        )
+    else:
+        parent_dept = next(
+            (
+                o
+                for o in all_orgs
+                if getattr(o, "level", None) == "department"
+                and (
+                    identity_name(getattr(o, "name", "")) == identity_name(base_dept_name)
+                    or compare_org_names(base_dept_name, getattr(o, "name", ""), all_orgs).equivalent
+                )
+            ),
+            None,
+        )
+        if parent_dept is None:
+            parent_dept = _ensure_org_entry(
+                storage,
+                name=base_dept_name,
+                level="department",
+                parent_id=district_parent_id,
+            )
+        unit_name = raw_name if raw_name != parent_dept.name else f"{base_dept_name}（本级）"
+        created_or_found = _ensure_org_entry(
+            storage,
+            name=unit_name,
+            level="unit",
+            parent_id=parent_dept.id,
+            keywords=[raw_name] if raw_name != unit_name else None,
+        )
+
+    if created_or_found is not None:
+        from src.services import org_matcher
+        org_matcher._matcher_instance = None
+    return created_or_found
 
 
 def _auto_match_organization(
@@ -290,7 +489,20 @@ def _auto_match_organization(
         organization_id = str(current.get("organization_id") or "").strip()
         confidence = float(current.get("confidence") or 0.0)
         if not organization_id:
-            return None
+            registered = _auto_register_missing_organization(
+                resolved_preflight,
+                filename=filename,
+            )
+            if registered is None:
+                return None
+            if user is not None and not user_can_access_org(user, registered.id):
+                return None
+            return runtime.set_job_organization(
+                job_id,
+                registered.id,
+                match_type="auto_registered",
+                confidence=0.90,
+            )
         conflict = _organization_binding_conflict(resolved_preflight, current)
         if conflict is not None:
             logger.warning(
@@ -322,6 +534,7 @@ async def _inspect_upload_preflight(
     fiscal_year: Optional[str],
     doc_type: Optional[str],
     include_matches: bool = False,
+    selected_org_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Inspect the submitted bytes once and restore the stream for storage.
 
@@ -353,6 +566,7 @@ async def _inspect_upload_preflight(
         doc_type=doc_type,
         content=content,
         include_matches=include_matches,
+        selected_org_id=selected_org_id,
     )
 
 
@@ -571,6 +785,7 @@ async def preflight_document(
     file: UploadFile = File(...),
     fiscal_year: Optional[str] = Form(None),
     doc_type: Optional[str] = Form(None),
+    selected_org_id: Optional[str] = Form(None),
     api_key: str = Depends(runtime.verify_api_key),
 ):
     _ = api_key
@@ -580,11 +795,14 @@ async def preflight_document(
     # The stream is rewound after inspection for symmetric behavior with the
     # upload path, and organization suggestions are requested here because
     # this endpoint's purpose is preflight matching.
+    # selected_org_id：人工补齐组织后的复核请求——与最终提交共用同一冲突
+    # 判断（_organization_binding_conflict），让"校验通过"与提交结果一致。
     return await _inspect_upload_preflight(
         file,
         fiscal_year=_clean_optional_text(fiscal_year),
         doc_type=_clean_optional_text(doc_type),
         include_matches=True,
+        selected_org_id=_clean_optional_text(selected_org_id),
     )
 
 

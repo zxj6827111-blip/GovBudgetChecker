@@ -27,10 +27,35 @@ def _is_short_deletion_variant(value: str, target: str) -> bool:
     return all(char in target_iter for char in value)
 
 
-def source_scope_evidence(page_texts: Sequence[str]) -> tuple[str | None, list[dict], bool]:
-    """目录/表注不能定论；明确封面与实际单位构成互相矛盾时不择一。"""
+def _is_jurisdiction_prefix_omission(value: str, target: str) -> bool:
+    """是否为行政区划/前缀漏字（如漏“区”“普陀”“普陀区”“上海市”），且其余部分完全一致。"""
+    if not value or not target or len(value) >= len(target):
+        return False
+    if target.startswith(value) or (
+        value.endswith(target.replace("上海市", "", 1))
+        and target.startswith("上海市")
+    ):
+        return False
+    candidates = [
+        target.replace("普陀区", "普陀", 1),
+        target.replace("普陀区", "", 1),
+        target.replace("上海市普陀区", "上海市", 1),
+        target.replace("上海市普陀区", "普陀区", 1),
+        re.sub(r"(?<=市)[^市区县]{1,6}区", "", target, count=1),
+        re.sub(r"区(?=[街道镇局委办学校院中心所队])", "", target, count=1),
+    ]
+    return value in candidates and len(value) >= 4
+
+
+def source_scope_evidence(
+    page_texts: Sequence[str],
+    filename: str = "",
+    *,
+    include_section_headings: bool = True,
+) -> tuple[str | None, list[dict], bool]:
+    """封面与构成说明为主；无封面明示时按需补充第二/三部分标题及内设机构/表注线索。"""
     cover = detect_cover_facts(page_texts)
-    found = []
+    found: list[dict[str, Any]] = []
     title = normalize_org_name(cover["cover_title"])
     for scope, pattern in [
         ("department", r"部门(?:汇总)?(?:预算|决算)|(?:预算|决算)主管部门"),
@@ -75,7 +100,104 @@ def source_scope_evidence(page_texts: Sequence[str]) -> tuple[str | None, list[d
                 found.append(
                     {"source": "composition", "page": page, "text": clause, "scope": scope}
                 )
+    if include_section_headings and not found and len(page_texts) > 1:
+        for page, text in enumerate(page_texts[:15], 1):
+            if page == 1:
+                continue
+            compact = normalize_org_name(text)
+            for match in re.finditer(
+                r"第[二三]部分[^\n。]{0,45}?(部门|单位)(?:汇总)?(?:预算|决算)(?:表|情况说明)",
+                compact,
+            ):
+                found.append(
+                    {
+                        "source": "section_heading",
+                        "page": page,
+                        "text": match.group(),
+                        "scope": "department" if match.group(1) == "部门" else "unit",
+                    }
+                )
+    if not found and len(page_texts) > 1:
+        for page, text in enumerate(page_texts[:15], 1):
+            if page == 1:
+                continue
+            compact = normalize_org_name(text)
+            if (
+                re.search(
+                    r"(?:设\d+个内设(?:机构|科室|职能科室)|本部设\d+个内设|无下属(?:行政|事业|预算)?单位)",
+                    compact,
+                )
+                and not re.search(
+                    r"下属(?:行政|事业)?(?:预算)?单位|所属(?:行政|事业)?(?:预算)?单位|二级(?:预算)?单位",
+                    compact,
+                )
+            ):
+                m_setup = re.search(
+                    r"(?:[^。]{0,30}(?:设\d+个内设(?:机构|科室|职能科室)|本部设\d+个内设|无下属(?:行政|事业|预算)?单位)[^。]{0,20})",
+                    compact,
+                )
+                if m_setup:
+                    found.append(
+                        {
+                            "source": "org_setup",
+                            "page": page,
+                            "text": m_setup.group(),
+                            "scope": "unit",
+                        }
+                    )
+        if not found:
+            for page, text in enumerate(page_texts, 1):
+                if page == 1:
+                    continue
+                compact = normalize_org_name(text)
+                m_body = re.search(
+                    r"(本单位(?:建立了|无(?:政府性基金|国有资本)|\d{4}年(?:度)?(?:预算|决算))|本部门(?:(?:预算|决算)包括|\d{4}年(?:度)?部门))",
+                    compact,
+                )
+                if m_body:
+                    found.append(
+                        {
+                            "source": "body_scope",
+                            "page": page,
+                            "text": m_body.group(1),
+                            "scope": "unit" if m_body.group(1).startswith("本单位") else "department",
+                        }
+                    )
+        if not found:
+            for page, text in enumerate(page_texts[:15], 1):
+                if page == 1:
+                    continue
+                compact = normalize_org_name(text)
+                if re.search(r"一般公共预算(?:收入|支出)决算表|镇级财政决算", compact):
+                    found.append(
+                        {
+                            "source": "town_budget_table",
+                            "page": page,
+                            "text": "镇级财政总决算表",
+                            "scope": "department",
+                        }
+                    )
+                    break
+        if not found:
+            for page, text in enumerate(page_texts[:15], 1):
+                if page == 1:
+                    continue
+                compact = normalize_org_name(text)
+                m_note = re.search(r"注[:：][^。\n]{0,45}反映(部门|单位)本年度", compact)
+                if m_note:
+                    found.append(
+                        {
+                            "source": "table_note",
+                            "page": page,
+                            "text": m_note.group(),
+                            "scope": "department" if m_note.group(1) == "部门" else "unit",
+                        }
+                    )
+                    break
     scopes = {item["scope"] for item in found}
+    if not scopes and filename:
+        # 保留调用方显式传入 filename 时仅作审计上下文；默认不跨越 page_texts 空白覆盖测试语义
+        pass
     return (next(iter(scopes)) if len(scopes) == 1 else None, found, len(scopes) > 1)
 
 
@@ -157,16 +279,33 @@ def decide_auto_binding(
         org
         for org in eligible
         if any(
-            identity_index.compare(item["text"], organization_name(org)).equivalent
+            identity_index.matches_org(item["text"], org).equivalent
             for item in evidence
         )
     ]
+    # 「部门名（本级）」是本级口径对所属部门的指代（conflict 检查里同一规则的
+    # 种子侧）：目录没有任何与证据直接等价的候选时（如封面「甲局（本级）」、
+    # 目录只有甲局部门与同名无后缀 unit 子记录），把甲局部门纳入候选，走
+    # departments→related→verified 组合路径绑定其本级单位；不改变名称等价
+    # 语义——裸名与「（本级）」名仍不等价，绑定只发生在范围明确的前提下，
+    # 且目录里已有带「（本级）」后缀的单位可等价命中时不启用（保持 cover_field 口径）。
+    if not matches:
+        matches = [
+            org
+            for org in eligible
+            if _field(org, "level") == "department"
+            and any(
+                identity_name(item["text"])
+                == identity_name(organization_name(org)) + "(本级)"
+                for item in evidence
+            )
+        ]
     audit["name_comparisons"] = [
         {"source": item["source"], "page": item["page"], "text": item["text"],
          "candidate_id": _field(org, "id"), "candidate_name": organization_name(org),
          "equivalent": comparison.equivalent, "rule": comparison.rule}
         for org in matches for item in evidence
-        for comparison in [identity_index.compare(item["text"], organization_name(org))]
+        for comparison in [identity_index.matches_org(item["text"], org)]
     ]
 
     # 每一项主体证据都须检查，不能靠另一项的高分覆盖明确矛盾。
@@ -174,18 +313,41 @@ def decide_auto_binding(
         target = identity_name(organization_name(org))
         exact_cover = any(
             item["source"] in {"cover", "cover_label"}
-            and identity_index.compare(item["text"], organization_name(org)).equivalent
+            and identity_index.matches_org(item["text"], org).equivalent
+            for item in evidence
+        )
+        exact_non_cover = any(
+            item["source"] in {"toc", "part_heading"}
+            and identity_index.matches_org(item["text"], org).equivalent
             for item in evidence
         )
         for item in evidence:
             value = identity_name(item["text"])
-            if identity_index.compare(value, target).equivalent:
+            if identity_index.matches_org(value, org).equivalent:
                 continue
             if (scope == "unit" and _field(org, "level") == "department"
                     and value == target + "(本级)"):
                 # 此处仅识别组合路径的部门种子；后面仍须核验本级单位及父子关系，绝不据此绑定部门。
                 continue
             if value and value in target:  # 抽取截断只作弱证据。
+                continue
+            if (
+                (exact_cover or exact_non_cover)
+                and not identity_index.has_name(value)
+                and _is_jurisdiction_prefix_omission(value, target)
+            ):
+                # 封面或章节标题仅漏行政区划前缀（如漏“区”或“普陀区”）且组织库无竞争单位时，
+                # 记为原件名称不一致供后续规则报出并画红框，不阻断绑定。
+                entry = {
+                    "source": item["source"],
+                    "page": item["page"],
+                    "text": item["text"],
+                    "candidate_id": _field(org, "id"),
+                    "candidate_name": organization_name(org),
+                    "reason": "missing_jurisdiction_prefix",
+                }
+                if entry not in audit["original_text_inconsistencies"]:
+                    audit["original_text_inconsistencies"].append(entry)
                 continue
             if (
                 exact_cover
@@ -217,15 +379,25 @@ def decide_auto_binding(
     departments = [org for org in safe if _field(org, "level") == "department"]
     # 当原件只写部门裸名时，本级归属只能走明确范围＋已确认父子关系的组合路径。
     if departments:
+        def _is_dept_benji_unit(org: Any, dept: Any) -> bool:
+            org_id_name = identity_name(organization_name(org))
+            dept_id_name = identity_name(organization_name(dept))
+            if org_id_name == dept_id_name + "(本级)":
+                return True
+            if _field(org, "parent_id") != _field(dept, "id"):
+                return False
+            if org_id_name == dept_id_name:
+                return True
+            if org_id_name.endswith("(本级)"):
+                base_name = org_id_name[:-len("(本级)")]
+                return identity_index.matches_org(base_name, dept).equivalent
+            return False
+
         related = [
             org
             for org in eligible
             if _field(org, "level") == "unit"
-            and any(
-                identity_name(organization_name(org))
-                == identity_name(organization_name(dept)) + "(本级)"
-                for dept in departments
-            )
+            and any(_is_dept_benji_unit(org, dept) for dept in departments)
         ]
         if scope == "unit":
             if not related:
@@ -250,8 +422,13 @@ def decide_auto_binding(
     elif scope:
         compatible = [org for org in safe if _field(org, "level") == scope]
         if safe and not compatible:
-            return defer("evidence_conflict", "原件明确层级提示与唯一目录主体层级冲突", safe)
-        safe = compatible
+            only_weak_note = bool(scope_evidence) and all(
+                item.get("source") == "table_note" for item in scope_evidence
+            )
+            if not only_weak_note:
+                return defer("evidence_conflict", "原件明确层级提示与唯一目录主体层级冲突", safe)
+        else:
+            safe = compatible
 
     if len(safe) > 1:
         return defer("equivalent_candidates_tie", "存在多个无法区分的等价候选", safe)

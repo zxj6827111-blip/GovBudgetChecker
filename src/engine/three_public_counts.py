@@ -412,6 +412,8 @@ def count_issues(
             _receipt(sub_check, "pass",
                      formula=f"{label}{stage_label}={amount} > 0 且数量要素已披露")
         evidence = item_paras[0] if item_paras else (paras[0] if paras else scope[:200])
+        snippet = evidence[:200]
+        ev_page = locate_page(doc, evidence[:40])
         for field_key, field_label, pattern in fields:
             if pattern.search(compact):
                 continue
@@ -420,15 +422,16 @@ def count_issues(
                 f"但三公经费说明未披露{field_label}。请补充{field_label}"
                 "（金额为 0 或未发生的无需披露数量）。",
                 {
-                    "page": locate_page(doc, evidence[:40]),
+                    "page": ev_page,
                     "three_public_item": label,
                     "count_field": field_key,
                     "item_amount_wan": str(amount),
                     "section": (section_title or "").strip()[:60] or None,
                     "expected_disclosure": f"披露{field_label}",
+                    "table_refs": [{"role": "三公经费说明", "page": ev_page, "span": snippet}],
                 },
                 severity="medium",
-                evidence_text=evidence[:200],
+                evidence_text=snippet,
             ))
 
     whole = _compact_text(merge_page_texts(list(getattr(doc, "page_texts", None) or [])))
@@ -436,17 +439,20 @@ def count_issues(
              formula="全文（含国有资产占有使用情况）任一处披露车辆保有量")
     if not _VEHICLE_STOCK_RE.search(whole):
         evidence = next((p for p in paras if "公务用车" in p), paras[0] if paras else scope[:200])
+        snippet = evidence[:200]
+        ev_page = locate_page(doc, evidence[:40])
         issues.append(rule._issue(
             "三公经费数量要素未披露：全文未披露公务用车（车辆）保有量。"
             "请在三公经费说明或国有资产占有使用情况中写明车辆保有量（无车辆的写明 0 辆）。",
             {
-                "page": locate_page(doc, evidence[:40]),
+                "page": ev_page,
                 "three_public_item": "公务用车",
                 "count_field": "vehicle_stock",
                 "section": (section_title or "").strip()[:60] or None,
                 "expected_disclosure": "披露车辆保有量",
+                "table_refs": [{"role": "三公经费说明", "page": ev_page, "span": snippet}],
             },
             severity="medium",
-            evidence_text=evidence[:200],
+            evidence_text=snippet,
         ))
     return issues

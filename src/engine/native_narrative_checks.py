@@ -26,7 +26,7 @@ _METRIC = (r"(?:一般公共预算(?:财政拨款)?支出(?:决算(?:数)?)?"
            r"|机关运行经费支出(?:决算(?:数)?)?"
            r"|本年收入(?:合计|总计|总额)|本年支出(?:合计|总计|总额))")
 _CURRENT = re.compile(
-    rf"(?P<metric>{_METRIC})(?:为|共计|合计为|决算为|是)?"
+    rf"(?P<metric>{_METRIC})(?:[（(]含结转结余[）)])?(?:为|共计|合计为|决算为|是)?"
     rf"(?P<current>{_NUMBER})(?P<unit>{_UNIT})"
 )
 _CHANGE = re.compile(
@@ -334,7 +334,7 @@ def _check_yoy(rule, doc, text, section, start, stop, year, owner, year_refs, is
         decimals = max(0, -declared.as_tuple().exponent)
         tolerance = max(Decimal('.1'), Decimal('.5').scaleb(-decimals))
         failed = difference > tolerance or not direction_matches
-        claim_refs = text.refs(start + current.start(), start + match.end(), '本年金额及同比声明')
+        claim_refs = text.refs(start + current.start(), start + match.end(), '本年金额及同比声明', unique_context=True)
         refs = list(claim_refs)
         if not re.search(r'20\d{2}(?:年度|年)', prefix):
             refs += year_refs

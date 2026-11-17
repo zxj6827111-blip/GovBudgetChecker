@@ -295,6 +295,10 @@ class ParsedTextBlock:
     bbox: Optional[Tuple[float, float, float, float]] = None
     confidence: Optional[float] = None
     extraction_method: str = "native_text"
+    # 原件字体证据（D1）：同一视觉行内粗体/异字号词块是阅读顺序重组的关键
+    # 输入；保留字体名与字号供审计。历史解析产物缺这两个字段仍可正常读回。
+    font_name: Optional[str] = None
+    font_size: Optional[float] = None
 
     def to_dict(self) -> Dict[str, Any]:
         data = dataclasses.asdict(self)
@@ -304,6 +308,7 @@ class ParsedTextBlock:
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "ParsedTextBlock":
         bbox = data.get("bbox")
+        font_name = data.get("font_name")
         return cls(
             block_uid=str(data.get("block_uid") or uuid.uuid4().hex),
             page_number=int(data.get("page_number") or 1),
@@ -311,6 +316,8 @@ class ParsedTextBlock:
             bbox=tuple(float(item) for item in bbox) if bbox else None,
             confidence=_opt_float(data.get("confidence")),
             extraction_method=str(data.get("extraction_method") or "native_text"),
+            font_name=str(font_name) if font_name else None,
+            font_size=_opt_float(data.get("font_size")),
         )
 
 

@@ -1,5 +1,16 @@
 import assert from "node:assert/strict";
-import { directoryMaterialStatus, materialHistoryHref, openReviewCount, reviewLabel, versionSource, type MaterialVersion } from "../app/components/reports/materialReportAdapters";
+import {
+  buildMaterialDeleteTargets,
+  directoryMaterialStatus,
+  formatMaterialDeleteSuccess,
+  materialHistoryHref,
+  materialReportDisplayTitle,
+  openReviewCount,
+  reviewLabel,
+  versionSource,
+  type MaterialReport,
+  type MaterialVersion,
+} from "../app/components/reports/materialReportAdapters";
 
 assert.equal(reviewLabel({ status: "completed", confirmed_count: 6 }), "已复核 · 确认问题 6 项");
 assert.equal(reviewLabel({ status: "completed", confirmed_count: 0 }), "已复核 · 未确认问题");
@@ -29,3 +40,60 @@ console.log("Department directory material status labels passed");
 
 assert.equal(materialHistoryHref("slot 1", "/reports/finance?year=2025"), "/materials/slots/slot%201?tab=versions&returnTo=%2Freports%2Ffinance%3Fyear%3D2025");
 console.log("Material history link passed");
+
+const makeReport = (overrides: Partial<MaterialReport>): MaterialReport => ({
+  item_id: "item-1",
+  slot_id: "slot-1",
+  job_id: null,
+  filename: "2026预算.pdf",
+  organization_id: "org-1",
+  organization_name: "财政局",
+  fiscal_year: 2026,
+  report_year: 2026,
+  report_kind: "budget",
+  current_version: version,
+  version_count: 1,
+  analysis_task_count: 1,
+  review: { status: "pending", confirmed_count: null },
+  ...overrides,
+});
+
+assert.deepEqual(
+  buildMaterialDeleteTargets([
+    makeReport({ item_id: "s1", slot_id: "slot-a", job_id: "job-ignored" }),
+    makeReport({ item_id: "s1-dup", slot_id: "slot-a" }),
+    makeReport({ item_id: "l1", slot_id: null, job_id: "job-legacy-1", current_version: null }),
+    makeReport({ item_id: "l2", slot_id: null, job_id: null, current_version: { ...version, source_job_id: "job-legacy-2" } }),
+    makeReport({ item_id: "l2-dup", slot_id: null, job_id: "job-legacy-2", current_version: null }),
+  ]),
+  {
+    slotIds: ["slot-a"],
+    jobIds: ["job-legacy-1", "job-legacy-2"],
+  },
+);
+
+assert.equal(
+  materialReportDisplayTitle(makeReport({ organization_name: "教育局", fiscal_year: 2025, report_kind: "final" })),
+  "教育局 · 2025 年决算",
+);
+assert.equal(
+  materialReportDisplayTitle(makeReport({ organization_name: null, fiscal_year: null, report_kind: "unknown" })),
+  "主体待确认 · 年度待确认 · 类型待确认报告",
+);
+
+assert.equal(
+  formatMaterialDeleteSuccess({
+    requested_slot_count: 2,
+    requested_job_count: 1,
+    deleted_slot_ids: ["slot-1"],
+    reset_baseline_slot_ids: ["slot-2"],
+    updated_slot_ids: [],
+    deleted_version_ids: [11, 12],
+    deleted_document_ids: [21],
+    deleted_job_ids: ["job-1", "job-2", "job-3"],
+    deleted_review_session_count: 2,
+    failed: [],
+  }),
+  "已删除 3 份报告（清理 2 个文件版本，删除 3 个分析任务，清理 2 条复核记录，1 项监督基线已重置为待提交）。",
+);
+console.log("Material report deletion adapter helpers passed");

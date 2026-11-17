@@ -161,18 +161,18 @@ def test_single_legal_item_mismatch_is_checked():
     assert final_issue.location["difference_wan"] == "-10.00"
 
 
-def test_missing_stated_total_defers_instead_of_silent_pass():
+def test_missing_stated_total_reports_template_issue_instead_of_deferring():
     page = (
         HEAD_NO_TOTAL
         + "1、教育支出（类）普通教育（款）小学教育（项）。年初预算60.00万元，支出决算为50.00万元。\n"
         + TAIL
     )
     issues, doc, signal = _run([page])
-    assert signal is not None and signal.status == "insufficient_data"
-    assert "stated_total_missing" in getattr(signal, "reason_codes", [])
+    assert signal is None
+    assert any("未按标准模板撰写总体情况说明" in issue.message for issue in issues)
     receipt = next((item for item in (getattr(doc, "fact_receipts", None) or [])
                     if item.get("sub_check_id") == "V33-251:total:missing"), None)
-    assert receipt is not None and receipt["status"] == "insufficient_data"
+    assert receipt is not None and receipt["status"] == "fail"
 
 
 def test_many_included_items_complete_pass():
@@ -239,3 +239,59 @@ def test_conditional_delta_mixed_units_is_net():
     assert final_issue.location["conditional_included_wan"] == "20000.017982"
     assert final_issue.location["conditional_assumed_wan"] == "181.82"
     assert final_issue.location["conditional_delta_wan"] == "-19818.197982"
+
+
+def _attach_fin05_facts(doc, entries):
+    from types import SimpleNamespace as NS
+
+    from src.engine.fact_context import FactContext
+    from tests.remediation.test_r22_a2_identity_chain import ORG, YEAR, _fact
+
+    doc.parse_artifact = NS(source_file_hash="a" * 64, parse_run_uid="run")
+    doc.fact_context = FactContext(
+        [_fact(code, name, raw) for code, name, raw in entries],
+        "a" * 64,
+        "run",
+        org_name=ORG,
+        fiscal_year=YEAR,
+    )
+
+
+def test_missing_stated_total_falls_back_to_fin05_table_total_and_passes():
+    page = (
+        HEAD_NO_TOTAL
+        + "1、教育支出（类）普通教育（款）小学教育（项）。年初预算60.00万元，支出决算为50.00万元。\n"
+        + "2、社会保障和就业支出（类）行政事业单位养老支出（款）行政单位离退休（项）。年初预算30.00万元，支出决算为40.00万元。\n"
+        + TAIL
+    )
+    doc = build_document("/tmp/v33-251-fin05-pass.pdf", [page], [[]], 1000)
+    doc.report_kind = "final"
+    _attach_fin05_facts(doc, [("total", "合计", "90.00"), ("2050202", "小学教育", "50.00"), ("2080501", "行政单位离退休", "40.00")])
+    issues = R33251_FunctionalDetailCompleteness().apply(doc)
+    assert any("未按标准模板撰写总体情况说明" in issue.message for issue in issues)
+    assert not any("支出决算合计" in issue.message and "不一致" in issue.message for issue in issues)
+    receipts = {r.get("sub_check_id"): r for r in (getattr(doc, "fact_receipts", None) or [])}
+    assert receipts["V33-251:total:missing"]["status"] == "fail"
+    assert receipts["V33-251:final:item_sum"]["status"] == "pass"
+
+
+def test_missing_stated_total_flags_fin05_table_total_mismatch():
+    page = (
+        HEAD_NO_TOTAL
+        + "1、教育支出（类）普通教育（款）小学教育（项）。年初预算60.00万元，支出决算为50.00万元。\n"
+        + "2、社会保障和就业支出（类）行政事业单位养老支出（款）行政单位离退休（项）。年初预算30.00万元，支出决算为30.00万元。\n"
+        + TAIL
+    )
+    doc = build_document("/tmp/v33-251-fin05-fail.pdf", [page], [[]], 1000)
+    doc.report_kind = "final"
+    _attach_fin05_facts(doc, [("total", "合计", "90.00"), ("2050202", "小学教育", "50.00"), ("2080501", "行政单位离退休", "30.00")])
+    issues = R33251_FunctionalDetailCompleteness().apply(doc)
+    assert any("未按标准模板撰写总体情况说明" in issue.message for issue in issues)
+    final_issue = next(issue for issue in issues if "支出决算合计" in issue.message)
+    assert "一般公共预算财政拨款支出决算表" in final_issue.message
+    assert final_issue.location["stated_total_wan"] == "90.00"
+    assert final_issue.location["included_subtotal_wan"] == "80.00"
+    assert final_issue.location["difference_wan"] == "-10.00"
+    receipt = _receipt(doc, "final")
+    assert receipt is not None and receipt["status"] == "fail"
+

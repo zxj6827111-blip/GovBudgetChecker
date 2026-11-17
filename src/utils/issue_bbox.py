@@ -72,6 +72,18 @@ class PDFBBoxLocator:
         by the binder. Every coordinate comes from its original characters;
         neither an amount nor a fuzzy match can select a source location.
         """
+        located = self._lookup_native_span(evidence, page)
+        if located is None:
+            return None
+        bbox, quote = located
+        if self._valid_source_bbox(page, bbox) and self._region_text_matches(page, bbox, quote):
+            return bbox
+        return None
+
+    def _lookup_native_span(
+        self, evidence: Dict[str, Any], page: Optional[int]
+    ) -> Optional[tuple[List[float], str]]:
+        """Verify source_span offset & uniqueness on the binder's native page text."""
         if (evidence.get("source_method") != "native_text"
                 or evidence.get("source_identity_status") != "verified"
                 or not self._source_identity_complete(evidence, page)):
@@ -98,20 +110,32 @@ class PDFBBoxLocator:
                 # ``extract_visible_text_from_page``（过滤不可见字符）。几何门
                 # 若用原始 extract_text() 的 offset，同一引文在两套文本里
                 # 位置不同，会把真实原文误判成"无法定位"（研究院 P17 实例）。
-                text, source_page = original.extract_text() or "", original
+                def _extract_text_aligned(target: Any) -> str:
+                    try:
+                        return target.extract_text(y_tolerance=4.5) or ""
+                    except TypeError:
+                        return target.extract_text() or ""
+
+                def _extract_lines_aligned(target: Any) -> List[Dict[str, Any]]:
+                    try:
+                        return target.extract_text_lines(y_tolerance=4.5, return_chars=True)
+                    except TypeError:
+                        return target.extract_text_lines(return_chars=True)
+
+                text, source_page = _extract_text_aligned(original), original
                 try:
                     from src.services.pdf_page_extract import is_visible_char
 
                     page_height = float(original.height)
                     visible_page = original.filter(
                         lambda obj, h=page_height: is_visible_char(obj, h))
-                    visible_text = visible_page.extract_text() or ""
+                    visible_text = _extract_text_aligned(visible_page)
                     if visible_text.strip():
                         text, source_page = visible_text, visible_page
                 except Exception:  # noqa: BLE001 - 过滤失败时沿用原始文本
                     pass
                 normalized_chars, positions = [], []
-                for line in source_page.extract_text_lines(return_chars=True):
+                for line in _extract_lines_aligned(source_page):
                     for char in line["chars"]:
                         for normalized in self._native_text(char.get("text")):
                             normalized_chars.append(normalized)
@@ -131,11 +155,9 @@ class PDFBBoxLocator:
                 max(float(char["x1"]) for char in source_chars),
                 max(float(char["bottom"]) for char in source_chars),
             ])
-            if self._valid_source_bbox(page, bbox) and self._region_text_matches(page, bbox, quote):
-                return bbox
+            return bbox, quote
         except Exception:
             return None
-        return None
 
     def _source_identity_complete(self, evidence: Dict[str, Any], page: Optional[int]) -> bool:
         """Exact source anchors must identify this original PDF, page, source object and quote."""
@@ -352,9 +374,16 @@ class PDFBBoxLocator:
         source_identity_complete = self._source_identity_complete(evidence, page)
         native_span = ("source_span" in evidence or
                        str(evidence.get("source_block_id") or "").startswith("native:"))
+        native_span_valid = True
         if native_span:
-            bbox = self._native_span_bbox(evidence, page)
-            source_identity_complete = source_identity_complete and bbox is not None
+            located = self._lookup_native_span(evidence, page)
+            native_span_valid = located is not None
+            bbox = None
+            if located is not None:
+                cand_bbox, cand_quote = located
+                if self._valid_source_bbox(page, cand_bbox) and self._region_text_matches(page, cand_bbox, cand_quote):
+                    bbox = cand_bbox
+            source_identity_complete = source_identity_complete and native_span_valid
             if bbox is not None:
                 evidence.update(bbox=bbox, location_level="exact_span", verification_status="verified")
             else:
@@ -378,6 +407,7 @@ class PDFBBoxLocator:
             and self._valid_document_page(page)
             and source_identity_complete
             and page_quote_matches
+            and (not native_span or bbox is not None)
         )
         evidence["source_identity_status"] = "verified" if source_identity_complete else "unverified"
         if page is not None and self._valid_document_page(page):
@@ -400,6 +430,23 @@ class PDFBBoxLocator:
                 evidence["location_level"] = "region"
         return evidence
 
+    def _yx_region_text(self, words: List[Any]) -> str:
+        """按视觉行聚类(y_tolerance=4.5)并按 x0 排序拼接原文，对齐 pdfplumber 读序。"""
+        if not words:
+            return ""
+        visual_lines: List[List[Any]] = []
+        for word in sorted(words, key=lambda w: (float(w[1]), float(w[0]))):
+            if visual_lines and abs(float(word[1]) - float(visual_lines[-1][0][1])) <= 4.5:
+                visual_lines[-1].append(word)
+            else:
+                visual_lines.append([word])
+        yx_tokens = [
+            str(word[4] or "")
+            for line_words in visual_lines
+            for word in sorted(line_words, key=lambda w: float(w[0]))
+        ]
+        return self._region_text("".join(yx_tokens))
+
     def _page_text_matches(self, page_number: Optional[int], quote: Any) -> bool:
         """Authenticate a quoted source span on the physical page without requiring a bbox."""
         needle = self._region_text(quote)
@@ -407,8 +454,12 @@ class PDFBBoxLocator:
             return False
         try:
             document, _fitz = self._load_document()
-            page_text = self._region_text(document.load_page(page_number - 1).get_text())
-            return bool(page_text and needle in page_text)
+            page = document.load_page(page_number - 1)
+            page_text = self._region_text(page.get_text())
+            if bool(page_text and needle in page_text):
+                return True
+            yx_page_text = self._yx_region_text(page.get_text("words") or [])
+            return bool(yx_page_text) and needle in yx_page_text
         except Exception:
             return False
 
@@ -446,13 +497,19 @@ class PDFBBoxLocator:
             page = document[page_number - 1]
             words = page.get_text("words") or []
             x0, y0, x1, y1 = bbox
-            region_tokens = [
-                str(word[4] or "")
+            overlapping_words = [
+                word
                 for word in words
                 if not (word[2] < x0 or word[0] > x1 or word[3] < y0 or word[1] > y1)
             ]
-            haystack = self._region_text("".join(region_tokens))
-            return bool(haystack) and self._region_text(quote) in haystack
+            haystack = self._region_text("".join(str(word[4] or "") for word in overlapping_words))
+            if bool(haystack) and needle in haystack:
+                return True
+            # 表格折行格被 pdfplumber 按视觉行序(y_tolerance=4.5, x0)重排时，
+            # 同一视觉行内的文字与跨列数字顺序可能与 PyMuPDF 默认流序不同；
+            # 按同口径视觉行聚类后再按 x0 排序拼接复核，仍严格要求区域内真实含全部原文字符。
+            yx_haystack = self._yx_region_text(overlapping_words)
+            return bool(yx_haystack) and needle in yx_haystack
         except Exception:
             return False
 

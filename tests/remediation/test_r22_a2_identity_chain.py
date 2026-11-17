@@ -181,7 +181,7 @@ def test_explicit_code_in_narrative_binds():
 
 
 def test_hierarchy_fact_falls_back_to_unknown_without_chain():
-    """判据不成立 → 金额仍未知（text_binding_failed），名称差异只进提示通道。"""
+    """判据不成立 → 金额仍未知；名称差异只进提示通道（name_mismatch_confirmed）。"""
     # doc 页文本须包含条目原文（_record_text_gap 按 item 偏移取原文出处）
     narrative = "23、农林支出（类）水利（款）防汛（项）。支出决算为 60.00 万元。"
     doc = _doc([narrative])
@@ -193,7 +193,8 @@ def test_hierarchy_fact_falls_back_to_unknown_without_chain():
     assert item
     fact, error = _hierarchy_fact(doc, facts, item)
     assert fact is None
-    assert "找不到同名科目" in str(error)
+    # Round 3 起：唯一近名候选按“科目名称差异候选”提示通道解释，金额仍不绑定。
+    assert "科目名称差异候选（类）" in str(error)
     assert "农林支出" in str(error)
 
 

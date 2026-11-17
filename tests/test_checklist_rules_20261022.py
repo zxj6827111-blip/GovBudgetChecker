@@ -82,6 +82,15 @@ def test_unique_quote_expands_until_unique_on_page() -> None:
     assert page.count(quote) == 1 and quote.startswith("主要用于")
 
 
+def test_unique_quote_standalone_line_does_not_cross_newline() -> None:
+    page = "上海市普陀区桃浦镇\n2025\n年决算\n报告正文"
+    start = page.index("上海市普陀区桃浦镇")
+    end = start + len("上海市普陀区桃浦镇")
+    quote = unique_quote(page, start, end)
+    assert quote == "上海市普陀区桃浦镇"
+    assert "\n" not in quote
+
+
 # ---- CMM-002 扩展：重复与标点（D-02/D-04） ----------------------------------
 
 
@@ -107,6 +116,25 @@ def test_budget_punctuation_and_brackets() -> None:
                 "单价100万元（含）以上设备（不含车辆0台（套）。\n下一段正文。"])
     text = _messages(CMM002_TextAnomalyRule().apply(doc))
     assert "：：" in text and "括号未闭合" in text and "文号格式" in text
+
+
+def test_half_width_punctuation_downgraded_to_info_while_keeping_doc_number() -> None:
+    doc = _doc([
+        "封面",
+        "卫生健康支出89.77万元，占4.21%;城乡社区支出1,723.59万元,占80.00%。",
+        "主要用于:办公保障服务。占0.45%.根据《办法》（沪财[2024]12号）实施。",
+    ])
+    issues = CMM002_TextAnomalyRule().apply(doc)
+    by_msg = {i.message: i for i in issues}
+    half_issues = [
+        i for msg, i in by_msg.items()
+        if any(tag in msg for tag in ("半角逗号/分号", "半角冒号", "半角句点", "英文句点"))
+    ]
+    assert len(half_issues) >= 3
+    assert all(i.severity == "info" for i in half_issues), [(i.message, i.severity) for i in half_issues]
+    doc_num_issues = [i for msg, i in by_msg.items() if "文号年份应使用六角括号" in msg]
+    assert len(doc_num_issues) == 1
+    assert doc_num_issues[0].severity == "low"
 
 
 # ---- CMM-005 方向矛盾词（B-09/D-07） ----------------------------------------

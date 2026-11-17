@@ -280,7 +280,7 @@ assert.equal(basicExpense.page, 12);
 assert.deepEqual(basicExpense.bbox, [10, 20, 300, 40]);
 assert.equal(basicExpense.evidenceRefs?.length, 2);
 assert.equal(basicExpense.evidenceRefs?.[1].locationLevel, "page", "没有框的位置只翻页，不画框");
-assert.equal(isFormalProblem(basicExpense), true, "补核计入必须处理");
+assert.equal(isFormalProblem(basicExpense), false, "未自动核对项移入参考区，不阻断完成复核");
 assert.equal(problemReviewKind(basicExpense), "obligation");
 assert.equal(t5.page, undefined, "没有位置时不编页码");
 assert.equal(t5.status, "resolved");

@@ -3,8 +3,10 @@
 import type { Route } from "next";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Download, RefreshCw, FileText, Link2 } from "lucide-react";
+
+import { ReviewWorkbenchPage } from "@/components/review-workbench/ReviewWorkbenchPage";
 
 import AssociateDialog from "@/components/AssociateDialog";
 import { AiScopeBanner } from "@/components/AiScopeBanner";
@@ -78,6 +80,38 @@ const DECISION_STATUS_LABELS: Record<string, string> = {
 
 export default function TaskDetail() {
   const { job_id } = useParams<{ job_id: string }>();
+  const [selectedRevision] = useState(() =>
+    typeof window === "undefined"
+      ? ""
+      : new URLSearchParams(window.location.search).get("analysis_revision") ?? "",
+  );
+
+  if (!selectedRevision) {
+    return (
+      <Suspense
+        fallback={
+          <div className="flex h-full items-center justify-center">
+            <span className="text-sm text-slate-500">正在加载…</span>
+          </div>
+        }
+      >
+        <div className="h-screen overflow-hidden">
+          <ReviewWorkbenchPage key={job_id} initialJobId={job_id} />
+        </div>
+      </Suspense>
+    );
+  }
+
+  return <LegacyRevisionTaskDetail jobId={job_id} initialRevision={selectedRevision} />;
+}
+
+function LegacyRevisionTaskDetail({
+  jobId: job_id,
+  initialRevision,
+}: {
+  jobId: string;
+  initialRevision: string;
+}) {
   const router = useRouter();
   const aiOptions = useAIAnalysisOptions();
   const [task, setTask] = useState<Task | null>(null);
@@ -98,7 +132,7 @@ export default function TaskDetail() {
   const [problemCategory, setProblemCategory] = useState("全部");
   const [highRiskOnly, setHighRiskOnly] = useState(false);
   const [ignoringProblemId, setIgnoringProblemId] = useState<string | null>(null);
-  const [selectedRevision, setSelectedRevision] = useState(() => typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("analysis_revision") ?? "");
+  const [selectedRevision, setSelectedRevision] = useState(initialRevision);
   const [revisions, setRevisions] = useState<Array<{revision_id: string; is_current: boolean; state: string}>>([]);
   const [historyDecisions, setHistoryDecisions] = useState<RevisionDecisionRecord[]>([]);
 
@@ -297,13 +331,29 @@ export default function TaskDetail() {
         organization_name?: string;
         organization_match_type?: string;
         organization_match_confidence?: number;
-        detail?: string;
+        detail?: string | { code?: string; message?: string; cover_org_name?: string; selected_org_name?: string };
         error?: string;
         message?: string;
       };
 
       if (!response.ok) {
-        throw new Error(payload.detail || payload.error || payload.message || "关联报告失败");
+        // 机构归属整改：后端组织冲突是结构化 detail={"code": ...}——不能把对象
+        // 直接 String 化成 "[object Object]"，也不能漏读 code 字段。
+        const detail = payload.detail;
+        const structured = typeof detail === "object" && detail !== null ? detail : null;
+        const conflictText = structured?.code === "organization_cover_conflict"
+          ? `封面机构与所选组织不一致（封面：${structured.cover_org_name ?? "未识别到"}；所选：${structured.selected_org_name ?? "未指定"}）`
+          : structured?.code === "organization_scope_conflict"
+            ? `封面层级口径与所选组织层级不符（${structured.message ?? ""}）`
+            : null;
+        throw new Error(
+          conflictText
+          || (typeof detail === "string" && detail)
+          || structured?.message
+          || payload.error
+          || payload.message
+          || "关联报告失败",
+        );
       }
 
       const nextOrganizationId = String(payload.organization_id ?? "").trim();

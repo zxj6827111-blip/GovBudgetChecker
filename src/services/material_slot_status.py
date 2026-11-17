@@ -32,6 +32,7 @@ from src.schemas.material_slot import (
     STATUS_REASON_APPLICABILITY_MARKED,
     STATUS_REASON_APPLICABILITY_UNRESOLVED,
     STATUS_REASON_AWAITING_ANALYSIS,
+    STATUS_REASON_AWAITING_SIGNOFF,
     STATUS_REASON_CALIBER_CONFLICT,
     STATUS_REASON_DUE_EXCEEDED,
     STATUS_REASON_DUE_NOT_REACHED,
@@ -75,6 +76,7 @@ def derive_slot_status(
     has_current_document: bool = False,
     analysis_state: str = ANALYSIS_NOT_STARTED,
     review_state: str = REVIEW_NONE,
+    has_pending_review_work: Optional[bool] = None,
     now: Optional[datetime] = None,
 ) -> SlotStatusResult:
     """推导槽位状态。
@@ -134,11 +136,21 @@ def derive_slot_status(
     if review_state == REVIEW_IN_PROGRESS:
         return SlotStatusResult("reviewing", STATUS_REASON_REVIEW_IN_PROGRESS)
     if review_state == REVIEW_REQUIRED:
-        return SlotStatusResult("review_required", STATUS_REASON_FINDINGS_PENDING)
+        reason = (
+            STATUS_REASON_AWAITING_SIGNOFF
+            if has_pending_review_work is False
+            else STATUS_REASON_FINDINGS_PENDING
+        )
+        return SlotStatusResult("review_required", reason)
     # 分析完成且无需人工复核：材料本身已可结案，但仍不等同复核完成。
-    # 这里停在 wait 状态而不是直接 completed——"没有待办"与"人已确认"
+    # 这里停在待结案状态而不是直接 completed——"没有待办"与"人已确认"
     # 是两件事，后者必须由 WP3 的持久化复核结论产生。
-    return SlotStatusResult("review_required", STATUS_REASON_FINDINGS_PENDING)
+    reason = (
+        STATUS_REASON_AWAITING_SIGNOFF
+        if has_pending_review_work is False
+        else STATUS_REASON_FINDINGS_PENDING
+    )
+    return SlotStatusResult("review_required", reason)
 
 
 def _is_due(now: datetime, due_at: datetime) -> bool:

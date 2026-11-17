@@ -26,8 +26,8 @@ import type { ObligationCascadeItemRecord } from "./reviewLifecycleAdapters";
 import {
   buildAmountComparison,
   buildCalculationGroups,
+  buildEvidenceRefDisplay,
   detailSummary,
-  evidenceRoleLabel,
   type CalculationGroup,
 } from "./reviewReadingAdapters";
 import { dedupeEvidenceRefsForDisplay, isProblemDegraded } from "./reviewWorkbenchAdapters";
@@ -355,46 +355,51 @@ export function IssueCard({
         </p>
       ))}
 
-      {problem.snippet || evidenceRefs.length > 0 ? (
-        <section className="mb-5">
-          <h3 className={SECTION_TITLE}>{evidenceExcerptLabel(problem.sourceIdentityVerified === true)}</h3>
-          {/* 只有一处证据时，引文就放在这条可点击的证据里，不再单独重复一遍。 */}
-          {problem.snippet && evidenceRefs.length !== 1 ? (
-            <div className="mb-2 rounded-md bg-surface-100 px-3 py-2 text-[0.9em] leading-relaxed text-slate-700">{quote}</div>
-          ) : null}
-          {evidenceRefs.length > 0 ? (
-            <div className="grid gap-1.5">
-              {evidenceRefs.map((ref, index) => {
-                const roleLabel = evidenceRoleLabel(ref.role);
-                // 位置文字只有页码时不重复显示（下方已有页码）。
-                const location = /^第 \d+ 页$/.test(ref.locationText) ? "" : ref.locationText.replace(/^第 \d+ 页 · /, "");
-                const main = evidenceRefs.length === 1 && quote ? quote
-                  : [roleLabel, ref.valueText ? `${ref.valueText} 万元` : ""].filter(Boolean).join(" · ");
-                const detail = [`第 ${ref.page} 页`, ref.bbox ? "精确定位" : "", location].filter(Boolean).join(" · ");
-                return (
-                  <button
-                    key={ref.key}
-                    type="button"
-                    onClick={() => onSelectEvidenceRef?.(ref.key)}
-                    aria-pressed={selectedEvidenceRefKey === ref.key}
-                    data-testid={`gbc-review-evidence-ref-${problem.id}-${ref.key}`}
-                    className={`grid w-full grid-cols-[1.6em_minmax(0,1fr)] items-start gap-2 rounded-md border px-2.5 py-2 text-left transition-colors ${
-                      selectedEvidenceRefKey === ref.key ? "border-primary-500 bg-primary-50" : "border-border hover:bg-surface-50"
-                    }`}
-                    title={`定位到原文：${[roleLabel, detail].filter(Boolean).join(" · ")}`}
-                  >
-                    <span className="mt-0.5 grid h-[1.6em] w-[1.6em] place-items-center rounded bg-surface-100 text-[0.75em] text-slate-500">{String.fromCharCode(65 + (index % 26))}</span>
-                    <span className="min-w-0">
-                      <span className="block break-words text-[0.88em] leading-relaxed text-slate-800">{main || roleLabel}</span>
-                      <span className="block break-words text-[0.72em] leading-relaxed text-slate-500">{detail} ↖</span>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          ) : null}
-        </section>
-      ) : null}
+      {problem.snippet || evidenceRefs.length > 0 ? (() => {
+        const verified = problem.sourceIdentityVerified === true;
+        const everyRefHasQuote = evidenceRefs.length > 0 && evidenceRefs.every((ref) => Boolean(ref.quoteText));
+        return (
+          <section className="mb-5">
+            <h3 className={SECTION_TITLE}>{evidenceExcerptLabel(verified)}</h3>
+            {/* 只有一处证据，或每条证据都已经带有各自的原文摘录时，不再在上方重复放一次整段引文。 */}
+            {problem.snippet && evidenceRefs.length !== 1 && !everyRefHasQuote ? (
+              <div className="mb-2 rounded-md bg-surface-100 px-3 py-2 text-[0.9em] leading-relaxed text-slate-700">{quote}</div>
+            ) : null}
+            {evidenceRefs.length > 0 ? (
+              <div className="grid gap-1.5">
+                {evidenceRefs.map((ref, index) => {
+                  const display = buildEvidenceRefDisplay(ref, evidenceRefs.length, quote, verified);
+                  // 位置文字只有页码时不重复显示（下方已有页码）。
+                  const location = /^第 \d+ 页$/.test(ref.locationText) ? "" : ref.locationText.replace(/^第 \d+ 页 · /, "");
+                  const detail = [`第 ${ref.page} 页`, ref.bbox ? "精确定位" : "", location].filter(Boolean).join(" · ");
+                  return (
+                    <button
+                      key={ref.key}
+                      type="button"
+                      onClick={() => onSelectEvidenceRef?.(ref.key)}
+                      aria-pressed={selectedEvidenceRefKey === ref.key}
+                      data-testid={`gbc-review-evidence-ref-${problem.id}-${ref.key}`}
+                      className={`grid w-full grid-cols-[1.6em_minmax(0,1fr)] items-start gap-2 rounded-md border px-2.5 py-2 text-left transition-colors ${
+                        selectedEvidenceRefKey === ref.key ? "border-primary-500 bg-primary-50" : "border-border hover:bg-surface-50"
+                      }`}
+                      title={`定位到原文：${[display.roleLabel, detail].filter(Boolean).join(" · ")}`}
+                    >
+                      <span className="mt-0.5 grid h-[1.6em] w-[1.6em] place-items-center rounded bg-surface-100 text-[0.75em] text-slate-500">{String.fromCharCode(65 + (index % 26))}</span>
+                      <span className="min-w-0">
+                        {display.heading ? (
+                          <span className="block break-words text-[0.76em] font-medium text-slate-600">{display.heading}</span>
+                        ) : null}
+                        <span className="block break-words text-[0.88em] leading-relaxed text-slate-800">{display.body}</span>
+                        <span className="block break-words text-[0.72em] leading-relaxed text-slate-500">{detail} ↖</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+          </section>
+        );
+      })() : null}
 
       {problem.suggestion ? (
         <section className="mb-5 rounded-md bg-primary-50 px-3.5 py-3">
@@ -406,10 +411,17 @@ export function IssueCard({
       {cascadedChecks && cascadedChecks.length > 0 ? (
         <section className="mb-5 border-t border-border pt-3" data-testid="gbc-review-cascaded-checks">
           <h3 className={SECTION_TITLE}>受此问题影响，以下 {cascadedChecks.length} 项核对未能自动进行</h3>
-          <p className="mb-1.5 text-[0.82em] text-slate-500">无需单独处理：补齐或更正本问题涉及的表格后重新检查即可。</p>
+          <p className="mb-1.5 text-[0.82em] text-slate-500">无需单独处理：补齐或更正本问题涉及的表格或说明内容后重新检查即可。</p>
           <ul className="list-disc space-y-0.5 pl-5 text-[0.88em] leading-relaxed text-slate-700">
             {cascadedChecks.map((check) => (
-              <li key={check.obligation_id}>{check.title}</li>
+              <li key={check.obligation_id}>
+                <span>{check.title}</span>
+                {problem.ruleId === "V33-227" ? (
+                  <span className="mt-0.5 block text-[0.9em] text-slate-500">
+                    因科目名称不一致，该条目对应金额尚未自动绑定核对；修正名称时请同步复核说明与表格金额。
+                  </span>
+                ) : null}
+              </li>
             ))}
           </ul>
         </section>

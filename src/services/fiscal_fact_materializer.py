@@ -619,12 +619,28 @@ class FiscalFactMaterializer:
         facts: List[FiscalFact] = []
         repeated_measures = {str(mapping["canonical_measure"]) for mapping in mappings
                              if sum(str(other["canonical_measure"]) == str(mapping["canonical_measure"]) for other in mappings) > 1}
+        # 同表打印的 5 位款级编码集合：编码位数异常（如 8 位）行的身份锚定依据。
+        printed_kuan_codes = {
+            str(lf.classification_code or "")
+            for lf in legacy_facts
+            if re.fullmatch(r"\d{5}", str(lf.classification_code or "") or "")
+        }
         for legacy in legacy_facts:
             column_fund_scope,fund_identity_conflict=measure_fund_scope(table.table_code,table.title,
                 (legacy.extra_dims or{}).get('source_header'))
             row_cells = cells_by_row.get(legacy.row_order, [])
             source_label_cols = (legacy.extra_dims or {}).get('source_label_cols', [])
             classification_status = str((legacy.extra_dims or {}).get('classification_status') or '')
+            # D2 编码位数异常锚定：8 位编码且其 5 位前缀是本表已打印的款级编码、
+            # 名称在场时，行身份可由「款前缀＋逐字名称」唯一锚定——不再按
+            # code_format_unverified 一刀切转 low_confidence；异常本身由规则层
+            # 依据 extra_dims 单独报告。前缀无款行锚定或名称缺失时保持原状态。
+            code_prefix_anchored = (
+                classification_status == 'code_format_unverified'
+                and bool(re.fullmatch(r"\d{8}", str(legacy.classification_code or "") or ""))
+                and str(legacy.classification_code)[:5] in printed_kuan_codes
+                and bool(legacy.classification_name)
+            )
             identity_conflict = classification_status == 'code_total_conflict'
             raw_conflict = (legacy.extra_dims or {}).get('classification_conflict') or {}
             classification_conflict: Dict[str, Any] = (
@@ -767,7 +783,7 @@ class FiscalFactMaterializer:
                         if table.confidence < 0.8 or (legacy.parse_confidence < 0.8 and not native_evidence_qualified)
                         or not column_identity_safe
                         or missing_subject_code
-                        or classification_status == 'code_format_unverified'
+                        or (classification_status == 'code_format_unverified' and not code_prefix_anchored)
                         or not amount_usable
                         or (is_ocr_source and not ocr_qualified)
                         else "unverified"
@@ -788,6 +804,13 @@ class FiscalFactMaterializer:
                             else "missing_subject_code" if missing_subject_code else "bound"
                         ),
                         "classification_status": classification_status or None,
+                        **({
+                            "code_length_anomaly": True,
+                            "code_anomaly_basis": {
+                                "printed_kuan_prefix": str(legacy.classification_code)[:5],
+                                "basis": "printed_kuan_prefix_plus_name_in_same_table",
+                            },
+                        } if code_prefix_anchored else {}),
                         **({"row_identity_conflict": {
                             "status": "code_total_conflict",
                             "reason": "编码与合计标记同时出现在同一行的标签列，来源证据未消除冲突",

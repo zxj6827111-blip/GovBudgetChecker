@@ -523,6 +523,168 @@ def _count_result_findings(result: Dict[str, Any]) -> int:
     return count_formal_findings(result)
 
 
+def _resolve_cascaded_quality_blockers(
+    *,
+    obligation_coverage: Optional[Dict[str, Any]],
+    structured_ingest: Optional[Dict[str, Any]],
+    result_row: Optional[Dict[str, Any]],
+) -> tuple[Optional[List[Any]], set[str], set[str], set[str]]:
+    """计算去除同源问题覆盖/连带后的有效阻塞义务、名称差异/表格读取连带集及原始阻塞集。"""
+    if (
+        not isinstance(result_row, dict)
+        or not isinstance(obligation_coverage, dict)
+        or not isinstance(obligation_coverage.get("instances"), list)
+    ):
+        return None, set(), set(), set(), set()
+
+    from src.engine.check_obligations import UNRESOLVED_OBLIGATION_STATUSES
+    from src.services.material_detail_query_service import build_coverage
+    from src.services.obligation_finding_coverage import (
+        TABLE_READING_CASCADE_CODES,
+        _broken_table_roots,
+    )
+    from src.services.review_lifecycle_service import blocking_coverage_obligations
+    from src.services.review_problem_set import collect_review_problems
+
+    coverage = build_coverage(obligation_coverage)
+    if not coverage.available:
+        return None, set(), set(), set(), set()
+
+    problems = collect_review_problems(
+        job_uuid=str(result_row.get("job_id") or "__quality_gate__"),
+        ai_findings=result_row.get("ai_findings"),
+        rule_findings=result_row.get("rule_findings"),
+        merged_result=result_row.get("merged"),
+        structured_ingest=structured_ingest,
+        result=result_row,
+        ignored_issue_ids=[],
+    )
+    visible_ids = {problem.issue_id for problem in problems}
+    all_items = list(coverage.items)
+    raw_blocking = [
+        item
+        for item in all_items
+        if item.blocks_gate and item.status in UNRESOLVED_OBLIGATION_STATUSES
+    ]
+    raw_blocking_ids = {item.obligation_id for item in raw_blocking}
+    remaining_blocking = blocking_coverage_obligations(
+        all_items,
+        result_row,
+        visible_issue_ids=visible_ids,
+        structured_ingest=structured_ingest,
+    )
+    remaining_ids = {item.obligation_id for item in remaining_blocking}
+    cascaded_name_mismatch_ids = {
+        item.obligation_id
+        for item in raw_blocking
+        if item.obligation_id not in remaining_ids
+        and not getattr(item, "blocked_by", None)
+        and {
+            str(code).strip()
+            for code in (getattr(item, "reason_codes", None) or ())
+            if str(code).strip()
+        }
+        == {"name_mismatch_confirmed"}
+    }
+    cascaded_table_reading_ids = {
+        item.obligation_id
+        for item in raw_blocking
+        if item.obligation_id not in remaining_ids
+        and item.obligation_id not in cascaded_name_mismatch_ids
+        and (
+            lambda codes: bool(codes) and codes <= TABLE_READING_CASCADE_CODES
+        )(
+            {
+                str(code).strip()
+                for code in (getattr(item, "reason_codes", None) or ())
+                if str(code).strip()
+            }
+        )
+    }
+    broken_table_codes = set(
+        _broken_table_roots(result_row, structured_ingest, visible_ids)
+    )
+    return (
+        remaining_blocking,
+        cascaded_name_mismatch_ids,
+        cascaded_table_reading_ids,
+        raw_blocking_ids,
+        broken_table_codes,
+    )
+
+
+def _is_cascaded_quality_rule(
+    item: Any,
+    cascaded_name_mismatch_ids: set[str],
+    cascaded_table_reading_ids: set[str],
+    raw_blocking_ids: set[str],
+    broken_table_codes: set[str] = frozenset(),
+) -> bool:
+    """该条 insufficient_data 规则仅因已上浮的同源名称差异或坏表读取/错列阻塞且无其他缺口。"""
+    if (
+        (
+            not cascaded_name_mismatch_ids
+            and not cascaded_table_reading_ids
+            and not broken_table_codes
+        )
+        or not isinstance(item, dict)
+    ):
+        return False
+    if str(item.get("status") or "") != STATUS_INSUFFICIENT_DATA:
+        return False
+    rule_id = str(item.get("rule_id") or "").strip()
+    if not rule_id:
+        return False
+    diags = [dg for dg in (item.get("diagnostics") or []) if isinstance(dg, dict)]
+    codes = {
+        str(code).strip()
+        for code in (item.get("reason_codes") or [])
+        if str(code).strip()
+    }
+    for dg in diags:
+        codes.update(
+            str(code).strip()
+            for code in (dg.get("reason_codes") or [])
+            if str(code).strip()
+        )
+    from src.engine.check_obligations import obligation_ids_for_rule
+    from src.services.obligation_finding_coverage import (
+        TABLE_READING_CASCADE_CODES,
+        _table_codes_in,
+    )
+
+    linked_obs = [
+        oid for oid in obligation_ids_for_rule(rule_id) if oid in raw_blocking_ids
+    ]
+    if not linked_obs:
+        if not broken_table_codes or not codes or not (codes <= TABLE_READING_CASCADE_CODES):
+            return False
+        cited_tables: set[str] = set()
+        for dg in diags:
+            for blk in dg.get("blocked_by") or ():
+                if isinstance(blk, dict):
+                    ref = str(blk.get("ref") or "").strip()
+                    if ref and not ref.startswith("规则级:"):
+                        cited_tables.update(_table_codes_in(ref))
+            for miss in dg.get("missing_operands") or ():
+                if isinstance(miss, dict):
+                    cited_tables.update(_table_codes_in(str(miss.get("table_code") or "")))
+        return bool(cited_tables) and cited_tables <= broken_table_codes
+    if (
+        cascaded_name_mismatch_ids
+        and not any(dg.get("blocked_by") for dg in diags)
+        and codes == {"name_mismatch_confirmed"}
+        and all(oid in cascaded_name_mismatch_ids for oid in linked_obs)
+    ):
+        return True
+    return (
+        bool(cascaded_table_reading_ids)
+        and bool(codes)
+        and codes <= TABLE_READING_CASCADE_CODES
+        and all(oid in cascaded_table_reading_ids for oid in linked_obs)
+    )
+
+
 def _evaluate_quality_gate(
     page_assessment: Dict[str, Any],
     report_kind: Any,
@@ -539,6 +701,7 @@ def _evaluate_quality_gate(
     doc_type: Optional[str] = None,
     obligation_coverage: Optional[Dict[str, Any]] = None,
     fact_overlay_report: Optional[Dict[str, Any]] = None,
+    result_row: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """任务级质量门禁：决定终态是 done / degraded / review_required。
 
@@ -791,13 +954,18 @@ def _evaluate_quality_gate(
     # ---- 规则证据完整性（此前只有降级数进门禁，不完整数被丢弃） ----
     if isinstance(evidence_completeness, dict):
         # incomplete 含 AI 候选；这些项已在上方作为 AI 证据不足单独阻断。
-        # 本处仅提示剩余本地规则缺口，避免同一 AI 引文重复报成两类问题。
-        # 兼容旧统计，未被 AI 降级数解释的不完整项仍保守按规则缺口保留。
-        incomplete_count = max(
-            int(evidence_completeness.get("rule_warning_count") or 0),
-            int(evidence_completeness.get("incomplete") or 0) - degraded_findings,
-            0,
-        )
+        # info 级提示（非正式问题）缺失引文或定位框时不拖累整份材料进入待复核。
+        if "formal_rule_warning_count" in evidence_completeness:
+            incomplete_count = max(
+                int(evidence_completeness.get("formal_rule_warning_count") or 0),
+                0,
+            )
+        else:
+            incomplete_count = max(
+                int(evidence_completeness.get("rule_warning_count") or 0),
+                int(evidence_completeness.get("incomplete") or 0) - degraded_findings,
+                0,
+            )
         if incomplete_count > 0:
             review_reasons.append(
                 {
@@ -809,14 +977,50 @@ def _evaluate_quality_gate(
                 }
             )
 
+    (
+        remaining_blocking_obligations,
+        cascaded_name_mismatch_ids,
+        cascaded_table_reading_ids,
+        raw_blocking_ids,
+        broken_table_codes,
+    ) = _resolve_cascaded_quality_blockers(
+        obligation_coverage=obligation_coverage,
+        structured_ingest=structured_ingest,
+        result_row=result_row,
+    )
+
     # ---- 规则执行摘要（parse/execution 异常不再伪装成 hint finding） ----
     if isinstance(rule_execution_summary, dict) and rule_execution_summary:
         error_rules = int(rule_execution_summary.get("execution_error") or 0)
         parse_error_rules = int(rule_execution_summary.get("parse_error") or 0)
         # insufficient_data 同样属"未得出可信结论"：数据缺失的规则被
         # 静默记 pass 是假绿 no_findings 的来源之一（GPT5.6 P0-2）。
-        insufficient_rules = int(
+        raw_insufficient_rules = int(
             rule_execution_summary.get("insufficient_data") or 0
+        )
+        raw_insufficient_unresolved = [
+            item
+            for item in (rule_execution_summary.get("unresolved_rules") or [])
+            if isinstance(item, dict)
+            and str(item.get("status") or "") == STATUS_INSUFFICIENT_DATA
+        ]
+        insufficient_unresolved = [
+            item
+            for item in raw_insufficient_unresolved
+            if not _is_cascaded_quality_rule(
+                item,
+                cascaded_name_mismatch_ids,
+                cascaded_table_reading_ids,
+                raw_blocking_ids,
+                broken_table_codes,
+            )
+        ]
+        cascaded_rule_count = len(raw_insufficient_unresolved) - len(
+            insufficient_unresolved
+        )
+        insufficient_rules = max(
+            raw_insufficient_rules - cascaded_rule_count,
+            len(insufficient_unresolved),
         )
         if error_rules + parse_error_rules > 0:
             review_reasons.append(
@@ -839,15 +1043,7 @@ def _evaluate_quality_gate(
                         f"有 {insufficient_rules} 条规则因数据缺失/解析歧义无法得出结论"
                         "（如表缺失、行宽无法对齐），这些检查项未实际覆盖，需人工复核"
                     ),
-                    "unresolved_rules": [
-                        item
-                        for item in (
-                            rule_execution_summary.get("unresolved_rules") or []
-                        )
-                        if isinstance(item, dict)
-                        and str(item.get("status") or "")
-                        == STATUS_INSUFFICIENT_DATA
-                    ][:20],
+                    "unresolved_rules": insufficient_unresolved[:20],
                 }
             )
 
@@ -865,7 +1061,44 @@ def _evaluate_quality_gate(
     # 台账回答"应该检查的事情完成了多少"。前者按实现方视角计数，后者按
     # 业务要求计数，因此"规则不存在"这类漏查只有台账能发现。
     obligation_blocking = 0
-    if isinstance(obligation_coverage, dict):
+    if remaining_blocking_obligations is not None:
+        obligation_blocking = len(remaining_blocking_obligations)
+        if obligation_blocking > 0:
+            from collections import Counter
+
+            labels = (
+                obligation_coverage.get("by_reason_labels")
+                if isinstance(obligation_coverage, dict)
+                and isinstance(obligation_coverage.get("by_reason_labels"), dict)
+                else {}
+            )
+            by_reason = Counter(
+                str(getattr(item, "reason", None) or "unknown")
+                for item in remaining_blocking_obligations
+            )
+            parts = [
+                f"{labels.get(code, code)} {count} 项"
+                for code, count in sorted(by_reason.items(), key=lambda kv: -kv[1])
+            ]
+            review_reasons.append(
+                {
+                    "code": "check_obligations_incomplete",
+                    "message": (
+                        f"应检查事项中有 {obligation_blocking} 项未完成"
+                        f"（{'、'.join(parts)}），本次结论只覆盖已完成的检查范围，"
+                        "不能视为已完整审核"
+                    ),
+                    "blocking_obligation_ids": [
+                        item.obligation_id for item in remaining_blocking_obligations
+                    ][:40],
+                    "catalog_version": (
+                        obligation_coverage.get("catalog_version")
+                        if isinstance(obligation_coverage, dict)
+                        else None
+                    ),
+                }
+            )
+    elif isinstance(obligation_coverage, dict):
         try:
             obligation_blocking = int(obligation_coverage.get("blocking_total") or 0)
         except (TypeError, ValueError):
@@ -1356,6 +1589,18 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
         # 同一来源），检查主体、金额范围与写法裁决全程消费这一份冻结值；
         # 重新分析取当时的当前选择，已出结果引用冻结副本。
         selected_org_basis = runtime.resolve_organization_basis(organization_id)
+        if not selected_org_basis.get("level") and runtime.ORG_AVAILABLE:
+            try:
+                job_link = runtime.require_org_storage().get_job_org(job_dir.name)
+                linked_org_id = getattr(job_link, "org_id", None) if job_link else None
+                if linked_org_id and str(linked_org_id).strip() != str(organization_id or "").strip():
+                    linked_basis = runtime.resolve_organization_basis(linked_org_id)
+                    if linked_basis.get("organization_name"):
+                        organization_id = str(linked_org_id).strip()
+                        organization_name = organization_name or linked_basis.get("organization_name")
+                        selected_org_basis = linked_basis
+            except Exception:
+                pass
 
         # 检查是否启用双模式。
         # 必须走真实 Settings 接口（is_dual_mode_enabled 读 config/app.yaml 的
@@ -2315,7 +2560,29 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                     **runtime.extract_job_status_context(current_ingest_status),
                 },
             )
-            if latest_ingest.get("is_latest") or candidate_only:
+            is_authoritative_slot_job = False
+            if (
+                not latest_ingest.get("is_latest")
+                and not candidate_only
+                and DatabaseConnection.is_initialized()
+            ):
+                slot_conn = await DatabaseConnection.acquire()
+                try:
+                    slot_row = await slot_conn.fetchrow(
+                        """
+                        SELECT 1
+                        FROM material_slots s
+                        JOIN analysis_jobs j
+                          ON j.structured_document_version_id = s.current_document_version_id
+                        WHERE j.job_uuid = $1
+                        LIMIT 1
+                        """,
+                        job_dir.name,
+                    )
+                    is_authoritative_slot_job = slot_row is not None
+                finally:
+                    await DatabaseConnection.release(slot_conn)
+            if latest_ingest.get("is_latest") or is_authoritative_slot_job or candidate_only:
                 structured_ingest_summary = await run_structured_ingest(
                     job_id=job_dir.name,
                     pdf_path=pdf_path,
@@ -2356,7 +2623,19 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             from src.services.recognition_metrics import recognition_state
             result['meta']['recognition_state']=recognition_state(parse_artifact_obj,structured_ingest_summary.get('fact_snapshot'),fact_context_obj)
         if os.getenv("DATABASE_URL") and structured_ingest_summary.get("status") in {"error", "skipped"}:
-            raise RuntimeError("trusted_ingest_not_committed: " + str(structured_ingest_summary.get("error") or structured_ingest_summary.get("reason")))
+            # D5：错误封装必须可诊断——异常消息为空（asyncpg 命令超时的 str() 是
+            # 空串）时带上异常类型与失败阶段，不得显示成 trusted_ingest_not_committed: None。
+            ingest_error = (
+                structured_ingest_summary.get("error")
+                or structured_ingest_summary.get("reason")
+                or "<no message>"
+            )
+            ingest_error_type = structured_ingest_summary.get("error_type") or type(ingest_error).__name__
+            ingest_stage = structured_ingest_summary.get("ingest_stage") or "<unknown stage>"
+            raise RuntimeError(
+                f"trusted_ingest_not_committed: stage={ingest_stage} "
+                f"{ingest_error_type}: {ingest_error}"
+            )
         if ocr_summary is not None:
             # ZC-02：OCR 摘要（页级状态、低分块计数、原生/OCR 冲突）如实落账
             result["meta"]["ocr"] = ocr_summary
@@ -2532,6 +2811,7 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             doc_type=doc_type,
             obligation_coverage=obligation_coverage,
             fact_overlay_report=fact_overlay_report,
+            result_row=result,
         )
         result["meta"]["quality_gate"] = quality_gate
         # 结论作用域同时写进 result.meta：任务详情/复核台/材料详情读的是

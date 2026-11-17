@@ -169,3 +169,69 @@ async def test_confirmed_identity_repair_preserves_review_and_supports_rollback(
     await rollback_material_identity(report_db,tmp_path/"receipt/receipt.json")
     assert status.read_bytes()==status_before and links.read_bytes()==links_before
     assert await report_db.fetchval("SELECT subject_org_id FROM material_slots WHERE id=$1",uuid.UUID(slot))=="org"
+
+
+@pytest.mark.asyncio
+async def test_delete_material_report_cascades_and_resets_baseline_slot(report_db, tmp_path, monkeypatch):
+    from api import runtime
+    from src.services.material_report_deletion import delete_material_reports
+
+    normal_path = tmp_path / "普通预算.pdf"
+    normal_path.write_bytes(b"normal pdf")
+    normal_reg = await registration.register_uploaded_material("job-normal", normal_path, metadata(normal_path))
+    normal_slot = uuid.UUID(normal_reg["material_slot"]["slot_id"])
+    normal_ver = int(normal_reg["document_version_id"])
+
+    base_meta = {**metadata(normal_path), "report_kind": "final", "job_id": "job-base"}
+    base_path = tmp_path / "基线决算.pdf"
+    base_path.write_bytes(b"baseline pdf")
+    base_reg = await registration.register_uploaded_material("job-base", base_path, base_meta)
+    base_slot = uuid.UUID(base_reg["material_slot"]["slot_id"])
+    base_ver = int(base_reg["document_version_id"])
+    await report_db.execute("UPDATE material_slots SET due_at = NOW() WHERE id = $1", base_slot)
+
+    for jid, vid, sid in (("job-normal", normal_ver, normal_slot), ("job-base", base_ver, base_slot)):
+        meta_json = json.dumps({"organization_id": "org", "structured_ingest": {"document_version_id": vid}})
+        job_pk = await report_db.fetchval(
+            "INSERT INTO analysis_jobs(job_uuid, filename, status, analysis_revision, metadata) VALUES($1, $2, 'review_required', 1, $3::jsonb) RETURNING id",
+            jid,
+            f"{jid}.pdf",
+            meta_json,
+        )
+        await report_db.execute("INSERT INTO analysis_results(job_id) VALUES($1)", job_pk)
+        await report_db.execute(
+            """
+            INSERT INTO review_sessions(slot_id, document_version_id, analysis_job_uuid, analysis_basis_token,
+                status, started_by, completed_by, completed_at, review_result)
+            VALUES($1, $2, $3, $4, 'completed', 'admin', 'admin', NOW(), '{"issue_counts":{"confirmed":2}}')
+            """,
+            sid,
+            vid,
+            jid,
+            f"{jid}:1",
+        )
+
+    uploads = tmp_path / "uploads"
+    (uploads / "job-normal").mkdir(parents=True)
+    (uploads / "job-base").mkdir(parents=True)
+    monkeypatch.setattr(runtime, "UPLOAD_ROOT", uploads)
+    monkeypatch.setattr(runtime, "ORG_AVAILABLE", False)
+
+    summary = await delete_material_reports(
+        report_db,
+        slot_ids=[str(normal_slot), str(base_slot)],
+        actor="admin",
+    )
+
+    assert summary["deleted_slot_ids"] == [str(normal_slot)]
+    assert summary["reset_baseline_slot_ids"] == [str(base_slot)]
+    assert sorted(summary["deleted_job_ids"]) == ["job-base", "job-normal"]
+    assert summary["deleted_review_session_count"] == 2
+    assert await report_db.fetchval("SELECT count(*) FROM material_slots WHERE id = $1", normal_slot) == 0
+    assert await report_db.fetchval("SELECT count(*) FROM material_slots WHERE id = $1", base_slot) == 1
+    assert await report_db.fetchval("SELECT current_document_version_id FROM material_slots WHERE id = $1", base_slot) is None
+    assert await report_db.fetchval("SELECT count(*) FROM fiscal_document_versions WHERE id = ANY($1::int[])", [normal_ver, base_ver]) == 0
+    assert await report_db.fetchval("SELECT count(*) FROM analysis_jobs WHERE job_uuid = ANY($1::text[])", ["job-normal", "job-base"]) == 0
+    assert await report_db.fetchval("SELECT count(*) FROM review_sessions WHERE slot_id = ANY($1::uuid[])", [normal_slot, base_slot]) == 0
+    assert not (uploads / "job-normal").exists()
+    assert not (uploads / "job-base").exists()

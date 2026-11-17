@@ -78,11 +78,20 @@ async def sync_slot_review_state_for_job(
         conn, link.slot_id, basis_token=basis_token
     )
     review_state = REVIEW_COMPLETED if completed_session else REVIEW_REQUIRED
+    has_pending_review_work: Optional[bool] = None
+    if not completed_session:
+        try:
+            from src.services.review_lifecycle_service import build_worklist_review_summary
+            summary = build_worklist_review_summary(slot_row, analysis, [], [])
+            has_pending_review_work = not bool(summary.get("signoff_only"))
+        except Exception:
+            has_pending_review_work = None
 
     result = await MaterialSlotService(conn).refresh_status(
         link.slot_id,
         analysis_state=ANALYSIS_DONE,
         review_state=review_state,
+        has_pending_review_work=has_pending_review_work,
     )
     if not result:
         return None

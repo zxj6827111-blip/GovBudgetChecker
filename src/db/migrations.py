@@ -1605,6 +1605,9 @@ MIGRATIONS: List[Dict[str, Any]] = [
             )""",
             """CREATE OR REPLACE FUNCTION guard_fiscal_snapshot_immutable() RETURNS trigger
             LANGUAGE plpgsql AS $$ BEGIN
+                IF TG_OP = 'DELETE' AND current_setting('app.allow_admin_report_delete', true) = 'on' THEN
+                    RETURN OLD;
+                END IF;
                 IF TG_OP='DELETE' THEN RAISE EXCEPTION 'fiscal snapshot is immutable'; END IF;
                 IF ROW(NEW.id,NEW.job_uuid,NEW.revision_id,NEW.parse_run_id,NEW.source_file_hash,
                        NEW.snapshot_hash,NEW.raw_facts_hash,NEW.effective_facts_hash,NEW.payload,NEW.created_at)
@@ -1618,7 +1621,12 @@ MIGRATIONS: List[Dict[str, Any]] = [
             """CREATE TRIGGER fiscal_snapshot_immutable BEFORE UPDATE OR DELETE ON analysis_fact_snapshots
                FOR EACH ROW EXECUTE FUNCTION guard_fiscal_snapshot_immutable()""",
             """CREATE OR REPLACE FUNCTION guard_analysis_revision_immutable() RETURNS trigger
-               LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'analysis revision is immutable'; END $$""",
+               LANGUAGE plpgsql AS $$ BEGIN
+                   IF TG_OP = 'DELETE' AND current_setting('app.allow_admin_report_delete', true) = 'on' THEN
+                       RETURN OLD;
+                   END IF;
+                   RAISE EXCEPTION 'analysis revision is immutable';
+               END $$""",
             'DROP TRIGGER IF EXISTS analysis_revision_immutable ON analysis_revision_results',
             """CREATE TRIGGER analysis_revision_immutable BEFORE UPDATE OR DELETE ON analysis_revision_results
                FOR EACH ROW EXECUTE FUNCTION guard_analysis_revision_immutable()""",
@@ -1650,7 +1658,12 @@ MIGRATIONS: List[Dict[str, Any]] = [
                 PRIMARY KEY(document_version_id,payload_hash)
             )""",
             """CREATE OR REPLACE FUNCTION guard_legacy_projection_archive() RETURNS trigger
-               LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'legacy projection archive is immutable'; END $$""",
+               LANGUAGE plpgsql AS $$ BEGIN
+                   IF TG_OP = 'DELETE' AND current_setting('app.allow_admin_report_delete', true) = 'on' THEN
+                       RETURN OLD;
+                   END IF;
+                   RAISE EXCEPTION 'legacy projection archive is immutable';
+               END $$""",
             'DROP TRIGGER IF EXISTS legacy_projection_archive_immutable ON legacy_projection_archives',
             """CREATE TRIGGER legacy_projection_archive_immutable BEFORE UPDATE OR DELETE ON legacy_projection_archives
                FOR EACH ROW EXECUTE FUNCTION guard_legacy_projection_archive()""",
@@ -1770,6 +1783,58 @@ MIGRATIONS.append({
     "description": "保留20XX样张源报告年度未知，禁止将下发日期冒充报告年度",
     "sql": ["ALTER TABLE disclosure_template_sources ALTER COLUMN source_report_year DROP NOT NULL",
             "ALTER TABLE disclosure_template_packages ALTER COLUMN source_report_year DROP NOT NULL"],
+})
+
+MIGRATIONS.append({
+    "id": "2026-11-15_0045_admin_report_delete_trigger_guard",
+    "description": "允许管理员报告删除事务通过会话变量安全清理不可变审计/快照记录",
+    "sql": [
+        """CREATE OR REPLACE FUNCTION guard_fiscal_snapshot_immutable() RETURNS trigger
+        LANGUAGE plpgsql AS $$ BEGIN
+            IF TG_OP = 'DELETE' AND current_setting('app.allow_admin_report_delete', true) = 'on' THEN
+                RETURN OLD;
+            END IF;
+            IF TG_OP='DELETE' THEN RAISE EXCEPTION 'fiscal snapshot is immutable'; END IF;
+            IF ROW(NEW.id,NEW.job_uuid,NEW.revision_id,NEW.parse_run_id,NEW.source_file_hash,
+                   NEW.snapshot_hash,NEW.raw_facts_hash,NEW.effective_facts_hash,NEW.payload,NEW.created_at)
+               IS DISTINCT FROM
+               ROW(OLD.id,OLD.job_uuid,OLD.revision_id,OLD.parse_run_id,OLD.source_file_hash,
+                   OLD.snapshot_hash,OLD.raw_facts_hash,OLD.effective_facts_hash,OLD.payload,OLD.created_at)
+            THEN RAISE EXCEPTION 'fiscal snapshot payload is immutable'; END IF;
+            RETURN NEW;
+        END $$""",
+        """CREATE OR REPLACE FUNCTION guard_analysis_revision_immutable() RETURNS trigger
+           LANGUAGE plpgsql AS $$ BEGIN
+               IF TG_OP = 'DELETE' AND current_setting('app.allow_admin_report_delete', true) = 'on' THEN
+                   RETURN OLD;
+               END IF;
+               RAISE EXCEPTION 'analysis revision is immutable';
+           END $$""",
+        """CREATE OR REPLACE FUNCTION guard_legacy_projection_archive() RETURNS trigger
+           LANGUAGE plpgsql AS $$ BEGIN
+               IF TG_OP = 'DELETE' AND current_setting('app.allow_admin_report_delete', true) = 'on' THEN
+                   RETURN OLD;
+               END IF;
+               RAISE EXCEPTION 'legacy projection archive is immutable';
+           END $$""",
+        """CREATE OR REPLACE FUNCTION protect_writing_scope_decision() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+            IF TG_OP = 'DELETE' AND current_setting('app.allow_admin_report_delete', true) = 'on' THEN
+                RETURN OLD;
+            END IF;
+            IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'writing scope decisions are immutable'; END IF;
+            IF ROW(NEW.request_id, NEW.job_uuid, NEW.document_version_id, NEW.file_hash, NEW.revision,
+                   NEW.analysis_basis_token, NEW.writing_scope, NEW.note, NEW.evidence_reference,
+                   NEW.source_evidence, NEW.conflict_acknowledged, NEW.actor, NEW.created_at)
+               IS DISTINCT FROM
+               ROW(OLD.request_id, OLD.job_uuid, OLD.document_version_id, OLD.file_hash, OLD.revision,
+                   OLD.analysis_basis_token, OLD.writing_scope, OLD.note, OLD.evidence_reference,
+                   OLD.source_evidence, OLD.conflict_acknowledged, OLD.actor, OLD.created_at) THEN
+                RAISE EXCEPTION 'writing scope decisions are immutable';
+            END IF;
+            RETURN NEW;
+        END $$""",
+    ],
 })
 
 

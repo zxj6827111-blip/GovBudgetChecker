@@ -23,9 +23,23 @@ def subject_suffix_key(value: str) -> str:
     return name
 
 
+_LEGACY_SUBJECT_ALIASES = {
+    "行政事业单位离退休": "行政事业单位养老",
+    "其他行政事业单位离退休": "其他行政事业单位养老",
+    "工业和信息产业监管": "工业和信息产业",
+    "文化体育与传媒": "文化旅游体育与传媒",
+    "其他文化体育与传媒": "其他文化旅游体育与传媒",
+}
+
+
 def subject_variant_key(value: str) -> str:
-    # 字形变体仅用于候选定位，正式名称仍按原文逐字比较。
-    return subject_suffix_key(value).replace("其它", "其他")
+    # 字形变体与常见历史科目沿用名仅用于候选定位，正式名称仍按原文逐字比较。
+    key = subject_suffix_key(value).replace("其它", "其他")
+    for prefix in ("归口管理的",):
+        if key.startswith(prefix) and len(key) - len(prefix) >= 4:
+            key = key[len(prefix):]
+            break
+    return _LEGACY_SUBJECT_ALIASES.get(key, key)
 
 
 def subject_name_candidates(name: str, names: Mapping[str, str]) -> list[str]:
