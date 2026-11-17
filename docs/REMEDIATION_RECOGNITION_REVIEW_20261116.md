@@ -370,3 +370,96 @@ revision 与结果指纹。
 - 测试：`tests/test_result_semantics_20261116.py`、
   `tests/test_recognition_review_remediation_20261116.py`
 - 本报告：`docs/REMEDIATION_RECOGNITION_REVIEW_20261116.md`
+
+## 11. 2026-11-17 第二次独立复核（`4c788761`）四类缺口返工
+
+第二次独立复核（`outputs/independent_recognition_review_20261117_4c788761/
+第二次独立复核报告.txt`）确认 RR-03/RR-04 原问题已修复，另提出 3 项 P1
+与 1 项 P2。本轮逐项返工如下。
+
+### 11.1 RR-01 后续：金额角色与科目绑定（P1）
+
+- 共享“其中”分项的金额角色改为逐项从原文提取
+  （`_GROUP_ITEM_AMOUNT_RE` 捕获分项前的“年初预算/支出决算”阶段词），
+  组级合计的存在不再倒推全部分项角色；预算与决算分别生成组回执
+  `V33-251:{budget|final}:group:{item_start}`。
+- 角色解析顺序：显式阶段词 → 枚举句开头阶段限定（“其中：年初预算：…”）
+  → 全部裸金额按本段落（支出决算具体情况）决算口径 → 显式与裸金额混排时
+  裸金额角色记为无法证明，不参与组内算术并单独入档。
+- 科目绑定只认可证明形态：归一后完全一致、一方为另一方 ≥4 字前缀省略、
+  或差异为已核准同义片段（`_GROUP_SUBJECT_VARIANTS`，当前仅
+  “养老↔离退休”，要求共同前缀一致、差异落在名称结尾）。通用前缀相似
+  阈值移除，降级为 `_group_subject_name_candidate` 候选提示，不参与绑定。
+- 绑定必须唯一：一名多配或重复名称判歧义、全部不绑定并单独入档；
+  未归属分项不再整体清空，改在组回执原因中留痕。
+- 反例验证：正控 `final:group pass` + `final:item_sum pass`（含未归属子项
+  留痕）；显式“年初预算为”分项 → `final:group` 无 pass、
+  `final:item_sum insufficient_data`、`budget:group fail`（差 9.07）；近似名
+  “基金补助” → 组 `insufficient_data`；混排与重复名称组合均不 pass。
+- 回归：`tests/test_independent_review_rr01_rr04.py` 增至 22 项（原 7 项保留）。
+
+### 11.2 RR-02 后续：部分页相交不再吞并独立原因（P1）
+
+- `_guarded_roots` 接入 V33-251 与 CMM-017 两个分支，分支不再提前返回绕过
+  守卫；修复函数内 `review_items` 循环变量遮蔽义务参数的源码缺陷。
+- 守卫从“页码有交集”收紧为“根问题证据必须覆盖义务全部独立来源页”：
+  未被覆盖的页若携带表实例缺数或独立读取原因，整条义务保守保留。
+- 主体身份校验：义务侧（detail 文本 + 缺数操作数 row_key）与根问题侧
+  （location 显式主体 + 消息文本）都可识别主体且互不包含时，拒绝承接
+  （同页不同科目/同页不同单位不再归并）；任一侧不可识别不下结论。
+- 新增 `cascade_partial_associations`：复合义务无法整条归并时，把已确定的
+  候选根问题与未覆盖独立页写入诊断 `partial_root_association`，不把整条
+  归为 `upstream_material_defect`。
+- 组合回归：部分页相交（两分支）、同页不同科目、同页不同表、无页码、
+  多根候选、execution_error、部分关联入档，共 8 项新用例。
+
+### 11.3 RR-05A：失败分类与断点批次身份（P1）
+
+- `_run_one` 按最终任务状态分类：`error/failed/cancelled` 记 `failed`
+  （流水线异常被捕获后正常返回不再记成 completed）；非终态
+  （queued/processing 等）记 `failed`；`done/review_required/degraded`
+  记完成执行，且 `coverage_incomplete` 与完成执行分开统计。
+- 断点回执记录批次指纹（选集身份 + AI 策略 + 工具版本）、输入/结果
+  revision、原件哈希与文档版本；只有“本批次确已完成、且当前行仍是该
+  批次产物（结果 revision 匹配当前行）”的条目才允许跳过。
+- 同批次恢复先按断点识别本批已产生的新 revision，不先报
+  `frozen_revision_changed`；旧批次/其他配置断点、失败回执、revision 已
+  前进的条目一律重跑或按处置原因跳过。
+- 控制流级回归（mock 流水线与状态负载，不触库）：error 记 failed、
+  非终态不记 completed、跨批次断点不复用、结果 revision 前进不复用、
+  输入/结果 revision 与批次指纹入档、指纹随策略与选集变化。
+
+### 11.4 RR-05B：恢复状态一致性（P2）
+
+- `RecoveryCoordinator.recover` 新增 `verify` 回调：恢复是否成功以重算后
+  的有效关系回执为准；重跑后原失败关系仍有未完成回执或未被重跑覆盖时，
+  记 `not_recovered`（`rerun_relations_still_incomplete`），旧回执保留。
+- `engine_rule_runner` 的恢复输入改为信号原因码与本次关系回执原因码的
+  并集（原因码只写在关系回执上时恢复同样触发）；重跑包进
+  `rule_identity_requirements`（与首次执行同一身份约束）。
+- 恢复成功后旧失败回执移出 `fact_receipts`（按 sub_check_id 被重跑回执
+  覆盖的才移出），下游聚合只看当前有效回执；失败历史留存于
+  `stats.recovery_superseded_receipts` 与 `document.superseded_fact_receipts`；
+  未被重跑覆盖的关系回执继续阻塞，已有 partial findings 不丢失。
+- 接入范围如实受限：协调器只接入 EngineRuleRunner 双模式入口；legacy
+  单模式 pipeline 未接入（模块 docstring 明示）。
+- 集成回归：`tests/test_recovery_runner_integration_20261117.py`（4 项，
+  真实 `EngineRuleRunner.run_rules` + 隔离假 I/O）：回执原因码入口、
+  恢复后收敛为 pass、重跑仍未完成保持 insufficient_data、未覆盖关系
+  不清理旧回执；`test_bounded_recovery_20261117.py` 增至 8 项。
+
+### 11.5 验证记录
+
+- 复核方定向集 + 本轮新增回归（14 文件）：**186 passed**；恢复协调器与
+  真实 runner 集成：**11 passed**。
+- 后端全量：`tests/`（不含 `tests/remediation`）**3673 passed, 167 skipped**；
+  `tests/remediation` 全目录 **2634 passed, 26 skipped**；合计 **6307 passed**。
+- 真实 PostgreSQL（隔离容器 55452，随机 schema，迁移幂等）：**164 passed**。
+- V33-251 消费方与回放类（checklist/dh03b/catalog/golden/replay/bench）：
+  114 passed。
+- ruff、mypy：改动文件全部通过。
+- 前端未改动（上一轮单测/构建/E2E 结论仍有效）。
+- 未执行存量重分析、未合并 main、未部署远程（遵照复核建议）。
+- 说明：一次全量套件中 `test_department_stats_prefers_merged_issue_total`
+  的失败复现为两套 pytest 并发运行对共享组织目录（data/*.json）的读写
+  竞争；单进程顺序运行下该用例及全量均通过，与业务代码改动无关。
