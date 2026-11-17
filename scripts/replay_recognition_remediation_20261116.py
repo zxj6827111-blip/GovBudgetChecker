@@ -29,6 +29,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.engine.fact_context import FactContext  # noqa: E402
+from src.schemas.document_profile import DocumentProfile  # noqa: E402
 from src.engine.rules_v33 import build_document  # noqa: E402
 from src.schemas.parse_artifact import ParseArtifact  # noqa: E402
 
@@ -98,7 +99,8 @@ def _run_job(job_dir: Path, artifact: Dict[str, Any], status: Dict[str, Any]) ->
     doc = build_document(str(_pdf_path(job_dir)), page_texts, page_tables, 0)
     doc.parse_artifact = artifact_obj
     doc.fact_context = context
-    doc.document_profile = status.get("document_profile")
+    if status.get("document_profile"):
+        doc.document_profile = DocumentProfile.model_validate(status["document_profile"])
 
     kind = str(status.get("report_kind") or status.get("doc_type") or "").lower()
     classes = _rule_classes()

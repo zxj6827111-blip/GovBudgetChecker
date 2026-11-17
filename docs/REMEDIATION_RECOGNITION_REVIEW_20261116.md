@@ -164,13 +164,14 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. .venv/bin/python \
 
 | 案例 | 执行/适用 | pass | fail | insufficient | execution_error |
 | --- | --- | --- | --- | --- | --- |
-| 95c937cc 上海市审计局 | 89/90 | 73 | 13 | 1（CMM-019 封面文种依据） | 0 |
-| 05e40add 合作交流办 | 89/90 | 76 | 10 | 1（同上） | 0 |
-| d835cf2a 市政府办公厅 | 89/90 | 80 | 6 | 1（同上） | 0 |
-| 34f7645b 民族宗教局 | 89/90 | 76 | 10 | 1（同上） | 0 |
+| 95c937cc 上海市审计局 | 90/90 | 74 | 13 | 0 | 0 |
+| 05e40add 合作交流办 | 90/90 | 76 | 11 | 0 | 0 |
+| d835cf2a 市政府办公厅 | 90/90 | 81 | 6 | 0 | 0 |
+| 34f7645b 民族宗教局 | 90/90 | 77 | 10 | 0 | 0 |
 
-- 四份材料均无 `parse_error` / `execution_error`；V33-110/106/107/223/227
-  不再出现在未完成规则中。
+- 回放使用任务持久化的 `document_profile` 与物理片段页表，四份材料均
+  **90/90 规则到达终态**，无 `parse_error` / `insufficient_data` /
+  `execution_error`；V33-110/106/107/223/227 不再出现在未完成规则中。
 - 34f7645b 的义务账本：
   `OBL-INTERNAL-T2-TOTAL` = **completed**（V33-240=fail，失败原因是原件 20805
   明细缺失 837.63 万元的真实材料问题），不再是 `insufficient_data`；
