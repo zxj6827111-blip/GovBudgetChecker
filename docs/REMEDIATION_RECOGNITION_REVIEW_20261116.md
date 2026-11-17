@@ -157,6 +157,27 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. .venv/bin/python \
 | b4e3ba95 机关事务管理局 2024 决算 | V33-CROSS-SAN-GONG-ECON | 仅取数不足，无具体问题 | 新增 1 条 31007/公务用车购置编码名称错配问题；金额比较仍 unknown |
 | **34f7645b 民族宗教局 2024 决算** | **V33-240** | **2013499 total_actual 缺失，OBL-INTERNAL-T2-TOTAL 未完成** | **横向 2013499 关系 `not_applicable`（全行空白=0）、纵向 20134 关系 `pass`；V33-240 执行完成** |
 
+### 5.1 完整规则流水线复跑（不只是单规则）
+
+用真实 `artifact_snapshot + fact_context + 原件` 构造 `page_texts/page_tables`
+后执行全部 90 条适用规则（不调 AI、不落库）：
+
+| 案例 | 执行/适用 | pass | fail | insufficient | execution_error |
+| --- | --- | --- | --- | --- | --- |
+| 95c937cc 上海市审计局 | 89/90 | 73 | 13 | 1（CMM-019 封面文种依据） | 0 |
+| 05e40add 合作交流办 | 89/90 | 76 | 10 | 1（同上） | 0 |
+| d835cf2a 市政府办公厅 | 89/90 | 80 | 6 | 1（同上） | 0 |
+| 34f7645b 民族宗教局 | 89/90 | 76 | 10 | 1（同上） | 0 |
+
+- 四份材料均无 `parse_error` / `execution_error`；V33-110/106/107/223/227
+  不再出现在未完成规则中。
+- 34f7645b 的义务账本：
+  `OBL-INTERNAL-T2-TOTAL` = **completed**（V33-240=fail，失败原因是原件 20805
+  明细缺失 837.63 万元的真实材料问题），不再是 `insufficient_data`；
+  `OBL-TXT-T1/T2/T3` 均为 completed。
+- 回放脚本已按物理片段还原 `doc.page_tables`，避免旧规则因回放环境缺页表
+  被误判为执行异常；这属于回放工具修正，不改变生产流水线。
+
 ## 6. 目标案例 34f7645b：断点与验证
 
 - 原件：`uploads/34f7645bc5f1cc5f09530c9d9d3cf3af/上海市民族和宗教事务局.pdf`

@@ -86,7 +86,16 @@ def _run_job(job_dir: Path, artifact: Dict[str, Any], status: Dict[str, Any]) ->
     artifact_obj = ParseArtifact.from_dict(artifact)
     pdf = pymupdf.open(_pdf_path(job_dir))
     page_texts = [page.get_text("text") for page in pdf]
-    doc = build_document(str(_pdf_path(job_dir)), page_texts, [], 0)
+    # 兼容仍读 doc.page_tables 的旧规则：按物理页还原页面表格，
+    # 不能让回放环境缺少页面表而被误判为规则执行异常。
+    page_tables: List[List[List[List[Any]]]] = [[] for _ in page_texts]
+    fragments = artifact_obj.physical_fragments or artifact_obj.table_fragments
+    for fragment in fragments:
+        page = int(getattr(fragment, "page_number", 0) or 0)
+        rows = [[str(cell or "") for cell in row] for row in (fragment.rows or [])]
+        if 1 <= page <= len(page_tables) and rows:
+            page_tables[page - 1].append(rows)
+    doc = build_document(str(_pdf_path(job_dir)), page_texts, page_tables, 0)
     doc.parse_artifact = artifact_obj
     doc.fact_context = context
     doc.document_profile = status.get("document_profile")
