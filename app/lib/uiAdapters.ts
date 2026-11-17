@@ -74,7 +74,7 @@ export interface JobSummaryRecord {
   /** 审核台两个页签的条数（后端 review_queue_counts）；旧摘要可能没有。 */
   queue_required_total?: number;
   queue_reference_total?: number;
-  /** 必须处理里“未能自动核对”的条数（已含在 queue_required_total 内）。 */
+  /** 内部未完成检查条数；只作覆盖统计，不再计入 queue_required_total。 */
   queue_obligation_total?: number;
   queue_candidate_total?: number;
   queue_degraded_total?: number;

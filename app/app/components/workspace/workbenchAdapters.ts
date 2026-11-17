@@ -65,13 +65,11 @@ export function resolveQueueCounts(job: JobSummaryRecord): QueueCountSummary | n
     const n = count(value);
     return n ? [`${label} ${n}`] : [];
   });
-  const obligations = count(job.queue_obligation_total);
-  const requiredParts = obligations ? `（问题 ${required - obligations}、未能自动核对 ${obligations}）` : "";
   return {
     required,
     reference,
     referenceParts,
-    detail: `必须处理 ${required}${requiredParts}：逐条处理后才能完成复核；`
+    detail: `必须处理 ${required}：逐条处理后才能完成复核；`
       + `参考 ${reference}${referenceParts.length ? `（${referenceParts.join("、")}）` : ""}：供查阅，不计入完成条件`,
   };
 }

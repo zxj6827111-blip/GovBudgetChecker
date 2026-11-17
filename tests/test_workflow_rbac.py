@@ -202,8 +202,8 @@ def test_remediation_package_rejects_cross_org_jobs_and_is_not_leaked(client: Te
     assert set(visible.json()["issues"]) == {"job-a::issue-a"}
 
 
-def test_system_review_reasons_can_be_saved_and_read_back(client: TestClient):
-    """系统提示只存在于规范报告，不能因缺少原始 finding 而拒绝卡片操作。"""
+def test_system_review_reasons_are_diagnostics_not_workflow_issues(client: TestClient):
+    """2026-11-16：系统处理原因进入 diagnostics，不再生成业务问题卡片。"""
     org_id = _create_org("system-review-unit")
     _create_job("job-system-review", "seed", org_id, "unused-finding")
     codes = [
@@ -217,24 +217,24 @@ def test_system_review_reasons_can_be_saved_and_read_back(client: TestClient):
         "review_reasons": [{"code": code, "message": f"待人工复核：{code}"} for code in codes],
     })
     token = _login(client, "admin", ADMIN_PASSWORD)
-    for index, code in enumerate(codes):
+    for code in codes:
         issue_id = f"review_reason:{code}"
-        status = "confirmed" if index % 2 == 0 else "no_issue"
         response = client.post("/api/workflow", headers=_headers(token), json={
             "action": "update_issue", "job_id": "job-system-review",
-            "issue_id": issue_id, "status": status, "note": "已核对该系统提示及其涉及范围",
+            "issue_id": issue_id, "status": "confirmed", "note": "系统提示不是业务问题",
         })
-        assert response.status_code == 200, response.text
-        record = response.json()["issues"][f"job-system-review::{issue_id}"]
-        assert record["status"] == status
-        assert record["severity"] == "manual_review"
+        assert response.status_code == 404, response.text
 
     visible = client.get("/api/workflow", headers=_headers(token)).json()["issues"]
-    assert set(visible) == {f"job-system-review::review_reason:{code}" for code in codes}
-    assert all(record["note"] == "已核对该系统提示及其涉及范围" for record in visible.values())
+    assert visible == {}
     report = runtime.get_job_status_payload("job-system-review")["review_report"]
     assert report["issues"] == []
     assert report["conclusion"]["review_issue_total"] == 0
+    assert not [item for item in report["manual_review"]
+                if item.get("record_type") == "review_reason"]
+    notices = [item for item in report["diagnostics"]
+               if item.get("record_type") == "processing_notice"]
+    assert {item.get("code") for item in notices} == set(codes)
 
 
 def test_system_review_lookup_rejects_unknown_ids_and_unfinished_checks(client: TestClient):

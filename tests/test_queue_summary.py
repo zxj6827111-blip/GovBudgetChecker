@@ -65,7 +65,9 @@ def test_queue_keeps_zero_material_issues_and_exposes_all_detail_tips(job):
     assert summary['review_issue_total'] == counts['review_issue_total'] == 0
     assert summary['review_candidate_total'] == counts['review_candidate_total'] == 0
     assert summary['tip_total'] == counts['tip_total'] == 5
-    assert summary['review_notice_total'] == counts['review_notice_total'] == 1
+    assert summary['review_notice_total'] == counts['review_notice_total'] == 0
+    assert any(item.get('record_type') == 'processing_notice'
+               for item in detail['review_report']['diagnostics'])
 
 
 def test_unknown_document_pages_stay_unknown_in_summary(job):
@@ -135,3 +137,37 @@ def test_list_required_count_includes_blocking_obligations():
     assert runtime._blocking_obligation_total("job-obl", status, []) == 2
     # 没有覆盖记录是“未知”，不是 0。
     assert runtime._blocking_obligation_total("job-obl", {"result": {"meta": {}}}, []) is None
+
+
+def test_list_required_count_does_not_add_technical_diagnostics(job):
+    """业务「必须处理」只统计正式问题；内部未完成关系单独记覆盖，不叠加到必处理。"""
+    coverage = {
+        "catalog_version": "t", "catalog_fingerprint": "f", "applicable_total": 2,
+        "completed_total": 1, "not_applicable_total": 0, "unresolved_total": 1,
+        "blocking_total": 1, "by_reason": {}, "by_group": [],
+        "instances": [{
+            "obligation_id": "OBL-INTERNAL-T2-TOTAL", "group_id": "TABLE_INTERNAL",
+            "group_title": "表内关系", "title": "收入决算表横向合计",
+            "status": "insufficient_data", "reason": "insufficient_data",
+            "reason_label": "取数不足", "detail": "2013499的操作数缺少可唯一核对的事实",
+            "checkers": [], "missing_checkers": [], "depends_on": [], "input_gaps": [],
+            "evidence_kind": "locatable", "basis": "", "gap_note": "",
+            "requires_ai": False, "blocks_gate": True,
+        }],
+    }
+    finding = {
+        "id": "V33-222-1", "source": "rule", "rule_id": "V33-222",
+        "severity": "error", "title": "金额不一致", "message": "合计与分项不一致",
+        "location": {"page": 8},
+        "evidence_status": "complete",
+        "evidence_verification": {"status": "verified", "source_identity_complete": True},
+    }
+    write_status(
+        job, scanned_page_count=0,
+        result={"rule_findings": [finding], "ai_findings": [],
+                "meta": {"obligation_coverage": coverage}},
+    )
+    summary = runtime.collect_job_summary(job)
+    assert summary["queue_required_total"] == 1
+    assert summary["queue_obligation_total"] == 1
+    assert summary["queue_diagnostic_total"] == 1

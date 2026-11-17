@@ -781,7 +781,7 @@ export function IssuesTab({
               })}
             </div>
             <div className="shrink-0 border-t border-border px-4 py-2 text-[11px] text-slate-500">
-              {queue === "required" ? "这些条目计入完成条件：问题逐条确认或记录理由后忽略；未能自动核对的检查选核对无误、确认有问题或不适用。" : "参考项不影响完成复核；可按需确认、忽略或补充意见。"}
+              {queue === "required" ? "这些条目计入完成条件：问题逐条确认或记录理由后忽略。" : "参考项不影响完成复核；可按需确认、忽略或补充意见。"}
               <span className="ml-1 text-slate-400">同类集中展示，各项分别记录结论；↑ ↓ 切换，Esc 关闭。</span>
             </div>
           </div>

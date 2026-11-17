@@ -945,12 +945,14 @@ def build_worklist_review_summary(
         if analysis.completed else None
     )
     pending_checks = len(_unhandled_obligations(state)) if state.coverage_available else None
+    # 技术覆盖缺口不能把内部未完成关系变成用户必须逐项处理的补核任务，
+    # 但也不得在检查未完整时显示“只剩签字/检查通过”：只有 done 才可能
+    # 进入 signoff_only；完成门禁另行允许复核已展示问题。
     signoff_only = bool(
         analysis.completed
         and status in ("pending", "invalidated")
         and str(analysis.status or "").strip().lower() == "done"
         and pending_findings == 0
-        and (pending_checks is None or pending_checks == 0)
     )
     return {
         "review_status": status,

@@ -389,7 +389,7 @@ assert.deepEqual(queued?.referenceParts, ["待核实 5", "证据不足 2", "提�
 assert.match(queued?.detail ?? "", /不计入完成条件/);
 // 必须处理含“未能自动核对”时，悬停说明拆开两类。
 assert.match(resolveQueueCounts({ job_id: "o", queue_required_total: 6, queue_obligation_total: 4, queue_reference_total: 22 } as JobSummaryRecord)?.detail ?? "",
-  /必须处理 6（问题 2、未能自动核对 4）/);
+  /必须处理 6：逐条处理后才能完成复核/);
 // 为 0 的组成不列。
 assert.deepEqual(resolveQueueCounts({ job_id: "z", queue_required_total: 0, queue_reference_total: 3,
   queue_candidate_total: 0, queue_degraded_total: 0, queue_tip_total: 3, queue_notice_total: 0 } as JobSummaryRecord)?.referenceParts, ["提示 3"]);

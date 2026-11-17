@@ -1282,6 +1282,38 @@ def _build_docx_document_xml(
                     ("原因/说明", str(item.get("message") or item.get("detail") or item.get("reason") or "")),
                     *_manual_finding_details(item),
                 ]))
+        processing = review_report.get("processing_summary")
+        if isinstance(processing, dict) and processing:
+            body.append(_docx_paragraph("处理状态", style="Heading1"))
+            body.append(_docx_table([
+                ("执行状态", str(processing.get("execution_state") or "")),
+                ("检查覆盖", str(processing.get("coverage_state") or "")),
+                ("正式问题", str(processing.get("formal_issue_total") or 0)),
+                ("技术诊断", str(processing.get("technical_diagnostic_total") or 0)),
+                ("材料缺陷阻断", str(processing.get("material_defect_blocked_total") or 0)),
+                ("内部未完成关系", str(processing.get("unfinished_obligation_total") or 0)),
+                ("检查是否完整", "是" if processing.get("check_complete") is True else "否，结果尚不完整"),
+            ]))
+        diagnostics = review_report.get("diagnostics")
+        diagnostics = (
+            [item for item in diagnostics if isinstance(item, dict)]
+            if isinstance(diagnostics, list)
+            else []
+        )
+        if diagnostics:
+            # 维护/审计导出：技术诊断不进入业务问题清单，也不与正式问题行混排。
+            body.append(_docx_paragraph("技术诊断（不进入业务问题清单）", style="Heading1"))
+            for item in diagnostics:
+                body.append(_docx_table([
+                    ("类型", str(item.get("record_type") or "diagnostic")),
+                    ("对象", str(item.get("obligation_id") or item.get("id") or item.get("code") or "")),
+                    ("原因码", "、".join(str(code) for code in (item.get("reason_codes") or []))
+                     or str(item.get("code") or "")),
+                    ("cause_kind", str(item.get("cause_kind") or "")),
+                    ("说明", str(item.get("message") or item.get("detail") or item.get("reason") or "")),
+                    ("根问题", "、".join(str(value) for value in (item.get("root_issue_ids") or []))),
+                    ("下一步", str(item.get("next_action") or "")),
+                ]))
         receipts = review_report.get("check_receipts")
         receipts = (
             [item for item in receipts if isinstance(item, dict)]

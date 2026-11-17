@@ -90,7 +90,6 @@ import {
   obligationItemsByProblemId,
   cascadedChecksByProblemId,
   obligationStatusEntries,
-  toObligationProblems,
   type ObligationDecision,
 } from "./obligationProblems";
 import {
@@ -463,10 +462,10 @@ export function ReviewWorkbenchPage({ initialJobId }: { initialJobId?: string } 
   const obligationBlock = reviewContext.kind === "available" && reviewContext.review.current_analysis.job_uuid === jobId
     ? reviewContext.review.obligation_review ?? null
     : null;
-  const obligationProblems = useMemo(() => toObligationProblems(obligationBlock, jobId), [obligationBlock, jobId]);
   const obligationItems = useMemo(() => obligationItemsByProblemId(obligationBlock), [obligationBlock]);
   const cascadedChecks = useMemo(() => cascadedChecksByProblemId(obligationBlock), [obligationBlock]);
-  const reviewProblems = useMemo(() => [...problems, ...obligationProblems], [problems, obligationProblems]);
+  // 技术诊断与未完成检查不进入业务问题队列；只在材料层汇总说明。
+  const reviewProblems = problems;
   const reviewStatusById = useMemo(
     () => ({ ...workflowStatusByIssueId, ...obligationStatusEntries(obligationBlock) }),
     [workflowStatusByIssueId, obligationBlock],
@@ -1114,11 +1113,10 @@ export function ReviewWorkbenchPage({ initialJobId }: { initialJobId?: string } 
    */
   const pendingObligations = currentReviewJob ? pendingObligationCount(reviewData) : null;
   const requiredTotal = countFormalProblems(problems);
-  const obligationItemCount = obligationProblems.length;
   const progressCounts: ReviewProgressCounts = {
     requiredTotal,
     ...statusCounts,
-    obligationTotal: pendingObligations === null ? null : Math.max(obligationItemCount, pendingObligations),
+    obligationTotal: pendingObligations,
     obligationPending: pendingObligations,
   };
   const requiredPending = statusCounts.pending + statusCounts.needsReview;
@@ -1149,7 +1147,7 @@ export function ReviewWorkbenchPage({ initialJobId }: { initialJobId?: string } 
           : showInvalidatedNotice && invalidated ? {
             text: `点击上方「${startLabel}」后可重新提交判定。`,
             invalidatedReason: invalidationReasonLabel(invalidated.invalidated_reason) || "复核依据已变化，需要重新复核",
-          } : { text: `当前为预览：点击上方「${startLabel}」后可确认、忽略问题和核对未能自动核对的检查。`, invalidatedReason: null }
+          } : { text: `当前为预览：点击上方「${startLabel}」后可确认或忽略问题。`, invalidatedReason: null }
     : null;
   const savedAtText = lastSavedAt ? `自动保存于 ${formatSavedAtTime(lastSavedAt)}` : null;
   const activeMoreTab = MORE_TABS.find((tab) => tab.id === activeTab) ?? null;

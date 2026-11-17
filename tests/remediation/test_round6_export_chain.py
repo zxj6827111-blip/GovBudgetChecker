@@ -318,7 +318,9 @@ def test_round6_five_download_sets_and_strict_tampering(tmp_path, monkeypatch):
                 table.remove(row)
     mutations = {
         "deleted_decision": ET.tostring(tree),
-        "changed_reason": xml.replace("rule_evidence_incomplete", "tampered_reason").encode(),
+        # 2026-11-16：全局处理原因退出业务导出；仍用导出中实际存在的人工决定说明
+        # 验证“改一个字就会改变文件字节”的防篡改链。
+        "changed_reason": xml.replace("Original version decision", "tampered_reason").encode(),
         "changed_revision": xml.replace(revision, "tampered_revision").encode(),
         "changed_message": xml.replace("文本收入预算与T1不一致", "tampered_message").encode(),
     }

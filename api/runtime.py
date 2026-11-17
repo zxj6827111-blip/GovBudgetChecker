@@ -138,7 +138,8 @@ JOB_SUMMARY_FILENAME = "job_summary.json"
 # 摘要字段口径的版本：新增或改变摘要字段时递增，旧快照因键失配自动重建。
 # 2：增加审核台两个页签的条数（queue_*）；3：必须处理计入“未能自动核对”（queue_obligation_total）；
 # 4：缺表/空表的连带核对不再计入“未能自动核对”（挂在根问题下）。
-JOB_SUMMARY_SCHEMA_VERSION = 4
+# 5：技术诊断不再计入“必须处理”；queue_obligation_total 仅作内部覆盖统计。
+JOB_SUMMARY_SCHEMA_VERSION = 5
 JOB_META_KEYS = (
     "job_id",
     "checksum",
@@ -2484,11 +2485,12 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
     review_counts = review_report_counts(review_report, ignored_issue_ids)
     # 列表显示审核台两个页签（必须处理 / 参考）的条数，点进去看到的就是这两个数。
     queue_counts = review_queue_counts(review_report, ignored_issue_ids)
-    # 补核已并入审核台「必须处理」（“未能自动核对”），列表的必须处理也计入同一批条目。
+    # 技术诊断只作内部覆盖统计：保留 queue_obligation_total 供维护/导出对账，
+    # 不再计入业务「必须处理」。业务必须处理只由正式问题决定。
     obligation_total = _blocking_obligation_total(job_dir.name, status_data, ignored_issue_ids)
     if obligation_total is not None:
         queue_counts["queue_obligation_total"] = obligation_total
-        queue_counts["queue_required_total"] += obligation_total
+        queue_counts["queue_diagnostic_total"] = obligation_total
 
     ai_participated = bool(use_ai_assist) and (
         dual_mode_enabled

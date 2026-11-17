@@ -166,7 +166,6 @@ export function ReviewInfoPanel({
         <section className={SECTION} data-testid="gbc-review-info-progress">
           <h3 className={HEADING}>
             人工复核：必须处理 {requiredHandled}/{requiredAll}
-            {progress.obligationTotal ? `（另有 ${progress.obligationTotal} 项未能自动核对在参考区）` : ""}
           </h3>
           <p className="mb-2 text-xs text-slate-600" data-testid="gbc-review-status-bar-counts">
             正式问题：已确认 {progress.confirmed} · 已忽略 {progress.ignored} · 已进整改包 {progress.inPackage} · 待复核 {progress.needsReview} · 待处理 {progress.pending}
@@ -182,7 +181,7 @@ export function ReviewInfoPanel({
           ) : (
             <p className="mb-2 text-xs text-success-700">服务端完成条件已满足。</p>
           )}
-          <p className="mb-2 text-xs text-slate-500">系统检出的正式问题需确认（或记录理由后忽略）；未能自动核对与参考条目已移至「参考」区，不阻断完成复核。</p>
+          <p className="mb-2 text-xs text-slate-500">系统检出的正式问题需确认（或记录理由后忽略）；具体材料疑点仍在「参考」区，技术诊断不进入问题队列。</p>
           <div className="flex flex-wrap gap-2">
             <button type="button" className={BUTTON} onClick={onShowRequired}>查看必须处理</button>
           </div>
@@ -192,11 +191,11 @@ export function ReviewInfoPanel({
           {progress.obligationPending === null ? (
             <p>当前复核上下文没有提供检查覆盖信息。</p>
           ) : progress.obligationPending > 0 ? (
-            <p>有 {progress.obligationPending} 项检查系统未能自动核对，已移至「参考」区仅供核查参考，不阻断完成复核。</p>
+            <p>已发现的问题可继续核实；本次检查有 {progress.obligationPending} 项内部关系未完成，结果尚不完整。相关技术记录保留在材料检查档案中，不需要逐项人工表态。</p>
           ) : (
-            <p>未能自动核对的检查已全部处理。</p>
+            <p>本次检查的内部关系已全部完成。</p>
           )}
-          <p className="mt-1 text-xs text-slate-500">这是整体检查的待办，与 AI 文字检查是否执行完成分开记录。</p>
+          <p className="mt-1 text-xs text-slate-500">这是整体检查覆盖度，与 AI 文字检查是否执行完成分开记录。</p>
         </section>
         <section ref={aiSectionRef} data-testid="gbc-review-info-ai">
           <h3 className={HEADING}>AI 文字检查</h3>
@@ -205,7 +204,7 @@ export function ReviewInfoPanel({
           ) : <p>本次分析没有记录 AI 文字检查的执行情况。</p>}
           {aiScope?.tone === "success" && aiScope.conclusionScope === "incomplete_scope" ? (
             <p className="mt-2 text-xs text-warning-700" data-testid="gbc-review-ai-scope-incomplete-note">
-              AI 文字检查本身已全部完成；“检查未完成”指仍有未能自动核对的检查待处理，处理完前不能得出完整结论。
+              AI 文字检查本身已全部完成；“检查未完成”指本次分析仍有内部关系未完成，结果尚不完整。
             </p>
           ) : null}
           <p className="mt-2 text-xs text-slate-500">AI 候选须对照原文判断：已核实的进入“必须处理”，待核实、证据不足的在“参考”。</p>

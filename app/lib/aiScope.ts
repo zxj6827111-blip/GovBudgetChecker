@@ -366,7 +366,7 @@ export function deriveAiScope(
     conclusionScopeLabel,
     // AI 已全部完成而整体结论仍为“未完成”时，未完成的是补核事项，不是 AI 检查。
     conclusionScopeShort: tone === "success" && conclusionScope === "incomplete_scope"
-      ? "仍有未能自动核对的检查待处理"
+      ? "仍有内部检查未完成，结果尚不完整"
       : CONCLUSION_SCOPE_SHORT_LABELS[conclusionScope] || conclusionScopeLabel,
     coverageStatus,
     coverageStatusLabel,
