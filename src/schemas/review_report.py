@@ -437,24 +437,28 @@ def build_review_report(payload: Mapping[str, Any]) -> Dict[str, Any]:
             "legacy_same_source_keys": list(item.get("legacy_same_source_keys") or []),
             "legacy_coverage_terms": list(item.get("legacy_coverage_terms") or []),
         }
+        legacy = (
+            not record["reason_codes"]
+            and not record["blocked_by"]
+            and not record["missing_operands"]
+        )
         roots: List[str] = []
-        try:
-            roots = cascade_root_issue_ids(
-                SimpleNamespace(**record),
-                cascade_row,
-                visible_issue_ids=visible_issue_ids,
-                structured_ingest=structured_ingest,
-            )
-        except Exception:  # noqa: BLE001 - 关联失败保持技术诊断，不影响报告生成
-            roots = []
+        if not legacy:
+            try:
+                roots = cascade_root_issue_ids(
+                    SimpleNamespace(**record),
+                    cascade_row,
+                    visible_issue_ids=visible_issue_ids,
+                    structured_ingest=structured_ingest,
+                )
+            except Exception:  # noqa: BLE001 - 关联失败保持技术诊断，不影响报告生成
+                roots = []
         diagnostics.append(
             annotate_diagnostic(
                 record,
                 schema_version=3,
                 root_issue_ids=roots,
-                legacy=not record["reason_codes"]
-                and not record["blocked_by"]
-                and not record["missing_operands"],
+                legacy=legacy,
             )
         )
     for raw_reason in _mapping_list(payload.get("review_reasons")):

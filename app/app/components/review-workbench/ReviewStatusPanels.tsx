@@ -79,6 +79,11 @@ export interface ReviewProgressCounts {
   /** 补核块不可用（旧后端/旧数据）时为 null。 */
   obligationTotal: number | null;
   obligationPending: number | null;
+  /** v3 报告处理摘要；旧结果没有时保持 null，回退到义务覆盖提示。 */
+  coverageState?: string | null;
+  technicalDiagnosticTotal?: number | null;
+  materialDefectBlockedTotal?: number | null;
+  checkComplete?: boolean | null;
 }
 
 export interface ReviewStatusChipsProps {
@@ -188,12 +193,28 @@ export function ReviewInfoPanel({
         </section>
         <section className={SECTION}>
           <h3 className={HEADING}>整体检查</h3>
-          {progress.obligationPending === null ? (
+          {progress.coverageState ? (
+            progress.checkComplete === true ? (
+              <p>本次检查覆盖完整，未发现内部关系未完成。</p>
+            ) : (
+              <p>
+                本次检查结果尚不完整：覆盖状态
+                {progress.coverageState === "partial" ? "为部分完成" : "未知"}
+                {typeof progress.technicalDiagnosticTotal === "number" && progress.technicalDiagnosticTotal > 0
+                  ? `；技术诊断 ${progress.technicalDiagnosticTotal} 项`
+                  : ""}
+                {typeof progress.materialDefectBlockedTotal === "number" && progress.materialDefectBlockedTotal > 0
+                  ? `；材料缺陷阻断 ${progress.materialDefectBlockedTotal} 项`
+                  : ""}
+                。已发现的问题可继续核实，技术诊断不需要逐项人工表态。
+              </p>
+            )
+          ) : progress.obligationPending === null ? (
             <p>当前复核上下文没有提供检查覆盖信息。</p>
           ) : progress.obligationPending > 0 ? (
             <p>已发现的问题可继续核实；本次检查有 {progress.obligationPending} 项内部关系未完成，结果尚不完整。相关技术记录保留在材料检查档案中，不需要逐项人工表态。</p>
           ) : (
-            <p>本次检查的内部关系已全部完成。</p>
+            <p>当前没有未完成的检查义务；完整覆盖状态以报告处理摘要为准。</p>
           )}
           <p className="mt-1 text-xs text-slate-500">这是整体检查覆盖度，与 AI 文字检查是否执行完成分开记录。</p>
         </section>

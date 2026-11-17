@@ -466,6 +466,13 @@ export function ReviewWorkbenchPage({ initialJobId }: { initialJobId?: string } 
   const cascadedChecks = useMemo(() => cascadedChecksByProblemId(obligationBlock), [obligationBlock]);
   // 技术诊断与未完成检查不进入业务问题队列；只在材料层汇总说明。
   const reviewProblems = problems;
+  const processingSummary = useMemo<Record<string, unknown> | null>(() => {
+    const report = detail?.review_report;
+    if (!report || typeof report !== "object" || Array.isArray(report)) return null;
+    const summary = (report as Record<string, unknown>).processing_summary;
+    if (!summary || typeof summary !== "object" || Array.isArray(summary)) return null;
+    return summary as Record<string, unknown>;
+  }, [detail]);
   const reviewStatusById = useMemo(
     () => ({ ...workflowStatusByIssueId, ...obligationStatusEntries(obligationBlock) }),
     [workflowStatusByIssueId, obligationBlock],
@@ -1118,6 +1125,14 @@ export function ReviewWorkbenchPage({ initialJobId }: { initialJobId?: string } 
     ...statusCounts,
     obligationTotal: pendingObligations,
     obligationPending: pendingObligations,
+    coverageState: typeof processingSummary?.coverage_state === "string"
+      ? String(processingSummary.coverage_state) : null,
+    technicalDiagnosticTotal: typeof processingSummary?.technical_diagnostic_total === "number"
+      ? Number(processingSummary.technical_diagnostic_total) : null,
+    materialDefectBlockedTotal: typeof processingSummary?.material_defect_blocked_total === "number"
+      ? Number(processingSummary.material_defect_blocked_total) : null,
+    checkComplete: typeof processingSummary?.check_complete === "boolean"
+      ? Boolean(processingSummary.check_complete) : null,
   };
   const requiredPending = statusCounts.pending + statusCounts.needsReview;
   const referenceCount = reviewProblems.length - requiredTotal;
