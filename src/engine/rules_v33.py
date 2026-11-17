@@ -1920,6 +1920,44 @@ def _page_verbatim_quote(
     return None
 
 
+def _row_amount_verbatim_quote(
+    doc: Document,
+    page: int,
+    row_anchor: Optional[str],
+    amount_text: Optional[str],
+    *,
+    max_len: int = 160,
+) -> Optional[str]:
+    """按行锚点（编码）定位同一行内的金额原格，返回含金额的页内唯一原文。
+
+    表格行在页文本中为“编码 名称 金额 …”；金额裸数字全页多次出现，不能直接
+    按页内首个命中绑定。先在锚点所在行内定位金额，再扩成页内唯一引文；行内
+    找不到时退回纯词元查找（保持既有可定位性兜底）。
+    """
+    from .checklist_support import unique_quote
+
+    pages = list(getattr(doc, "page_texts", None) or [])
+    if not (1 <= page <= len(pages)):
+        return None
+    raw = str(pages[page - 1] or "")
+    anchor = str(row_anchor or "").strip()
+    amount = str(amount_text or "").strip()
+    if anchor and amount:
+        anchor_at = raw.find(anchor)
+        if anchor_at >= 0:
+            line_start = raw.rfind("\n", 0, anchor_at) + 1
+            line_end = raw.find("\n", anchor_at)
+            line_end = len(raw) if line_end < 0 else line_end
+            amount_at = raw.find(amount, line_start, line_end)
+            if amount_at >= 0:
+                quote = unique_quote(
+                    raw, amount_at, amount_at + len(amount), min_len=4, max_len=max_len
+                )
+                if quote:
+                    return quote
+    return _page_verbatim_quote(doc, page, (amount, anchor))
+
+
 class R33004_CellNumberValidity(Rule):
     code, severity = "V33-004", "error"
     desc = "表内数字合法性（百分比>100、负数提示）"
@@ -13737,7 +13775,12 @@ class R33TxtFundDetail(Rule):
             narrative_page = _txt_fund_page_for(
                 offsets, section["body_start"] + binding["offset"]
             )
-            table_span = _page_verbatim_quote(
+            table_span = _row_amount_verbatim_quote(
+                doc,
+                int(item["page"]),
+                str(item.get("code") or ""),
+                str(item.get("cell_text") or ""),
+            ) or _page_verbatim_quote(
                 doc,
                 int(item["page"]),
                 (
