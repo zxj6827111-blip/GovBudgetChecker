@@ -2567,7 +2567,6 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
 
         refs: List[Dict[str, Any]] = []
         from .checklist_support import unique_quote
-        from .rules_v33 import _span_page_fragments
 
         for role, span_start, span_end, fallback_page, fallback_span in (
             ("增减句", match.start(), _sentence_end(0, match.end()), unit_page,

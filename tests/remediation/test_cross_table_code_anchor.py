@@ -296,7 +296,6 @@ def test_printed_name_contradicts_fact_not_bound():
     doc, target = welfare_document(cross_rows=[
         ("FIN_03_expenditure", "2080502", "事业单位离退休"),
     ])
-    anchor = doc.fact_context.facts[-1]
     grid = doc.parse_artifact.physical_fragments[0]
     grid.rows[0][1] = "其他行政事业单位养老支出"
     grid.cells[1].raw_text = grid.cells[1].normalized_text = grid.rows[0][1]

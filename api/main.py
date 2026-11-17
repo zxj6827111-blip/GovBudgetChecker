@@ -1591,7 +1591,7 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
         selected_org_basis = runtime.resolve_organization_basis(organization_id)
         if not selected_org_basis.get("level") and runtime.ORG_AVAILABLE:
             try:
-                job_link = runtime.require_org_storage().get_job_org(job_id)
+                job_link = runtime.require_org_storage().get_job_org(job_dir.name)
                 linked_org_id = getattr(job_link, "org_id", None) if job_link else None
                 if linked_org_id and str(linked_org_id).strip() != str(organization_id or "").strip():
                     linked_basis = runtime.resolve_organization_basis(linked_org_id)

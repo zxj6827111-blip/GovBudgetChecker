@@ -9,6 +9,7 @@ import re
 import unicodedata
 from collections import Counter
 from decimal import Decimal
+from typing import Any, Dict, List
 
 from .amount_math import classify_amount_diff
 from .rule_policy import AMOUNT_TOLERANCE_WAN, amount_difference_exceeds_policy
@@ -872,7 +873,7 @@ def _is_near_subject_name_candidate(requested: str, actual: str) -> bool:
         return True
     if len(actual) == len(requested):
         # 等长且长度>=6时仅差1个字（如“应急处理” vs “应急处置”）
-        if len(actual) >= 6 and sum(1 for a, b in zip(requested, actual) if a != b) == 1:
+        if len(actual) >= 6 and sum(1 for a, b in zip(requested, actual, strict=True) if a != b) == 1:
             return True
         return False
     if len(actual) > len(requested):

@@ -215,7 +215,7 @@ def column_shift_issue(rule, doc, title: str, table_code: str, detection: Dict[s
     )
     pages = _fact_pages(doc, detection.get("fact_ids") or [])
     verbatim_quote, ref_page = _column_shift_verbatim_quote(doc, title, detection, pages)
-    location = {
+    location: Dict[str, Any] = {
         "table": title,
         "table_code": table_code,
         "page": ref_page or (pages[0] if pages else None),

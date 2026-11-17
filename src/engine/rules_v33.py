@@ -4371,8 +4371,9 @@ class R33106_GeneralBudgetStruct(Rule):
                     )
                     if tbl_quote:
                         trefs.append({"role": "T5合计", "page": p, "span": tbl_quote})
-                    if nar_quote or total_statement_text:
-                        trefs.extend(_narrative_quote_refs(doc, [nar_quote or total_statement_text]))
+                    narrative_for_refs = nar_quote or total_statement_text
+                    if narrative_for_refs:
+                        trefs.extend(_narrative_quote_refs(doc, [narrative_for_refs]))
                     ev_page = trefs[-1]["page"] if trefs else p
                     ev_quote = trefs[-1]["span"] if trefs else tbl_quote
                     loc: Dict[str, Any] = {"page": ev_page, "pos": 0}

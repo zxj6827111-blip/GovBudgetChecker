@@ -356,7 +356,6 @@ async def delete_material_reports(
             for row in slot_rows:
                 locked_slots[row["id"]] = dict(row)
 
-        req_slot_set = set(req_slot_uuids)
         found_target_slot_uuids: List[uuid.UUID] = []
         for parsed_uuid in req_slot_uuids:
             if parsed_uuid not in locked_slots:

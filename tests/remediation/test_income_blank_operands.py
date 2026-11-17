@@ -78,7 +78,7 @@ def _rule():
 def test_certified_blank_cells_join_text_check_as_zero():
     """认证真空白 + 说明写 0：空白观测操作数参与核对，义务不再阻断。"""
     doc, rows = document()
-    issues = _rule().apply(doc)
+    _rule().apply(doc)
     # 合计行的空白格必须被空白观测接纳（不是"操作数缺失"）。
     assert not any("business_income/决算操作数缺失" in str(r.get("incomplete_reason") or "")
                    for r in doc.fact_receipts)
@@ -137,6 +137,6 @@ def test_blank_operand_admission_applies_across_columns():
     cell.raw_text = ""
     cell.numeric_value = None
     cell.native_blank_verified = True
-    issues = _rule().apply(doc)
+    _rule().apply(doc)
     assert not any("other_income/决算操作数缺失" in str(r.get("incomplete_reason") or "")
                    for r in doc.fact_receipts)
