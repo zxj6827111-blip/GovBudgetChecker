@@ -404,6 +404,9 @@ revision 与结果指纹。
   守卫；修复函数内 `review_items` 循环变量遮蔽义务参数的源码缺陷。
 - 守卫从“页码有交集”收紧为“根问题证据必须覆盖义务全部独立来源页”：
   未被覆盖的页若携带表实例缺数或独立读取原因，整条义务保守保留。
+  该检查只限主体/阶段类根问题；表实例类根问题（缺表/空表/读取异常）
+  的覆盖范围由分支层按表实例身份校验，跨页同一张表不因根问题只引用
+  其中一页而被拆散。
 - 主体身份校验：义务侧（detail 文本 + 缺数操作数 row_key）与根问题侧
   （location 显式主体 + 消息文本）都可识别主体且互不包含时，拒绝承接
   （同页不同科目/同页不同单位不再归并）；任一侧不可识别不下结论。
@@ -422,9 +425,15 @@ revision 与结果指纹。
 - 断点回执记录批次指纹（选集身份 + AI 策略 + 工具版本）、输入/结果
   revision、原件哈希与文档版本；只有“本批次确已完成、且当前行仍是该
   批次产物（结果 revision 匹配当前行）”的条目才允许跳过。
+- `_load_checkpoint` 返回“已完成条目”的身份元组集合
+  `(job_id, 批次指纹, 结果 revision, 原件哈希, 文档版本)`：失败/跳过回执
+  **永不**进入该集合，失败任务不可能仅因 job_id 相同被跳过；跨批次/
+  revision 不匹配的复用拒绝在 `_checkpoint_resumable` 运行时判定。
 - 同批次恢复先按断点识别本批已产生的新 revision，不先报
   `frozen_revision_changed`；旧批次/其他配置断点、失败回执、revision 已
   前进的条目一律重跑或按处置原因跳过。
+- `--job-id` 指向当前槽位行之外的任务时留显式回执
+  `job_not_in_current_slots`，不再静默丢弃。
 - 控制流级回归（mock 流水线与状态负载，不触库）：error 记 failed、
   非终态不记 completed、跨批次断点不复用、结果 revision 前进不复用、
   输入/结果 revision 与批次指纹入档、指纹随策略与选集变化。
@@ -455,28 +464,80 @@ revision 与结果指纹。
   insufficient_data、未覆盖关系不清理旧回执、聚合取当前有效回执；
   `test_bounded_recovery_20261117.py` 增至 8 项。
 
-### 11.5 验证记录
+### 11.5 交付前对抗自检（2026-11-17，第三方复核前）
 
-- 复核方定向集 + 本轮新增回归（14 文件）：**186 passed**；恢复协调器与
+以复核方视角对四处返工做相邻边界排查，发现并修复两处自建缺陷：
+
+- **RR-02 过度拦截**：未覆盖页检查原对所有分支生效，跨页同一张表
+  （根问题只引用其中一页）会被错误拆散。已限定为主体/阶段类分支；
+  表实例类分支的覆盖范围由分支层按表实例身份校验（回归：
+  `test_table_reading_root_covers_same_table_across_pages`）。
+- **RR-05A 静默丢弃**：`--job-id` 指向当前槽位行之外的任务时无任何
+  回执。已改为显式 `job_not_in_current_slots`（回归：
+  `test_run_reports_unknown_job_id_instead_of_silent_drop`）。
+- **断点加载器形态**：`_load_checkpoint` 由记录列表收紧为“已完成条目”
+  身份元组集合，失败/跳过回执永不进入，复核方探针零适配可读
+  （`resumed_completed_jobs` 对失败任务为 `[]`）。
+- 预算自洽变体探针：预算分项之和恰等于预算总额时，决算组回执不存在、
+  `final:item_sum` 仍 insufficient——决算侧不因预算算术自洽而被证明。
+- 枚举句内夹带的组级合计（“年初预算总计…”）不再被当作裸分项进入组内
+  算术（按名称后缀总计/合计过滤；回归
+  `test_enum_embedded_group_total_is_not_a_component`，10 份真实材料
+  回放复跑 0 差异）。
+
+交付前证据链（HEAD 提交前复跑）：
+
+- 后端全量（含 remediation）：**6312 passed, 193 skipped, exit 0**。
+- 真实 PostgreSQL（隔离容器，随机 schema）：**164 passed**。
+- 前端单测：**50 套全过**；`toUiProblems` 探针（candidate→required 0、
+  structured→visible 0）与复核方 `frontend_results.json` 期望一致。
+- 真实材料回放：10 份任务 × 9 条定向规则，显式结果与上一轮存档
+  **0 差异**；每任务 90 条规则全流水线 statuses/key_obligations/
+  unresolved_rules **0 差异**；唯一回执差异为 edb56827 新增
+  `V33-251:final:group:225` **pass**（组内 2055.14=组级 2055.14，两个
+  未归属子项如实留痕），显式问题不变。
+- 三份原 PDF 全新解析（95c937cc/05e40add/d835cf2a）：五条规则正常返回，
+  半角括号命中、合计 7709.62 取到、章节修复有效；status.json SHA256
+  前后一致，未改动业务数据。
+- 复核方两轮探针零适配复跑全绿（副本运行，未改动其证据目录）：
+  第一轮 9 组反例、第二轮组变体/级联/恢复/断点全部达到返工预期。
+- 文档命令与真实接口核对：`backup_all.py create` 与 `reanalyze_current_slots`
+  全部参数逐一存在。
+- 恢复“实际可恢复材料”正例说明：真实 runner 集成测试以真实回执机制
+  承载（非注入 ok 回调）；对语料的空表影子策略可修复样例扫描为非结论性
+  （快照结构与探测假设不符），如实记录，不声称已覆盖全部运行路径。
+
+### 11.6 验证记录（最终 HEAD）
+
+- 复核方定向集 + 本轮新增回归（14 文件）：**190 passed**；恢复协调器与
   真实 runner 集成：**12 passed**。
-- 后端全量（含 `tests/remediation`）：**6308 passed, 193 skipped**。
-- 真实 PostgreSQL（隔离容器 55452，随机 schema，迁移幂等）：**164 passed**。
-- V33-251 消费方与回放类（checklist/dh03b/catalog/golden/replay/bench）：
-  114 passed。
-- 复核方自有探针在新 HEAD 复跑（副本运行，未改动其证据目录）：
-  - `explicit_budget_components`：`budget:group fail`、`final:item_sum
-    insufficient_data`，决算组回执不再 pass；
-  - `similar_but_different_component`：`final:group insufficient_data`；
-  - 两个部分页相交级联：`roots=[]`、未归并 `remaining=1`；
-  - `recovery_receipts` / runner 探针两例：`recovered` 且规则收敛 `pass`；
-  - `failed_run_checkpoint`：`outcome=failed`、断点不复用（`[]`）；
-  - `checkpoint_wrong_revision`：旧批次断点不跳过（`run_calls=1`）。
+- 后端全量（含 `tests/remediation`）：**6312 passed, 193 skipped, exit 0**
+  （自检修复后最终一轮，含枚举合计过滤回归）。
+- 真实 PostgreSQL（隔离容器，随机 schema，迁移幂等）：**164 passed**。
+- 前端：单测 **50 套全过**；`toUiProblems` 探针（candidate→required 0、
+  structured→visible 0）与复核方 `frontend_results.json` 期望一致；
+  前端业务代码本轮未改动。
+- 真实材料回放（10 份任务）：9 条定向规则显式结果与上一轮存档
+  **0 差异**；每任务 90 条规则全流水线 statuses/key_obligations/
+  unresolved_rules **0 差异**；唯一回执差异为 edb56827 新增
+  `V33-251:final:group:225` **pass**（组内 2055.14=组级 2055.14，两个未
+  归属子项如实留痕），显式问题不变。
+- 三份原 PDF 全新解析（95c937cc/05e40add/d835cf2a）：五条规则正常返回，
+  半角括号命中、合计 7709.62 取到、章节修复有效；status.json SHA256
+  前后一致，未改动业务数据。
+- 复核方两轮探针**零适配**复跑全绿（副本运行，未改动其证据目录）：
+  第一轮 9 组反例（正控/改额/换名/跨页级联×2/待处理数×3/隐藏门禁）、
+  第二轮组变体/级联/恢复/断点全部达到返工预期，其中
+  `failed_run_checkpoint.resumed_completed_jobs=[]`、
+  `checkpoint_wrong_revision.run_calls=1`。
 - ruff、mypy：改动文件全部通过。
-- 前端未改动（上一轮单测/构建/E2E 结论仍有效）。
-- 未执行存量重分析、未合并 main、未部署远程（遵照复核建议）。
-- 断点接口说明：`_load_checkpoint` 由“已完成 job_id 集合”改为“完整回执
-  记录列表”，跳过判定统一走 `_resumable_checkpoint_record`（批次指纹 +
-  结果 revision 匹配）——复核探针如引用旧接口需按新语义断言。
+- 文档命令与真实接口核对：`backup_all.py create` 与
+  `reanalyze_current_slots` 全部参数逐一存在。
+- 未执行存量重分析、未合并 main、未推送远程、未部署。
+- 断点接口说明：`_load_checkpoint` 返回“已完成条目”身份元组集合
+  `(job_id, 批次指纹, 结果 revision, 原件哈希, 文档版本)`；失败/跳过回执
+  永不进入该集合，复用判定在 `_checkpoint_resumable`（批次指纹 + 结果
+  revision 匹配当前行）。
 - 说明：一次全量套件中 `test_department_stats_prefers_merged_issue_total`
   的失败复现为两套 pytest 并发运行对共享组织目录（data/*.json）的读写
   竞争；单进程顺序运行下该用例及全量均通过，与业务代码改动无关。

@@ -486,6 +486,10 @@ def _shared_group_disclosures(
             name = re.sub(r"\s+", "", name).strip("“”\"'（）()")
             if not name:
                 continue
+            if name.endswith(("总计", "合计")):
+                # 枚举句内夹带的组级合计不是分项：不算共享分项，也不进入
+                # 组内算术（其角色/归属与组级合计一致，由记录层处理）。
+                continue
             stage_word = match.group("stage") or ""
             per_item.append({
                 "name": name,

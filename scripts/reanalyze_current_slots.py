@@ -204,23 +204,41 @@ def _selection_fingerprint(
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
-def _load_checkpoint(path: Path) -> List[Dict[str, Any]]:
-    """逐行读取断点回执；只解析结构完整的 JSONL 行，不按 job_id 去重。"""
-    records: List[Dict[str, Any]] = []
+def _load_checkpoint(path: Path) -> set[tuple[str, str, str, str, str]]:
+    """断点中“已完成执行”条目的身份元组集合。
+
+    元组形态 ``(job_id, 批次指纹, 结果 revision, 原件哈希, 文档版本)``：
+    失败/跳过回执**永不**进入该集合（outcome != completed 的行一律忽略，
+    连同无法解析的行），因此失败任务不可能仅因 job_id 相同而被跳过；
+    跨批次、结果 revision 不匹配或原件身份变化的复用拒绝，由
+    ``_checkpoint_resumable`` 在运行时结合当前行身份完成。
+    """
+    completed: set[tuple[str, str, str, str, str]] = set()
     if not path.is_file():
-        return records
+        return completed
     for line in path.read_text(encoding="utf-8").splitlines():
         try:
             item = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if isinstance(item, dict) and item.get("job_id"):
-            records.append(item)
-    return records
+        if not isinstance(item, dict) or item.get("outcome") != "completed":
+            continue
+        job_id = str(item.get("job_id") or "").strip()
+        if not job_id:
+            continue
+        completed.add((
+            job_id,
+            str(item.get("batch_fingerprint") or ""),
+            str(item.get("result_revision") or ""),
+            str(item.get("file_hash") or ""),
+            str(item.get("document_version_id")
+                if item.get("document_version_id") is not None else ""),
+        ))
+    return completed
 
 
-def _resumable_checkpoint_record(
-    records: List[Dict[str, Any]],
+def _checkpoint_resumable(
+    completed: set[tuple[str, str, str, str, str]],
     *,
     batch_fingerprint: str,
     job_id: str,
@@ -230,29 +248,22 @@ def _resumable_checkpoint_record(
 ) -> bool:
     """仅当“本批次确已完成、且当前行仍是该批次产物”时才允许跳过。
 
-    - outcome 必须是 completed（error/failed/未终态一律重跑）；
+    - 断点集合本身只含已完成条目（失败任务不可能被跳过）；
     - 批次指纹必须一致（旧批次/其他配置的断点不静默复用）；
     - 结果 revision 必须等于当前行的 analysis_revision：中间有人重跑过、
       或断点属于旧版本批次时，当前状态已不是该断点描述的状态。
     """
-    for record in records:
-        if str(record.get("job_id") or "") != str(job_id or ""):
-            continue
-        if record.get("outcome") != "completed":
-            continue
-        if record.get("batch_fingerprint") != batch_fingerprint:
-            continue
-        if file_hash and record.get("file_hash") not in (None, file_hash):
-            continue
-        if document_version_id is not None and record.get("document_version_id") not in (
-            None,
-            document_version_id,
-        ):
-            continue
-        if not result_revision or record.get("result_revision") != result_revision:
-            continue
-        return True
-    return False
+    if not result_revision:
+        return False
+    key = (
+        str(job_id or ""),
+        str(batch_fingerprint or ""),
+        str(result_revision),
+        str(file_hash or ""),
+        str(document_version_id)
+        if document_version_id is not None else "",
+    )
+    return key in completed
 
 
 async def _append_checkpoint(path: Path, record: Dict[str, Any], lock: asyncio.Lock) -> None:
@@ -407,7 +418,7 @@ async def _run(args: argparse.Namespace) -> int:
     runtime._job_queue = _NoopQueue()
     checkpoint_path = Path(args.checkpoint) if args.checkpoint else None
     checkpoint_lock = asyncio.Lock()
-    checkpoint_records = _load_checkpoint(checkpoint_path) if checkpoint_path else []
+    checkpoint_completed = _load_checkpoint(checkpoint_path) if checkpoint_path else set()
     try:
         conn = await DatabaseConnection.acquire()
         try:
@@ -447,8 +458,8 @@ async def _run(args: argparse.Namespace) -> int:
                     continue
                 # 同批次已完成且当前行仍是其产物 → 直接跳过；
                 # 本批产生的新 revision 不能先报 frozen_revision_changed。
-                if _resumable_checkpoint_record(
-                    checkpoint_records,
+                if _checkpoint_resumable(
+                    checkpoint_completed,
                     batch_fingerprint=batch_fingerprint,
                     job_id=str(row.get("job_uuid") or ""),
                     file_hash=row.get("file_hash"),
@@ -476,8 +487,16 @@ async def _run(args: argparse.Namespace) -> int:
                 targets.append(str(row.get("job_uuid")))
                 target_rows[str(row.get("job_uuid"))] = row
         else:
-            if args.job_id:
-                wanted = list(dict.fromkeys(args.job_id))
+            wanted = list(dict.fromkeys(args.job_id)) if args.job_id else None
+            if wanted is not None:
+                # 指定 job_id 不在当前槽位行里时必须留显式回执，不能静默丢弃。
+                resolved_ids = {str(row.get("job_uuid") or "") for row in rows}
+                for missing in wanted:
+                    if missing not in resolved_ids:
+                        selection_errors.append({
+                            "job_id": missing, "slot_id": None,
+                            "outcome": "skipped", "reason": "job_not_in_current_slots",
+                        })
                 rows = [row for row in rows if str(row.get("job_uuid") or "") in wanted]
             batch_fingerprint = _selection_fingerprint(
                 [_identity(row) for row in rows],
@@ -488,8 +507,8 @@ async def _run(args: argparse.Namespace) -> int:
                 job_id = str(row.get("job_uuid") or "")
                 if not job_id:
                     continue
-                if _resumable_checkpoint_record(
-                    checkpoint_records,
+                if _checkpoint_resumable(
+                    checkpoint_completed,
                     batch_fingerprint=batch_fingerprint,
                     job_id=job_id,
                     file_hash=row.get("file_hash"),

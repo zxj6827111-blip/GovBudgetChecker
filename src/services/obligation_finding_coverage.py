@@ -1313,9 +1313,13 @@ def _guarded_roots(item: Any, roots: Sequence[str], result_row: Any, structured_
         if not root_pages or not (pages & root_pages):
             return []
         uncovered = pages - root_pages
-        if uncovered and (uncovered & _independent_source_pages(item)):
+        if (not allow_reading_codes and uncovered
+                and (uncovered & _independent_source_pages(item))):
             # 部分页相交：未被根问题证据覆盖的页还有独立的表实例缺数，
             # 不能整条归并；已确定的部分关联由未归并清单自身的原因码保留。
+            # 该检查只限主体/阶段类根问题：表实例类根问题（缺表/空表/读取
+            # 异常）的覆盖范围由分支层按表实例身份校验，跨页同一张表不应
+            # 因根问题只引用其中一页而被拆散。
             return []
     elif len(root_ids) > 1:
         return []

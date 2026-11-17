@@ -456,3 +456,42 @@ def test_review_summary_pending_matches_decisions_and_ignored_set():
     ignored = build_review_report({**base, "ignored_issue_ids": ["issue-1"]})
     assert ignored["review_summary"]["formal_issue_total"] == 0
     assert ignored["review_summary"]["pending_formal_issue_total"] == 0
+
+
+def test_table_reading_root_covers_same_table_across_pages():
+    """跨页同一张表：读取异常根问题引用一页时仍承接该表其他页的缺数。"""
+    item = _obligation(
+        detail="第5页、第6页「FIN_02_income」金额尚未取到，表格读取映射未完成",
+        reason_codes=["table_mapping_incomplete"],
+        missing_operands=[
+            {"source": "table", "page": 5, "table_code": "FIN_02_income"},
+            {"source": "table", "page": 6, "table_code": "FIN_02_income"},
+        ],
+    )
+    structured = {"review_items": [{
+        "id": "structured-income-root", "type": "table_mapping_incomplete",
+        "table_code": "FIN_02_income", "page": 5,
+        "message": "表格列映射尚未完成", "severity": "manual_review",
+    }]}
+    roots = cascade_root_issue_ids(
+        item, {"rule_findings": []}, {"structured-income-root"},
+        structured_ingest=structured,
+    )
+    assert roots == ["structured-income-root"]
+
+
+def test_enum_embedded_group_total_is_not_a_component():
+    """枚举句内夹带的组级合计不进入共享分项，组算术与章节加总保持正控语义。"""
+    text = SHARED_TEXT.replace(
+        "其中：机关事业单位基本养老保险缴费支出 985.78 万元，",
+        "其中：机关事业单位基本养老保险缴费支出 985.78 万元，年初预算总计 2064.21 万元，",
+    )
+    receipts, _ = _run_shared(text)
+    group = next(
+        value for key, value in receipts.items()
+        if key.startswith("V33-251:final:group:")
+    )
+    assert group["status"] == "pass"
+    items = group.get("component_items") or []
+    assert all(not str(item.get("name") or "").endswith(("总计", "合计"))
+               for item in items if isinstance(item, dict))

@@ -86,27 +86,29 @@ def test_checkpoint_resume_matches_batch_and_result_revision(tmp_path):
         }) + "\n",
         encoding="utf-8",
     )
-    records = module._load_checkpoint(path)
-    assert [r["job_id"] for r in records] == ["job-1", "job-2"]
-    ok = module._resumable_checkpoint_record(
-        records, batch_fingerprint="batch-1", job_id="job-1",
+    completed = module._load_checkpoint(path)
+    assert ("job-1", "batch-1", "rev-new", "a" * 64, "7") in completed
+    # 失败回执不进入已完成集合：无论任何身份都不可能被跳过。
+    assert all(job_id != "job-2" for job_id, *_ in completed)
+    ok = module._checkpoint_resumable(
+        completed, batch_fingerprint="batch-1", job_id="job-1",
         file_hash="a" * 64, document_version_id=7, result_revision="rev-new",
     )
     assert ok is True
     # 旧批次断点不静默复用。
-    assert module._resumable_checkpoint_record(
-        records, batch_fingerprint="batch-2", job_id="job-1",
+    assert module._checkpoint_resumable(
+        completed, batch_fingerprint="batch-2", job_id="job-1",
         file_hash="a" * 64, document_version_id=7, result_revision="rev-new",
     ) is False
     # 当前 revision 已前进（他人重跑过）：不是断点描述的状态，不跳过。
-    assert module._resumable_checkpoint_record(
-        records, batch_fingerprint="batch-1", job_id="job-1",
+    assert module._checkpoint_resumable(
+        completed, batch_fingerprint="batch-1", job_id="job-1",
         file_hash="a" * 64, document_version_id=7, result_revision="rev-other",
     ) is False
-    # 失败回执永不跳过。
-    assert module._resumable_checkpoint_record(
-        records, batch_fingerprint="batch-1", job_id="job-2",
-        file_hash="a" * 64, document_version_id=7, result_revision="rev-new",
+    # 原件换版：文件哈希不匹配，不跳过。
+    assert module._checkpoint_resumable(
+        completed, batch_fingerprint="batch-1", job_id="job-1",
+        file_hash="b" * 64, document_version_id=7, result_revision="rev-new",
     ) is False
 
 
@@ -139,11 +141,10 @@ def test_run_one_classifies_final_status_error_as_failed(tmp_path, monkeypatch):
     assert result["error"] == "pipeline failed"
     assert result["result_revision"] == "rev-failed"
     assert result["batch_fingerprint"] == "batch-1"
-    # 这条回执写进断点后也不构成跳过条件。
-    assert module._resumable_checkpoint_record(
-        [result], batch_fingerprint="batch-1", job_id="job-1",
-        file_hash="a" * 64, document_version_id=7, result_revision="rev-failed",
-    ) is False
+    # 失败回执写进断点文件后也不会进入已完成集合。
+    path = tmp_path / "failed-checkpoint.jsonl"
+    path.write_text(json.dumps(result) + "\n", encoding="utf-8")
+    assert module._load_checkpoint(path) == set()
 
 
 def test_run_one_non_terminal_status_is_not_completed(tmp_path, monkeypatch):
@@ -214,8 +215,11 @@ def test_run_records_input_and_result_revisions(tmp_path, monkeypatch):
     assert result["document_version_id"] == 7
     assert result["ai_mode"] == "local"
     # 同批次恢复：result_revision 匹配当前行 → 跳过成立。
-    assert module._resumable_checkpoint_record(
-        [result], batch_fingerprint="batch-9", job_id="job-1",
+    path = tmp_path / "done-checkpoint.jsonl"
+    path.write_text(json.dumps(result) + "\n", encoding="utf-8")
+    completed = module._load_checkpoint(path)
+    assert module._checkpoint_resumable(
+        completed, batch_fingerprint="batch-9", job_id="job-1",
         file_hash="a" * 64, document_version_id=7, result_revision="rev-new-20261117",
     ) is True
 
@@ -244,3 +248,49 @@ def test_cli_exposes_preview_freeze_and_checkpoint_options():
     for token in ("--dry-run", "--preview", "--freeze-list", "--freeze-out",
                   "--checkpoint", "--output", "--report"):
         assert token in result.stdout
+
+
+def test_run_reports_unknown_job_id_instead_of_silent_drop(tmp_path, monkeypatch):
+    """--job-id 指向当前槽位行之外的任务：留显式回执，不静默丢弃。"""
+    import asyncio
+    from types import SimpleNamespace
+
+    module = _load_module()
+
+    async def fake_initialize():
+        return None
+
+    async def fake_acquire():
+        return object()
+
+    async def fake_release(conn):
+        return None
+
+    async def fake_close():
+        return None
+
+    async def fake_load(conn):
+        return []
+
+    run_one = SimpleNamespace(await_count=0)
+
+    async def fake_run_one(*args, **kwargs):
+        run_one.await_count += 1
+        return {"job_id": "ghost", "outcome": "completed"}
+
+    monkeypatch.setattr(module.DatabaseConnection, "initialize", fake_initialize)
+    monkeypatch.setattr(module.DatabaseConnection, "acquire", fake_acquire)
+    monkeypatch.setattr(module.DatabaseConnection, "release", fake_release)
+    monkeypatch.setattr(module.DatabaseConnection, "close", fake_close)
+    monkeypatch.setattr(module, "_load_current_slot_jobs", fake_load)
+    monkeypatch.setattr(module, "_run_one", fake_run_one)
+    args = SimpleNamespace(
+        checkpoint="", freeze_list="", job_id=["ghost"], ai_policy="inherit",
+        concurrency=1, recover_stale_active=False, report=str(tmp_path / "r.json"),
+        output="",
+    )
+    exit_code = asyncio.run(module._run(args))
+    assert exit_code == 0
+    assert run_one.await_count == 0
+    report = (tmp_path / "r.json").read_text()
+    assert "job_not_in_current_slots" in report
