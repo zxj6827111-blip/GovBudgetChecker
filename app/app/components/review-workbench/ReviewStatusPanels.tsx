@@ -155,6 +155,9 @@ export function ReviewInfoPanel({
   const handled = progress.confirmed + progress.ignored + progress.inPackage;
   const requiredHandled = handled;
   const requiredAll = progress.requiredTotal;
+  const coverageLabel = progress.coverageState === "partial"
+    ? "部分完成"
+    : progress.coverageState === "complete" ? "完整" : "未知";
   return (
     <div
       className="absolute inset-0 z-40 flex flex-col bg-white"
@@ -198,8 +201,7 @@ export function ReviewInfoPanel({
               <p>本次检查覆盖完整，未发现内部关系未完成。</p>
             ) : (
               <p>
-                本次检查结果尚不完整：覆盖状态
-                {progress.coverageState === "partial" ? "为部分完成" : "未知"}
+                本次检查结果尚不完整：覆盖状态为{coverageLabel}
                 {typeof progress.technicalDiagnosticTotal === "number" && progress.technicalDiagnosticTotal > 0
                   ? `；技术诊断 ${progress.technicalDiagnosticTotal} 项`
                   : ""}
