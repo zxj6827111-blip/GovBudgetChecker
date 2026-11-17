@@ -2410,6 +2410,11 @@ def _make_issue_location(
     return location
 
 
+def _compact_total_label(value: Any) -> str:
+    """合计标签归一：全半角、空白不影响“合计/总计”识别。"""
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(value or "")))
+
+
 def _extract_table_total(table: List[List[str]]) -> Optional[float]:
     """提取合计行的「合计」列数值（None 安全）。
 
@@ -2424,7 +2429,7 @@ def _extract_table_total(table: List[List[str]]) -> Optional[float]:
     header_total_col = None
     for row in table[:5]:
         for i, cell in enumerate(row):
-            if str(cell or "").strip() == "合计":
+            if _compact_total_label(cell) == "合计":
                 header_total_col = i
                 break
         if header_total_col is not None:
@@ -2437,7 +2442,8 @@ def _extract_table_total(table: List[List[str]]) -> Optional[float]:
             continue
         if any(str(c or "").strip().isdigit() and len(str(c).strip()) in (3, 5, 7) for c in row[:3]):
             continue
-        if not (any(str(c or "").strip() == "合计" for c in row) or str(row[0] or "").strip().startswith("合计")):
+        if not (any(_compact_total_label(c) == "合计" for c in row)
+                or _compact_total_label(row[0] if row else "").startswith("合计")):
             continue
         if header_total_col is not None and header_total_col < len(cells) and cells[header_total_col] is not None:
             return float(cells[header_total_col])
@@ -3248,9 +3254,13 @@ def _extract_final_functional_narrative_mentions(
     if getattr(doc, "parse_artifact", None) is not None:
         merged, offsets = _txt_fund_merged_pages(doc)
         # 2022 版三公章节标题也带“一般公共预算”，不能顶替说明五。
+        # 2026-11-16：第六节标题漏“基”时（“本支出”）同样必须排除，否则
+        # 它会被当成最后一节，V33-227 误选第六节并报“未提取到科目提及”
+        # （市政府办公厅 p22 实证）。
         sections = [section for section in _nar_repeat_sections(merged, doc, offsets)
                     if "一般公共预算" in section[0] and "支出决算" in section[0]
-                    and "基本支出" not in section[0] and "三公" not in section[0]]
+                    and "基本支出" not in section[0] and "本支出" not in section[0]
+                    and "三公" not in section[0]]
         if not sections:
             return mentions
         _title, begin, _section_end = sections[-1]
@@ -4715,8 +4725,9 @@ class R33110_BudgetVsFinal_TextConsistency(Rule):
     desc = "（三）一般公共预算财政拨款支出决算（具体）情况:数字与大于/小于/持平一致性，并校验是否说明原因"
 
     # 1) 小节起止（行首匹配 + 变体）
-    _SEC_START = re.compile(r"(?m)^\s*(（三）|三、)\s*一般公共预算财政拨款支出决算(?:具体)?情况")
-    _NEXT_SEC  = re.compile(r"(?m)^\s*(（四）|四、|（六）|六、|一般公共预算财政拨款基本支出决算情况说明)")
+    # 2026-11-16：半角“(三)”与全角“（三）”同等识别；不能因括号字形漏章。
+    _SEC_START = re.compile(r"(?m)^\s*([（(]三[)）]|三、)\s*一般公共预算财政拨款支出决算(?:具体)?情况")
+    _NEXT_SEC  = re.compile(r"(?m)^\s*([（(]四[)）]|四、|[（(]六[)）]|六、|一般公共预算财政拨款基本支出决算情况说明)")
 
     # 2) 优化后的主配对模式：缩小匹配窗口，增加上下文约束
     _PAIR = re.compile(
@@ -5632,6 +5643,43 @@ def _total_structural_contradiction(
 _SECTION_DISTRACTOR_PREFIXES = ("一般公共预算", "政府性基金", "国有资本", "财政拨款")
 
 
+#: 决算说明章节标题：中文/阿拉伯序号与全半角括号统一识别。
+#: 2026-11-16：原文“（三）”写成半角“(三)”时不再漏章（审计局 p21 实证）。
+_SECTION_TITLE_START = (
+    r"(?:[（(][一二三四五六七八九十]{1,3}[)）]"
+    r"|[一二三四五六七八九十]{1,3}、"
+    r"|\d{1,2}[、.．])"
+)
+_SECTION_TITLE_RE = re.compile(
+    r"(?:^|\n)\s*" + _SECTION_TITLE_START + r"[^。；;！!？?\n]{0,60}(?:说明|情况)"
+)
+#: 章节边界只认“一、/1、”这类同级标题；括号子标题（如“（一）总体情况”）
+#: 是章节正文的一部分，不能把章节截断在第一个子标题处。
+_SECTION_BOUNDARY_RE = re.compile(
+    r"(?:^|\n)\s*(?:[一二三四五六七八九十]{1,3}、|\d{1,2}[、.．])"
+    r"[^。；;！!？?\n]{0,60}(?:说明|情况)"
+)
+#: 目录行尾部：点线引导 + 页码，或行尾孤立页码（与 diagnostic_fields 同口径）。
+_SECTION_TOC_TAIL_RE = re.compile(
+    r"(?:……|…{2,}|\.{2,}|·{2,})\s*\d+\s*$|\s\d{1,3}\s*$"
+)
+
+
+def _section_scope_body_is_catalog_only(raw: str, match: re.Match, next_start: int) -> bool:
+    """标题命中了目录、而不是正文。
+
+    目录条目后面紧跟下一条同级目录行，标题与下一同级标题之间没有正文；
+    正文章节即使以“（一）”子标题开头，也会继续到下一个“六、”同级标题，
+    因此正文间距充足。只用于“排除目录”，不改写正文。
+    """
+    line_end = raw.find("\n", match.end())
+    line_tail = raw[match.end(): line_end if line_end >= 0 else len(raw)]
+    if _SECTION_TOC_TAIL_RE.search(line_tail.strip()):
+        return True
+    body = raw[match.end():next_start].strip()
+    return len(body) < 12
+
+
 def _final_section_scope(
     doc: Document,
     title_keywords: Tuple[str, ...],
@@ -5645,9 +5693,8 @@ def _final_section_scope(
     （「本年收入合计 203 \\n 23.21 万元」）。near_number 按换行分句后
     只能拿到半截数字。
 
-    处理：在合并文本上定位标题（取**最后一次**出现——目录条目在前、
-    正文标题在后；泛标题用 exclude_tokens 排除专项章节后缀陷阱），
-    截取到下一个中文序号标题为止，然后做两类修复：
+    处理：在合并文本上定位标题（先排除目录条目，再取**最后一次**正文出现），
+    截取到下一个同级中文序号标题为止，然后做两类修复：
       1. 断号融合：数字 \\n 数字 → 一个数（"203\\n23.21" → "20323.21"）；
       2. 行尾续行融合：行尾为非句末标点且次行以数字开头（"人员经费\\n12192.15 万元"）。
     仅在章节范围内修复，不触碰 merge_page_texts 的全局页界语义。
@@ -5661,24 +5708,31 @@ def _final_section_scope(
                 lines.pop()  # A literal trailing physical page label is not an amount.
             page_texts.append("\n".join(lines))
     raw = merge_page_texts(page_texts)
-    title_pat = re.compile(
-        r"(?:^|\n)\s*(?:[一二三四五六七八九十]+、|\d{1,2}、)"
-        r"[^。；;！!？?\n]{0,60}(?:说明|情况)"
-    )
-    starts = []
-    for m in title_pat.finditer(raw):
+    candidates = []
+    for m in _SECTION_TITLE_RE.finditer(raw):
         title = m.group(0)
         if not all(kw in title for kw in title_keywords):
             continue
         if any(tok in title for tok in exclude_tokens):
             continue
-        starts.append(m.start())
-    if not starts:
+        nxt = _SECTION_BOUNDARY_RE.search(raw, m.end())
+        next_start = nxt.start() if nxt else len(raw)
+        if _section_scope_body_is_catalog_only(raw, m, next_start):
+            continue
+        candidates.append((m, next_start))
+    if not candidates:
+        # 兼容旧标题变体：错字标题（如“本支出”缺“基”）只在正常标题无正文
+        # 候选时才由调用方的 fallback 关键词再试；这里不凭空放宽。
         return None
-    start = starts[-1]
-    nxt = title_pat.search(raw, start + 5)
-    end = nxt.start() if nxt else len(raw)
-    scope = raw[start:end]
+    # 同级“七、…”章节优先于其内部“（二）…”子标题：子标题也含关键词时，
+    # 不能把章节截成从子标题开始（V33-108 三公章节实测）。
+    top_level = [
+        item for item in candidates
+        if re.match(r"^\s*(?:[一二三四五六七八九十]{1,3}、|\d{1,2}[、.．])",
+                    item[0].group(0))
+    ]
+    start_match, next_start = (top_level or candidates)[-1]
+    scope = raw[start_match.start():next_start]
     scope = re.sub(r"(\d)[ \t]*\r?\n[ \t]*(\d)", r"\1\2", scope)
     scope = re.sub(
         r"([^\n。；;！!？\d])[ \t]*\r?\n[ \t]*(\d)", r"\1\2", scope
@@ -11880,10 +11934,18 @@ def _econ_item_amount_from_lane(
         }
     if not _econ_item_code_matches(code, expected_code):
         # 名称命中，但同行编码指向**另一个**业务项：两栏身份不一致，
-        # 无法确认这一行到底记的是哪个业务项 → 交给调用方记取数不足。
+        # 无法确认这一行到底记的是哪个业务项 → 交给调用方记取数不足，
+        # 同时把已由原件行证明的编码/名称错配作为具体材料问题交付。
+        cell = cells[amount_col]
         return {
             "conflict": f"{code} {label}（expected {expected_code}，actual {code}："
                         "行内编码与名称指向不同业务项）",
+            "conflict_code": code,
+            "expected_code": expected_code,
+            "conflict_name": label,
+            "page": cell.page or cells[start].page,
+            "row_label": "".join(c.text or "" for c in cells[start:amount_col] if c.text),
+            "cell_text": str(cell.text or (cell.number if cell.number is not None else "")).strip(),
         }
     return {
         "amount": cells[amount_col].number,
@@ -12088,6 +12150,7 @@ class R33CrossSanGongEcon(Rule):
         # 用集合逐项记账而不是拿原因文本做子串匹配——后者会把"别项的失败"错连到本项。
         blocked: Set[str] = set()
         basic: Dict[str, Dict[str, Any]] = {}
+        identity_conflicts: List[Dict[str, Any]] = []
         codes_2025 = _econ_table_uses_2025_codes(table6)
         for key, subject, names, expected_code in _SAN_GONG_ECON_ITEM_SPECS:
             if codes_2025:
@@ -12106,6 +12169,7 @@ class R33CrossSanGongEcon(Rule):
                         continue
                     if hit.get("conflict"):
                         conflict = str(hit["conflict"])
+                        identity_conflicts.append({**hit, "subject": subject})
                         break
                     found.append(hit)
                 if conflict:
@@ -12297,6 +12361,35 @@ class R33CrossSanGongEcon(Rule):
         # 保持未知。禁止"取不到金额就静默跳过"——那是 pass 掩盖未比较项的
         # 缺陷形态（残联 p14 FIN_06 三个空白决算格实证）。
         issues: List[Issue] = []
+        # 2026-11-16：原件行内编码与名称指向不同业务项（如 31007 与
+        # “公务用车购置”同处一行）已由原文行证明，交付具体材料问题；
+        # 仅该业务项的跨表金额比较保持 unknown，不借错位数据完成核对。
+        for conflict in identity_conflicts:
+            conflict_code = str(conflict.get("conflict_code") or "")
+            expected_code = str(conflict.get("expected_code") or "")
+            row_label = str(conflict.get("row_label") or "")
+            evidence = row_label or str(conflict.get("cell_text") or conflict.get("conflict") or "")
+            location = {
+                "table": _FIN_06_TABLE_TITLE,
+                "table_code": "FIN_06_basic_expenditure",
+                "page": conflict.get("page") or page6,
+                "pages": [conflict.get("page") or page6],
+                "code": conflict_code or None,
+                "expected_code": expected_code or None,
+                "subject": conflict.get("subject"),
+                "row": row_label or None,
+                "defect_type": "economic_code_name_mismatch",
+            }
+            issues.append(self._issue(
+                f"基本支出经济分类表科目编码与名称不一致：“{conflict_code} "
+                f"{conflict.get('conflict_name') or conflict.get('subject')}”"
+                f"（应为 {expected_code}：行内编码与名称指向不同业务项）。"
+                "该行金额不能作为对应业务项的核对依据，请核对原件编码/名称。",
+                location,
+                severity="warn",
+                evidence_text=evidence,
+                check_relation_id=f"{self.code}:econ_identity:{conflict.get('subject')}",
+            ))
         item_relation_prefix = f"{self.code}:cross:san_gong"
         for key, subject, _names, _expected_code in _SAN_GONG_ECON_ITEM_SPECS:
             relation_id = f"{item_relation_prefix}:{key}"

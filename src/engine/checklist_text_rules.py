@@ -608,8 +608,10 @@ class CMM011_AmountUnitWan(Rule):
                     before = chunk[max(0, match.start() - 14):match.start()]
                     if re.search(r"[万亿千百]$", before):
                         continue
-                    after = chunk[match.end():match.end() + 4]
-                    if re.match(r"\s*(?:元|万元|亿元|％|%)", after):
+                    after = chunk[match.end():match.end() + 6]
+                    # 2026-11-16：后接“万万元/元元”等重复单位时，缺单位问题
+                    # 由重复单位检查独立报出；同一处不能再追加一条“缺少万元”。
+                    if re.match(r"\s*(?:万万元|亿亿元|元元|万元万|元|万元|亿元|％|%)", after):
                         continue
                     # 引文含金额语境词起点，能说明是哪个槽位漏了万元
                     head_start, end = flat_span(positions,

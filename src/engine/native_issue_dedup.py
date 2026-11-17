@@ -31,7 +31,7 @@ _TABLE_DEFECT_RULES = {
 _TABLE_DEFECT_PRIMARY = ('V33-002', 'V33-114')
 _YOY = {'V33-234', 'CMM-007'}
 _TEXT = {'CMM-001', 'V33-108', 'V33-105', 'V33-221', 'V33-224', 'V33-222'}
-_UNIT_MAGNITUDE = {'V33-222', 'CMM-011'}
+_UNIT_MAGNITUDE = {'V33-222', 'V33-251', 'CMM-011'}
 _NUMBER = r'(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?'
 _DECISION_LITERAL = re.compile(
     rf'(?:支\s*出\s*决\s*算(?:\s*数)?|决\s*算\s*数)(?:\s*为|\s*是)?\s*'
@@ -41,6 +41,7 @@ _YUAN_LITERAL = re.compile(rf'(?<![\d.,，])(?P<amount>{_NUMBER})\s*(?P<unit>元
 
 #: 缺陷等价关系必须显式声明，不能只因金额相同就合并。
 DEFECT_AMOUNT_UNIT_MISSING_WAN = "amount_unit_missing_wan"
+DEFECT_AMOUNT_UNIT_DUPLICATED = "amount_unit_duplicated"
 PROBLEM_GROUP_ID_PREFIX = "pg-"
 _CHANGE = re.compile(rf'(?:增加|减少){_NUMBER}(?:亿元|万元|元)[，,]?(?:增长|下降|增加|减少){_NUMBER}[%％]')
 _THREE_TOTAL = re.compile(
@@ -233,6 +234,75 @@ def _sum_key(item, context, doc=None):
             tuple(sorted(blank_ids)), _version(item, context))
 
 
+_DUP_UNIT_RE = re.compile(r"(?P<amount>\d[\d,]*(?:\.\d+)?)\s*(?P<bad_unit>万万元|亿亿元|元元|万元万)")
+
+
+def _duplicate_unit_anchor(item, page, page_text):
+    """同一处“万万元/元元”等重复单位锚点：页 + 最小字面量 + 唯一原文区间。
+
+    只用于 V33-222 / V33-251 / CMM-011 已经报出的重复单位问题，不据金额
+    相同合并其他缺陷；CMM-011 的“缺少万元”不在此列。
+    """
+    rule = _rule(item)
+    if rule not in _UNIT_MAGNITUDE:
+        return None
+    message = str(_get(item, "message") or _get(item, "title") or "")
+    literal_match = re.search(r"[“\"](?P<literal>[^”\"]*?(?:万万元|亿亿元|元元|万元万))[”\"]", message)
+    if literal_match is None:
+        # CMM-011 的“缺少万元”可能是同一处“万万元”引出的连带误报：
+        # 原文金额后紧接重复单位时，归入重复单位主问题，不再单独逐条处理。
+        if rule == "CMM-011" and "缺少单位" in message:
+            amount_match = re.search(r"[“\"][^”\"]*?(?P<amount>\d[\d,]*(?:\.\d+)?)[”\"]", message)
+            if amount_match is None:
+                return None
+            amount_raw = amount_match.group("amount")
+            amount = amount_raw.replace(",", "")
+            compact_page = re.sub(r"\s+", "", unicodedata.normalize("NFKC", page_text))
+            needle_match = re.search(
+                re.escape(amount_raw) + r"(万万元|亿亿元|元元|万元万)", compact_page
+            )
+            if needle_match is None:
+                return None
+            needle = needle_match.group(0)
+            if compact_page.count(needle) != 1:
+                return None
+            text = _Text.from_pages([page_text])
+            if text.compact.count(needle) != 1:
+                return None
+            start = text.compact.index(needle)
+            return {
+                "physical_page": page,
+                "literal": needle,
+                "literal_amount": amount,
+                "literal_unit": needle_match.group(1),
+                "text_span": [
+                    text.positions[start],
+                    text.positions[start + len(needle) - 1] + 1,
+                ],
+                "defect_type": DEFECT_AMOUNT_UNIT_DUPLICATED,
+            }
+        return None
+    literal = re.sub(r"\s+", "", unicodedata.normalize("NFKC", literal_match.group("literal")))
+    amount_match = _DUP_UNIT_RE.search(literal)
+    if amount_match is None:
+        return None
+    needle = f"{amount_match.group('amount')}{amount_match.group('bad_unit')}"
+    text = _Text.from_pages([page_text])
+    if text.compact.count(needle) != 1:
+        return None
+    start = text.compact.index(needle)
+    raw_start = text.positions[start]
+    raw_end = text.positions[start + len(needle) - 1] + 1
+    return {
+        "physical_page": page,
+        "literal": needle,
+        "literal_amount": amount_match.group("amount").replace(",", ""),
+        "literal_unit": amount_match.group("bad_unit"),
+        "text_span": [raw_start, raw_end],
+        "defect_type": DEFECT_AMOUNT_UNIT_DUPLICATED,
+    }
+
+
 def _unit_magnitude_anchor(item, doc=None):
     """V33-222/CMM-011 的同一原文字面量锚点。
 
@@ -253,6 +323,21 @@ def _unit_magnitude_anchor(item, doc=None):
     if not pages or page > len(pages):
         return None
     page_text = str(pages[page - 1] or "")
+    duplicated = _duplicate_unit_anchor(item, page, page_text)
+    if duplicated is not None:
+        file_hash = ""
+        context = getattr(doc, "fact_context", None)
+        if context is not None:
+            file_hash = str(getattr(context, "file_hash", "") or "")
+        if not file_hash:
+            for ref in location.get("table_refs") or []:
+                if isinstance(ref, dict) and ref.get("file_hash"):
+                    file_hash = str(ref["file_hash"])
+                    break
+        if not file_hash:
+            return None
+        duplicated["file_hash"] = file_hash
+        return duplicated
     if rule == "V33-222":
         if location.get("unit_magnitude_error") is not True:
             return None
@@ -799,7 +884,7 @@ def _merged(group, doc=None, *, key=None):
                     related_findings=[{'rule_id': _rule(item), 'message': _get(item, 'message'),
                                        'check_relation_id': _get(item, 'check_relation_id'),
                                        'location': deepcopy(_location(item))} for item in group])
-    if key is not None and key and key[0] == DEFECT_AMOUNT_UNIT_MISSING_WAN:
+    if key is not None and key and key[0] in {DEFECT_AMOUNT_UNIT_MISSING_WAN, DEFECT_AMOUNT_UNIT_DUPLICATED}:
         anchor = None
         for item in group:
             candidate = _unit_magnitude_anchor(item, doc)
@@ -809,7 +894,7 @@ def _merged(group, doc=None, *, key=None):
         if anchor is not None:
             location["problem_group_id"] = problem_group_id(key)
             location["source_anchor"] = anchor
-            location["defect_type"] = DEFECT_AMOUNT_UNIT_MISSING_WAN
+            location["defect_type"] = key[0]
             location["member_issue_ids"] = aliases
             location["member_rules"] = rules
             # 成员各自的证据与回执原样保留；主卡片采用质量最高的成员。
@@ -931,7 +1016,8 @@ def deduplicate_native_issues(issues, doc=None, *, receipts=None):
             continue
         group = [issues[index] for index in indices]
         keys = [key for index in indices for key in item_keys[index]]
-        key = next((k for k in keys if k and k[0] == DEFECT_AMOUNT_UNIT_MISSING_WAN), keys[0])
+        key = next((k for k in keys if k and k[0] in {
+            DEFECT_AMOUNT_UNIT_MISSING_WAN, DEFECT_AMOUNT_UNIT_DUPLICATED}), keys[0])
         result.append(_merged(group, doc, key=key))
     _link_related_symptoms(result)
     receipt_list = receipts if receipts is not None else getattr(doc, 'fact_receipts', None)

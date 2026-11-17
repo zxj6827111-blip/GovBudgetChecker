@@ -94,7 +94,8 @@ def _operand_year(doc):
     return value if isinstance(value, int) and value >= 1900 else None
 
 
-def _record_operand_gap(doc, facts, candidates, reason, *, indicator, code, name, stage):
+def _record_operand_gap(doc, facts, candidates, reason, *, indicator, code, name, stage,
+                        source_cell=None):
     """缺数/多候选：位置来自事实自身的原格；取不到位置时不编造。"""
     from .diagnostic_fields import blocker, record_gap, table_candidate, table_missing_operand
 
@@ -103,6 +104,16 @@ def _record_operand_gap(doc, facts, candidates, reason, *, indicator, code, name
         return
     year = _operand_year(doc)
     page = next((page for fact in facts for _, page in _cell_locations(fact)), None)
+    source_bbox = None
+    if source_cell is not None:
+        # 缺数位置优先取同一行同一列的源格；不能用同表首条事实的坐标冒充
+        # “缺失格位置”（那会把第 11 行缺失标到第 3 行）。
+        cell_page = getattr(source_cell, 'page_number', None)
+        if isinstance(cell_page, int) and not isinstance(cell_page, bool) and cell_page > 0:
+            page = cell_page
+        bbox = getattr(source_cell, 'bbox', None)
+        if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+            source_bbox = list(bbox)
     if page is None:
         from .diagnostic_fields import table_page
 
@@ -130,7 +141,8 @@ def _record_operand_gap(doc, facts, candidates, reason, *, indicator, code, name
         missing_operands=[table_missing_operand(
             table_code=table_code, role=f'{indicator}/{stage}操作数', page=page,
             row_key=code or name, column=indicator,
-            fund_scope=getattr(facts[0], 'fund_scope', None), stage=stage, year=year, bbox=next((ref.get('bbox') for fact in facts for ref in (getattr(fact, 'extra_dims', None) or {}).get('evidence_refs', []) or [] if ref.get('bbox')), None))],
+            fund_scope=getattr(facts[0], 'fund_scope', None), stage=stage, year=year,
+            bbox=source_bbox)],
     )
 
 
@@ -183,7 +195,8 @@ record_operand_gap = _record_operand_gap
 record_operand_rejection = _record_operand_rejection
 
 
-def select(doc, facts, indicator, *, code=None, name=None, stage='决算', allow_native_blank=False):
+def select(doc, facts, indicator, *, code=None, name=None, stage='决算', allow_native_blank=False,
+           source_cell=None):
     context = doc.fact_context
     normalized_name = re.sub(r'\s+', '', str(name)) if name is not None else None
     candidates = [f for f in facts if f.indicator == indicator
@@ -249,7 +262,7 @@ def select(doc, facts, indicator, *, code=None, name=None, stage='决算', allow
                 return term, None
         reason = f'{code or name or indicator}的{indicator}/{stage}操作数缺失或不唯一'
         _record_operand_gap(doc, facts, candidates, reason, indicator=indicator,
-                            code=code, name=name, stage=stage)
+                            code=code, name=name, stage=stage, source_cell=source_cell)
         return None, reason
     fact = candidates[0]
     if isinstance(fact, NativeBlankTerm):

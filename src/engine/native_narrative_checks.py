@@ -218,10 +218,22 @@ def _foreign_owner(proof, owner):
     proof = unicodedata.normalize('NFKC', str(proof or ''))
     compact_owner = re.sub(r'\s+', '', unicodedata.normalize('NFKC', str(owner or '')))
     if compact_owner:
+        # 先连写“正确主体名 + 重复末字”（“上海市生态环境局局”）一并去掉，
+        # 避免去除主体名后残留一个“局”被识别为其他单位。
+        tail = compact_owner[-1]
+        proof = re.sub(
+            re.escape(compact_owner) + re.escape(tail) + r"+", compact_owner, proof
+        )
         proof = proof.replace(compact_owner, '')
         bare_owner = re.sub(r'\([^()]{1,20}\)', '', compact_owner)
         if len(bare_owner) >= 4:
             proof = re.sub(r'\([^()]{1,20}\)', '', proof).replace(bare_owner, '')
+        # 2026-11-16：单位名称多字（“上海市生态环境局局”）时，去掉正确主体名
+        # 后会残留重复末字。该残留是已由 CMM-017 报告的名称缺陷，不能让正文
+        # 正确金额被当成“其他主体”而阻断取数；只剥离开头的重复末字，不改写
+        # 原文或主体名。
+        if proof.startswith(tail):
+            proof = proof.lstrip(tail)
     proof = re.sub(r'本部门|本单位|本局|本中心|本办公室', '', proof)
     return bool(_ORG.search(proof))
 

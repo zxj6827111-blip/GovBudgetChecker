@@ -547,8 +547,14 @@ def test_same_class_wrong_code_is_an_identity_conflict_not_a_finding(truth):
     assert "expected 30217" in reason
     assert "actual 30231" in reason
 
-    partial = _by_item(getattr(excinfo.value, "partial_issues", []) or [])
-    assert set(partial) == {"overseas", "vehicle_operation"}, (
+    all_partial = getattr(excinfo.value, "partial_issues", []) or []
+    # 2026-11-16：原件行内编码与名称错配作为具体材料问题单独交付；
+    # 它不冒充 reception 的跨表金额比较结论。
+    identity_issues = [issue for issue in all_partial
+                       if not (issue.location or {}).get("san_gong_item")]
+    assert len(identity_issues) == 1 and "30231" in identity_issues[0].message
+    partial = _by_item(all_partial)
+    assert set(partial) == {"", "overseas", "vehicle_operation"}, (
         "一项错码不得吞掉其它已确认冲突，也不得给 reception 出正式 finding"
     )
 

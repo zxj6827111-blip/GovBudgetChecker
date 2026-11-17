@@ -648,7 +648,10 @@ _V33227_NAME_MISMATCH_CLAUSE_RE = re.compile(
 
 
 def _compact_subject_text(value: Any) -> str:
-    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(value or "")))
+    # 前导连接号只作候选匹配的噪声（价格认证中心“－机关事业单位…”实测）；
+    # 不删除名称内部字符，也不用于补造金额身份。
+    text = re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(value or "")))
+    return re.sub(r"^[\-－—–‐]+", "", text)
 
 
 def _finding_narrative_pages(finding: Mapping[str, Any]) -> Set[int]:
@@ -998,6 +1001,158 @@ def _table_reading_cascade_root(
     return broken[overlap[0]]
 
 
+_V33251_KIND_RE = re.compile(r"V33-251:(?P<kind>budget|final)")
+
+
+def _v33251_defect_cascade_roots(
+    item: Any,
+    result_row: Any,
+    visible: Optional[Set[str]],
+) -> List[str]:
+    """V33-251 已交付具体披露/加总问题，承接同口径未完成分项关系。"""
+    texts = [str(getattr(item, "detail", None) or "")]
+    texts.extend(
+        str((blocker or {}).get("ref") or "")
+        for blocker in (getattr(item, "blocked_by", None) or [])
+        if isinstance(blocker, Mapping)
+    )
+    kinds = {
+        match.group("kind")
+        for text in texts
+        for match in _V33251_KIND_RE.finditer(text)
+    }
+    if not kinds:
+        return []
+    checklist = {"budget": "C-11", "final": "C-12"}
+    roots: List[str] = []
+    for finding in _current_rule_findings(result_row):
+        if not isinstance(finding, dict) or not is_formal_finding(finding):
+            continue
+        issue_id = str(finding.get("id") or "").strip()
+        if not issue_id or (visible is not None and issue_id not in visible):
+            continue
+        rule_id = str(finding.get("rule_id") or finding.get("check") or "")
+        related = {str(value) for value in finding.get("related_rule_ids") or []}
+        if rule_id != "V33-251" and "V33-251" not in related:
+            continue
+        location = _json_dict(finding.get("location"))
+        item_code = str(location.get("checklist_item") or "")
+        if any(checklist[kind] == item_code for kind in kinds):
+            roots.append(issue_id)
+    return list(dict.fromkeys(roots))
+
+
+def _subject_name_cascade_roots(
+    item: Any,
+    result_row: Any,
+    visible: Optional[Set[str]],
+) -> List[str]:
+    """已正式报出的单位名称差异，承接同页“主体冲突”类未完成关系。
+
+    典型：正文大标题“上海市生态环境局局”由 CMM-017 报出，V33-102 的正文
+    金额关系因主体冲突中断。只认已由原件确认的正式名称问题，且页码必须
+    与义务阻断位置一致（或全篇仅此一条名称问题），不按相似名称猜。
+    """
+    detail = str(getattr(item, "detail", None) or "")
+    codes = {
+        str(code).strip()
+        for code in (getattr(item, "reason_codes", None) or [])
+        if str(code).strip()
+    }
+    if "subject_conflict" not in codes and "单位名称" not in detail and "主体" not in detail:
+        return []
+    pages = {
+        int(match.group(1)) for match in re.finditer(r"第(\d+)页", detail)
+    }
+    candidates: List[tuple] = []
+    for finding in _current_rule_findings(result_row):
+        if not isinstance(finding, dict) or not is_formal_finding(finding):
+            continue
+        issue_id = str(finding.get("id") or "").strip()
+        if not issue_id or (visible is not None and issue_id not in visible):
+            continue
+        message = str(finding.get("message") or finding.get("title") or "")
+        if not (str(finding.get("rule_id") or "") == "CMM-017"
+                or ("单位名称" in message and ("不一致" in message or "多字" in message))):
+            continue
+        location = _json_dict(finding.get("location"))
+        finding_pages = _finding_pages(location)
+        candidates.append((issue_id, finding_pages))
+    if not candidates:
+        return []
+    matched = [
+        issue_id for issue_id, finding_pages in candidates
+        if not pages or not finding_pages or (pages & finding_pages)
+    ]
+    if matched:
+        return list(dict.fromkeys(matched))
+    return [candidates[0][0]] if len(candidates) == 1 else []
+
+
+_UNIT_DEFECT_TEXT_RE = re.compile(
+    r"(?:万万元|亿亿元|元元|万元万|单位重复|重复单位|单位书写有误|单位口径错误)"
+)
+
+
+def _unit_defect_cascade_roots(
+    item: Any,
+    result_row: Any,
+    visible: Optional[Set[str]],
+) -> List[str]:
+    """已报“重复单位/单位书写有误”的正式问题，承接受其影响的未完成关系。
+
+    只认已由原件证据确认的正式问题；义务自身 detail 必须提到单位异常，
+    或 blocked_by 指向同一单位缺陷规则。不能仅凭页码把其他金额问题当根因。
+    """
+    detail = str(getattr(item, "detail", None) or "")
+    blocked_refs = " ".join(
+        str((blocker or {}).get("ref") or "")
+        for blocker in (getattr(item, "blocked_by", None) or [])
+        if isinstance(blocker, Mapping)
+    )
+    if not (_UNIT_DEFECT_TEXT_RE.search(detail) or "V33-251" in blocked_refs
+            or "V33-222" in blocked_refs or "CMM-011" in blocked_refs):
+        return []
+    pages: Set[int] = set()
+    for operand in getattr(item, "missing_operands", None) or []:
+        if isinstance(operand, Mapping):
+            page = operand.get("page")
+            if isinstance(page, int) and not isinstance(page, bool) and page > 0:
+                pages.add(page)
+    for match in re.finditer(r"第(\d+)页", detail):
+        pages.add(int(match.group(1)))
+    roots: List[str] = []
+    for finding in _current_rule_findings(result_row):
+        if not isinstance(finding, dict) or not is_formal_finding(finding):
+            continue
+        issue_id = str(finding.get("id") or "").strip()
+        if not issue_id or (visible is not None and issue_id not in visible):
+            continue
+        message = str(finding.get("message") or finding.get("title") or "")
+        location = _json_dict(finding.get("location"))
+        defect_type = str(location.get("defect_type") or "")
+        related = set(str(value) for value in [
+            finding.get("rule_id"), finding.get("check"),
+            *(finding.get("related_rule_ids") or []),
+            *(location.get("related_rule_ids") or []),
+        ] if value)
+        if not (defect_type == "amount_unit_duplicated"
+                or _UNIT_DEFECT_TEXT_RE.search(message)):
+            continue
+        finding_pages = _finding_pages(location) | {
+            finding.get("page") for _ in (0,) if isinstance(finding.get("page"), int)
+        }
+        if pages and finding_pages and not (pages & finding_pages):
+            continue
+        if blocked_refs and related and not ({ref for ref in ("V33-251", "V33-222", "CMM-011")
+                                             if ref in blocked_refs} & related):
+            # blocked_by 明确指向某单位规则时，根问题必须包含同族规则身份。
+            if pages and not (pages & finding_pages):
+                continue
+        roots.append(issue_id)
+    return list(dict.fromkeys(roots))
+
+
 def cascade_root_issue_ids(
     item: Any,
     result_row: Any,
@@ -1020,6 +1175,15 @@ def cascade_root_issue_ids(
     )
     if reading_root is not None:
         return [reading_root]
+    v33251_roots = _v33251_defect_cascade_roots(item, result_row, visible)
+    if v33251_roots:
+        return v33251_roots
+    name_roots = _subject_name_cascade_roots(item, result_row, visible)
+    if name_roots:
+        return name_roots
+    unit_roots = _unit_defect_cascade_roots(item, result_row, visible)
+    if unit_roots:
+        return unit_roots
     return _v33227_name_mismatch_roots(item, result_row, visible)
 
 
