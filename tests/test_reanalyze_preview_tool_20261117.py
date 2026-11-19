@@ -294,3 +294,124 @@ def test_run_reports_unknown_job_id_instead_of_silent_drop(tmp_path, monkeypatch
     assert run_one.await_count == 0
     report = (tmp_path / "r.json").read_text()
     assert "job_not_in_current_slots" in report
+
+
+def _run_args(tmp_path, freeze_list, checkpoint=""):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        checkpoint=checkpoint, freeze_list=str(freeze_list), job_id=[], ai_policy="inherit",
+        concurrency=1, recover_stale_active=False, report=str(tmp_path / "r.json"),
+        output="",
+    )
+
+
+def _patch_run(monkeypatch, module, rows, counter):
+    async def fake_initialize():
+        return None
+
+    async def fake_acquire():
+        return object()
+
+    async def fake_release(conn):
+        return None
+
+    async def fake_close():
+        return None
+
+    async def fake_load(conn):
+        return rows
+
+    async def fake_run_one(*args, **kwargs):
+        counter.await_count += 1
+        return {"job_id": args[0] if args else "", "outcome": "completed"}
+
+    monkeypatch.setattr(module.DatabaseConnection, "initialize", fake_initialize)
+    monkeypatch.setattr(module.DatabaseConnection, "acquire", fake_acquire)
+    monkeypatch.setattr(module.DatabaseConnection, "release", fake_release)
+    monkeypatch.setattr(module.DatabaseConnection, "close", fake_close)
+    monkeypatch.setattr(module, "_load_current_slot_jobs", fake_load)
+    monkeypatch.setattr(module, "_run_one", fake_run_one)
+
+
+def test_frozen_job_id_is_not_replaced_by_another_job_in_same_slot(tmp_path, monkeypatch):
+    """冻结任务被同槽位替代任务换掉：记选集变化，执行次数为零。"""
+    import asyncio
+    from types import SimpleNamespace
+
+    module = _load_module()
+    rows = [{
+        "slot_id": "slot-1", "job_uuid": "replacement",
+        "current_document_version_id": 7, "file_hash": "a" * 64,
+        "analysis_revision": "rev-new", "mode": "dual",
+        "subject_org_name": "甲单位", "fiscal_year": 2026, "report_kind": "final",
+        "status": "done",
+    }]
+    freeze_path = tmp_path / "freeze.json"
+    freeze_path.write_text(json.dumps({"slots": [{
+        "slot_id": "slot-1", "job_uuid": "original",
+        "document_version_id": 7, "file_hash": "a" * 64, "analysis_revision": None,
+    }]}), encoding="utf-8")
+    # 断点即使声称替代任务已完成，也不能先于任务身份生效：
+    # 结果必须是选集变化，而不是 checkpoint_completed。
+    fingerprint = module._selection_fingerprint(
+        [{"slot_id": "slot-1", "job_uuid": "original", "document_version_id": 7,
+          "file_hash": "a" * 64, "analysis_revision": None}],
+        ai_policy="inherit", recover_stale_active=False,
+    )
+    checkpoint_path = tmp_path / "checkpoint.jsonl"
+    checkpoint_path.write_text(json.dumps({
+        "job_id": "replacement", "batch_fingerprint": fingerprint,
+        "result_revision": "rev-new", "file_hash": "a" * 64,
+        "document_version_id": 7, "outcome": "completed", "status": "done",
+    }) + "\n", encoding="utf-8")
+    counter = SimpleNamespace(await_count=0)
+    _patch_run(monkeypatch, module, rows, counter)
+    exit_code = asyncio.run(
+        module._run(_run_args(tmp_path, freeze_path, checkpoint=str(checkpoint_path)))
+    )
+    assert exit_code == 0
+    assert counter.await_count == 0
+    report = json.loads((tmp_path / "r.json").read_text(encoding="utf-8"))
+    assert report["skipped"] == 1
+    entry = report["results"][0]
+    assert entry["reason"] == "frozen_job_replaced"
+    assert entry["job_id"] == "original"
+    assert entry["current_job_uuid"] == "replacement"
+
+
+def test_frozen_job_id_match_still_executes(tmp_path, monkeypatch):
+    """冻结任务仍在当前槽位：正常执行一次，身份核对不放宽也不误拦。"""
+    import asyncio
+    from types import SimpleNamespace
+
+    module = _load_module()
+    rows = [{
+        "slot_id": "slot-1", "job_uuid": "original",
+        "current_document_version_id": 7, "file_hash": "a" * 64,
+        "analysis_revision": "rev-1", "mode": "dual",
+        "subject_org_name": "甲单位", "fiscal_year": 2026, "report_kind": "final",
+        "status": "done",
+    }]
+    freeze_path = tmp_path / "freeze.json"
+    freeze_path.write_text(json.dumps({"slots": [{
+        "slot_id": "slot-1", "job_uuid": "original",
+        "document_version_id": 7, "file_hash": "a" * 64, "analysis_revision": None,
+    }]}), encoding="utf-8")
+    counter = SimpleNamespace(await_count=0)
+    _patch_run(monkeypatch, module, rows, counter)
+    exit_code = asyncio.run(module._run(_run_args(tmp_path, freeze_path)))
+    assert exit_code == 0
+    assert counter.await_count == 1
+
+
+def test_frozen_entry_without_job_id_falls_back_to_slot(tmp_path):
+    """旧格式只冻结槽位：仍按槽位解析，保持向后兼容。"""
+    module = _load_module()
+    row = {"slot_id": "slot-1", "job_uuid": "job-1"}
+    resolved, reason, current = module._resolve_frozen_entry(
+        {"slot_id": "slot-1"}, {"job-1": row}, {"slot-1": row},
+    )
+    assert resolved is row
+    assert reason is None
+    assert current == "job-1"

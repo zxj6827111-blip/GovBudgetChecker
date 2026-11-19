@@ -16,7 +16,10 @@
   哈希与文档版本；只有“本批次确已完成、且当前行仍是该批次产物”的条目
   才允许跳过，旧批次或其他配置的断点不静默复用；
 - 同批次恢复时先按断点识别“本批已产生的新 revision”，不先报
-  ``frozen_revision_changed``；不同批次或版本变化仍按处置原因跳过。
+  ``frozen_revision_changed``；不同批次或版本变化仍按处置原因跳过；
+- 冻结条目带任务 ID 时只认该任务：同一槽位换成替代任务时记
+  ``frozen_job_replaced`` 并跳过，即使原件版本与哈希未变也不得改跑替代任务；
+  确要重跑替代任务须重新冻结选集。
 """
 
 from __future__ import annotations
@@ -29,7 +32,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
 
@@ -168,6 +171,35 @@ def _load_freeze_list(path: Path) -> List[Dict[str, Any]]:
     if not isinstance(slots, list):
         raise SystemExit(f"{path}: 冻结选集缺少 slots 数组")
     return [dict(item) for item in slots if isinstance(item, dict)]
+
+
+def _resolve_frozen_entry(
+    entry: Dict[str, Any],
+    by_job: Dict[str, Dict[str, Any]],
+    by_slot: Dict[str, Dict[str, Any]],
+) -> Tuple[Optional[Dict[str, Any]], Optional[str], Optional[str]]:
+    """按冻结身份精确解析当前行，返回 ``(row, reason, current_job_uuid)``。
+
+    冻结了任务 ID 就必须命中同一个任务：同槽位换成替代任务时不得顶替执行，
+    即使原件版本和哈希都没变，也按选集变化留回执、执行次数为零。只有冻结
+    条目本身没有任务 ID（旧格式仅按槽位冻结）才允许按槽位解析。
+    """
+    job_id = str(entry.get("job_uuid") or "").strip()
+    slot_id = str(entry.get("slot_id") or "").strip()
+    row = by_job.get(job_id) if job_id else None
+    if row is not None:
+        if slot_id and str(row.get("slot_id") or "") != slot_id:
+            return None, "frozen_slot_changed", str(row.get("job_uuid") or "")
+        return row, None, str(row.get("job_uuid") or "")
+    if job_id:
+        replacement = by_slot.get(slot_id) if slot_id else None
+        if replacement is not None:
+            return None, "frozen_job_replaced", str(replacement.get("job_uuid") or "")
+        return None, "frozen_job_missing", None
+    row = by_slot.get(slot_id) if slot_id else None
+    if row is None:
+        return None, "frozen_slot_missing", None
+    return row, None, str(row.get("job_uuid") or "")
 
 
 #: 有有效结果、可记“完成执行”的终态；与覆盖完整性分开统计。
@@ -449,11 +481,17 @@ async def _run(args: argparse.Namespace) -> int:
             for entry in frozen:
                 job_id = str(entry.get("job_uuid") or "").strip()
                 slot_id = str(entry.get("slot_id") or "").strip()
-                row = by_job.get(job_id) or by_slot.get(slot_id)
+                # 任务身份先于断点与版本核对：冻结的是哪个任务就只能跑哪个任务，
+                # 同槽位的替代任务不得顶替（执行次数为零，留选集变化回执）。
+                row, identity_reason, current_job_id = _resolve_frozen_entry(
+                    entry, by_job, by_slot
+                )
                 if row is None:
                     selection_errors.append({
                         "slot_id": slot_id or None, "job_id": job_id or None,
-                        "outcome": "skipped", "reason": "frozen_slot_missing",
+                        "outcome": "skipped", "reason": identity_reason,
+                        **({"current_job_uuid": current_job_id}
+                           if current_job_id and current_job_id != job_id else {}),
                     })
                     continue
                 # 同批次已完成且当前行仍是其产物 → 直接跳过；
