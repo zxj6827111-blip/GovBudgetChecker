@@ -160,4 +160,5 @@ def test_wrong_amount_still_fails_with_real_difference():
     ], body)
     issues = check_fund_totals(_rule(), doc)
     assert _receipt(doc)["status"] == "fail"
-    assert issues and "2.4700" in issues[0].message
+    # 2026-11-19：差额按金额格式显示，至少两位小数（2.47 而非 2.4700）。
+    assert issues and "2.47" in issues[0].message

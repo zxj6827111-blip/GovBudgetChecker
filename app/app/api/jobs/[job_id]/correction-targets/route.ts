@@ -5,12 +5,15 @@ import { requireBackendAuthHeaders } from "@/lib/routeAuth";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(_request: NextRequest, { params }: { params: Promise<{ job_id: string }> }) {
+export async function GET(request: NextRequest, { params }: { params: Promise<{ job_id: string }> }) {
   const auth = await requireBackendAuthHeaders();
   if (!auth.ok) return auth.response;
   const jobId = encodeURIComponent((await params).job_id);
   try {
-    const upstream = await fetchWithTimeout(`${apiBase}/api/jobs/${jobId}/correction-targets`, {
+    // R6（2026-11-20 复审）：历史读取校正必须把 analysis_revision 透传到后端，
+    // 否则代理永远返回当前版本，历史页串入新版校正记录。
+    const search = request.nextUrl.search || "";
+    const upstream = await fetchWithTimeout(`${apiBase}/api/jobs/${jobId}/correction-targets${search}`, {
       cache: "no-store",
       headers: auth.headers,
     });

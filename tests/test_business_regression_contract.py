@@ -74,6 +74,22 @@ def test_final_accounts_toc_only_does_not_count_as_complete_nine_tables() -> Non
     assert any(issue.rule == "V33-002" and "缺失表" in issue.message for issue in issues)
 
 
+def test_final_table_order_uses_body_pages_when_toc_continues_onto_a_second_page() -> None:
+    from src.engine.rules_v33 import build_document
+
+    toc = "目录\n一、收入支出决算总表\n二、收入决算表\n三、支出决算表"
+    continuation = ("八、政府性基金预算财政拨款收入支出决算表\n"
+                    "九、国有资本经营预算财政拨款收入支出决算表\n"
+                    "第三部分 某单位决算情况说明\n一、收入支出决算总体情况说明\n"
+                    "二、收入决算情况说明")
+    pages = [toc, continuation, *STANDARD_FINAL_TABLE_TITLES]
+    doc = build_document("test.pdf", pages, [[] for _ in pages], 0)
+    assert R33002_NineTablesCheck().apply(doc) == []
+    swapped = [toc, continuation, STANDARD_FINAL_TABLE_TITLES[-1], *STANDARD_FINAL_TABLE_TITLES[:-1]]
+    doc = build_document("test.pdf", swapped, [[] for _ in swapped], 0)
+    assert any("顺序异常" in issue.message for issue in R33002_NineTablesCheck().apply(doc))
+
+
 def test_final_accounts_narrative_mentions_do_not_count_as_table_titles() -> None:
     text = "本部门支出决算表相关数据已在情况说明中列示，具体口径详见财政拨款说明。"
 

@@ -184,6 +184,8 @@ SAFE_LOG_NAMES = frozenset(
         "last_exception",
         "error_msg",
         "msg",
+        # pid：操作系统进程号，纯整数；用于识别僵尸队列锁的持有者。
+        "pid",
         # attempts：入库重试的次数上限（环境变量读取的纯数值循环边界），
         # 只可能是整数，不含材料原文。
         "attempts",

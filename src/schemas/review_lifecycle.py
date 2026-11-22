@@ -163,6 +163,9 @@ ERROR_OBLIGATION_DECISION_CONFLICT = "obligation_decision_conflict"
 #: 输入校验，不用 409。零依据放行意味着"点一下「不适用」、不写任何说明，
 #: 阻塞义务就消失"——对审计系统不可接受（任务书 §十）。
 ERROR_OBLIGATION_DECISION_EVIDENCE_REQUIRED = "obligation_decision_evidence_required"
+#: 同一义务下有多个独立原文位置/科目，表态必须指明具体范围（HTTP 422）；
+#: 缺范围或范围不属于该义务时不写入，避免一处表态放行全部（R5）。
+ERROR_OBLIGATION_SCOPE_REQUIRED = "obligation_scope_required"
 
 
 class ReviewBlocker(BaseModel):
@@ -322,6 +325,9 @@ class ObligationReviewItem(BaseModel):
     decided_at: Optional[str] = None
     note: Optional[str] = None
     evidence_reference: Optional[str] = None
+    #: R5：同一义务下按原文位置/科目范围分别表态的记录，``{scope_key: 决定}``。
+    #: 页面按分组的 ``decision_scope`` 取对应记录，不再把一处表态显示成全部已核对。
+    scope_decisions: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
     #: DH-02 结构化卡点：原样透传引擎字段，供前端与导出消费。
     reason_codes: List[str] = Field(default_factory=list)
     blocked_by: List[Dict[str, Any]] = Field(default_factory=list)
@@ -396,6 +402,9 @@ class ObligationDecisionRequest(BaseModel):
     #: 勾选并随请求提交。verified_ok / verified_issue / not_applicable 三个
     #: 关闭性决定的必填协议字段；范围确认不能代替依据，但缺它一律 422。
     scope_confirmed: bool = False
+    #: R5：同一义务下按原文位置/科目范围分别表态时的稳定范围键
+    #: （分组 ``decision_scope``）。同一义务只有一处阻塞时可省略。
+    scope_key: Optional[str] = Field(default=None, max_length=120)
 
     @field_validator("decision")
     @classmethod
@@ -540,6 +549,7 @@ __all__ = [
     "ERROR_OBLIGATION_NOT_BLOCKING",
     "ERROR_OBLIGATION_DECISION_CONFLICT",
     "ERROR_OBLIGATION_DECISION_EVIDENCE_REQUIRED",
+    "ERROR_OBLIGATION_SCOPE_REQUIRED",
     "ObligationDecisionRecord",
     "ObligationReviewItem",
     "ObligationReviewBlock",

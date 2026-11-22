@@ -34,9 +34,11 @@ _SAFE_JOB_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 CORRECTION_FIELDS = frozenset(
     {"raw_value", "unit", "year", "org", "scope", "indicator", "column_mapping", "cell_value",
-     "table_rows", "table_identity", "manual_location"}
+     "table_rows", "table_identity", "manual_location", "subject_code", "subject_name"}
 )
 TABLE_FIELDS = frozenset({"column_mapping", "cell_value", "table_rows", "table_identity"})
+TEXT_FIELDS = frozenset({"raw_value", "unit", "subject_code", "subject_name"})
+_AMOUNT_TEXT = re.compile(r"^(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$")
 FEEDBACK_REASONS = frozenset(
     {
         "parse_error",
@@ -52,7 +54,7 @@ FEEDBACK_REASONS = frozenset(
 class CorrectionChange(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    target_type: Literal["fact", "table_instance"]
+    target_type: Literal["fact", "table_instance", "text_statement"]
     target_id: StrictStr = Field(min_length=1, max_length=240)
     field: Literal[
         "raw_value",
@@ -66,6 +68,8 @@ class CorrectionChange(BaseModel):
         "table_rows",
         "table_identity",
         "manual_location",
+        "subject_code",
+        "subject_name",
     ]
     value: Any
     evidence_ids: List[StrictStr] = Field(default_factory=list, max_length=10)
@@ -74,6 +78,24 @@ class CorrectionChange(BaseModel):
 
     @model_validator(mode="after")
     def validate_change(self) -> "CorrectionChange":
+        if self.target_type == "text_statement":
+            if self.field not in TEXT_FIELDS:
+                raise ValueError("text_statement corrections only accept raw_value, unit, subject_code or subject_name")
+            if self.field == "unit" and str(self.value) not in {"元", "万元", "亿元"}:
+                raise ValueError("text_statement unit correction must be 元/万元/亿元")
+            if self.field == "raw_value":
+                value = str(self.value or "").strip()
+                if not _AMOUNT_TEXT.fullmatch(value):
+                    raise ValueError("text_statement raw_value correction must be a plain amount")
+            if self.field == "subject_code":
+                value = str(self.value or "").strip()
+                if not re.fullmatch(r"\d{3}|\d{5}|\d{7}", value):
+                    raise ValueError("text_statement subject_code must be 3/5/7 digits")
+            if self.field == "subject_name" and not str(self.value or "").strip():
+                raise ValueError("text_statement subject_name correction must be non-empty")
+            if not isinstance(self.location, dict) or not self.location:
+                raise ValueError("text_statement correction needs the original page location")
+            return self
         if self.field in TABLE_FIELDS and self.target_type != "table_instance":
             raise ValueError(f"{self.field} corrections must target a table_instance")
         if self.field not in TABLE_FIELDS and self.target_type != "fact":
@@ -263,7 +285,25 @@ def _parse_bbox(value: Any) -> Optional[List[float]]:
     return bbox
 
 
-def _validate_manual_location(job_id: str, job_dir: Path, value: Dict[str, Any]) -> Dict[str, Any]:
+def _normalized_page_text(value: str) -> str:
+    import unicodedata
+
+    return "".join(unicodedata.normalize("NFKC", str(value or "")).split())
+
+
+def _validate_manual_location(
+    job_id: str,
+    job_dir: Path,
+    value: Dict[str, Any],
+    *,
+    require_bbox: bool = True,
+) -> Dict[str, Any]:
+    """校验人工提交的原页位置。
+
+    ``require_bbox=False`` 用于正文金额校正：有页码且原句在该页唯一时，
+    页码+原句本身就是可复核的定位，不再强制坐标；原句不唯一时拒绝并
+    提示复核人框选具体位置。表格类校正仍必须提交 bbox。
+    """
     if isinstance(value.get("physical_page"), bool):
         raise HTTPException(status_code=422, detail="manual_location needs a positive physical_page")
     try:
@@ -271,8 +311,9 @@ def _validate_manual_location(job_id: str, job_dir: Path, value: Dict[str, Any])
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail="manual_location needs physical_page") from exc
     bbox = _parse_bbox(value.get("bbox"))
-    if not bbox:
+    if require_bbox and not bbox:
         raise HTTPException(status_code=422, detail="manual_location needs a valid bbox")
+    quote = str(value.get("quote") or "")[:2000]
     try:
         import fitz
 
@@ -280,9 +321,22 @@ def _validate_manual_location(job_id: str, job_dir: Path, value: Dict[str, Any])
         with fitz.open(pdf_path) as document:
             if page_number < 1 or page_number > document.page_count:
                 raise HTTPException(status_code=422, detail="manual_location physical_page is out of range")
-            rect = document.load_page(page_number - 1).rect
-            if bbox[0] < 0 or bbox[1] < 0 or bbox[2] > rect.width or bbox[3] > rect.height:
+            page = document.load_page(page_number - 1)
+            rect = page.rect
+            if bbox and (bbox[0] < 0 or bbox[1] < 0 or bbox[2] > rect.width or bbox[3] > rect.height):
                 raise HTTPException(status_code=422, detail="manual_location bbox exceeds the physical page")
+            if not bbox:
+                # 无坐标时必须能证明“该页这一原句唯一”；否则要求框选。
+                needle = _normalized_page_text(quote)
+                haystack = _normalized_page_text(page.get_text("text"))
+                if len(needle) < 6 or haystack.count(needle) != 1:
+                    raise HTTPException(
+                        status_code=422,
+                        detail={
+                            "error": "manual_location_needs_selection",
+                            "message": "该原句在本页不唯一或过短，无法据此定位；请在页面上框选具体位置后提交",
+                        },
+                    )
     except HTTPException:
         raise
     except FileNotFoundError as exc:
@@ -290,7 +344,6 @@ def _validate_manual_location(job_id: str, job_dir: Path, value: Dict[str, Any])
     except ImportError as exc:
         raise HTTPException(status_code=503, detail="PyMuPDF is not installed") from exc
 
-    quote = str(value.get("quote") or "")[:2000]
     evidence_seed = json.dumps(
         [job_id, page_number, bbox, quote], ensure_ascii=False, separators=(",", ":")
     )
@@ -305,8 +358,12 @@ def _validate_manual_location(job_id: str, job_dir: Path, value: Dict[str, Any])
         "bbox": bbox,
         "source_method": "manual",
         "verification_status": "unverified",
-        "location_level": "region",
-        "validation_note": "人工提交的位置已校验页码和边界；原文引用仍未由系统核实",
+        "location_level": "region" if bbox else "page_span",
+        "validation_note": (
+            "人工提交的位置已校验页码和边界；原文引用仍未由系统核实"
+            if bbox else
+            "人工提交的页码与原句已校验在该页唯一；未提供坐标"
+        ),
     }
 
 
@@ -475,6 +532,75 @@ async def _resolve_evidence(
     return await _load_persisted_evidence(payload, evidence_id)
 
 
+def _revision_applied_ids_from_fs(job_id: str) -> Dict[str, List[str]]:
+    """文件镜像兜底：analysis_versions/*/status.json 里的正文校正回执。"""
+    mapping: Dict[str, List[str]] = {}
+    versions_dir = _job_dir(job_id) / "analysis_versions"
+    if not versions_dir.exists():
+        return mapping
+    for entry in sorted(versions_dir.iterdir()):
+        status_path = entry / "status.json"
+        if not entry.is_dir() or not status_path.exists():
+            continue
+        try:
+            payload = json.loads(status_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        revision = str(payload.get("analysis_revision") or "")
+        if not revision:
+            continue
+        ids: List[str] = []
+        for block in (payload.get("applied_text_correction_ids"),
+                      (payload.get("result") or {}).get("applied_text_correction_ids")):
+            if isinstance(block, list):
+                ids.extend(str(item) for item in block if str(item).strip())
+        if ids:
+            mapping[revision] = ids
+    return mapping
+
+
+async def _revision_applied_ids_map(job_id: str) -> Dict[str, List[str]]:
+    """全部已发布版本的正文校正回执（revision → applied ids）。
+
+    R6（2026-11-21 第三轮复审）：一条记录的"首次生效版本"是它第一次出现在
+    某版本 applied 列表中的版本——后续版本沿用同一记录（顺序叠加）时不再
+    改写生效版本，C 视图才能如实显示"第一笔在 B 首次生效、已被替代"。
+    """
+    mapping: Dict[str, List[str]] = {}
+    if (os.getenv("DATABASE_URL") or "").strip():
+        from src.db.connection import DatabaseConnection
+
+        try:
+            conn = await DatabaseConnection.acquire()
+            try:
+                rows = await conn.fetch(
+                    "SELECT revision_id, "
+                    "payload->'applied_text_correction_ids' AS top_ids, "
+                    "payload->'result'->'applied_text_correction_ids' AS result_ids "
+                    "FROM analysis_revision_results WHERE job_uuid=$1",
+                    job_id,
+                )
+            finally:
+                await DatabaseConnection.release(conn)
+            for row in rows or []:
+                ids: List[str] = []
+                for block in (row.get("top_ids"), row.get("result_ids")):
+                    if isinstance(block, str):
+                        try:
+                            block = json.loads(block)
+                        except Exception:
+                            block = []
+                    if isinstance(block, list):
+                        ids.extend(str(item) for item in block if str(item).strip())
+                if ids:
+                    mapping[str(row["revision_id"])] = ids
+        except Exception:
+            mapping = {}
+    if not mapping:
+        mapping = _revision_applied_ids_from_fs(job_id)
+    return mapping
+
+
 def _current_basis_or_409(job_id: str, job_dir: Path, submitted: str) -> str:
     current = current_analysis_basis_token(job_id, job_dir)
     if current is None:
@@ -536,6 +662,76 @@ async def create_job_correction(job_id: str, body: CorrectionRequest, request: R
     current_evidence_ids = report_evidence_ids(payload)
     manual_evidence: List[Dict[str, Any]] = []
     correction_changes: List[Dict[str, Any]] = []
+    text_changes = [change for change in body.changes if change.target_type == "text_statement"]
+    # R4（2026-11-20 复审）：重复请求（同版本、同目标、同字段、同取值）直接
+    # 返回既有回执，不重复记账、不重复触发重算。放在目标校验之前：重分析
+    # 启动后当前 payload 没有目标列表，重复提交不能再被误判成 422。
+    from src.services.text_correction_targets import duplicate_correction_record as _duplicate_check
+
+    _duplicate = _duplicate_check(
+        read_jsonl_records(job_dir / "corrections.jsonl"),
+        basis_token=basis,
+        changes=[change.model_dump(exclude_none=True) for change in body.changes],
+    )
+    if _duplicate is not None:
+        return {
+            "correction_id": _duplicate.get("record_id"),
+            "record_status": "duplicate_ignored",
+            "duplicate": True,
+            "analysis_basis_token": basis,
+            "analysis_revision": basis.rsplit(":", 1)[-1],
+            "new_analysis_revision": None,
+            "affected_checks": {"status": "unchanged", "check_ids": [], "reason": "重复请求未新增改动"},
+            "reanalysis_status": "not_executed_duplicate",
+            "reanalysis_detail": None,
+            "review_decisions_status": "unchanged_until_new_analysis_is_published",
+            "apply_status": "already_recorded",
+            "message": "相同校正已存在于当前分析版本，未重复追加，也未重复触发重分析。",
+        }
+    text_targets: Dict[str, Dict[str, Any]] = {}
+    if text_changes:
+        from src.services.text_correction_targets import build_text_correction_targets
+
+        text_targets = {target["target_id"]: target for target in build_text_correction_targets(payload)}
+        raw_value_fields: Dict[str, bool] = {}
+        for change in text_changes:
+            target = text_targets.get(change.target_id)
+            if target is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": "text_correction_target_not_found",
+                        "message": "校正对象不在当前分析版本；请刷新后重新选择原句",
+                    },
+                )
+            if change.field == "raw_value":
+                raw_value_fields[change.target_id] = True
+            quote = str((change.location or {}).get("quote") or "")
+            span = str(target.get("span") or "")
+            if quote and span and quote not in span and span not in quote:
+                amount = str(target.get("amount_raw") or "")
+                if not amount or amount not in quote:
+                    raise HTTPException(
+                        status_code=422,
+                        detail={
+                            "error": "text_correction_span_mismatch",
+                            "message": "提交的原文位置与当前校正对象不一致，请重新选择原句",
+                        },
+                    )
+        # R3（2026-11-20 复审）：原文读数本身不是合法金额（"54,65.41"、
+        # "5,465.41.00"）时，直接提交或只确认单位都不得当作有效读数重算；
+        # 必须由复核人显式输入合法读数后才能确认单位/科目。
+        for change in text_changes:
+            target = text_targets.get(change.target_id) or {}
+            if target.get("raw_is_valid") is False and change.field != "raw_value" and not raw_value_fields.get(change.target_id):
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": "text_correction_invalid_raw_amount",
+                        "message": "原文读数不是合法金额，请先输入有效读数后再确认单位或科目",
+                        "amount_raw": target.get("amount_raw"),
+                    },
+                )
 
     for change in body.changes:
         for evidence_id in change.evidence_ids:
@@ -554,12 +750,40 @@ async def create_job_correction(job_id: str, body: CorrectionRequest, request: R
                 current_evidence_ids.add(evidence_id)
         normalized_change = change.model_dump(exclude_none=True)
         if change.location is not None:
-            location_evidence = _validate_manual_location(job_id, job_dir, change.location)
+            location_evidence = _validate_manual_location(
+                job_id, job_dir, change.location,
+                require_bbox=change.target_type != "text_statement",
+            )
             manual_evidence.append(location_evidence)
             normalized_change["evidence_ids"] = [*change.evidence_ids, location_evidence["evidence_id"]]
             normalized_change["location"] = {
                 "physical_page": location_evidence["physical_page"],
                 "bbox": location_evidence["bbox"],
+                **(
+                    {
+                        "quote": location_evidence["quote"],
+                        # R5：目标原句的页内位置随台账透传，同页同额两笔靠它区分。
+                        **(
+                            {"pos": change.location.get("pos")}
+                            if isinstance(change.location.get("pos"), int)
+                            and not isinstance(change.location.get("pos"), bool)
+                            else {}
+                        ),
+                    }
+                    if change.target_type == "text_statement" else {}
+                ),
+            }
+        if change.target_type == "text_statement":
+            target = text_targets.get(change.target_id) or {}
+            # 校正台账必须保留原文、依据、人员与分析版本：原文与依据取提交时
+            # 的当前目标快照，后续版本变化不能改写这条记录。
+            normalized_change["original_text"] = target.get("span")
+            normalized_change["target_snapshot"] = {
+                "rule_id": target.get("rule_id"),
+                "amount_raw": target.get("amount_raw"),
+                "subject": target.get("subject"),
+                "table_basis": target.get("table_basis"),
+                "analysis_revision": target.get("analysis_revision"),
             }
         if change.field == "manual_location":
             location_evidence = _validate_manual_location(job_id, job_dir, change.value)
@@ -581,6 +805,20 @@ async def create_job_correction(job_id: str, body: CorrectionRequest, request: R
         meta = result.get("meta") if isinstance(result.get("meta"), dict) else {}
         receipts = meta.get("check_receipts")
     affected = affected_check_ids(receipts, (item.target_id for item in body.changes))
+    if text_changes:
+        # R4：受影响检查由目标在当前版本的真实依赖产生，不是固定清单。
+        # 同一笔正文金额同时被单项表文核对（V33-222）和分项加总
+        # （V33-251）消费时，两者都必须列入并重算。
+        affected_ids: List[str] = []
+        for change in text_changes:
+            target = text_targets.get(change.target_id) or {}
+            values = target.get("affected_check_ids") or [target.get("rule_id")]
+            affected_ids.extend(str(value) for value in values if value)
+        affected = {
+            "status": "mapped",
+            "check_ids": list(dict.fromkeys(affected_ids)),
+            "reason": "正文金额校正按当前版本实际依赖重跑单项核对、分项加总与单位检查",
+        }
     record = {
         "record_id": "cor-" + uuid.uuid4().hex,
         "job_id": job_id,
@@ -637,6 +875,9 @@ async def create_job_correction(job_id: str, body: CorrectionRequest, request: R
         "affected_checks": affected,
         "reanalysis_status": reanalysis_status,
         "reanalysis_detail": reanalysis_detail,
+        "apply_status": (
+            "pending_reanalysis" if reanalysis_status == "queued" else "not_applied"
+        ),
         "review_decisions_status": (
             "pending_reanalysis" if reanalysis_status == "queued" else "unchanged_until_new_analysis_is_published"
         ),
@@ -713,13 +954,29 @@ _TARGET_TABLE_KEYS = (
 
 
 @router.get("/api/jobs/{job_id}/correction-targets")
-async def get_correction_targets(job_id: str, request: Request) -> Dict[str, Any]:
-    """List what the reviewer can fix by hand: alerted tables, unread regions and prior corrections."""
+async def get_correction_targets(
+    job_id: str,
+    request: Request,
+    analysis_revision: Optional[str] = Query(default=None, max_length=300),
+) -> Dict[str, Any]:
+    """List what the reviewer can fix by hand: alerted tables, unread regions and prior corrections.
+
+    R6（2026-11-20 复审）：带 ``analysis_revision`` 时报告、目标、事实与生效
+    记录全部绑定该历史版本——目标来自该版本的快照，历史只列**在该版本生效**
+    的校正（记录在其触发重分析产出的版本上留 effective_in_revision），当前
+    版本的依据令牌不回填历史页；历史数据缺失时显式 404/409，不回退当前数据。
+    """
     _validate_job_id(job_id)
-    _, _, _, payload = require_job_access(request, job_id)
+    _, _, _, current_payload = require_job_access(request, job_id)
     from src.services.fiscal_table_rules import NINE_TABLE_RULES
+    from src.services.text_correction_targets import build_text_correction_targets
 
     job_dir = _job_dir(job_id)
+    historical = bool(str(analysis_revision or "").strip())
+    if historical:
+        payload = await _bound_evidence_payload(job_id, str(analysis_revision).strip())
+    else:
+        payload = current_payload
     receipt = ((payload.get("structured_ingest") or {}).get("reading_import") or {})
     reading = receipt.get("reading_quality") or {}
     tables = []
@@ -733,14 +990,130 @@ async def get_correction_targets(job_id: str, request: Request) -> Dict[str, Any
                 for measure, aliases in (rule.measure_aliases.items() if rule else [])
             ],
         })
-    history = [
-        {"record_id": record.get("record_id"), "actor": record.get("actor"), "reason": record.get("reason"),
-         "created_at": record.get("created_at"), "changes": record.get("changes") or []}
-        for record in read_jsonl_records(job_dir / "corrections.jsonl")
+    records = read_jsonl_records(job_dir / "corrections.jsonl")
+    applied_map = await _revision_applied_ids_map(job_id)
+    # R6（2026-11-21 第三轮复审）：每条记录的"首次生效版本"= 它第一次出现在
+    # 某版本 applied 列表中的版本；后续版本顺序叠加不改写。视图按"该版实际
+    # 采用的读数"展示：台账顺序里最后一次**在当版 applied 回执内**的 raw_value。
+    first_effective: Dict[str, str] = {}
+    for _rev in sorted(applied_map):
+        for _rid in applied_map[_rev]:
+            first_effective.setdefault(_rid, _rev)
+    view_revision = str(payload.get("analysis_revision") or "") or None
+
+    def _raw_target_of(record: Dict[str, Any]) -> str:
+        for change in record.get("changes") or []:
+            if change.get("target_type") == "text_statement" \
+                    and str(change.get("field") or "") == "raw_value":
+                return str(change.get("target_id") or "")
+        return ""
+
+    def _record_value(record: Dict[str, Any], field_name: str) -> Optional[str]:
+        for change in record.get("changes") or []:
+            if str(change.get("field") or "") == field_name:
+                return str(change.get("value") or "")
+        return None
+
+    _ledger_raw_order: Dict[str, List[int]] = {}
+    for _index, _record in enumerate(records):
+        _target = _raw_target_of(_record)
+        if _target:
+            _ledger_raw_order.setdefault(_target, []).append(_index)
+
+    def _record_superseded(record: Dict[str, Any], at_revision: Optional[str]) -> bool:
+        """同一目标的读数记录：存在更晚提交、且在 at_revision 已生效的记录即被替代。"""
+        if not at_revision:
+            return False
+        record_id = str(record.get("record_id") or "")
+        target = _raw_target_of(record)
+        indices = _ledger_raw_order.get(target) or []
+        try:
+            own_index = records.index(record)
+        except ValueError:
+            return False
+        for later_index in indices:
+            if later_index <= own_index:
+                continue
+            later = records[later_index]
+            later_eff = first_effective.get(str(later.get("record_id") or ""))
+            if later_eff and str(later_eff) <= str(at_revision):
+                return True
+        return False
+
+    def _adopted_at(at_revision: Optional[str]) -> Dict[str, Dict[str, str]]:
+        adopted: Dict[str, Dict[str, str]] = {}
+        if not at_revision:
+            return adopted
+        # R6（2026-11-21 自检加固）：当版采用读数以**该版自己的** applied 回执
+        # 为准——校正在更早版本生效、却在当版重分析中未再命中（unapplied）时，
+        # 当版报告实际回到原文读数，这里不得沿用旧人工值标成"当版采用"。
+        view_ids = set(applied_map.get(str(at_revision)) or [])
+        for target, indices in _ledger_raw_order.items():
+            for index in reversed(indices):
+                record = records[index]
+                record_id = str(record.get("record_id") or "")
+                if record_id and record_id in view_ids:
+                    adopted[target] = {
+                        "value": str(_record_value(record, "raw_value") or ""),
+                        "record_id": record_id,
+                    }
+                    break
+        return adopted
+
+    adopted = _adopted_at(view_revision)
+    history = []
+    for record in records:
+        record_id = str(record.get("record_id") or "")
+        effective_in = first_effective.get(record_id)
+        if view_revision:
+            # 视图列出"在该版或其之前已生效"的记录——C 视图能追溯第一笔
+            # （在 B 首次生效、读数已被替代），B 视图看不到尚未生效的后一笔。
+            if not (effective_in and str(effective_in) <= str(view_revision)):
+                continue
+        history.append({
+            "record_id": record.get("record_id"),
+            "actor": record.get("actor"),
+            "reason": record.get("reason"),
+            "created_at": record.get("created_at"),
+            "changes": record.get("changes") or [],
+            "analysis_basis_token": record.get("analysis_basis_token"),
+            "effective_in_revision": effective_in,
+            "submitted_against_revision": str(
+                record.get("analysis_basis_token") or ""
+            ).rpartition(":")[-1] or None,
+            "superseded": _record_superseded(record, view_revision),
+        })
+    payload_revision = payload.get("analysis_revision")
+    # R6：每个目标随视图版本返回"该版实际采用的读数"——与同版报告一致；
+    # 无人工校正时采用值即原文读数（effective_source=original_disclosure）。
+    statements = build_text_correction_targets(payload)
+    for target in statements:
+        target_id = str(target.get("target_id") or "")
+        entry = adopted.get(target_id)
+        if entry and entry.get("value"):
+            target["effective_value"] = entry["value"]
+            target["effective_correction_id"] = entry.get("record_id")
+            target["effective_source"] = "manual_correction"
+        else:
+            target["effective_value"] = target.get("amount_raw")
+            target["effective_source"] = "original_disclosure"
+    # R6：台账里有记录却在任何已发布版本都找不到生效回执——如实列出，
+    # 不借用当前版本数据补历史明细。
+    missing_effect = [
+        str(record.get("record_id") or "")
+        for record in records
+        if str(record.get("record_id") or "") not in first_effective
     ]
     return {
         "job_id": job_id,
-        "analysis_basis_token": current_analysis_basis_token(job_id, job_dir),
+        # R6：历史请求返回该版本的依据令牌并显式标记 historical；
+        # 前端在历史态只读展示，不拿它提交。
+        "analysis_basis_token": (
+            f"{job_id}:{payload_revision}" if historical
+            else current_analysis_basis_token(job_id, job_dir)
+        ),
+        "analysis_revision": payload_revision,
+        "historical": historical,
         "reading_status": reading.get("status"),
         "tables": tables,
         "table_code_options": [
@@ -749,6 +1122,12 @@ async def get_correction_targets(job_id: str, request: Request) -> Dict[str, Any
         ],
         "gaps": [gap for gap in reading.get("gaps") or [] if isinstance(gap, dict)],
         "orphaned_amounts": receipt.get("orphaned_physical_amounts") or [],
+        "text_statements": statements,
         "overlay_status": payload.get("fact_overlay"),
+        "records_without_effect_version": missing_effect,
+        "history_note": (
+            "以下校正记录在任何已发布版本中都没有生效回执，无法确认其生效版本；"
+            "历史明细不借用当前版本数据补齐。" if missing_effect else None
+        ),
         "history": history[-50:],
     }

@@ -69,8 +69,20 @@ class ReviewReport:
 def normalize_manual_review(item: Mapping[str, Any]) -> Dict[str, Any]:
     """One title contract for JSON, CSV and visible reports, including legacy reasons."""
     normalized = dict(item)
-    title = str(item.get("title") or item.get("group_title") or item.get("code")
-                or item.get("obligation_id") or "待人工复核")
+    record_type = str(item.get("record_type") or "").strip()
+    code = str(item.get("code") or "").strip()
+    raw_title = str(item.get("title") or "").strip()
+    if record_type == "review_reason" and code and (not raw_title or raw_title == code):
+        resolved = _processing_reason_title(code)
+        if resolved != "处理状态说明":
+            raw_title = resolved
+    title = str(
+        raw_title
+        or item.get("group_title")
+        or code
+        or item.get("obligation_id")
+        or "待人工复核"
+    )
     normalized["title"] = title
     normalized["display_title"] = str(item.get("group_title") or title)
     return normalized
@@ -233,7 +245,34 @@ def _is_rounding_hint(item: Mapping[str, Any]) -> bool:
     return "可能为显示取整误差" in message or "在默认金额容差内，可能为取整误差" in message
 
 
-def build_review_report(payload: Mapping[str, Any]) -> Dict[str, Any]:
+def _resolve_payload_pdf_path(payload: Mapping[str, Any]) -> Optional[str]:
+    import os
+    from pathlib import Path
+
+    upload_root = Path(os.getenv("UPLOAD_DIR", "uploads")).resolve()
+    candidates: List[Path] = []
+    raw_saved = str(payload.get("saved_path") or "").strip()
+    if raw_saved:
+        path = Path(raw_saved)
+        candidates.append(path if path.is_absolute() else upload_root / path)
+    job_id = str(payload.get("job_id") or "").strip()
+    filename = str(payload.get("filename") or "").strip()
+    if job_id and filename:
+        candidates.append(upload_root / job_id / filename)
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                return str(candidate)
+        except OSError:
+            continue
+    return None
+
+
+def build_review_report(
+    payload: Mapping[str, Any],
+    *,
+    resolve_pdf_bboxes: bool = True,
+) -> Dict[str, Any]:
     """Build the canonical report from a terminal job payload without guessing."""
     job_id = str(payload.get("job_id") or "")
     result = _mapping(payload.get("result"))
@@ -377,8 +416,8 @@ def build_review_report(payload: Mapping[str, Any]) -> Dict[str, Any]:
                 "record_type": "structured_review",
                 "id": item.get("id") or f"structured-review:{table_code or len(diagnostics) + 1}",
                 "title": item.get("title") or (
-                    f"结构化识别待复核：{table_code}"
-                    if table_code else "结构化识别结果待复核"
+                    f"表格识别待复核：{_display_table_name(table_code)}"
+                    if table_code else "表格识别待复核"
                 ),
                 "message": item.get("message") or "该结构化识别项需要人工复核。",
                 "severity": item.get("severity") or "manual_review",
@@ -388,7 +427,7 @@ def build_review_report(payload: Mapping[str, Any]) -> Dict[str, Any]:
                     for key, value in {"page": page, "table": table_code or None}.items()
                     if value is not None
                 },
-                "suggestion": item.get("recommended_action") or "请核对原始 PDF 后确认。",
+                "suggestion": _structured_action_suggestion(item.get("recommended_action")),
             }
         )
 
@@ -596,7 +635,106 @@ def build_review_report(payload: Mapping[str, Any]) -> Dict[str, Any]:
     # 导出/页面使用同一时点的口径快照；CSV 的 conclusion_json 也随附。
     output["conclusion"]["processing_summary"] = output["processing_summary"]
     output["conclusion"]["review_summary"] = output["review_summary"]
+    output["unfinished_checks"] = _unfinished_checks(
+        diagnostics,
+        ai_requested=bool(payload.get("use_ai_assist", meta.get("use_ai_assist"))),
+    )
+    from src.services.unfinished_check_groups import build_unfinished_check_groups
+
+    structured_ingest = _mapping(payload.get("structured_ingest") or meta.get("structured_ingest"))
+    reading_import = _mapping(structured_ingest.get("reading_import"))
+    reading_tables = _mapping_list(reading_import.get("tables"))
+    structure_view = _mapping(meta.get("structure_view"))
+    page_texts = [
+        str(text or "") for text in (structure_view.get("page_texts") or [])
+    ] if isinstance(structure_view.get("page_texts"), list) else []
+    raw_blocking_ids = [
+        str(oid) for oid in (coverage_dict.get("blocking_obligation_ids") or [])
+        if str(oid or "").strip()
+    ] if isinstance(coverage_dict.get("blocking_obligation_ids"), list) else []
+    blocking_ids = list(raw_blocking_ids)
+    covered_obligation_ids: List[str] = []
+    if raw_blocking_ids:
+        try:
+            from src.services.material_detail_query_service import build_coverage
+            from src.services.review_lifecycle_service import blocking_coverage_obligations
+
+            cov = build_coverage(coverage_dict)
+            if cov.available:
+                visible_ids = {
+                    str(item.get("id") or "")
+                    for item in confirmed_issues
+                    if item.get("id")
+                }
+                for item in _mapping_list(structured_ingest.get("review_items")):
+                    if item.get("id"):
+                        visible_ids.add(str(item["id"]))
+                effective_blocking = {
+                    item.obligation_id
+                    for item in blocking_coverage_obligations(
+                        list(cov.items),
+                        result,
+                        visible_issue_ids=visible_ids,
+                        structured_ingest=structured_ingest,
+                    )
+                }
+                blocking_ids = [oid for oid in raw_blocking_ids if oid in effective_blocking]
+                covered_obligation_ids = [oid for oid in raw_blocking_ids if oid not in effective_blocking]
+        except Exception:
+            pass
+    pdf_path = _resolve_payload_pdf_path(payload) if resolve_pdf_bboxes else None
+    output["unfinished_check_groups"] = build_unfinished_check_groups(
+        output["unfinished_checks"],
+        _TABLE_CODE_LABELS,
+        confirmed_issues,
+        reading_tables=reading_tables,
+        page_texts=page_texts,
+        blocking_obligation_ids=blocking_ids,
+        covered_obligation_ids=covered_obligation_ids,
+        pdf_path=pdf_path,
+        analysis_revision=output.get("analysis_revision"),
+    )
     return output
+
+
+_TABLE_CODE_LABELS: Dict[str, str] = {
+    "FIN_01_income_expenditure_total": "收入支出决算总表",
+    "FIN_02_income": "收入决算表",
+    "FIN_03_expenditure": "支出决算表",
+    "FIN_04_fiscal_grant_total": "财政拨款收入支出决算总表",
+    "FIN_05_general_public_expenditure": "一般公共预算财政拨款支出决算表",
+    "FIN_06_basic_expenditure": "一般公共预算财政拨款基本支出决算表",
+    "FIN_07_three_public": "财政拨款“三公”经费支出决算表",
+    "FIN_08_gov_fund": "政府性基金预算财政拨款收入支出决算表",
+    "FIN_09_state_capital": "国有资本经营预算财政拨款收入支出决算表",
+}
+
+_STRUCTURED_ACTION_SUGGESTIONS: Dict[str, str] = {
+    "inspect_table_column_mapping": "请核对原始 PDF 对应页的表格标题、列头与金额列对齐关系（重点检查跨页续表及表头延续是否完整）。",
+    "inspect_original_table_reading": "请核对原始 PDF 对应页的表格区域，确认单元格内容及数字是否完整提取。",
+    "inspect_original_cell_identity": "请核对原始 PDF 中该金额所属的科目编码、科目名称及列归属是否正确。",
+    "correct_original_number_format": "请核对原始 PDF 对应页的金额格式（如重复小数点或异常分隔符），必要时以原文为准补正。",
+    "review_table_title_and_headers": "请核对原始 PDF 对应页的表格标题和表头，确认其属于哪张核心表或附表。",
+}
+
+
+def _display_table_name(table_code: str) -> str:
+    code = str(table_code or "").strip()
+    if code in _TABLE_CODE_LABELS:
+        return _TABLE_CODE_LABELS[code]
+    if code.startswith("UNKNOWN_P"):
+        head = code.split("_", 2)[1] if "_" in code else ""
+        page_digits = head[1:] if head.startswith("P") and head[1:].isdigit() else ""
+        if page_digits:
+            return f"第 {page_digits} 页未识别表格"
+    return code
+
+
+def _structured_action_suggestion(action: Any) -> str:
+    raw = str(action or "").strip()
+    if not raw:
+        return "请核对原始 PDF 后确认。"
+    return _STRUCTURED_ACTION_SUGGESTIONS.get(raw, raw)
 
 
 def _processing_reason_title(code: str) -> str:
@@ -637,6 +775,50 @@ def _processing_reason_cause(code: str) -> str:
     if code == "evidence_incomplete_findings":
         return CAUSE_EXTRACTION_FAILURE
     return CAUSE_EXECUTION_FAILURE
+
+
+def _unfinished_checks(diagnostics: List[Dict[str, Any]], *, ai_requested: bool) -> List[Dict[str, Any]]:
+    """任务列表和核对页签共用明细。同一义务及其处理摘要只展示一次。"""
+    from src.engine.check_obligations import obligation_ids_for_rule
+
+    items: Dict[str, Dict[str, Any]] = {}
+    for item in diagnostics:
+        record_type = item.get("record_type")
+        obligation = str(item.get("obligation_id") or "")
+        if record_type == "unfinished_check" and obligation:
+            if obligation == "OBL-AI-SEMANTIC-REVIEW" and not ai_requested:
+                continue
+            items.setdefault(obligation, {**item, "id": obligation})
+        elif record_type == "structured_review":
+            key = str(item.get("id"))
+            items.setdefault(key, item)
+
+    obligations = set(items)
+    has_table_checks = any(item["record_type"] == "structured_review" for item in items.values())
+    for item in diagnostics:
+        if item.get("record_type") != "processing_notice":
+            continue
+        code = str(item.get("code") or "")
+        blocking = set(item.get("blocking_obligation_ids") or [])
+        if code == "check_obligations_incomplete" and blocking and blocking.issubset(obligations):
+            continue
+        if code == "table_reading_incomplete" and has_table_checks:
+            continue
+        if code in {"rules_insufficient_data", "rule_execution_error", "rules_not_executed"}:
+            unresolved = _mapping_list(item.get("unresolved_rules"))
+            if unresolved:
+                for rule in unresolved:
+                    rule_id = str(rule.get("rule_id") or "")
+                    if not rule_id or obligations.intersection(obligation_ids_for_rule(rule_id)):
+                        continue
+                    key = f"rule:{rule_id}"
+                    items.setdefault(key, {
+                        **item, "id": key, "title": f"{rule_id} · {item['title']}",
+                        "message": rule.get("detail") or item["message"],
+                    })
+                continue
+        items.setdefault(str(item.get("id")), item)
+    return list(items.values())
 
 
 def _collect_findings(result: Mapping[str, Any]) -> List[Dict[str, Any]]:

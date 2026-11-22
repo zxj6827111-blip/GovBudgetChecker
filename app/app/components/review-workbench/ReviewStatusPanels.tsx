@@ -15,6 +15,7 @@ import { AlertTriangle, CheckCircle2, ChevronRight, Info, X } from "lucide-react
 
 import { AiScopeBanner } from "../AiScopeBanner";
 import { formatPageList, type AiScopeView } from "../../../lib/aiScope";
+import type { ReviewDiagnosticItem } from "../../../lib/uiAdapters";
 
 type ChipTone = "success" | "warning" | "danger" | "muted";
 
@@ -131,6 +132,10 @@ export interface ReviewInfoPanelProps {
   onRecheck?: () => void;
   /** 从检查范围条的“详情”进入时直接定位到 AI 文字检查一节。 */
   focusSection?: "ai" | null;
+  /** 技术诊断与未完成检查明细（v3）。 */
+  diagnostics?: ReviewDiagnosticItem[];
+  /** 点击诊断页码跳转到左侧 PDF 原文对应页。 */
+  onJumpToPage?: (page: number, item: ReviewDiagnosticItem) => void;
 }
 
 const BUTTON = "rounded-md border border-border px-3 py-1.5 text-xs text-slate-700 hover:bg-surface-100";
@@ -147,6 +152,8 @@ export function ReviewInfoPanel({
   onShowReference,
   onRecheck,
   focusSection = null,
+  diagnostics = [],
+  onJumpToPage,
 }: ReviewInfoPanelProps) {
   const aiSectionRef = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -219,6 +226,45 @@ export function ReviewInfoPanel({
             <p>当前没有未完成的检查义务；完整覆盖状态以报告处理摘要为准。</p>
           )}
           <p className="mt-1 text-xs text-slate-500">这是整体检查覆盖度，与 AI 文字检查是否执行完成分开记录。</p>
+          {diagnostics.length > 0 ? (
+            <div className="mt-3 space-y-2" data-testid="gbc-review-diagnostics-list">
+              <div className="text-xs font-medium text-slate-700">具体未完成项与技术说明（{diagnostics.length} 项）</div>
+              <ul className="space-y-1.5">
+                {[
+                  ...diagnostics.filter((item) => item.recordType === "unfinished_check" || item.recordType === "structured_review"),
+                  ...diagnostics.filter((item) => item.recordType !== "unfinished_check" && item.recordType !== "structured_review"),
+                ].map((item) => (
+                  <li
+                    key={item.id}
+                    data-testid="gbc-review-diagnostic-item"
+                    className="rounded-md border border-border bg-surface-50 px-2.5 py-2 text-xs text-slate-700"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="font-medium text-slate-900">{item.title}</span>
+                      {item.page && onJumpToPage ? (
+                        <button
+                          type="button"
+                          onClick={() => onJumpToPage(item.page!, item)}
+                          className="shrink-0 whitespace-nowrap text-primary-700 hover:underline"
+                          data-testid={`gbc-review-diagnostic-jump-${item.id}`}
+                        >
+                          第 {item.page} 页 ↖
+                        </button>
+                      ) : item.page ? (
+                        <span className="shrink-0 whitespace-nowrap text-slate-500">第 {item.page} 页</span>
+                      ) : null}
+                    </div>
+                    {item.message && item.message !== item.title ? (
+                      <p className="mt-1 whitespace-pre-line text-slate-600">{item.message}</p>
+                    ) : null}
+                    {item.suggestion ? (
+                      <p className="mt-1 text-slate-500">处理建议：{item.suggestion}</p>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </section>
         <section ref={aiSectionRef} data-testid="gbc-review-info-ai">
           <h3 className={HEADING}>AI 文字检查</h3>

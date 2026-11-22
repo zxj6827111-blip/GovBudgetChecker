@@ -451,7 +451,8 @@ def _decision(decision: str, *, revision: int = 1, reviewer: str = "r") -> Dict[
     }
 
 
-def test_gate_does_not_block_on_blocking_obligations():
+def test_gate_blocks_on_unhandled_blocking_obligations():
+    """2026-11-19：页面写“需人工核对”的义务必须与完成门禁同口径。"""
     items = [_obligation_item("OBL-1"), _obligation_item("OBL-2")]
     state = _state(
         active=_session(),
@@ -460,12 +461,11 @@ def test_gate_does_not_block_on_blocking_obligations():
         coverage_items=items,
     )
     gate = review_lifecycle_service.evaluate_completion_gate(state)
-    assert gate.can_complete is True
-    assert gate.blockers == []
+    assert gate.can_complete is False
+    assert [(item.code, item.count) for item in gate.blockers] == [("blocking_obligations", 2)]
 
 
-def test_gate_ignores_unhandled_obligations_while_preserving_counts():
-    """未自动核对义务移入参考区，不阻断完成门禁。"""
+def test_gate_blocks_only_unhandled_obligations_while_preserving_counts():
     items = [
         _obligation_item("OBL-1"),
         _obligation_item("OBL-2"),
@@ -485,8 +485,8 @@ def test_gate_ignores_unhandled_obligations_while_preserving_counts():
         obligation_decisions=decisions,
     )
     gate = review_lifecycle_service.evaluate_completion_gate(state)
-    assert gate.can_complete is True
-    assert [item.code for item in gate.blockers] == []
+    assert gate.can_complete is False
+    assert [(item.code, item.count) for item in gate.blockers] == [("blocking_obligations", 1)]
     assert len(review_lifecycle_service._unhandled_obligations(state)) == 1
 
 
@@ -551,14 +551,14 @@ def test_obligation_covered_by_same_finding_is_not_a_duplicate_todo():
     assert [entry.obligation_id for entry in block.items] == [item.obligation_id]
     assert block.pending_total == 1
     assert block.covered_total == 0
-    # 问题本身仍按问题流程处理：仅检出问题（pending_findings）阻塞完成门禁。
+    # 名称问题只合并展示，金额子检查未完成 → 义务仍阻塞；问题本身也阻塞。
     codes = [blocker.code for blocker in review_lifecycle_service.evaluate_completion_gate(state).blockers]
-    assert "blocking_obligations" not in codes
+    assert "blocking_obligations" in codes
     assert "pending_findings" in codes
 
 
-def test_gate_does_not_block_on_pending_obligation_decisions():
-    """内部未完成义务不再阻塞完成门禁，只保留 pending count 供参考。"""
+def test_gate_blocks_on_pending_or_unknown_obligation_decisions():
+    """pending 与未知决定值都不得被当成已处理。"""
     items = [_obligation_item("OBL-1"), _obligation_item("OBL-2"), _obligation_item("OBL-3")]
     decisions = {
         "OBL-1": _decision("pending"),
@@ -573,8 +573,8 @@ def test_gate_does_not_block_on_pending_obligation_decisions():
         obligation_decisions=decisions,
     )
     gate = review_lifecycle_service.evaluate_completion_gate(state)
-    assert gate.can_complete is True
-    assert gate.blockers == []
+    assert gate.can_complete is False
+    assert [(item.code, item.count) for item in gate.blockers] == [("blocking_obligations", 2)]
 
 
 def test_gate_ignores_decisions_for_non_blocking_obligations():

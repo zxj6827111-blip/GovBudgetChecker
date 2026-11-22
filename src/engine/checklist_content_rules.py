@@ -368,16 +368,35 @@ class CMM022_SubjectCodeFormat(Rule):
     def apply(self, doc: Document) -> List[Issue]:
         issues: List[Issue] = []
         texts = list(doc.page_texts or [])
+        doc_class_rows = {
+            code for tables in (getattr(doc, "page_tables", None) or [])
+            for table in tables or [] for row in table or []
+            for code, segments, _ in table_code_rows(row) if len(segments) == 1
+        }
         for page_index, tables in enumerate(getattr(doc, "page_tables", None) or []):
             text = str(texts[page_index] if page_index < len(texts) else "")
             for table in tables or []:
                 seen: Dict[str, str] = {}
+                # 功能分类表的层级前缀：款/项编码前三位必须等于其上最近的“类”行。
+                # 只在该前缀本身也作为类行出现在本材料的表里时才判（编码属于另一个
+                # 已存在的类），避免没有类行或双栏表造成误报；不依赖科目字典。
+                class_rows = doc_class_rows
+                current_class = ""
                 for row in table or []:
                     for code, segments, name in table_code_rows(row):
+                        if len(code) == 3 and len(segments) == 1:
+                            current_class = code
                         quote_start = self._locate(text, segments, name)
                         if quote_start is None:
                             continue
                         start, end = quote_start
+                        if (len(code) in (5, 7) and current_class and code[:3] != current_class
+                                and code[:3] in class_rows and not code.startswith("3")):
+                            issues.append(issue_at(
+                                self, f"科目编码层级错位：“{code} {name}”位于“{current_class}”类下，"
+                                f"但编码前三位为“{code[:3]}”，与所属类不一致（疑似编码误写，请对照原表核对）。",
+                                page_index + 1, text, start, end, severity="warn", checklist_item="B-04",
+                            ))
                         if len(segments) > 1 and any(len(seg) == 1 for seg in segments[1:]):
                             fixed = " ".join([segments[0]] + [seg.zfill(2) for seg in segments[1:]])
                             issues.append(issue_at(

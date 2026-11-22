@@ -32,6 +32,11 @@ const DEFAULT_JOBS: Array<Record<string, unknown>> = [
     filename: "2026年度部门预算公开说明.pdf",
     status: "review_required",
     quality_status: "review_required",
+    queue_unfinished_check_total: 2,
+    queue_unfinished_location_total: 1,
+    queue_unfinished_blocking_location_total: 1,
+    queue_unfinished_blocking_check_total: 2,
+    queue_unfinished_blocking_affected_total: 2,
     organization_name: "市教育局",
     organization_id: "org-edu",
     report_year: 2026,
@@ -209,15 +214,16 @@ test.describe("Workbench overview (Task 4)", () => {
     await expect(page.getByTestId("gbc-workbench-queue-row-job-analyzing")).toHaveCount(0);
   });
 
-  test("REGRESSION: review_required row must show 需要人工复核, never 分析完成", async ({ page }) => {
+  test("已生成的结果显示未完成核对的直达入口", async ({ page }) => {
     await page.context().addCookies([sessionCookie]);
     await installWorkbenchMocks(page, { isAdmin: true });
     await page.goto("/workbench");
     await page.getByTestId("gbc-cockpit-all").click();
 
     const row = page.getByTestId("gbc-workbench-queue-row-job-review");
-    await expect(row).toContainText("需要人工复核");
-    await expect(row).not.toContainText("分析完成");
+    await expect(row).toContainText("已生成结果");
+    const openChecks = row.getByRole("link", { name: /1 处需人工核对 · 影响 2 项检查/ });
+    await expect(openChecks).toHaveAttribute("href", /[?&]tab=checks/);
   });
 
   test("REGRESSION: unresolved report year must render 未识别到, never 2000", async ({ page }) => {

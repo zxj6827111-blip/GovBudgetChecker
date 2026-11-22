@@ -91,8 +91,14 @@ def compute_queue_workers() -> Tuple[int, bool]:
     ai_sequential_mode = env_flag("AI_SEQUENTIAL_MODE", True)
     default_workers = 2
     if ai_sequential_mode:
+        # AI_SEQUENTIAL_MODE 只串行大模型调用，不是"可以无限并发解析"。
+        # 旧默认 max(10, min(32, cpu*2)) 在 18 核机上直接开 32 个 worker，
+        # 一次批量重跑 20 个任务就打穿数据库连接池并触发看门狗连环强杀
+        # （2026-11-18 事故）。默认收敛到 4–6：PDF 解析是子进程、CPU 密集，
+        # 超过核数 1/3 的并发只会互相争抢；要更高吞吐请显式设
+        # JOB_QUEUE_WORKERS（并相应调大 GOVBUDGET_POOL_MAX_SIZE）。
         cpu_count = os.cpu_count() or 4
-        default_workers = max(10, min(32, cpu_count * 2))
+        default_workers = max(4, min(6, cpu_count // 3))
 
     workers_raw = os.getenv("JOB_QUEUE_WORKERS")
     try:

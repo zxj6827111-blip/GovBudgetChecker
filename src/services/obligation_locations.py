@@ -354,6 +354,13 @@ def resolve_obligation_locations(
         for quoted in _QUOTED_RE.findall(detail):
             for page in _pages_containing(page_texts, quoted, limit=2):
                 locations.append((page, None, f"含“{quoted}”"))
+        if "评级" in detail:
+            for needle in ("绩效评级为", "评级为", "绩效评级", "绩效自评"):
+                hits = _pages_containing(page_texts, needle, limit=2)
+                if hits:
+                    for page in hits:
+                        locations.append((page, None, f"绩效说明（含“{needle}”）"))
+                    break
         if table_pages:
             min_page = min(table_pages)
             max_page = min_page + 3

@@ -385,14 +385,23 @@ const queued = resolveQueueCounts({ job_id: "q", queue_required_total: 4, queue_
   queue_candidate_total: 5, queue_degraded_total: 2, queue_tip_total: 6, queue_notice_total: 2 } as JobSummaryRecord);
 assert.equal(queued?.required, 4);
 assert.equal(queued?.reference, 15);
-assert.deepEqual(queued?.referenceParts, ["待核实 5", "证据不足 2", "提示 6", "复核事项 2"]);
+// 参考拆分是结构化单元：待核实为 info 色强调，其余灰；渲染层据此做括号从属。
+assert.deepEqual(queued?.referenceParts, [
+  { label: "待核实", count: 5, tone: "info" },
+  { label: "证据不足", count: 2, tone: "muted" },
+  { label: "提示", count: 6, tone: "muted" },
+  { label: "复核事项", count: 2, tone: "muted" },
+]);
 assert.match(queued?.detail ?? "", /不计入完成条件/);
+// 悬停文案与列表行括号从属同词。
+assert.match(queued?.detail ?? "", /参考 15（待核实 5、证据不足 2、提示 6、复核事项 2）：供查阅，不计入完成条件/);
 // 必须处理含“未能自动核对”时，悬停说明拆开两类。
 assert.match(resolveQueueCounts({ job_id: "o", queue_required_total: 6, queue_obligation_total: 4, queue_reference_total: 22 } as JobSummaryRecord)?.detail ?? "",
   /必须处理 6：逐条处理后才能完成复核/);
 // 为 0 的组成不列。
 assert.deepEqual(resolveQueueCounts({ job_id: "z", queue_required_total: 0, queue_reference_total: 3,
-  queue_candidate_total: 0, queue_degraded_total: 0, queue_tip_total: 3, queue_notice_total: 0 } as JobSummaryRecord)?.referenceParts, ["提示 3"]);
+  queue_candidate_total: 0, queue_degraded_total: 0, queue_tip_total: 3, queue_notice_total: 0 } as JobSummaryRecord)?.referenceParts,
+  [{ label: "提示", count: 3, tone: "muted" }]);
 // 旧摘要没有 queue_* 字段：返回 null，调用方退回旧写法。
 assert.equal(resolveQueueCounts({ job_id: "old", review_issue_total: 3 } as JobSummaryRecord), null);
 

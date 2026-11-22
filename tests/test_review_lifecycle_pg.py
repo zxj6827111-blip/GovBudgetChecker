@@ -603,8 +603,8 @@ async def test_coverage_unavailable_allows_signoff_without_claiming_clean(review
     assert state.obligation_review.reason == "coverage_unavailable"
 
 
-async def test_blocking_obligations_do_not_block_signoff(review_db):
-    """签核分离（Step 3）：阻塞义务不再拦完成，但完成快照必须如实记下未处理数。"""
+async def test_blocking_obligations_block_signoff(review_db):
+    """2026-11-19：页面“需人工核对”与完成门禁同口径；未处理阻塞义务拦完成。"""
     schema, pool = review_db
     async with _conn(schema, pool) as conn:
         ctx = await _make_reviewable_slot(
@@ -612,14 +612,16 @@ async def test_blocking_obligations_do_not_block_signoff(review_db):
         )
         await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
         state = await review_lifecycle_service.load_review_by_slot(conn, ctx["slot_id"])
-        completed = await review_lifecycle_service.complete_review(
-            conn, ctx["slot_id"], actor="r"
-        )
-    assert state.completion_gate.blockers == []
-    coverage = completed.session.review_result["coverage"]
-    assert coverage["blocking_count"] == 4
-    assert coverage["blocking_engine_total"] == 4
-    assert coverage["blocking_obligations_closed_by"] == "automatic_only"
+        assert state.completion_gate.can_complete is False
+        assert [(item.code, item.count) for item in state.completion_gate.blockers] == [
+            ("blocking_obligations", 4)
+        ]
+        with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
+            await review_lifecycle_service.complete_review(
+                conn, ctx["slot_id"], actor="r"
+            )
+    assert excinfo.value.status_code == 409
+    assert [item.code for item in excinfo.value.blockers] == ["blocking_obligations"]
 
 
 # ==== 门禁：身份与口径 ======================================================

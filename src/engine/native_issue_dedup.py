@@ -649,21 +649,30 @@ def _repeat_text_keys(item, doc, context):
         return []
     fact = candidates[0]
     identity = _resolve_ref({'fact_uid': fact.fact_uid}, context)
-    values = [_decimal(location.get('value_a')), _decimal(location.get('value_b'))]
-    if identity is None or None in values or values[0] == values[1] or values.count(fact.normalized_value) != 1:
+    nominal_values = [_decimal(location.get('value_a')), _decimal(location.get('value_b'))]
+    if identity is None or None in nominal_values:
         return []
     refs = [ref for ref in location.get('table_refs') or [] if isinstance(ref, dict)
             and ref.get('role') in {'披露A', '披露B'}]
     if len(refs) != 2 or {ref['role'] for ref in refs} != {'披露A', '披露B'}:
         return []
     by_role = {ref['role']: ref for ref in refs}
+    values = []
     for index, role in enumerate(('披露A', '披露B')):
         ref = by_role[role]
         span = _compact(ref.get('span') or ref.get('quote'))
-        if (_literal_ref_position(ref, doc) is None
-                or not any(_decimal(match['amount']) * {'元': Decimal('.0001'), '万元': Decimal(1), '亿元': Decimal(10000)}[match['unit']] == values[index]
-                           for match in re.finditer(rf'(?P<amount>{_NUMBER})(?P<unit>亿元|万元|元)', span))):
+        # value_a/value_b 是原文字面值。必须按各侧经定位的原文单位比较，
+        # 才能将“11.02 元”与“11.02 万元”的同一处缺陷归并。
+        matches = {
+            nominal_values[index] * {'元': Decimal('.0001'), '万元': Decimal(1), '亿元': Decimal(10000)}[match['unit']]
+            for match in re.finditer(rf'(?P<amount>{_NUMBER})(?P<unit>亿元|万元|元)', span)
+            if _decimal(match['amount']) == nominal_values[index]
+        }
+        if _literal_ref_position(ref, doc) is None or len(matches) != 1:
             return []
+        values.append(matches.pop())
+    if values[0] == values[1] or values.count(fact.normalized_value) != 1:
+        return []
     unchanged = values.index(fact.normalized_value)
     same_item = by_role[('披露A', '披露B')[unchanged]]
     if indicator not in _compact(same_item.get('span') or same_item.get('quote')):
@@ -849,6 +858,8 @@ def _merged(group, doc=None, *, key=None):
     if key is not None and key and key[0] in set(_TABLE_DEFECT_RULES.values()):
         # 根缺陷组：主条按规则身份取（缺失表/空表说明本身），证据质量其次。
         primary = max(group, key=lambda item: (_rule(item) in _TABLE_DEFECT_PRIMARY, _quality(item)))
+    elif key and key[0] == 'text_vs_table':
+        primary = max(group, key=lambda item: (bool(_location(item).get('unit_magnitude_error')), _quality(item)))
     else:
         primary = max(group, key=_quality)
     result = deepcopy(primary)
@@ -1023,7 +1034,198 @@ def deduplicate_native_issues(issues, doc=None, *, receipts=None):
     receipt_list = receipts if receipts is not None else getattr(doc, 'fact_receipts', None)
     if receipt_list is not None:
         link_merged_issue_receipts(result, receipt_list)
+        _annotate_unit_recoveries(result, receipt_list)
+    _annotate_manual_text_corrections(result, doc)
     return result
+
+
+def _annotate_manual_text_corrections(issues, doc) -> None:
+    """正文金额人工校正后，材料问题仍按原文保留，同时标明重算所用校正值。"""
+    corrections = list(getattr(doc, "text_corrections", None) or [])
+    if not corrections:
+        return
+    for issue in issues:
+        if _rule(issue) not in {"CMM-011", "V33-251", "V33-222"}:
+            continue
+        location = _location(issue)
+        page = location.get("page")
+        if not isinstance(page, int) or isinstance(page, bool):
+            continue
+        if location.get("manual_correction"):
+            continue
+        message = str(_get(issue, "message") or "")
+        compact_message = _compact(message)
+        matched = None
+        for correction in corrections:
+            if int(correction.get("page") or 0) != page:
+                continue
+            span = _compact(correction.get("span") or "")
+            amount_match = re.search(r"\d[\d,]*(?:\.\d+)?", span)
+            amount = amount_match.group(0) if amount_match else ""
+            # 有原文区间时只认区间命中；金额单独不足以把校正挂到某条问题。
+            if span and span in compact_message:
+                matched = correction
+                break
+            if not span and amount and _compact(amount) in compact_message:
+                matched = correction
+                break
+        if matched is None:
+            continue
+        detail = {
+            "correction_id": matched.get("correction_id"),
+            "field": matched.get("field"),
+            "value": matched.get("value"),
+            "original_text": matched.get("span"),
+            "actor": matched.get("actor"),
+            "analysis_basis_token": matched.get("analysis_basis_token"),
+            "note": "已按人工校正值重算；原 PDF 未改写，材料缺陷仍按原文保留",
+        }
+        location["manual_correction"] = detail
+        if _rule(issue) == "CMM-011":
+            location.setdefault("display_title", "金额缺少单位“万元”")
+        _set(issue, "location", location)
+        note = (
+            f"已采用人工校正：{matched.get('field')}={matched.get('value')}"
+            "（原 PDF 未改写，材料缺陷仍按原文保留）"
+        )
+        if note not in message:
+            _set(issue, "message", f"{message}；{note}。")
+
+
+def _annotate_unit_recoveries(issues, receipts) -> None:
+    """漏单位问题保留在材料问题清单，同时附上实际核算结论。
+
+    2026-11-19 验收要求：原文漏写“万元”仍按 CMM-011 报一次；同一笔金额若
+    已由 V33-251 依同科目原表决算格恢复单位并计入分项加总，问题必须显示
+    “已按第X页核对，已纳入N项加总”，不能与核算结论互相矛盾。
+    """
+    recoveries = []
+    for receipt in receipts or []:
+        if not isinstance(receipt, dict):
+            continue
+        if receipt.get("status") not in {"pass", "fail"}:
+            continue
+        evidence = receipt.get("calculation_evidence") or {}
+        for item in evidence.get("included") or []:
+            basis = item.get("basis") if isinstance(item, dict) else None
+            if not isinstance(basis, dict):
+                continue
+            # 只认由原表科目身份恢复单位的条目，不把普通表格取数当成单位凭证。
+            if basis.get("role") != "same_subject_table_basis":
+                continue
+            recoveries.append((receipt, evidence, item, basis))
+    if not recoveries:
+        return
+    for issue in issues:
+        if _rule(issue) != "CMM-011":
+            continue
+        location = _location(issue)
+        page = location.get("page")
+        message = str(_get(issue, "message") or "")
+        if not isinstance(page, int) or isinstance(page, bool):
+            continue
+        if location.get("verified_by"):
+            continue
+        compact_message = _compact(message)
+        candidates = []
+        for receipt, evidence, item, basis in recoveries:
+            if item.get("page") != page:
+                continue
+            raw = _compact(item.get("raw") or "")
+            if not raw:
+                continue
+            # 只认同一页码上的同一原文金额；金额相同不足以跨页合并。
+            if raw in compact_message or (
+                item.get("span") and _compact(item["span"]) in compact_message
+            ):
+                candidates.append((receipt, evidence, item, basis))
+        if not candidates:
+            continue
+        # 同页同额多处时，优先用逐字原文区间唯一命中的那一条；仍不唯一
+        # 就保持待核，不能把一笔核算结论挂到另一处同名同额条目上。
+        span_matches = [
+            candidate for candidate in candidates
+            if candidate[2].get("span")
+            and _compact(candidate[2]["span"]) in compact_message
+        ]
+        if len(span_matches) == 1:
+            matched = span_matches[0]
+        elif len(candidates) == 1:
+            matched = candidates[0]
+        else:
+            continue
+        receipt, evidence, item, basis = matched
+        basis_page = basis.get("page")
+        table_value = basis.get("quote") or basis.get("normalized_value")
+        included_count = evidence.get("included_count")
+        subtotal = evidence.get("subtotal_wan")
+        item_difference = _decimal(item.get("value_wan"))
+        table_amount = _decimal(basis.get("normalized_value"))
+        if item_difference is not None and table_amount is not None:
+            item_difference = item_difference - table_amount
+        note = f"已按第{basis_page}页核对"
+        if basis.get("subject_name") or basis.get("subject_code"):
+            note += f"（{basis.get('subject_name') or ''}"
+            note += f"{'，' if basis.get('subject_name') else ''}科目{basis.get('subject_code') or '未识别'}）"
+        if table_value:
+            note += f"原表决算{_compact(str(table_value))}{basis.get('unit') or ''}"
+        if item_difference is not None and item_difference != 0:
+            direction = "少" if item_difference < 0 else "多"
+            raw_unit_text = (
+                f"{item.get('raw')}{item.get('unit_original')}"
+                if item.get("unit_original")
+                else f"披露{item.get('raw')}（未写单位，按{basis.get('unit') or '万元'}核算）"
+            )
+            note += (
+                f"；正文{raw_unit_text}"
+                f"{direction}{format(abs(item_difference), 'f')}万元"
+            )
+        if included_count is not None and subtotal:
+            note += f"，已纳入{included_count}项支出决算分项加总（合计{subtotal}万元"
+            difference = _decimal(evidence.get("difference_wan"))
+            if receipt.get("status") != "pass" and difference is not None and difference != 0:
+                direction = "少" if difference < 0 else "多"
+                note += f"，较总额{direction}{format(abs(difference), 'f')}万元"
+            note += "）"
+        verification = {
+            "rule_id": "V33-251",
+            "sub_check_id": receipt.get("sub_check_id"),
+            "outcome": receipt.get("status"),
+            "text_page": page,
+            "text_span": item.get("span"),
+            "text_amount": item.get("raw"),
+            "table_page": basis_page,
+            "table_code": basis.get("table_code"),
+            "subject_code": basis.get("subject_code"),
+            "subject_name": basis.get("subject_name"),
+            "table_value": table_value,
+            "table_unit": basis.get("unit"),
+            "included_count": included_count,
+            "subtotal_wan": subtotal,
+            "item_difference_wan": (
+                format(item_difference, "f") if item_difference is not None else None
+            ),
+            "counts_as_pass": receipt.get("status") == "pass",
+            "note": note,
+        }
+        # 两端证据：正文原句（原有 evidence_text，交给证据门核验）+ 同科目
+        # 原表金额。原表侧不能塞进 table_refs：多 ref 路径会把整条问题标成
+        # unverified，反而把正式问题降级为参考。原表页/bbox/格随 verified_by
+        # 携带，复核页据此提供“查看第16页原表”的独立跳转。
+        if basis_page and table_value:
+            verification["table_quote"] = str(table_value)
+            verification["table_bbox"] = basis.get("bbox")
+            verification["table_source_cell_id"] = basis.get("source_cell_id")
+            verification["table_file_hash"] = basis.get("file_hash")
+            location["pages"] = sorted({
+                item for item in [location.get("page"), basis_page]
+                if isinstance(item, int) and not isinstance(item, bool)
+            })
+        location["verified_by"] = verification
+        location.setdefault("display_title", "金额缺少单位“万元”")
+        _set(issue, "location", location)
+        if note not in message:
+            _set(issue, "message", f"{message}；{note}。")
 
 
 def _link_related_symptoms(issues) -> None:

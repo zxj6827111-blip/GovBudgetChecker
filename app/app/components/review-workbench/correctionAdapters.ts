@@ -58,23 +58,62 @@ export interface ReadingGap {
   affected_fragment_uids?: string[];
 }
 
+export interface CorrectionTextStatement {
+  target_id: string;
+  rule_id?: string;
+  title?: string;
+  page?: number;
+  pos?: number | null;
+  span?: string;
+  amount_raw?: string;
+  raw_is_valid?: boolean;
+  unit_current?: string | null;
+  suggested_unit?: string | null;
+  subject?: { code?: string | null; name?: string | null } | null;
+  evidence?: { page?: number; bbox?: number[] | null; quote?: string | null }[];
+  effective_value?: string | null;
+  effective_source?: string | null;
+  effective_correction_id?: string | null;
+}
+
 export interface CorrectionHistoryRecord {
   record_id: string;
   actor: string;
   reason: string;
   created_at: string;
-  changes: { field?: string; target_id?: string; value?: unknown }[];
+  changes: {
+    field?: string;
+    target_id?: string;
+    value?: unknown;
+    original_text?: string;
+  }[];
+  /** R6：该记录所属分析版本（`job:revision`）；历史页据此过滤。 */
+  analysis_basis_token?: string | null;
+  /** R6：记录实际生效的分析版本（历史页由服务端绑定返回）。 */
+  effective_in_revision?: string | null;
+  /** R6：记录提交时所基于的分析版本。 */
+  submitted_against_revision?: string | null;
+  /** R6（2026-11-21 第三轮）：同一目标的读数已被更晚提交且已生效的记录替代。 */
+  superseded?: boolean;
 }
 
 export interface CorrectionTargets {
   job_id: string;
   analysis_basis_token: string | null;
+  /** R6：响应绑定的分析版本；历史请求与当前请求分别返回各自版本。 */
+  analysis_revision?: string | null;
+  /** R6：true 表示这是按指定历史版本返回的只读数据。 */
+  historical?: boolean;
   reading_status?: string | null;
   tables: CorrectionTable[];
   table_code_options?: { code: string; label: string }[];
   gaps: ReadingGap[];
   orphaned_amounts: ReadingCell[];
+  text_statements?: CorrectionTextStatement[];
   overlay_status?: { status?: string; unresolved?: { reason?: string }[] } | null;
+  /** R6：在任何已发布版本都没有生效回执的记录；历史明细缺失时如实列出。 */
+  records_without_effect_version?: string[];
+  history_note?: string | null;
   history: CorrectionHistoryRecord[];
 }
 

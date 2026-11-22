@@ -53,13 +53,15 @@ export interface PdfViewerPaneProps {
   relatedRefs?: PdfRelatedRef[];
   /** 当前定位说明；用户翻走或滚走后可一键回到证据位置。 */
   locator?: { label: string; page: number } | null;
+  /** 外部定位触发序号：同页再次点击定位按钮时强制重新滚动到高亮区域。 */
+  focusSeq?: number;
 }
 
 export interface PdfRelatedRef {
   key: string;
   page: number;
   bbox?: number[];
-  tone: "total" | "item";
+  tone: "total" | "item" | "focus";
 }
 
 /** MediaBox 原点与预览页不一致时的仿射逆变换（preview → 解析坐标）。 */
@@ -79,7 +81,7 @@ function buildPageImageUrl(jobId: string, page: number, renderScale: number): st
 }
 
 export function PdfViewerPane({ jobId, totalPages, currentPage, onPageChange, highlightedProblem, leadingControls,
-  regionPick, onRegionPicked, onRegionPickCancel, relatedRefs, locator }: PdfViewerPaneProps) {
+  regionPick, onRegionPicked, onRegionPickCancel, relatedRefs, locator, focusSeq }: PdfViewerPaneProps) {
   const [scalePercent, setScalePercent] = useState(DEFAULT_SCALE_PERCENT);
   const [fitWidth, setFitWidth] = useState(true);
   const [loadedImage, setLoadedImage] = useState<{ url: string; width: number; height: number } | null>(null);
@@ -211,8 +213,9 @@ export function PdfViewerPane({ jobId, totalPages, currentPage, onPageChange, hi
   const selectedOtherPage = highlightedProblem?.page && highlightedProblem.page !== currentPage
     ? highlightedProblem.page : null;
   // 跳到新证据时将框滚动到可视区域；手动翻页则回到页首。
-  const overlayTop = overlayBox?.topPct;
-  const overlayLeft = overlayBox?.leftPct;
+  const scrollTarget = overlayBox ?? relatedBoxes[0]?.box;
+  const overlayTop = scrollTarget?.topPct;
+  const overlayLeft = scrollTarget?.leftPct;
   useEffect(() => {
     const viewport = scrollRef.current;
     const img = imageRef.current;
@@ -221,7 +224,7 @@ export function PdfViewerPane({ jobId, totalPages, currentPage, onPageChange, hi
     viewport.scrollTop = overlayTop === undefined
       ? 0 : Math.max(0, imageTop + img.clientHeight * overlayTop / 100 - viewport.clientHeight * 0.25);
     viewport.scrollLeft = 0;
-  }, [imageUrl, naturalSize, highlightedProblem?.id, overlayTop, overlayLeft, relocateTick]);
+  }, [imageUrl, naturalSize, highlightedProblem?.id, overlayTop, overlayLeft, relocateTick, focusSeq]);
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col" data-testid="gbc-review-pdf-viewer">
@@ -416,7 +419,13 @@ export function PdfViewerPane({ jobId, totalPages, currentPage, onPageChange, hi
           {relatedBoxes.map((ref) => (
             <div
               key={ref.key}
-              className={`pointer-events-none absolute z-[5] rounded-sm border ${ref.tone === "total" ? "border-primary-400 bg-primary-100/40" : "border-warning-400 bg-warning-100/40"}`}
+              className={`pointer-events-none absolute z-[5] rounded-sm ${
+                ref.tone === "focus"
+                  ? "border-2 border-warning-600 bg-warning-100/45 shadow-sm"
+                  : ref.tone === "total"
+                    ? "border border-primary-400 bg-primary-100/40"
+                    : "border border-warning-400 bg-warning-100/40"
+              }`}
               style={getProblemOverlayStyle(ref.box)}
               data-testid="gbc-review-related-highlight"
               data-tone={ref.tone}

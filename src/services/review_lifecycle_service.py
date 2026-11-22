@@ -53,7 +53,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from fastapi import HTTPException
 from src.db.transaction import in_transaction
@@ -93,6 +93,7 @@ from src.schemas.review_lifecycle import (
     ERROR_OBLIGATION_DECISION_CONFLICT,
     ERROR_OBLIGATION_DECISION_EVIDENCE_REQUIRED,
     ERROR_OBLIGATION_NOT_BLOCKING,
+    ERROR_OBLIGATION_SCOPE_REQUIRED,
     ERROR_REVIEW_COMPLETED_LOCKED,
     ERROR_REVIEW_CONTEXT_MISMATCH,
     ERROR_REVIEW_CONTEXT_UNAVAILABLE,
@@ -129,6 +130,7 @@ from src.schemas.review_lifecycle import (
     ReviewSessionSummary,
 )
 from src.services import review_context_query, review_obligation_store, review_session_store
+from src.services.review_session_store import BASIS_TOKEN_SEPARATOR
 from src.services.audit_log import append_audit_event
 from src.services.material_detail_query_service import build_coverage
 from src.services.material_slot_service import MaterialSlotService
@@ -204,6 +206,12 @@ class ReviewState:
     #: ``{obligation_id: 决定行}``。会话失效后旧决定留在库里供审计，
     #: 但不再出现在这里——门禁只读"这一次复核"的结论。
     obligation_decisions: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    #: R5（2026-11-20）：同一义务下按原文位置/科目范围分别表态的决定，
+    #: ``{obligation_id: {scope_key: 决定行}}``。同页两科目的两处阻塞必须
+    #: 各自表态，不能共用一条 obligation_id 决定。
+    scoped_decisions: Dict[str, Dict[str, Dict[str, Any]]] = field(default_factory=dict)
+    #: 当前分析落库的未完成检查分组快照（含稳定 ``decision_scope``）。
+    unfinished_groups: List[Dict[str, Any]] = field(default_factory=list)
 
 
 # ---- 事实装载 ---------------------------------------------------------------
@@ -473,6 +481,10 @@ def _load_coverage(state: ReviewState) -> None:
     state.coverage_items = list(coverage.items) if coverage.available else []
     if coverage.available and coverage.summary is not None:
         state.coverage_blocking_total = coverage.summary.blocking_total
+    raw_groups = state.analysis.result_meta.get("unfinished_check_groups")
+    state.unfinished_groups = [
+        dict(group) for group in raw_groups or [] if isinstance(group, dict)
+    ] if isinstance(raw_groups, list) else []
 
 
 async def _load_obligation_decisions(conn: Any, state: ReviewState) -> None:
@@ -482,17 +494,29 @@ async def _load_obligation_decisions(conn: Any, state: ReviewState) -> None:
     故意不按 (obligation_id, job_uuid) 聚合历史：上一次复核的补核结论
     不能漏进这一次——同一份材料可能有多个分析代际，决定属于"哪一次复核"
     必须毫不含糊（任务书 §十）。
+
+    R5：带 ``scope_key`` 的决定进入 ``scoped_decisions``；旧的无范围决定
+    保留在 ``obligation_decisions``，只在单处/旧分析时兜底。
     """
     effective = state.active_session or state.completed_session
     if effective is None:
         state.obligation_decisions = {}
+        state.scoped_decisions = {}
         return
     rows = await review_obligation_store.list_session_decisions(
         conn, effective.get("review_session_id")
     )
-    state.obligation_decisions = {
-        str(row.get("obligation_id") or ""): row for row in rows if row.get("obligation_id")
-    }
+    state.obligation_decisions = {}
+    state.scoped_decisions = {}
+    for row in rows:
+        obligation_id = str(row.get("obligation_id") or "")
+        if not obligation_id:
+            continue
+        scope_key = str(row.get("scope_key") or "")
+        if scope_key:
+            state.scoped_decisions.setdefault(obligation_id, {})[scope_key] = row
+        else:
+            state.obligation_decisions[obligation_id] = row
 
 
 # ---- 门禁（纯函数，输入即事实） ---------------------------------------------
@@ -645,6 +669,47 @@ def cascaded_coverage_obligations(
     return grouped
 
 
+def required_obligation_scopes(state: ReviewState) -> Dict[str, List[str]]:
+    """同一义务下需要分别表态的原文位置范围（R5）。
+
+    只取真正阻塞完成的组；没有任何分组快照的旧分析返回空，门禁沿用
+    义务级决定，保持旧结果可读。
+    """
+    required: Dict[str, List[str]] = {}
+    for group in state.unfinished_groups:
+        if not isinstance(group, dict) or not group.get("blocks_completion"):
+            continue
+        scope = str(group.get("decision_scope") or "")
+        if not scope:
+            continue
+        for obligation_id in group.get("blocking_obligation_ids") or []:
+            required.setdefault(str(obligation_id), []).append(scope)
+    return {key: sorted(set(values)) for key, values in required.items()}
+
+
+def obligation_decision_resolved(
+    obligation_id: str,
+    decisions: Dict[str, Dict[str, Any]],
+    *,
+    required_scopes: Optional[Sequence[str]] = None,
+    scoped_decisions: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> bool:
+    """一条义务是否已被人工处理（含 R5 位置范围判定）。"""
+    scopes = list(required_scopes or [])
+    scoped = scoped_decisions or {}
+
+    def resolved(row: Optional[Dict[str, Any]]) -> bool:
+        current = str((row or {}).get("decision") or "").strip()
+        return current in RESOLVED_OBLIGATION_DECISIONS
+
+    if len(scopes) > 1:
+        # 多处独立阻塞：每一处都必须有自己的表态；义务级决定不能替代。
+        return all(resolved(scoped.get(scope)) for scope in scopes)
+    if len(scopes) == 1:
+        return resolved(scoped.get(scopes[0])) or resolved(decisions.get(obligation_id))
+    return resolved(decisions.get(obligation_id))
+
+
 def _unhandled_obligations(state: ReviewState) -> List[CoverageObligationItem]:
     """尚未被人工处理的阻塞义务（完成门禁 WP3-B 口径的唯一判据）。
 
@@ -653,22 +718,85 @@ def _unhandled_obligations(state: ReviewState) -> List[CoverageObligationItem]:
     与 ``_problem_blockers`` 同一条纪律：把不认识的值当成"已解决"，
     等于让一个拼错的状态码静默放行复核。
     """
-    return unhandled_coverage_obligations(_blocking_obligations(state), state.obligation_decisions)
+    return unhandled_coverage_obligations(
+        _blocking_obligations(state),
+        state.obligation_decisions,
+        required_scopes=required_obligation_scopes(state),
+        scoped_decisions=state.scoped_decisions,
+    )
 
 
 def unhandled_coverage_obligations(
-    items: List[CoverageObligationItem], decisions: Dict[str, Dict[str, Any]]
+    items: List[CoverageObligationItem],
+    decisions: Dict[str, Dict[str, Any]],
+    *,
+    required_scopes: Optional[Dict[str, Sequence[str]]] = None,
+    scoped_decisions: Optional[Dict[str, Dict[str, Dict[str, Any]]]] = None,
 ) -> List[CoverageObligationItem]:
     """复核门禁与主管统计复用同一未完成判据，避免客户看到虚假的零待办。"""
+    scope_map = required_scopes or {}
+    scoped_map = scoped_decisions or {}
     unhandled: List[CoverageObligationItem] = []
     for item in items:
         if not item.blocks_gate or item.status not in UNRESOLVED_OBLIGATION_STATUSES:
             continue
-        row = decisions.get(item.obligation_id)
-        current = str((row or {}).get("decision") or "").strip() or "pending"
-        if current not in RESOLVED_OBLIGATION_DECISIONS:
+        if not obligation_decision_resolved(
+            item.obligation_id,
+            decisions,
+            required_scopes=scope_map.get(item.obligation_id),
+            scoped_decisions=scoped_map.get(item.obligation_id),
+        ):
             unhandled.append(item)
     return unhandled
+
+
+async def effective_scope_decisions_for_jobs(
+    conn: Any, basis_tokens: Sequence[str]
+) -> Dict[str, Dict[str, Dict[str, str]]]:
+    """队列徽标批量读取范围决定（R5-B，2026-11-20 复审）。
+
+    处理队列的“X 处需人工核对”按**当前分析代际的有效会话**取范围决定，
+    与完成门禁同一口径：进行中的会话优先，其次同代际最近完成；旧代际
+    会话的决定不参与。返回 ``{job_uuid: {obligation_id: {scope_key: decision}}}``。
+    """
+    tokens = [str(token or "").strip() for token in basis_tokens]
+    tokens = [token.rpartition(":")[0] for token in tokens]
+    tokens = [token for token in tokens if token]
+    if not tokens:
+        return {}
+    rows = await conn.fetch(
+        """
+        WITH effective AS (
+            SELECT DISTINCT ON (rs.analysis_basis_token)
+                rs.analysis_basis_token,
+                rs.id::text AS session_id
+            FROM review_sessions rs
+            WHERE rs.analysis_basis_token LIKE ANY($1::text[])
+              AND rs.status <> 'invalidated'
+            ORDER BY rs.analysis_basis_token,
+                CASE rs.status WHEN 'in_progress' THEN 0 WHEN 'completed' THEN 1 ELSE 2 END,
+                rs.started_at DESC NULLS LAST
+        )
+        SELECT e.analysis_basis_token, d.obligation_id, d.scope_key, d.decision
+        FROM review_obligation_decisions d
+        JOIN effective e ON e.session_id = d.review_session_id::text
+        """,
+        [f"{job_id}:%" for job_id in tokens],
+    )
+    result: Dict[str, Dict[str, Dict[str, str]]] = {}
+    for row in rows:
+        token = str(row.get("analysis_basis_token") or "")
+        job_uuid, _, _ = token.rpartition(BASIS_TOKEN_SEPARATOR)
+        if not job_uuid:
+            continue
+        obligation = str(row.get("obligation_id") or "")
+        if not obligation:
+            continue
+        scope = str(row.get("scope_key") or "")
+        result.setdefault(job_uuid, {}).setdefault(obligation, {})[scope] = str(
+            row.get("decision") or ""
+        )
+    return result
 
 
 def evaluate_start_gate(state: ReviewState) -> CompletionGate:
@@ -709,6 +837,15 @@ def evaluate_completion_gate(state: ReviewState) -> CompletionGate:
         blockers.append(ReviewBlocker(code=BLOCKER_ANALYSIS_NOT_COMPLETED))
 
     blockers.extend(_problem_blockers(state.problems, state.decisions))
+
+    # 2026-11-19：队列/复核页的“需人工核对”与完成门禁必须同口径。已被
+    # 同源正式问题覆盖或由根问题连带处理的义务不阻断；其余未完成阻塞义务
+    # 逐条阻断完成，避免页面写着“需人工核对”却能直接完成复核。
+    unhandled_obligations = _unhandled_obligations(state)
+    if unhandled_obligations:
+        blockers.append(ReviewBlocker(
+            code=BLOCKER_BLOCKING_OBLIGATIONS, count=len(unhandled_obligations)
+        ))
 
     return CompletionGate(can_complete=not blockers, blockers=blockers)
 
@@ -836,6 +973,19 @@ def _obligation_review_block(state: ReviewState) -> "ObligationReviewBlock":
                 evidence_reference=(
                     _opt_text(row.get("evidence_reference")) if row else None
                 ),
+                scope_decisions={
+                    scope: {
+                        "decision": str(scope_row.get("decision") or "") or None,
+                        "decision_revision": int(scope_row.get("revision") or 0) or None,
+                        "decided_by": _opt_text(scope_row.get("reviewer")),
+                        "decided_at": _opt_iso(scope_row.get("reviewed_at")),
+                        "note": _opt_text(scope_row.get("note")),
+                        "evidence_reference": _opt_text(scope_row.get("evidence_reference")),
+                    }
+                    for scope, scope_row in (
+                        state.scoped_decisions.get(item.obligation_id) or {}
+                    ).items()
+                },
                 # DH-02：结构化卡点从账本覆盖条目原样透传，不在复核层重算。
                 reason_codes=list(getattr(item, "reason_codes", []) or []),
                 blocked_by=[dict(value) for value in getattr(item, "blocked_by", []) or []],
@@ -1673,6 +1823,44 @@ def _obligation_evidence_error(
     }
 
 
+def _resolve_decision_scope(
+    state: ReviewState, obligation_id: str, scope_key: Optional[str]
+) -> str:
+    """把请求里的范围键归一为该义务当前的合法表态范围。
+
+    同一义务多处独立阻塞时，缺少范围或范围不在当前分组内直接 422：
+    否则一处表态会被当成整个义务已处理，第二处阻塞被静默放行（R5）。
+    """
+    scopes = required_obligation_scopes(state).get(obligation_id, [])
+    normalized = str(scope_key or "").strip()
+    if not scopes:
+        return ""
+    if len(scopes) == 1:
+        if normalized and normalized not in scopes:
+            raise ReviewLifecycleError(
+                422,
+                ERROR_OBLIGATION_SCOPE_REQUIRED,
+                "提交的表态范围不在当前分析的该义务下，请刷新后重新选择原文位置",
+                scope_keys=scopes,
+            )
+        return normalized or scopes[0]
+    if not normalized:
+        raise ReviewLifecycleError(
+            422,
+            ERROR_OBLIGATION_SCOPE_REQUIRED,
+            "该义务在当前分析中有多处原文位置，请分别选择具体位置后表态",
+            scope_keys=scopes,
+        )
+    if normalized not in scopes:
+        raise ReviewLifecycleError(
+            422,
+            ERROR_OBLIGATION_SCOPE_REQUIRED,
+            "提交的表态范围不在当前分析的该义务下，请刷新后重新选择原文位置",
+            scope_keys=scopes,
+        )
+    return normalized
+
+
 def _prepare_obligation_decision(
     state: ReviewState, obligation_id: str
 ) -> Optional[HTTPException]:
@@ -1708,17 +1896,22 @@ async def _write_obligation_decision(
     evidence_reference: Optional[str],
     expected_revision: Optional[int],
     actor: str,
+    scope_key: str = "",
 ) -> tuple:
     """执行决定写入，返回 ``(行, 审计动作)``；并发/过期一律 409，不静默覆盖。
 
     两条并发防线各自的职责（任务书 §十五）：
 
-    - **唯一约束** ``uq_review_obligation_decisions_scope``：两个复核人同时
-      首次表态时，后到者的 INSERT 命中冲突返回 None → 409；
+    - **唯一约束** ``uq_review_obligation_decisions_scoped_scope``：两个复核人
+      同时首次表态时，后到者的 INSERT 命中冲突返回 None → 409；
     - **乐观锁** ``revision``：改写已有决定必须携带读到的 revision，
       带错/不带 → 409（响应里附 ``current_revision`` 供展示层提示刷新）。
     """
-    existing = state.obligation_decisions.get(obligation_id)
+    scoped_existing = (
+        (state.scoped_decisions.get(obligation_id) or {}).get(scope_key)
+        if scope_key else None
+    )
+    existing = scoped_existing if scope_key else state.obligation_decisions.get(obligation_id)
     if existing is None:
         if expected_revision is not None:
             # 带着 revision 来却查不到行：客户端拿到的是过期视图。
@@ -1736,6 +1929,7 @@ async def _write_obligation_decision(
             note=note,
             evidence_reference=evidence_reference,
             reviewer=actor,
+            scope_key=scope_key,
         )
         if row is None:
             # 并发下别人已先写入（唯一约束兜底）。先到者的结论优先。
@@ -1788,6 +1982,7 @@ async def decide_obligation(
     job_uuid: Optional[str] = None,
     analysis_basis_token: Optional[str] = None,
     scope_confirmed: bool = False,
+    scope_key: Optional[str] = None,
 ) -> ObligationDecisionData:
     _require_autocommit(conn, operation="decide_obligation")
     """人工补核一条检查义务（WP3-B），写入绑定**当前活动会话**的数据库决定。
@@ -1883,6 +2078,14 @@ async def decide_obligation(
                 )
         else:
             rejection = _prepare_obligation_decision(state, normalized_obligation)
+            effective_scope = ""
+            if rejection is None:
+                try:
+                    effective_scope = _resolve_decision_scope(
+                        state, normalized_obligation, scope_key
+                    )
+                except ReviewLifecycleError as exc:
+                    rejection = exc
             if rejection is None:
                 row, action = await _write_obligation_decision(
                     conn,
@@ -1894,9 +2097,15 @@ async def decide_obligation(
                     evidence_reference=evidence_text,
                     expected_revision=expected_revision,
                     actor=actor,
+                    scope_key=effective_scope,
                 )
                 # 让本函数返回的门禁反映刚写入的决定（同事务内的一致视图）。
-                state.obligation_decisions[normalized_obligation] = row
+                if effective_scope:
+                    state.scoped_decisions.setdefault(
+                        normalized_obligation, {}
+                    )[effective_scope] = row
+                else:
+                    state.obligation_decisions[normalized_obligation] = row
                 effects.audits.append(
                     _obligation_audit_event(
                         actor,

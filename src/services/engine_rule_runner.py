@@ -796,6 +796,13 @@ class EngineRuleRunner:
         self._stats["delivery_suppressions"] = list(
             getattr(document, "delivery_suppression_ledger", None) or [])
         self._stats["recovery"] = list(self._recovery.records)
+        # R4/R5（2026-11-20 复审）：正文校正消费回执随统计收割，双模式结果
+        # 与 legacy payload 同源——未命中的校正在发布层转 correction_overlay
+        # 未生效清单，不再静默。
+        self._stats["applied_text_correction_ids"] = list(
+            getattr(document, "applied_text_correction_ids", None) or [])
+        self._stats["unapplied_text_corrections"] = list(
+            getattr(document, "unapplied_text_corrections", None) or [])
         if getattr(document, "fact_context", None) is not None:
             try:
                 self._stats["fact_context_summary"] = document.fact_context.summary()
@@ -832,6 +839,12 @@ class EngineRuleRunner:
                 filesize=getattr(job_context, "filesize", 0) or job_context.meta.get("filesize", 0),
             )
             document.structure_view = job_context.meta.get("structure_view")
+            # R4/R5（2026-11-20 复审）：双模式路径与 legacy 路径消费同一份
+            # 人工正文校正台账——dual 模式此前没有挂载，校正提交后重算仍按
+            # 原文跑（R3 合法读数 202 后新版本不变即此根因）。
+            document.text_corrections = [
+                dict(item) for item in ((job_context.meta or {}).get("text_corrections") or [])
+            ]
             # ZC-01（AC-01）：双模式路径消费与 legacy 路径同一版本的统一事实
             fact_snapshot = getattr(job_context, "fact_context", None)
             if isinstance(fact_snapshot, dict) and fact_snapshot:

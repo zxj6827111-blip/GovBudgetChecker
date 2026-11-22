@@ -22,7 +22,7 @@ import logging
 import math
 from dataclasses import replace
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import asyncpg
 
@@ -373,43 +373,36 @@ async def persist_facts_and_evidence(
     EvidenceRef 实体写入——物理页、bbox、来源单元格、定位等级与
     验证状态原样落库；旧格式（只有 evidence_ids）退回 quote+unverified。
     """
-    written = 0
-    async with conn.transaction():
-        for fact in facts:
-            evidence_refs: List[Dict[str, Any]] = []
-            raw_refs = (fact.extra_dims or {}).get("evidence_refs")
-            if isinstance(raw_refs, list):
-                evidence_refs = [dict(item) for item in raw_refs if isinstance(item, dict)]
+    # 逐条 await conn.execute() 会把每条连接往返都串在事件循环上；一份材料的
+    # 事实与证据动辄数千行，批量重跑时显著拉长连接占用。先攒行再
+    # executemany，语义不变（同一事务、同样的 ON CONFLICT DO NOTHING 幂等）。
+    evidence_rows: List[Tuple[Any, ...]] = []
+    fact_rows: List[Tuple[Any, ...]] = []
+    for fact in facts:
+        evidence_refs: List[Dict[str, Any]] = []
+        raw_refs = (fact.extra_dims or {}).get("evidence_refs")
+        if isinstance(raw_refs, list):
+            evidence_refs = [dict(item) for item in raw_refs if isinstance(item, dict)]
 
-            evidence_ids = list(fact.evidence_ids)
-            if evidence_refs:
-                # 以事实声明的 evidence_ids 为准，补齐丢失的引用实体
-                known = {str(ref.get("evidence_id") or "") for ref in evidence_refs}
-                for evidence_id in evidence_ids:
-                    if evidence_id not in known:
-                        evidence_refs.append(
-                            {
-                                "evidence_id": evidence_id,
-                                "file_hash": file_hash,
-                                "quote": fact.raw_value or "",
-                                "verification_status": "unverified",
-                                "location_level": "unresolved",
-                            }
-                        )
-            for ref in evidence_refs:
-                bbox_value = ref.get("bbox")
-                await conn.execute(
-                    """
-                    INSERT INTO parse_evidence (
-                        parse_run_id, evidence_id, file_hash, physical_page,
-                        printed_page, source_cell_id, source_block_id, quote,
-                        bbox, source_method, verification_status, location_level, source_provenance
-                    ) VALUES (
-                        $1, $2, $3, $4, $5, $6, $7, $8,
-                        $9::jsonb, $10, $11, $12, $13::jsonb
+        evidence_ids = list(fact.evidence_ids)
+        if evidence_refs:
+            # 以事实声明的 evidence_ids 为准，补齐丢失的引用实体
+            known = {str(ref.get("evidence_id") or "") for ref in evidence_refs}
+            for evidence_id in evidence_ids:
+                if evidence_id not in known:
+                    evidence_refs.append(
+                        {
+                            "evidence_id": evidence_id,
+                            "file_hash": file_hash,
+                            "quote": fact.raw_value or "",
+                            "verification_status": "unverified",
+                            "location_level": "unresolved",
+                        }
                     )
-                    ON CONFLICT (parse_run_id, evidence_id) DO NOTHING
-                    """,
+        for ref in evidence_refs:
+            bbox_value = ref.get("bbox")
+            evidence_rows.append(
+                (
                     parse_run_id,
                     str(ref.get("evidence_id") or ""),
                     str(ref.get("file_hash") or file_hash),
@@ -424,21 +417,9 @@ async def persist_facts_and_evidence(
                     str(ref.get("location_level") or "unresolved"),
                     _json(ref.get("source_provenance") or {}),
                 )
-            await conn.execute(
-                """
-                INSERT INTO parse_facts (
-                    parse_run_id, fact_uid, instance_uid, table_code, indicator,
-                    org_name, org_scope, fiscal_year, period, fund_scope, budget_stage,
-                    subject_code, subject_name, classification_level, parent_subject_code,
-                    hierarchy_path, raw_value, unit, display_precision, normalized_value,
-                    recognition_status, confidence, evidence_ids, extra_dims, row_order
-                ) VALUES (
-                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-                    $12, $13, $14, $15, $16, $17, $18, $19, $20,
-                    $21, $22, $23, $24, $25
-                )
-                ON CONFLICT (parse_run_id, fact_uid) DO NOTHING
-                """,
+            )
+        fact_rows.append(
+            (
                 parse_run_id,
                 fact.fact_uid,
                 fact.instance_uid,
@@ -465,8 +446,42 @@ async def persist_facts_and_evidence(
                 _json(fact.extra_dims),
                 fact.row_order,
             )
-            written += 1
-    return written
+        )
+    async with conn.transaction():
+        if evidence_rows:
+            await conn.executemany(
+                """
+                INSERT INTO parse_evidence (
+                    parse_run_id, evidence_id, file_hash, physical_page,
+                    printed_page, source_cell_id, source_block_id, quote,
+                    bbox, source_method, verification_status, location_level, source_provenance
+                ) VALUES (
+                    $1, $2, $3, $4, $5, $6, $7, $8,
+                    $9::jsonb, $10, $11, $12, $13::jsonb
+                )
+                ON CONFLICT (parse_run_id, evidence_id) DO NOTHING
+                """,
+                evidence_rows,
+            )
+        if fact_rows:
+            await conn.executemany(
+                """
+                INSERT INTO parse_facts (
+                    parse_run_id, fact_uid, instance_uid, table_code, indicator,
+                    org_name, org_scope, fiscal_year, period, fund_scope, budget_stage,
+                    subject_code, subject_name, classification_level, parent_subject_code,
+                    hierarchy_path, raw_value, unit, display_precision, normalized_value,
+                    recognition_status, confidence, evidence_ids, extra_dims, row_order
+                ) VALUES (
+                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+                    $12, $13, $14, $15, $16, $17, $18, $19, $20,
+                    $21, $22, $23, $24, $25
+                )
+                ON CONFLICT (parse_run_id, fact_uid) DO NOTHING
+                """,
+                fact_rows,
+            )
+    return len(fact_rows)
 
 
 async def load_parse_artifact(conn: asyncpg.Connection, parse_run_id: int) -> ParseArtifact:

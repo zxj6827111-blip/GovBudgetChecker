@@ -73,8 +73,10 @@ export function safeReviewReturnPath(value: string | null | undefined): string {
     return `${url.pathname}${url.search}`;
   } catch { return "/review"; }
 }
-export function reviewDetailPath(jobId: string, returnTo = "/review"): string {
-  return `/review?${new URLSearchParams({ job: jobId, returnTo: safeReviewReturnPath(returnTo) })}`;
+export function reviewDetailPath(jobId: string, returnTo = "/review", tab?: "checks"): string {
+  const params = new URLSearchParams({ job: jobId, returnTo: safeReviewReturnPath(returnTo) });
+  if (tab) params.set("tab", tab);
+  return `/review?${params}`;
 }
 export function nextReviewItem(items: ReviewListItem[], jobId: string, returnTo: string): ReviewListItem | null {
   const path = safeReviewReturnPath(returnTo);

@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import re
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .amount_math import classify_amount_diff
@@ -28,6 +28,7 @@ from .fact_context import _canonical_budget_stage
 from .native_table_arithmetic import table_facts
 from .rule_outcome import RuleDeferred, RuleNotApplicable
 from .rules_v33 import Document, Issue, Rule, _unit_error_explains_amount
+from src.schemas.parse_artifact import FiscalFact
 
 
 def _runtime_defect_key(doc: Any, page: int, suffix: str) -> str:
@@ -41,14 +42,51 @@ def _runtime_defect_key(doc: Any, page: int, suffix: str) -> str:
     return f"{fingerprint}|p{page}|{suffix}"
 from src.utils.narration import normalize_amount_punctuation
 
-_AMOUNT = r"(\d[\d,]*(?:\.\d+)?)"
+# R3（2026-11-20 独立复核）：先取得**完整**数字词，再决定能否取数。
+# 旧模式 ``\d[\d,]*(?:\.\d+)?`` 会把 “5,465.41.00”截成“5,465.41”，
+# 直接去逗号又会把“54,65.41”读成 5465.41——两种非法书写都能得到正式通过。
+# 这里把数字样式的连续片段整段捕获，交给 fiscal_lexeme 校验；非法词保留
+# 原貌并只影响依赖它的算式，不做修补、截断或按总额反推。
+_AMOUNT_LEXEME = r"[+\-−]?\d[\d,]*(?:\.\d+)*"
+_AMOUNT = rf"({_AMOUNT_LEXEME})"
 
 
 def _dec(text: Any) -> Optional[Decimal]:
-    try:
-        return Decimal(str(text).replace(",", ""))
-    except (InvalidOperation, ValueError):
+    """按 fiscal_lexeme 严格取数；非法千分位/双小数点等一律返回 None。"""
+    from .fiscal_lexeme import lex_numeric
+
+    lexeme = lex_numeric(text)
+    if lexeme.kind not in {"number", "amount"} or lexeme.value is None:
         return None
+    return lexeme.value
+
+
+def _wan_display(value: Decimal) -> str:
+    """万元数值的显示格式：至少两位小数，去掉第三位以后的全零尾数。
+
+    ``54,654,100 元 × 0.0001`` 会得到 ``5465.4100``，数值正确但显示成
+    “168959.5400”会被误读为精度不同；``0.017982`` 这类真实精细差异保留。
+    """
+    text = format(value, "f")
+    if "." not in text:
+        return text + ".00"
+    whole, fraction = text.split(".", 1)
+    fraction = fraction.rstrip("0")
+    if len(fraction) < 2:
+        fraction = fraction.ljust(2, "0")
+    return f"{whole}.{fraction}"
+
+
+def _wan_trim(value: Decimal) -> str:
+    """逐项操作数保留原精度：整数不带小数位，``5465.4100`` 只去掉多余零。
+
+    回执里的逐项 ``value_wan`` 沿用原设计（``40`` 不写成 ``40.00``）；
+    只有合计/差额等展示字段使用 :func:`_wan_display` 的两位小数格式。
+    """
+    text = format(value, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
 
 
 # ---------------------------------------------------------------------------
@@ -1265,7 +1303,7 @@ def _shared_group_disclosures(
                     arithmetic_status = "fail"
                     arithmetic_reason = (
                         f"组内分项合计{format(group_sum, 'f')}与组级合计"
-                        f"{format(stated_total, 'f')}不一致，差{format(abs(difference), 'f')}"
+                        f"{format(stated_total, 'f')}不一致，差{_wan_display(abs(difference))}"
                     )
                     if total_pos is not None:
                         result["untrusted_totals"].add(total_pos)
@@ -1664,7 +1702,7 @@ def _inherit_clause_unit(
         ]
         # 条目头金额（"（项）4.19 万元"）是同条目决算槽位的显式单位依据：
         # 声明式记录之外，科目头自带金额带单位时同样可捐单位。
-        if joined:
+        if joined and record["kind"] == "final":
             for clause in clauses:
                 if int(clause["start"]) != clause_start:
                     continue
@@ -1705,9 +1743,11 @@ def _completeness_summary(items: Sequence[Dict[str, Any]], label: str) -> str:
                   if item.get("not_included_reason") == "group_component_unbound")
     group_conflict = sum(1 for item in items
                          if item.get("not_included_reason") == "group_total_conflict")
+    subject_unresolved = sum(1 for item in items
+                             if item.get("not_included_reason") == "subject_identity_unresolved")
     unusable = (
         len(items) - missing - not_itemized - conflict - ambiguous - dup_unit
-        - unbound - group_conflict
+        - unbound - group_conflict - subject_unresolved
     )
     parts = []
     if missing:
@@ -1724,6 +1764,8 @@ def _completeness_summary(items: Sequence[Dict[str, Any]], label: str) -> str:
         parts.append(f"{unbound}处共享分项无法对应到项级科目")
     if group_conflict:
         parts.append(f"{group_conflict}处组级合计与组内分项不一致")
+    if subject_unresolved:
+        parts.append(f"{subject_unresolved}处复核人指定科目无法在表内唯一确认（编码与名称矛盾或落表失败）")
     if unusable:
         parts.append(f"{unusable}处{label}金额缺少可归一单位或格式")
     return "、".join(parts) or "金额无法纳入合计"
@@ -1765,12 +1807,347 @@ def _operand_admitted(record: Dict[str, Any], rejected_positions: set) -> bool:
             and record["pos"] not in rejected_positions)
 
 
+def _unit_basis_evidence(fact: "FiscalFact") -> Dict[str, Any]:
+    """单位恢复凭证的可序列化摘要：只留追溯「同科目原表证实单位」所需字段。"""
+    return {
+        "fact_uid": fact.fact_uid,
+        "table_code": fact.table_code,
+        "subject_code": fact.subject_code,
+        "subject_name": fact.subject_name,
+        "unit": fact.unit,
+        "normalized_value": (
+            format(fact.normalized_value, "f")
+            if fact.normalized_value is not None else None
+        ),
+    }
+
+
 def _operand_evidence(record: Dict[str, Any]) -> Dict[str, Any]:
     """证据保留原始数值精度，同时保证分析快照可序列化。"""
     evidence = dict(record)
     if isinstance(evidence.get("value_wan"), Decimal):
-        evidence["value_wan"] = format(evidence["value_wan"], "f")
+        # 问题证据里的金额按报告展示口径（至少两位小数）；回执逐项值用
+        # _wan_trim 保留原文精度。
+        evidence["value_wan"] = _wan_display(evidence["value_wan"])
+    basis = evidence.get("table_unit_basis")
+    # FiscalFact 是运行期对象：回执路径（unit_facts）要按 fact 记账，但进入
+    # 分析快照会让 dumps_canonical 拒绝整个结果入库（2026-11-19 上海商业
+    # 会计学校重跑即因此在质量门禁后的落库阶段报 pending_retry 失败）。
+    if isinstance(basis, FiscalFact):
+        # R1：失败分支同样要能追溯原表。只留事实 ID 不够，页码、源格、
+        # 引文与 bbox 一并保留（FiscalFact 本身仍只存在于运行期）。
+        evidence["table_unit_basis"] = _unit_basis_full_evidence(basis)
+    subject_row = evidence.get("subject_row_basis")
+    if isinstance(subject_row, FiscalFact):
+        # R4（2026-11-21 第三轮复核）：加总回执引用复核人指定科目的同一
+        # 原表行；运行期对象必须先序列化成凭证再进快照。
+        evidence["subject_row_basis"] = _unit_basis_full_evidence(subject_row)
+    unresolved = evidence.pop("subject_identity_unresolved", None)
+    if unresolved:
+        # 指定科目未决的明细（编码/名称/表内名称/原因）保持可读形态。
+        evidence["subject_identity_unresolved"] = unresolved
+        evidence["not_included_reason"] = evidence.get("not_included_reason")
     return evidence
+
+
+def _unit_basis_full_evidence(fact: "FiscalFact") -> Dict[str, Any]:
+    """单位恢复凭证：科目身份 + 原表格金额、页码、格与引文。
+
+    计划要求「依据所在页及原句或原表格」两端都可追溯：正文端由调用方补
+    page/span，原表端由本函数携带 physical_page/source_cell_id/quote/bbox。
+    """
+    evidence = _unit_basis_evidence(fact)
+    refs = [
+        ref for ref in ((fact.extra_dims or {}).get("evidence_refs") or [])
+        if isinstance(ref, dict)
+    ]
+    page = next((ref.get("physical_page") for ref in refs if ref.get("physical_page")), None)
+    cell = next((ref.get("source_cell_id") for ref in refs if ref.get("source_cell_id")), None)
+    quote = next((ref.get("quote") for ref in refs if str(ref.get("quote") or "").strip()), None)
+    bbox = next((ref.get("bbox") for ref in refs if ref.get("bbox")), None)
+    evidence.update({
+        "page": page,
+        "source_cell_id": cell,
+        "quote": quote,
+        "bbox": bbox,
+        "file_hash": next(
+            (ref.get("file_hash") for ref in refs if ref.get("file_hash")), None
+        ),
+        "role": "same_subject_table_basis",
+    })
+    return evidence
+
+
+def _calc_item_evidence(record: Dict[str, Any], locate) -> Dict[str, Any]:
+    """单条分项的原文数字、原文单位、核算依据与依据页。"""
+    pos = record.get("pos")
+    page = span = None
+    if isinstance(pos, int):
+        try:
+            page, text, start, end = locate(pos)
+            span = re.sub(r"\s+", " ", text[start:end]).strip()
+        except Exception:
+            page = span = None
+    evidence: Dict[str, Any] = {
+        "page": page,
+        "span": span,
+        "raw": str(record.get("raw") or ""),
+        "unit": record.get("unit"),
+        # R2：原文单位与核算单位分别留痕，复核人能看到单位来源。
+        "unit_original": record.get("unit_original"),
+        "unit_accounting": record.get("unit_accounting", record.get("unit")),
+        "unit_source": record.get("unit_source"),
+        "kind": record.get("kind"),
+    }
+    value = record.get("value_wan")
+    if value is not None:
+        evidence["value_wan"] = _wan_trim(value) if isinstance(value, Decimal) else str(value)
+    basis = record.get("table_unit_basis")
+    if basis is not None:
+        evidence["basis"] = (
+            _unit_basis_full_evidence(basis) if isinstance(basis, FiscalFact) else basis
+        )
+    subject_row = record.get("subject_row_basis")
+    if subject_row is not None:
+        # R4（2026-11-21 第三轮复核）：复核人指定科目时，加总回执引用单项
+        # 所用的同一原表行（页码/编码/名称/金额/原格）。
+        evidence["subject_row_basis"] = (
+            _unit_basis_full_evidence(subject_row)
+            if isinstance(subject_row, FiscalFact) else subject_row
+        )
+    if record.get("subject_identity_unresolved"):
+        evidence["subject_identity_unresolved"] = record["subject_identity_unresolved"]
+        evidence["not_included_reason"] = record.get("not_included_reason")
+    if record.get("unit_inherited_from") is not None:
+        evidence["unit_inherited_from"] = record["unit_inherited_from"]
+    if record.get("basis_mode"):
+        evidence["basis_mode"] = record["basis_mode"]
+    if record.get("source"):
+        evidence["source"] = record["source"]
+    if record.get("manual_correction"):
+        evidence["manual_correction"] = record["manual_correction"]
+    if record.get("manual_corrections"):
+        # 同一目标可能先确认单位再校正读数，逐条保留依据与人员/版本。
+        evidence["manual_corrections"] = list(record["manual_corrections"])
+    if record.get("malformed_amount"):
+        evidence["malformed_amount"] = True
+        evidence["not_included_reason"] = record.get("not_included_reason")
+    return evidence
+
+
+def _calculation_evidence(
+    included: Sequence[Dict[str, Any]],
+    not_included: Sequence[Dict[str, Any]],
+    withheld: Sequence[Dict[str, Any]],
+    locate,
+) -> Dict[str, Any]:
+    """一条算式的逐项证据底座；金额结论由调用方补齐。"""
+    return {
+        "included_count": len(included),
+        "included": [_calc_item_evidence(record, locate) for record in included],
+        "not_included": [_calc_item_evidence(record, locate) for record in not_included],
+        "withheld_count": len(withheld),
+        "unknown_count": len(not_included) + len(withheld),
+    }
+
+
+def _compact_match_text(value: Any) -> str:
+    return re.sub(r"\s+", "", str(value or ""))
+
+
+def _compact_raw_token_in(needle: str, raw: str) -> bool:
+    """金额原文是否作为**完整数字 token**出现在引文中。
+
+    R5（2026-11-20 复审）：预算行 raw="0" 这类短值不能再靠子串命中
+    "支出决算为12,906.51"——数字两侧必须不是数字/小数点/千分位。
+    """
+    if not raw:
+        return False
+    return re.search(rf"(?<![\d.,，]){re.escape(raw)}(?![\d.,，])", needle) is not None
+
+
+def _apply_text_corrections(
+    records: Sequence[Dict[str, Any]],
+    locate,
+    doc: Document,
+) -> int:
+    """把正文金额人工校正应用到当前条目；返回命中条数。
+
+    只按物理页 + 原文区间/金额匹配，不按金额大小猜条目。一条校正必须
+    唯一命中一个条目才应用；同页同金额多处命中（同名多行/重复列示）保持
+    待核，不能把一处校正扩散到所有同额条目。
+
+    R5（2026-11-20 复审）：
+    - 校正带原句页内位置（pos）时优先按位置唯一落条（同页两笔同额原句
+      也能各改各的）；
+    - 无位置时按原文片段包含匹配；金额词只作"片段都够不着"时的兜底，
+      且必须是完整数字 token；
+    - 片段命中多于一条时再用保留空白的原文引文二次区分；仍不唯一保持待核。
+    """
+    corrections = getattr(doc, "text_corrections", None) or []
+    if not corrections:
+        return 0
+    located: List[Dict[str, Any]] = []
+    for record in records:
+        pos = record.get("pos")
+        if not isinstance(pos, int):
+            continue
+        try:
+            page, text, start, end = locate(pos)
+        except Exception:
+            continue
+        located.append({
+            "record": record,
+            "page": int(page),
+            "span": _compact_match_text(text[start:end]),
+            "span_raw": str(text[start:end]),
+            "page_start": int(start),
+            "page_end": int(end),
+            "raw": _compact_match_text(record.get("raw")),
+        })
+    applied_records: Dict[int, Dict[str, Any]] = {}
+    applied_ids: List[str] = []
+    unresolved: List[Dict[str, Any]] = []
+    for correction in corrections:
+        try:
+            correction_page = int(correction.get("page") or 0)
+        except (TypeError, ValueError):
+            continue
+        needle = _compact_match_text(correction.get("span"))
+        quote_raw = str(correction.get("span") or "")
+        try:
+            correction_pos = int(correction.get("pos"))
+        except (TypeError, ValueError):
+            correction_pos = None
+        if not needle and correction_pos is None:
+            continue
+        same_page = [item for item in located if item["page"] == correction_page]
+        matches: List[Dict[str, Any]] = []
+        if correction_pos is not None:
+            # 位置优先：原句起点落在条目声明窗口附近（±64 字，覆盖 2A 分支
+            # 的科目名前缀）才算同一处。
+            matches = [
+                item for item in same_page
+                if abs(item["page_start"] - correction_pos) <= 64
+                or item["page_start"] <= correction_pos <= item["page_end"]
+            ]
+        if not matches and needle:
+            matches = [
+                item for item in same_page
+                if needle in item["span"] or item["span"] in needle
+            ]
+        if not matches and needle:
+            matches = [
+                item for item in same_page
+                if _compact_raw_token_in(needle, item["raw"])
+            ]
+        if len(matches) > 1 and quote_raw:
+            raw_refined = [
+                item for item in matches
+                if item["span_raw"]
+                and (item["span_raw"] in quote_raw or quote_raw in item["span_raw"])
+            ]
+            if len(raw_refined) == 1:
+                matches = raw_refined
+        if len(matches) != 1:
+            unresolved.append({
+                "correction_id": correction.get("correction_id"),
+                "reason": "ambiguous_match" if matches else "not_found",
+                "match_count": len(matches),
+            })
+            continue
+        record = matches[0]["record"]
+        field = str(correction.get("field") or "")
+        value = correction.get("value")
+        if field == "unit":
+            unit = str(value or "")
+            if unit not in _AMOUNT_UNIT_FACTOR:
+                unresolved.append({
+                    "correction_id": correction.get("correction_id"),
+                    "reason": "invalid_unit",
+                })
+                continue
+            record["unit"] = unit
+        elif field == "raw_value":
+            raw_value = str(value or "").replace(",", "").strip()
+            if _dec(raw_value) is None:
+                unresolved.append({
+                    "correction_id": correction.get("correction_id"),
+                    "reason": "invalid_raw_value",
+                })
+                continue
+            record["raw"] = str(value).strip()
+        elif field == "subject_code":
+            record["manual_subject_code"] = str(value or "").strip()
+        elif field == "subject_name":
+            record["manual_subject_name"] = str(value or "").strip()
+        else:
+            unresolved.append({
+                "correction_id": correction.get("correction_id"),
+                "reason": "unsupported_field",
+            })
+            continue
+        record.setdefault("manual_corrections", []).append({
+            "correction_id": correction.get("correction_id"),
+            "field": field,
+            "value": value,
+            "actor": correction.get("actor"),
+            "analysis_basis_token": correction.get("analysis_basis_token"),
+            "original_text": correction.get("span"),
+        })
+        record["manual_correction"] = (record.get("manual_corrections") or [None])[-1]
+        applied_records[id(record)] = record
+        if correction.get("correction_id"):
+            applied_ids.append(str(correction["correction_id"]))
+    for record in applied_records.values():
+        value = _dec(str(record.get("raw") or ""))
+        factor = _AMOUNT_UNIT_FACTOR.get(record.get("unit"))
+        record["value_wan"] = (
+            value * factor if value is not None and factor is not None else None
+        )
+        record["not_included_reason"] = (
+            None if record["value_wan"] is not None else "amount_or_unit_unusable"
+        )
+    try:
+        doc.applied_text_correction_ids = list(dict.fromkeys(applied_ids))
+        doc.unapplied_text_corrections = unresolved
+    except Exception:
+        pass
+    return len(applied_records)
+
+
+def _conditional_trial(
+    included: Sequence[Dict[str, Any]],
+    not_included: Sequence[Dict[str, Any]],
+    subtotal: Decimal,
+    stated: Decimal,
+    locate,
+) -> Optional[Dict[str, Any]]:
+    """只能提出「按万元理解」时的条件试算；明确标记不计通过率、不解除门禁。"""
+    candidates = [
+        record for record in not_included
+        if str(record.get("raw") or "").strip()
+        and record.get("not_included_reason") in {
+            "amount_or_unit_unusable", "unit_basis_unconfirmed",
+        }
+    ]
+    if not candidates:
+        return None
+    values = [_dec(str(record.get("raw") or "")) for record in candidates]
+    if any(value is None for value in values):
+        return None
+    assumed = subtotal + sum(values, Decimal(0))
+    delta = assumed - stated
+    return {
+        "assumption": "未确定单位的金额按万元理解",
+        "included_count": len(included) + len(candidates),
+        "subtotal_wan": _wan_display(assumed),
+        "difference_wan": _wan_display(delta),
+        "evidence": [_calc_item_evidence(record, locate) for record in candidates],
+        "is_conditional": True,
+        "counts_as_pass": False,
+        "clears_completion_gate": False,
+    }
 
 
 def _table_general_public_expenditure_total(doc: Document) -> Tuple[Optional[Decimal], Optional[str]]:
@@ -1826,6 +2203,28 @@ class R33251_FunctionalDetailCompleteness(Rule):
                 s, e = flat_span(positions, header_match.start(), header_match.end())
                 return page, text, s, e
             return _locate(0)
+
+        def _format_not_included_locations(rows: Sequence[Dict[str, Any]]) -> str:
+            refs: List[str] = []
+            for row in rows[:3]:
+                pos = row.get("pos")
+                if pos is None:
+                    continue
+                page, text, s, e = _locate(int(pos))
+                excerpt = re.sub(r"\s+", " ", text[s:e]).strip()
+                raw_val = str(row.get("raw") or "").strip()
+                if excerpt and raw_val and raw_val not in excerpt:
+                    refs.append(f"第{page}页「{excerpt}」（{raw_val}）")
+                elif excerpt:
+                    refs.append(f"第{page}页「{excerpt}」")
+                elif raw_val:
+                    refs.append(f"第{page}页（{raw_val}）")
+                else:
+                    refs.append(f"第{page}页")
+            if not refs:
+                return ""
+            suffix = "等" if len(rows) > 3 else ""
+            return f"（定位：{'、'.join(refs)}{suffix}）"
 
         issues: List[Issue] = []
         unresolved: List[str] = []
@@ -1894,6 +2293,20 @@ class R33251_FunctionalDetailCompleteness(Rule):
             raw, unit, bad_unit = match.group("amount"), match.group("unit"), match.group("bad_unit")
             value = _dec(raw)
             factor = _AMOUNT_UNIT_FACTOR.get(unit)
+            # R3：数字词本身非法（错位逗号、双小数点等）时保留原文，不取数、
+            # 不修补，也不按总额反推；该条目不进入合计，缺陷单独报出。
+            malformed = value is None and not bad_unit
+            if malformed:
+                bad_page, bad_text, bad_s, bad_e = _locate(match.start())
+                issues.append(issue_at(
+                    self,
+                    f"支出决算具体情况中金额格式异常：“{raw}”，无法作为金额取数，"
+                    "请核对原文数字（不按总额反推）。",
+                    bad_page, bad_text, bad_s, bad_e,
+                    severity="warn", checklist_item="C-14",
+                    section="一般公共预算财政拨款支出决算具体情况",
+                    check_relation_id=f"{self.code}:V33-251:malformed:{match.start()}",
+                ))
             if bad_unit:
                 bad_page, bad_text, bad_s, bad_e = _locate(match.start())
                 issues.append(issue_at(
@@ -1906,10 +2319,15 @@ class R33251_FunctionalDetailCompleteness(Rule):
             records.append({
                 "kind": _decl_kind(match.group("kind")),
                 "raw": raw, "unit": unit, "pos": match.start(),
+                # 原文单位与核算单位分开保存；unit 在单位恢复/人工确认后
+                # 表示核算单位，unit_original 始终保留正文原字面单位。
+                "unit_original": unit,
                 **({"bad_unit": bad_unit} if bad_unit else {}),
                 "value_wan": value * factor if value is not None and factor is not None else None,
+                **({"malformed_amount": True} if malformed else {}),
                 "not_included_reason": (
                     "duplicated_unit" if bad_unit
+                    else "invalid_amount_literal" if malformed
                     else None if value is not None and factor is not None
                     else "amount_or_unit_unusable"
                 ),
@@ -1921,6 +2339,115 @@ class R33251_FunctionalDetailCompleteness(Rule):
         # 按该单位归一后参与合计；漏单位缺陷由 CMM-011 独立交付，
         # 不再让整个构成检查被阻断（宜川部门决算 P29 实证）。
         _inherit_clause_unit(clauses, records, joined, tail_start)
+        # 2026-11-19：正文金额校正先按原文位置落到条目，再走单位依据与加总。
+        _apply_text_corrections(records, _locate, doc)
+        from .native_final_disclosure import (
+            GENERAL,
+            detail_decision_unit_from_table,
+            detail_unit_basis_from_table,
+            unit_basis_by_subject_code,
+        )
+
+        facts, _ = table_facts(doc, GENERAL)
+        decision_units = {fact.unit for fact in facts if fact.indicator == "total_actual"}
+        # 只补单位，金额一律取正文原数；先确认每个条目的同槽位只有一笔声明，
+        # 保留多候选冲突的原判定。
+        if decision_units:
+            for clause in clauses:
+                begin, end = int(clause["start"]), int(clause["end"])
+                actuals = [r for r in records if begin <= r["pos"] < end and r["kind"] == "final"]
+                if len(actuals) != 1 or actuals[0].get("bad_unit"):
+                    continue
+                record = actuals[0]
+                # R4（2026-11-21 第三轮复核）：复核人指定科目时，单项核对与
+                # 分项加总必须引用同一原表行。编码在表内无法唯一确认，或编码
+                # 与名称互相矛盾时，科目身份未决——这笔读数不再作为已确认
+                # 依据计入分项加总（与单项"待核"一致），其余各笔仍有可查小计。
+                manual_code = str(record.get("manual_subject_code") or "").strip()
+                manual_name = str(record.get("manual_subject_name") or "").strip()
+                subject_row = None
+                subject_unresolved = None
+                normalize = lambda value: re.sub(r"\s+|支出$", "", str(value or ""))
+                if manual_code:
+                    designated = unit_basis_by_subject_code(doc, facts, manual_code)
+                    if designated is None:
+                        subject_unresolved = {
+                            "subject_code": manual_code,
+                            "subject_name": manual_name or None,
+                            "reason": "subject_code_not_found",
+                        }
+                    elif manual_name and normalize(designated.subject_name) != normalize(manual_name):
+                        # 编码与名称由复核人同时给出但不一致：不猜以哪个为准。
+                        subject_unresolved = {
+                            "subject_code": manual_code,
+                            "subject_name": manual_name,
+                            "table_subject_name": designated.subject_name,
+                            "reason": "subject_name_conflict",
+                        }
+                    else:
+                        subject_row = designated
+                        record["subject_row_basis"] = designated
+                elif manual_name:
+                    basis_row = detail_unit_basis_from_table(
+                        doc, facts, joined[begin:record["pos"]]
+                    )
+                    if basis_row is None or normalize(basis_row.subject_name) != normalize(manual_name):
+                        subject_unresolved = {
+                            "subject_code": getattr(basis_row, "subject_code", None) if basis_row is not None else None,
+                            "subject_name": manual_name,
+                            "table_subject_name": getattr(basis_row, "subject_name", None) if basis_row is not None else None,
+                            "reason": "subject_name_conflict",
+                        }
+                if subject_unresolved is not None:
+                    record["not_included_reason"] = "subject_identity_unresolved"
+                    record["subject_identity_unresolved"] = subject_unresolved
+                    continue
+                # R2（2026-11-20 独立复核）：正文写明的单位必须按原文换算。
+                # 旧逻辑在表头单位为万元、正文写“54,654,100元”时仍以表头
+                # 覆盖正文单位，把它当万元加总。这里把原文单位与核算单位分开：
+                # 只有原文缺单位且有可追溯依据时才允许恢复；显式单位或人工
+                # 确认单位优先，依据只展示来源，不改写已写明的单位。
+                if record.get("unit") is not None:
+                    manual_units = [
+                        item for item in (record.get("manual_corrections") or [])
+                        if item.get("field") == "unit"
+                    ]
+                    record["unit_accounting"] = record["unit"]
+                    record["unit_source"] = (
+                        "manual_correction" if manual_units else "explicit_text"
+                    )
+                    continue
+                if manual_code:
+                    basis = subject_row
+                    basis_mode = "manual_subject"
+                elif decision_units == {record["unit"]} and not record.get("manual_correction"):
+                    continue
+                else:
+                    basis = detail_decision_unit_from_table(
+                        doc, facts, joined[begin:record["pos"]],
+                        record["raw"], record["unit"],
+                    )
+                    basis_mode = "amount_match"
+                    if basis is None:
+                        # 四类边界：单位依据按科目身份定位，金额差异是核算结果而不是
+                        # 单位前提。正文数字写错时仍必须恢复单位并如实算出差额。
+                        basis = detail_unit_basis_from_table(
+                            doc, facts, joined[begin:record["pos"]]
+                        )
+                        basis_mode = "identity_only"
+                if basis is not None:
+                    factor = _AMOUNT_UNIT_FACTOR.get(basis.unit)
+                    value = _dec(str(record.get("raw") or ""))
+                    if factor is None or value is None:
+                        continue
+                    record["table_unit_basis"] = basis
+                    record["unit"] = basis.unit
+                    record["unit_accounting"] = basis.unit
+                    record["unit_source"] = f"table_basis:{basis_mode}"
+                    # 必须用正文数字：不得以表内金额覆盖正文原数。
+                    record["value_wan"] = value * factor
+                    record["basis_mode"] = basis_mode
+                    record["not_included_reason"] = None
         accounting = _clause_declaration_accounting(
             joined, clauses, records, tail_start, space_before=space_before
         )
@@ -2110,6 +2637,22 @@ class R33251_FunctionalDetailCompleteness(Rule):
                 or (item["scope"] == "ambiguous" and not item["stages"])
             ]
             exception_evidence = _exception_evidence(disclosure_exceptions, _locate)
+            unit_facts = [record["table_unit_basis"] for record in included
+                          if "table_unit_basis" in record]
+            for record in included:
+                if "table_unit_basis" in record:
+                    page, original, start, end = _locate(record["pos"])
+                    exception_evidence.append({
+                        "page": page,
+                        "span": original[start:end],
+                        "role": "原表证实单位的正文金额",
+                        "unit_for_check": record["unit"],
+                    })
+            # 2026-11-19：每条算式独立记账——原文数字、原文单位、核算科目、
+            # 依据页与原句/原表格。分支只补金额结论，不重造逐项证据。
+            calc_evidence = _calculation_evidence(
+                included, not_included_items, withheld_items, _locate
+            )
             if not kind_records and not not_included_items and not withheld_items:
                 continue
             if total is not None:
@@ -2126,6 +2669,7 @@ class R33251_FunctionalDetailCompleteness(Rule):
                         reason=f"{label}总额缺失，无法复算分项加总",
                         reason_codes=["stated_total_missing"],
                         disclosure_sources=exception_evidence,
+                        calculation_evidence=calc_evidence,
                     )
                     continue
             else:
@@ -2139,10 +2683,12 @@ class R33251_FunctionalDetailCompleteness(Rule):
                         reason=f"{label}总额缺失且表5合计未取到，无法复算分项加总",
                         reason_codes=["stated_total_missing"],
                         disclosure_sources=exception_evidence,
+                        calculation_evidence=calc_evidence,
                     )
                     continue
             gap_summary = _completeness_summary(not_included_items, label)
             gap_codes = _completeness_codes(not_included_items)
+            loc_note = _format_not_included_locations(not_included_items)
             withheld_summary = (
                 f"另有{len(withheld_items)}个科目依法不予公开、金额未知"
                 if withheld_items else ""
@@ -2152,7 +2698,7 @@ class R33251_FunctionalDetailCompleteness(Rule):
                 if not_included_items:
                     detail = (
                         f"{label}无已纳入分项，{len(not_included_items)}处金额未纳入合计"
-                        f"（{gap_summary}）"
+                        f"（{gap_summary}）{loc_note}"
                         + (f"；{withheld_summary}" if withheld_summary else "")
                         + "，不能发布分项加总"
                     )
@@ -2170,6 +2716,7 @@ class R33251_FunctionalDetailCompleteness(Rule):
                         reason=detail,
                         reason_codes=codes,
                         disclosure_sources=exception_evidence,
+                        calculation_evidence=calc_evidence,
                     )
                     continue
                 if withheld_items:
@@ -2184,6 +2731,7 @@ class R33251_FunctionalDetailCompleteness(Rule):
                         reason=detail,
                         reason_codes=["withheld_amount_unknown", "sum_scope_not_comparable"],
                         disclosure_sources=exception_evidence,
+                        calculation_evidence=calc_evidence,
                     )
                     continue
                 continue
@@ -2199,16 +2747,32 @@ class R33251_FunctionalDetailCompleteness(Rule):
             anchor_page, anchor_text, anchor_s, anchor_e = (
                 _locate(total.start()) if total is not None else _locate_header()
             )
+            calc_evidence.update({
+                "subtotal_wan": _wan_display(subtotal),
+                "stated_total_wan": _wan_display(stated),
+                "difference_wan": _wan_display(difference),
+            })
+            trial = _conditional_trial(
+                included, not_included_items, subtotal, stated, _locate
+            )
+            if trial is not None:
+                calc_evidence["trial"] = trial
             if unknown:
                 if known_exceeds:
                     parts = [
-                        f"已公开分项{label}合计{format(subtotal, 'f')}万元"
+                        f"已公开分项{label}合计{_wan_display(subtotal)}万元"
                         f"（纳入{len(included)}项），已超过{total_origin_label}"
-                        f"{format(stated, 'f')}万元，差{format(abs(difference), 'f')}万元；"
+                        f"{_wan_display(stated)}万元，差{_wan_display(abs(difference))}万元；"
                         "即使未纳入或依法不予公开的分项为零，该加总关系也不成立"
                     ]
                     if not_included_items:
-                        parts.append(f"另有{gap_summary}，未纳入合计")
+                        parts.append(f"另有{gap_summary}{loc_note}，未纳入合计")
+                    if trial is not None:
+                        parts.append(
+                            f"条件试算：若未确定单位的{len(trial['evidence'])}项按万元理解，"
+                            f"合计为{trial['subtotal_wan']}万元（差{trial['difference_wan']}万元）；"
+                            "该试算仅为假设，不计通过率，不解除检查未完成"
+                        )
                     if withheld_items:
                         parts.append(withheld_summary)
                     message = "；".join(parts) + "。"
@@ -2219,10 +2783,11 @@ class R33251_FunctionalDetailCompleteness(Rule):
                         not_included_items=[_operand_evidence(record) for record in not_included_items],
                         withheld_items=withheld_items,
                         disclosure_exceptions=exception_evidence,
-                        stated_total_wan=format(stated, "f"),
-                        included_subtotal_wan=format(subtotal, "f"),
-                        difference_wan=format(difference, "f"),
+                        stated_total_wan=_wan_display(stated),
+                        included_subtotal_wan=_wan_display(subtotal),
+                        difference_wan=_wan_display(difference),
                         completeness="partial",
+                        calculation_evidence=calc_evidence,
                     ))
                     codes = list(dict.fromkeys([
                         *(gap_codes or (["item_amount_not_included"]
@@ -2237,6 +2802,7 @@ class R33251_FunctionalDetailCompleteness(Rule):
                         reason=message,
                         reason_codes=codes,
                         disclosure_sources=exception_evidence,
+                        calculation_evidence=calc_evidence,
                     )
                     if not_included_items:
                         from .diagnostic_fields import blocker, record_gap
@@ -2247,7 +2813,7 @@ class R33251_FunctionalDetailCompleteness(Rule):
                                                 ref=f'V33-251:{kind}:{label}:分项范围',
                                                 reason_code='scope_unconfirmed')])
                         unresolved_text = (
-                            f"{label}有{len(not_included_items)}处金额未纳入合计：{gap_summary}"
+                            f"{label}有{len(not_included_items)}处金额未纳入合计：{gap_summary}{loc_note}"
                         )
                         record_gap(doc, unresolved_text, **scope_entry)
                         unresolved.append(unresolved_text)
@@ -2259,12 +2825,18 @@ class R33251_FunctionalDetailCompleteness(Rule):
                     continue
                 if not_included_items:
                     parts = [
-                        f"已公开分项{label}合计{format(subtotal, 'f')}万元"
+                        f"已公开分项{label}合计{_wan_display(subtotal)}万元"
                         f"（纳入{len(included)}项）",
-                        f"另有{gap_summary}，未纳入合计",
+                        f"另有{gap_summary}{loc_note}，未纳入合计",
                     ]
                     if withheld_items:
                         parts.append(withheld_summary)
+                    if trial is not None:
+                        parts.append(
+                            f"条件试算：若未确定单位的{len(trial['evidence'])}项按万元理解，"
+                            f"合计为{trial['subtotal_wan']}万元（差{trial['difference_wan']}万元）；"
+                            "该试算仅为假设，不计通过率，不解除检查未完成"
+                        )
                     parts.append(
                         "公开分项与全口径总额范围不一致，不计算完整加总差额，"
                         "不能视为完整分项加总"
@@ -2300,10 +2872,11 @@ class R33251_FunctionalDetailCompleteness(Rule):
                         not_included_items=[_operand_evidence(record) for record in not_included_items],
                         withheld_items=withheld_items,
                         disclosure_exceptions=exception_evidence,
-                        stated_total_wan=format(stated, "f"),
-                        included_subtotal_wan=format(subtotal, "f"),
+                        stated_total_wan=_wan_display(stated),
+                        included_subtotal_wan=_wan_display(subtotal),
                         difference_wan=None,
                         completeness="partial",
+                        calculation_evidence=calc_evidence,
                     ))
                     codes = list(dict.fromkeys([
                         *(gap_codes or ["item_amount_not_included"]),
@@ -2317,6 +2890,7 @@ class R33251_FunctionalDetailCompleteness(Rule):
                         reason=message,
                         reason_codes=codes,
                         disclosure_sources=exception_evidence,
+                        calculation_evidence=calc_evidence,
                     )
                     from .diagnostic_fields import blocker, record_gap
                     scope_entry = dict(
@@ -2326,7 +2900,7 @@ class R33251_FunctionalDetailCompleteness(Rule):
                                             ref=f'V33-251:{kind}:{label}:分项范围',
                                             reason_code='scope_unconfirmed')])
                     unresolved_text = (
-                        f"{label}有{len(not_included_items)}处金额未纳入合计：{gap_summary}"
+                        f"{label}有{len(not_included_items)}处金额未纳入合计：{gap_summary}{loc_note}"
                     )
                     record_gap(doc, unresolved_text, **scope_entry)
                     unresolved.append(unresolved_text)
@@ -2347,16 +2921,48 @@ class R33251_FunctionalDetailCompleteness(Rule):
                     reason=detail,
                     reason_codes=["withheld_amount_unknown", "sum_scope_not_comparable"],
                     disclosure_sources=exception_evidence,
+                    calculation_evidence=calc_evidence,
                 )
                 continue
             if not (abs(difference) > envelope):
+                calc_evidence["outcome"] = "pass"
+                pass_reason = None
+                if unit_facts:
+                    basis_labels = []
+                    for record in included:
+                        basis = record.get("table_unit_basis")
+                        if basis is None:
+                            continue
+                        refs = (getattr(basis, "extra_dims", None) or {}).get(
+                            "evidence_refs") or []
+                        page = next(
+                            (ref.get("physical_page")
+                             for ref in refs
+                             if isinstance(ref, dict) and ref.get("physical_page")),
+                            None,
+                        )
+                        basis_labels.append(
+                            f"第{page}页{getattr(basis, 'subject_name', '') or ''}"
+                            f"（科目{getattr(basis, 'subject_code', '') or ''}）"
+                            f"{record['raw']}{record['unit']}"
+                        )
+                    pass_reason = (
+                        f"已公开分项{label}合计{_wan_display(subtotal)}万元"
+                        f"（纳入{len(included)}项）"
+                    )
+                    if basis_labels:
+                        pass_reason += (
+                            "；其中" + "、".join(basis_labels[:3])
+                            + "由同科目原表决算格证实单位"
+                        )
                 relation_receipt(
-                    self, doc, f"V33-251:{kind}:item_sum", [],
+                    self, doc, f"V33-251:{kind}:item_sum", unit_facts,
                     status="pass",
                     formula="sum(item declared amounts normalized by original unit) == stated section total (万元)",
-                    reason=None,
-                    reason_codes=[],
+                    reason=pass_reason,
+                    reason_codes=["source_table_unit_confirmed"] if unit_facts else [],
                     disclosure_sources=exception_evidence,
+                    calculation_evidence=calc_evidence,
                 )
                 continue
             unit_items = [record for record in included if record["unit"] != "万元"
@@ -2367,13 +2973,13 @@ class R33251_FunctionalDetailCompleteness(Rule):
                 page, text, s, e = _locate(record["pos"])
                 anchors.append({
                     "page": page, "amount": record["raw"], "unit": record["unit"],
-                    "value_wan": format(record["value_wan"], "f"),
+                    "value_wan": _wan_trim(record["value_wan"]),
                     "section": "支出决算具体情况", "span": text[s:e],
                 })
             parts = [
-                f"支出决算具体情况逐项列示的{label}合计{format(subtotal, 'f')}万元"
-                f"（纳入{len(included)}项），与{total_origin_label}{format(stated, 'f')}万元不一致，"
-                f"相差{format(abs(difference), 'f')}万元"
+                f"支出决算具体情况逐项列示的{label}合计{_wan_display(subtotal)}万元"
+                f"（纳入{len(included)}项），与{total_origin_label}{_wan_display(stated)}万元不一致，"
+                f"相差{_wan_display(abs(difference))}万元"
             ]
             conditional_assumed = conditional_included = conditional_delta = None
             if unit_items:
@@ -2387,13 +2993,13 @@ class R33251_FunctionalDetailCompleteness(Rule):
                 conditional_delta = conditional_assumed - conditional_included
                 parts.append(f"其中{len(unit_items)}项原文以{units}列示，已按原文单位折算为万元")
                 basis = (
-                    f"当前已纳入{format(conditional_included, 'f')}万元，"
-                    f"若按万元名义值替换为{format(conditional_assumed, 'f')}万元"
+                    f"当前已纳入{_wan_display(conditional_included)}万元，"
+                    f"若按万元名义值替换为{_wan_display(conditional_assumed)}万元"
                 )
                 if conditional_delta > 0:
                     parts.append(
                         f"条件性说明：若这些项按万元名义值计入，合计将增加"
-                        f"{format(conditional_delta, 'f')}万元（{basis}）；"
+                        f"{_wan_display(conditional_delta)}万元（{basis}）；"
                         "本规则不采用该假设，单位问题另行确认"
                     )
                 elif conditional_delta < 0:
@@ -2412,9 +3018,12 @@ class R33251_FunctionalDetailCompleteness(Rule):
             else:
                 parts.append("分项合计超出总额")
             message = "；".join(parts) + "。"
+            calc_evidence["outcome"] = "fail"
             receipt_codes = ["item_sum_mismatch"]
             if unit_items:
                 receipt_codes.append("source_unit_normalized")
+            if unit_facts:
+                receipt_codes.append("source_table_unit_confirmed")
             # 2A：差额被同源单位错精确解释时，下游不再产出独立正式问题；
             # 金额子检查仍为 executed，回执记录解释来源与剩余差额。
             explained = (
@@ -2435,24 +3044,27 @@ class R33251_FunctionalDetailCompleteness(Rule):
                     explained_by="unit_error",
                     residual_difference_wan=format(
                         max(abs(difference) - abs(conditional_delta), Decimal(0)), "f"),
-                    cascade_of=_runtime_defect_key(doc, anchor_page, f"{label}:{format(conditional_assumed, 'f')}"),
+                    cascade_of=_runtime_defect_key(doc, anchor_page, f"{label}:{_wan_display(conditional_assumed)}"),
+                    calculation_evidence=calc_evidence,
                 )
                 continue
             issues.append(issue_at(
                 self, message, anchor_page, anchor_text, anchor_s, anchor_e,
                 severity="warn", checklist_item=checklist,
-                included_items=[
-                    {**{k: v for k, v in record.items() if k != "value_wan"},
-                     "value_wan": format(record["value_wan"], "f")}
-                    for record in included
-                ],
-                not_included_items=not_included_items,
+                # R1（2026-11-20 独立复核）：失败分支也必须复用可序列化的
+                # 操作数证据。直接拷贝 record 会把运行期 FiscalFact
+                # （table_unit_basis）带进分析快照，dumps_canonical 拒绝入库，
+                # 差额报告因此无法发布。_operand_evidence 保留事实 ID、原表、
+                # 原句和页码，只把 FiscalFact 换成摘要。
+                included_items=[_operand_evidence(record) for record in included],
+                not_included_items=[_operand_evidence(record) for record in not_included_items],
                 unit_normalized_items=anchors,
                 disclosure_exceptions=exception_evidence,
-                stated_total_wan=format(stated, "f"),
-                included_subtotal_wan=format(subtotal, "f"),
-                difference_wan=format(difference, "f"),
+                stated_total_wan=_wan_display(stated),
+                included_subtotal_wan=_wan_display(subtotal),
+                difference_wan=_wan_display(difference),
                 completeness="complete",
+                calculation_evidence=calc_evidence,
                 # 两种口径属于同一原文节的整改事项，但各自算式和失败回执独立保留。
                 detail_section_anchor={
                     "page": anchor_page,
@@ -2465,13 +3077,14 @@ class R33251_FunctionalDetailCompleteness(Rule):
                    if conditional_delta is not None else {}),
             ))
             relation_receipt(
-                self, doc, f"V33-251:{kind}:item_sum", [],
+                self, doc, f"V33-251:{kind}:item_sum", unit_facts,
                 status="fail",
                 formula="sum(item declared amounts normalized by original unit) == stated section total (万元)",
                 reason=message,
                 reason_codes=receipt_codes,
                 disclosure_sources=exception_evidence,
                 amount_subcheck_status="executed",
+                calculation_evidence=calc_evidence,
             )
         issues.extend(self._coverage(doc, joined, items, _locate, listed_final))
         if unresolved:

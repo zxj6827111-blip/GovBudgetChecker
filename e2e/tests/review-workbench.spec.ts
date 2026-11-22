@@ -32,6 +32,8 @@ interface MockOptions {
   workflowUpdates: Array<Record<string, unknown>>;
   workflowIssuesState: Record<string, { issue_id: string; job_id: string; status: string; note?: string | null }>;
   ruleFindings?: Array<Record<string, unknown>>;
+  unfinishedChecks?: Array<Record<string, unknown>>;
+  unfinishedCheckGroups?: Array<Record<string, unknown>>;
 }
 
 function buildJobDetail(options: MockOptions) {
@@ -46,6 +48,9 @@ function buildJobDetail(options: MockOptions) {
     structured_report_id: "GBC-2026-0731-0187",
     stage_progress: { phase: "quality_gate", percent: 100 },
     stage_failed_at: null,
+    ...(options.unfinishedChecks ? { review_report: {
+      unfinished_checks: options.unfinishedChecks, unfinished_check_groups: options.unfinishedCheckGroups,
+    } } : {}),
     result: {
       rule_findings: options.ruleFindings ?? [
         {
@@ -239,6 +244,76 @@ async function openMoreTab(page: Page, tab: "corrections" | "metadata" | "stages
 }
 
 test.describe("Review workbench (Task 6)", () => {
+  test("核对直达入口可高亮同页原格并打开关联正式问题", async ({ page }) => {
+    await page.context().addCookies([sessionCookie]);
+    await installReviewWorkbenchMocks(page, {
+      reportYear: 2026, workflowUpdates: [], workflowIssuesState: {},
+      unfinishedChecks: [{
+        id: "table-map", record_type: "structured_review", title: "两列未能绑定",
+        message: "部分金额格没有确定列名。", page: 12,
+        cells: [{ page: 12, bbox: [100, 200, 130, 260] }, { page: 12, bbox: [132, 200, 180, 260] }],
+        root_issue_ids: ["FIN-1"],
+      }, {
+        id: "OBL-TXT-T5", record_type: "unfinished_check", title: "表文金额核对",
+        detail: "第 12 页「基本支出 76,300.00 万元」对应的表文关系未完成。",
+      }],
+      unfinishedCheckGroups: [{
+        id: "source-1", title: "本年支出子列未确认", page: 12, location_level: "exact",
+        table_name: "政府性基金预算财政拨款收入支出决算表", check_ids: ["table-map", "OBL-TXT-T5"],
+        evidence: [{ page: 12, bbox: [100, 200, 130, 260] }, { page: 12, bbox: [132, 200, 180, 260] }],
+      }],
+    });
+    await page.goto(`/review?job=${JOB_ID}&tab=checks`);
+    const checks = page.getByTestId("gbc-review-unfinished-checks");
+    await expect(checks).toBeVisible();
+    await expect(page.getByTestId("gbc-review-tab-checks")).toContainText("核对未完成 2");
+    await expect(checks.getByTestId("gbc-unfinished-summary")).toHaveText("1 处待核对 · 影响 2 项检查");
+    await checks.getByRole("button", { name: /定位第 12 页/ }).click();
+    await expect(page.getByTestId("gbc-review-related-highlight")).toHaveCount(2);
+    await checks.getByText("影响的 2 项检查").click();
+    await expect(checks.getByText("表文金额核对")).toBeVisible();
+    await checks.getByRole("button", { name: /查看关联问题 预算分项合计/ }).click();
+    await expect(page.getByRole("heading", { name: "预算分项合计与公开总额不一致" })).toBeVisible();
+    await page.getByRole("button", { name: /查看受影响的 2 项核对/ }).click();
+    await expect(checks).toBeVisible();
+  });
+
+  test("历史分析版本只读回看：显示版本横幅且禁用完成复核", async ({ page }) => {
+    await page.context().addCookies([sessionCookie]);
+    await installReviewWorkbenchMocks(page, {
+      reportYear: 2026, workflowUpdates: [], workflowIssuesState: {},
+    });
+    await page.goto(`/review?job=${JOB_ID}&analysis_revision=rev-20261119T112550-cc0db76d`);
+    const banner = page.getByTestId("gbc-review-history-banner");
+    await expect(banner).toBeVisible();
+    await expect(banner).toContainText("rev-20261119T112550-cc0db76d");
+    await expect(page.getByTestId("gbc-review-complete")).toBeDisabled();
+  });
+
+  test("新后端分组显示 1 处影响 2 项检查", async ({ page }) => {
+    await page.context().addCookies([sessionCookie]);
+    await installReviewWorkbenchMocks(page, {
+      reportYear: 2026, workflowUpdates: [], workflowIssuesState: {},
+      unfinishedChecks: [{
+        id: "OBL-A", record_type: "unfinished_check", title: "分项加总",
+        detail: "第 12 页分项加总未完成。",
+      }, {
+        id: "OBL-B", record_type: "unfinished_check", title: "表文金额",
+        detail: "第 12 页表文金额未完成。",
+      }],
+      unfinishedCheckGroups: [{
+        id: "source-1", title: "事业运行条目显式决算金额", page: 12,
+        location_level: "page", check_ids: ["OBL-A", "OBL-B"],
+        handling_mode: "manual_required", blocks_completion: true,
+        affected_check_count: 2, evidence: [],
+      }],
+    });
+    await page.goto(`/review?job=${JOB_ID}&tab=checks`);
+    await expect(page.getByTestId("gbc-unfinished-summary")).toHaveText(
+      "1 处需人工核对 · 影响 2 项检查（核对表态后才能完成复核）",
+    );
+  });
+
   test("核心闭环：确认移出待处理，自动接续证据，全部问题及刷新保留记录", async ({ page }) => {
     const workflowUpdates: Array<Record<string, unknown>> = [];
     const workflowIssuesState: MockOptions["workflowIssuesState"] = {};
@@ -870,5 +945,341 @@ test.describe("Review workbench (Task 6)", () => {
     await expect(page.getByTestId("gbc-review-not-ready")).toContainText("尚未分析完成");
     // 引导态提供返回路径，不允许是死胡同
     await expect(page.getByTestId("gbc-review-not-ready")).toContainText("前往处理队列");
+  });
+
+  test("P24 同页两科目未闭环项：按 group.related_issue_ids 各自绑定 207 类问题与 2080501 问题，不跨科目误跳", async ({
+    page,
+  }) => {
+    await page.context().addCookies([sessionCookie]);
+    await installReviewWorkbenchMocks(page, {
+      reportYear: 2023,
+      workflowUpdates: [],
+      workflowIssuesState: {},
+      ruleFindings: [
+        {
+          id: "issue-207",
+          rule_id: "V33-227",
+          severity: "medium",
+          title: "说明5功能分类类款项名称与T5不一致",
+          message: "说明5类级科目名称与T5不一致（207）：表格“文化旅游体育与传媒支出”，说明“文化体育与传媒支出”",
+          evidence_status: "verified",
+          location: {
+            page: 24,
+            pages: [16, 24],
+            actual_name: "文化体育与传媒支出",
+            table_refs: [{ page: 24, span: "5、文化体育与传媒支出（类）其他文化体育与传媒支出（款）\n文化产业发展专项支出（项）" }],
+          },
+        },
+        {
+          id: "issue-2080501",
+          rule_id: "V33-227",
+          severity: "medium",
+          title: "说明5功能分类类款项名称与T5不一致",
+          message: "说明5科目名称与T5不一致：归口管理的行政单位离退休",
+          evidence_status: "verified",
+          location: {
+            page: 24,
+            pages: [16, 24],
+            actual_name: "归口管理的行政单位离退休",
+            table_refs: [{ page: 24, span: "归口管理的行政单位离退休（项）" }],
+          },
+        },
+      ],
+      unfinishedChecks: [
+        {
+          id: "OBL-TXT-T5-culture",
+          record_type: "unfinished_check",
+          title: "说明5与T5表核对",
+          detail: "说明第24页「文化产业发展专项支出」找不到对应编码：类级名称不一致",
+          page: 24,
+        },
+        {
+          id: "OBL-TXT-T5-retire",
+          record_type: "unfinished_check",
+          title: "说明5与T5表核对",
+          detail: "说明第24页「归口管理的行政单位离退休」项名称不一致",
+          page: 24,
+        },
+      ],
+      unfinishedCheckGroups: [
+        {
+          id: "source-1",
+          title: "文化产业发展专项支出",
+          subject: "文化产业发展专项支出",
+          page: 24,
+          handling_mode: "manual_required",
+          blocks_completion: true,
+          check_ids: ["OBL-TXT-T5-culture"],
+          related_issue_ids: ["issue-207"],
+          evidence: [],
+        },
+        {
+          id: "source-2",
+          title: "归口管理的行政单位离退休",
+          subject: "归口管理的行政单位离退休",
+          page: 24,
+          handling_mode: "manual_required",
+          blocks_completion: true,
+          check_ids: ["OBL-TXT-T5-retire"],
+          related_issue_ids: ["issue-2080501"],
+          evidence: [],
+        },
+      ],
+    });
+
+    await page.goto(`/review?job=${JOB_ID}&tab=checks`);
+    const checks = page.getByTestId("gbc-review-unfinished-checks");
+    await expect(checks).toBeVisible();
+
+    const cultureGroup = checks.getByTestId("gbc-unfinished-group-source-1");
+    await expect(cultureGroup).toBeVisible();
+    const cultureBtn = cultureGroup.locator("button", { hasText: /去处理：文化体育与传媒支出/ });
+    await expect(cultureBtn).toBeVisible();
+    await cultureBtn.click();
+    await expect(page.getByTestId("gbc-review-issue-detail")).toHaveAttribute("data-detail-problem-id", "issue-207");
+
+    await page.getByTestId("gbc-review-tab-checks").click();
+    const retireGroup = checks.getByTestId("gbc-unfinished-group-source-2");
+    await retireGroup.locator("button").first().click();
+    const retireBtn = retireGroup.locator("button", { hasText: /去处理：归口管理的行政单位离退休/ });
+    await expect(retireBtn).toBeVisible();
+    await retireBtn.click();
+    await expect(page.getByTestId("gbc-review-issue-detail")).toHaveAttribute("data-detail-problem-id", "issue-2080501");
+  });
+
+  test("V33-227 问题卡直接区分支出后缀与实质错名，并可内联同步表态受影响的金额核对", async ({
+    page,
+  }) => {
+    await page.context().addCookies([sessionCookie]);
+    const decideBodies: Array<Record<string, unknown>> = [];
+    let currentDecision: string | null = null;
+    let currentNote: string | null = null;
+    let decisionRevision = 0;
+
+    const buildReviewPayload = () => {
+      const obligationItem = {
+        obligation_id: "OBL-TXT-T5",
+        group_id: "grp-txt-t5",
+        group_title: "一般公共预算支出决算说明与T5核对",
+        title: "说明5与T5表核对",
+        status: "insufficient_data",
+        reason: "code_name_conflict",
+        reason_label: "科目名称差异",
+        detail: "说明第24页「文化产业发展专项支出」1,544万元因上级类名缺少“旅游”二字未能自动核对。",
+        locations: [{ page: 24, label: "文化产业发展专项支出", bbox: [80, 320, 420, 360] }],
+        missing_operands: [{ source: "text", page: 24, row_key: "文化产业发展专项支出", column: "决算金额", role: "条目决算金额" }],
+        blocked_by: [],
+        decision: currentDecision,
+        decision_revision: decisionRevision || null,
+        decided_by: currentDecision ? "e2e-reviewer" : null,
+        decided_at: currentDecision ? "2026-11-21T20:00:00Z" : null,
+        note: currentNote,
+        evidence_reference: currentDecision ? "第 24 页（按系统定位核对）" : null,
+        scope_decisions: currentDecision
+          ? {
+              "grp:culture-24": {
+                decision: currentDecision,
+                decision_revision: decisionRevision,
+                note: currentNote,
+                decided_by: "e2e-reviewer",
+                decided_at: "2026-11-21T20:00:00Z",
+              },
+            }
+          : {},
+      };
+      return {
+        data: {
+          review_context: { available: true, slot_id: "slot-v33227" },
+          review: {
+            slot_id: "slot-v33227",
+            current_document_version_id: 201,
+            current_analysis: { job_uuid: JOB_ID, document_version_id: 201, analysis_basis_token: `${JOB_ID}:201`, completed: true },
+            current_session: {
+              review_session_id: "session-v33227",
+              slot_id: "slot-v33227",
+              document_version_id: 201,
+              analysis_job_uuid: JOB_ID,
+              analysis_basis_token: `${JOB_ID}:201`,
+              status: "in_progress",
+              started_by: "e2e-reviewer",
+            },
+            obligation_review: {
+              available: true,
+              items: [obligationItem],
+              cascaded: [],
+            },
+            history: [],
+            completion_gate: { can_complete: false, blockers: [] },
+          },
+        },
+      };
+    };
+
+    await page.route("**/api/**", async (route) => {
+      const request = route.request();
+      const method = request.method().toUpperCase();
+      const url = new URL(request.url());
+      const path = url.pathname;
+      const json = (body: unknown, status = 200) =>
+        route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+
+      if (path === "/api/auth/me") return json({ user: { username: "e2e-reviewer", is_admin: true } });
+      if (path === "/api/reviews") return json(buildReviewPayload());
+      if (path === "/api/reviews/slot-v33227/obligations/OBL-TXT-T5" && method === "PUT") {
+        const body = request.postDataJSON() as Record<string, unknown>;
+        decideBodies.push(body);
+        const rawDecision = String(body.decision ?? "verified_ok");
+        currentDecision = rawDecision === "pending" ? null : rawDecision;
+        currentNote = rawDecision === "pending" ? null : (typeof body.note === "string" ? body.note : null);
+        decisionRevision += 1;
+        return json({ status: "ok", decision: rawDecision, decision_revision: decisionRevision });
+      }
+      if (path === `/api/jobs/${JOB_ID}`) {
+        return json(buildJobDetail({
+          reportYear: 2023,
+          totalPages: 33,
+          workflowUpdates: [],
+          workflowIssuesState: {},
+          ruleFindings: [
+            {
+              id: "issue-201-suffix",
+              rule_id: "V33-227",
+              severity: "low",
+              title: "说明5功能分类类款项名称与T5不一致",
+              message: "十三、说明5类级科目名称与T5不一致（201）：表格“一般公共服务支出”，说明“一般公共服务”（名称多/少“支出/决算”等字；涉及说明第3、4项）",
+              evidence_status: "verified",
+              evidence: [{ page: 24, bbox: [80, 120, 420, 150], text: "3、一般公共服务（类）商贸事务（款）外资管理（项）。", verification_status: "verified" }],
+              location: { page: 24, pages: [16, 24], actual_name: "一般公共服务" },
+            },
+            {
+              id: "issue-207-culture",
+              rule_id: "V33-227",
+              severity: "medium",
+              title: "说明5功能分类类款项名称与T5不一致",
+              message: "十四、说明5类级科目名称与T5不一致（207）：表格“文化旅游体育与传媒支出”，说明“文化体育与传媒支出”（应以表格“文化旅游体育与传媒支出”为准）",
+              evidence_status: "verified",
+              evidence: [{ page: 24, bbox: [80, 320, 420, 360], text: "5、文化体育与传媒支出（类）其他文化体育与传媒支出（款）文化产业发展专项支出（项）", verification_status: "verified" }],
+              location: {
+                page: 24,
+                pages: [16, 24],
+                actual_name: "文化体育与传媒支出",
+                table_refs: [{ page: 24, span: "5、文化体育与传媒支出（类）其他文化体育与传媒支出（款）\n文化产业发展专项支出（项）" }],
+              },
+            },
+            {
+              id: "issue-20799-culture",
+              rule_id: "V33-227",
+              severity: "medium",
+              title: "说明5功能分类类款项名称与T5不一致",
+              message: "十五、说明5款级科目名称与T5不一致（207-99）：表格“其他文化旅游体育与传媒支出”，说明“其他文化体育与传媒支出”（应以表格“其他文化旅游体育与传媒支出”为准）",
+              evidence_status: "verified",
+              evidence: [{ page: 24, bbox: [80, 320, 420, 360], text: "5、文化体育与传媒支出（类）其他文化体育与传媒支出（款）文化产业发展专项支出（项）", verification_status: "verified" }],
+              location: {
+                page: 24,
+                pages: [16, 24],
+                actual_name: "其他文化体育与传媒支出",
+                table_refs: [{ page: 24, span: "5、文化体育与传媒支出（类）其他文化体育与传媒支出（款）\n文化产业发展专项支出（项）" }],
+              },
+            },
+          ],
+          unfinishedChecks: [
+            {
+              id: "OBL-TXT-T5",
+              record_type: "unfinished_check",
+              title: "说明5与T5表核对",
+              detail: "说明第24页「文化产业发展专项支出」1,544万元因上级类名缺少“旅游”二字未能自动核对。",
+              page: 24,
+            },
+          ],
+          unfinishedCheckGroups: [
+            {
+              id: "source-1",
+              title: "文化产业发展专项支出",
+              subject: "文化产业发展专项支出",
+              page: 24,
+              handling_mode: "manual_required",
+              blocks_completion: true,
+              decision_scope: "grp:culture-24",
+              blocking_obligation_ids: ["OBL-TXT-T5"],
+              check_ids: ["OBL-TXT-T5"],
+              related_issue_ids: ["issue-207-culture", "issue-20799-culture"],
+              plain_reason: "说明第24页「文化产业发展专项支出」1,544万元因上级类名缺少“旅游”二字未能自动核对。",
+              evidence: [{ page: 24, bbox: [80, 320, 420, 360] }],
+            },
+          ],
+        }));
+      }
+      if (path === `/api/jobs/${JOB_ID}/structured-ingest`) return json({ status: "done", review_item_count: 0, review_items: [] });
+      if (path === "/api/workflow") return json({ issues: {}, packages: [] });
+      if (path.startsWith("/api/files/")) {
+        return route.fulfill({
+          status: 200,
+          contentType: "image/svg+xml",
+          body: `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="1344"><rect width="100%" height="100%" fill="white"/></svg>`,
+        });
+      }
+      return json({});
+    });
+
+    await page.goto(`/review?job=${JOB_ID}`);
+    await expect(page.getByTestId("gbc-review-tab-checks")).toContainText("核对未完成 1");
+
+    // 1. 十三号（仅少“支出”）：直接亮明“仅文字规范 · 金额已自动核对”
+    await selectIssue(page, "issue-201-suffix");
+    await expect(page.getByTestId("gbc-review-amount-check-status")).toContainText("仅文字规范 · 金额已自动核对");
+    await expect(page.getByTestId("gbc-review-amount-check-status")).toContainText("无需人工补核金额");
+    await expect(page.getByTestId("gbc-review-linked-unfinished")).toHaveCount(0);
+
+    // 2. 十四号（207 类实质错名）：亮明“影响金额自动核对”、内联展开第 24 页「文化产业发展专项支出」并一次提交表态
+    await selectIssue(page, "issue-207-culture");
+    const statusBanner = page.getByTestId("gbc-review-amount-check-status");
+    await expect(statusBanner).toContainText("影响金额自动核对");
+    await expect(statusBanner).toContainText("尚未完成");
+    const linkedSection = page.getByTestId("gbc-review-linked-unfinished");
+    await expect(linkedSection).toContainText("有 1 项核对未完成");
+    await expect(linkedSection).toContainText("第 24 页 · 文化产业发展专项支出");
+    await expect(linkedSection).toContainText("1,544万元");
+
+    await linkedSection.getByTestId("gbc-inline-unfinished-decide-ok-source-1").click();
+    await page.getByTestId("gbc-review-obligation-note").fill("已对照第16页207表与第24页正文，1,544万元一致。");
+    await page.getByTestId("gbc-review-obligation-scope-confirm").check();
+    await page.getByTestId("gbc-review-obligation-save").click();
+
+    await expect(linkedSection).toContainText("已完成金额核对（核对无误）");
+    await expect(linkedSection).toContainText("已完成 1 项人工核对");
+    await expect(linkedSection).not.toContainText("核对未完成");
+    await expect(linkedSection).not.toContainText("尚未自动核对");
+    await expect(statusBanner).toContainText("已人工表态");
+    await expect(statusBanner).toContainText("核对无误");
+    await expect(statusBanner).not.toContainText("尚未完成");
+    await expect(page.getByTestId("gbc-review-tab-checks")).toContainText("核对未完成 0");
+
+    // 3. 切到共享同一 source-1 的十五号（207-99 款）：顶部与内联标题均应同步显示已完成人工核对，不再提示尚未完成
+    await selectIssue(page, "issue-20799-culture");
+    await expect(statusBanner).toContainText("已人工表态");
+    await expect(statusBanner).not.toContainText("尚未完成");
+    await expect(linkedSection).toContainText("已完成 1 项人工核对");
+    await expect(linkedSection).not.toContainText("核对未完成");
+
+    // 4. 在 207-99 卡内撤销表态后，计数与两张卡的提示均应同步恢复为“尚未完成 / 有 1 项核对未完成”
+    await linkedSection.getByTestId("gbc-inline-unfinished-undo-source-1").click();
+    await expect(page.getByTestId("gbc-review-tab-checks")).toContainText("核对未完成 1");
+    await expect(statusBanner).toContainText("影响金额自动核对");
+    await expect(statusBanner).toContainText("尚未完成");
+    await expect(linkedSection).toContainText("有 1 项核对未完成");
+    await selectIssue(page, "issue-207-culture");
+    await expect(statusBanner).toContainText("尚未完成");
+    await expect(linkedSection).toContainText("有 1 项核对未完成");
+
+    expect(decideBodies).toHaveLength(2);
+    expect(decideBodies[0]).toMatchObject({
+      decision: "verified_ok",
+      scope_confirmed: true,
+      scope_key: "grp:culture-24",
+    });
+    expect(decideBodies[1]).toMatchObject({
+      decision: "pending",
+      scope_key: "grp:culture-24",
+    });
   });
 });

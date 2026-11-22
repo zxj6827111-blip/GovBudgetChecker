@@ -37,15 +37,25 @@ class DatabaseConnection:
             raise ValueError("DATABASE_URL environment variable is required")
 
         cls._validate_database_url(url)
-        
+
         cls._schema = os.getenv("PG_SCHEMA", "public")
-        
+
+        # 池上限必须显著高于队列 worker 数：worker 之外，HTTP 轮询与队列发现
+        # 也在抢连接。写死 10 时 32 个 worker 批量重跑会集体 30 秒超时
+        # （2026-11-18 事故）。默认 20（远低于 PG max_connections=100），
+        # 可用 GOVBUDGET_POOL_MAX_SIZE 覆盖。
+        try:
+            pool_max_size = int(os.getenv("GOVBUDGET_POOL_MAX_SIZE") or 20)
+        except (TypeError, ValueError):
+            pool_max_size = 20
+        pool_max_size = max(4, pool_max_size)
+
         logger.info(f"Connecting to PostgreSQL with schema: {cls._schema}")
-        
+
         cls._pool = await asyncpg.create_pool(
             url,
             min_size=2,
-            max_size=10,
+            max_size=pool_max_size,
             command_timeout=180
         )
         
@@ -88,8 +98,8 @@ class DatabaseConnection:
     async def acquire(cls) -> asyncpg.Connection:
         """Acquire a connection from the pool with schema set.
 
-        池耗尽时必须可见地失败（D5）：池上限 10 而任务 worker 可能 ≥10，
-        无超时的 acquire 会无限挂起，把"数据库不可用"伪装成"任务卡死"。
+        池耗尽时必须可见地失败（D5）：池上限（GOVBUDGET_POOL_MAX_SIZE，
+        默认 20）必须显著高于任务 worker 数，否则 worker 会饿死 HTTP 与队列。
         超时由 GOVBUDGET_POOL_ACQUIRE_TIMEOUT 控制（秒，默认 30）。
         """
         pool = await cls.get_pool()

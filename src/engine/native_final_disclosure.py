@@ -39,12 +39,17 @@ _DASH_ITEM = re.compile(
 # IR-02：原件文本层会在"支出决算"与"为"之间夹游离逗号/换行
 # （自然资源研究院 P20"支出决算\n,\n为 2341.32 万元"），[，,]? 容忍该形态。
 class _BareClaimWithUnit:
-    """IR-02：裸金额声明继承条目首句单位后的声明视图（与正则 match 同接口）。"""
+    """IR-02：裸金额声明继承条目首句单位后的声明视图（与正则 match 同接口）。
 
-    __slots__ = ('_amount', '_unit', '_start', '_end')
+    ``inherited_unit``：R2——裸声明的单位是从表内依据/条目首句恢复的，
+    原文并没有写单位；原样保留这一事实，展示与回执不得写成“原文披露…万元”。
+    """
+
+    __slots__ = ('_amount', '_unit', '_start', '_end', 'inherited_unit')
 
     def __init__(self, amount, unit, start, end):
         self._amount, self._unit, self._start, self._end = amount, unit, start, end
+        self.inherited_unit = True
 
     def __getitem__(self, key):
         if key == 'amount':
@@ -60,6 +65,259 @@ class _BareClaimWithUnit:
         return self._end
 
 
+class _ManualClaim(_BareClaimWithUnit):
+    """R4：人工校正后的声明视图；原文披露仍由 evidence 保留。"""
+
+    def __init__(self, amount, unit, start, end):
+        super().__init__(amount, unit, start, end)
+        self.inherited_unit = False
+
+
+class _RecoveredClaim(_BareClaimWithUnit):
+    """R4（2026-11-21 第三轮）：解析失败条目经人工校正恢复出的声明视图。
+
+    金额词本身非法（错位逗号/双小数点）时原文声明本就不可解析，单项核对
+    此前只能停在"缺少可唯一核对的事实"。复核人显式输入合法读数并确认
+    单位后，单项与加总必须消费同一有效读数。声明区间取校正命中的原句
+    位置；inherited_unit 恒为 True——原句没有可解析的完整（金额+单位）
+    声明，展示按"原文未写单位/原文数字异常"如实留痕。
+    """
+
+
+def _manual_claim_for_unparsed_item(doc, text, item, stop):
+    """从人工校正台账为"显式决算金额无法解析"的条目恢复有效读数。
+
+    匹配语义与 :func:`_manual_correction_for_item` 一致：校正带页内位置
+    （pos）时按位置落条，原句起点必须落在本条目范围内；无位置时原句须
+    在条目窗口内唯一且整页唯一。命中后要求 raw_value 是合法金额、单位由
+    复核人显式确认（原句没有可继承的完整声明）；同版本同字段冲突仍不猜。
+    返回 ``(claim, manual)`` 或 ``None``（保持原缺数判定）。
+    """
+    corrections = getattr(doc, 'text_corrections', None) or []
+    if not corrections:
+        return None
+    item_start, item_stop = int(item.start()), int(stop)
+    if item_start >= item_stop or item_start >= len(text.positions):
+        return None
+    raw_start = text.positions[item_start]
+    item_page = next(
+        (index + 1 for index, (left, right) in enumerate(text.pages)
+         if left <= raw_start < right),
+        None,
+    )
+    if item_page is None:
+        return None
+
+    from bisect import bisect_left
+
+    def _compact_index(raw_offset):
+        return bisect_left(text.positions, raw_offset)
+
+    def _correction_compact_pos(correction):
+        pos = correction.get('pos')
+        if not isinstance(pos, int) or isinstance(pos, bool):
+            return None
+        page_left = text.pages[item_page - 1][0]
+        return _compact_index(page_left + int(pos))
+
+    matched = []
+    for correction in corrections:
+        try:
+            page = int(correction.get('page') or 0)
+        except (TypeError, ValueError):
+            continue
+        if page != item_page:
+            continue
+        needle = _compact_text(correction.get('span'))
+        correction_pos = _correction_compact_pos(correction)
+        if correction_pos is not None:
+            # 位置落条：原句起点必须落在本条目范围内，不得扩散到其他条目。
+            if not (item_start <= correction_pos < item_stop):
+                continue
+        elif needle:
+            found = text.compact.find(needle, item_start, item_stop)
+            if found < 0 or text.compact.find(needle, found + 1, item_stop) >= 0:
+                continue
+        else:
+            continue
+        matched.append(correction)
+    if not matched:
+        return None
+    fields = {}
+    for correction in matched:
+        field = str(correction.get('field') or '')
+        previous = fields.get(field)
+        if previous is not None and str(previous.get('value')) != str(correction.get('value')) \
+                and str(previous.get('analysis_basis_token') or '') == str(correction.get('analysis_basis_token') or ''):
+            # 同一分析版本内同字段互相冲突：不猜哪一个生效，保持待核。
+            return None
+        fields[field] = correction
+    if 'raw_value' not in fields or 'unit' not in fields:
+        # 原句没有可继承的完整声明：单位必须与读数一起由复核人显式确认。
+        return None
+    amount = str(fields['raw_value'].get('value') or '').strip().replace(',', '')
+    unit = str(fields['unit'].get('value') or '').strip()
+    if unit not in {'元', '万元', '亿元'} or _wan(amount, unit) is None:
+        return None
+    anchor = fields.get('raw_value') or fields.get('unit')
+    needle = _compact_text(anchor.get('span'))
+    correction_pos = _correction_compact_pos(anchor)
+    if correction_pos is None and needle:
+        found = text.compact.find(needle, item_start, item_stop)
+        if found >= 0 and text.compact.find(needle, found + 1, item_stop) < 0:
+            correction_pos = found
+    if correction_pos is None or correction_pos < 0:
+        return None
+    claim_start = max(item_start, correction_pos)
+    claim_end = (min(item_stop, correction_pos + len(needle)) if needle
+                 else min(item_stop, correction_pos + 1))
+    span_compact = text.compact[claim_start:claim_end]
+    token = re.search(r'\d[\d,.]*', span_compact)
+    original_amount = token.group(0) if token else ''
+    original_unit, original_unit_written = None, False
+    if token:
+        unit_after = re.match(r'(亿元|万元|元)', span_compact[token.end():])
+        if unit_after:
+            original_unit, original_unit_written = unit_after.group(1), True
+    last = matched[-1]
+    manual = {
+        'correction_id': last.get('correction_id'),
+        'correction_ids': [item.get('correction_id') for item in matched],
+        'actor': last.get('actor'),
+        'analysis_basis_token': last.get('analysis_basis_token'),
+        'reason': last.get('reason'),
+        'page': item_page,
+        'span': str(last.get('span') or ''),
+        'original_amount': original_amount,
+        'original_unit': original_unit,
+        'original_unit_written': original_unit_written,
+        'amount': amount,
+        'unit': unit,
+        'unit_field_applied': True,
+        'recovered_claim': True,
+        **({'subject_code': str(fields['subject_code'].get('value') or '').strip()}
+           if fields.get('subject_code') else {}),
+        **({'subject_name': str(fields['subject_name'].get('value') or '').strip()}
+           if fields.get('subject_name') else {}),
+    }
+    claim = _RecoveredClaim(original_amount or amount, unit, claim_start, claim_end)
+    return claim, manual
+
+
+def _compact_text(value):
+    return ''.join(unicodedata.normalize('NFKC', str(value or '')).split())
+
+
+def _manual_correction_for_item(doc, text, item, stop, claim):
+    """定位落在当前条目当前决算声明上的人工校正，并合成有效读数。
+
+    只按物理页 + 原句区间唯一命中；同页同句多处命中时保持待核，不能把
+    一处校正扩散到同页其他条目。同一目标分字段提交（raw_value + unit）
+    时合并。
+
+    R4（2026-11-20 复审）：多次改数按台账顺序生效——同一字段后值覆盖前值，
+    与 V33-251 分项加总的消费顺序一致；同批次（同一分析版本）同字段出现
+    互相冲突的取值仍不猜，保持待核。复核人指定的科目编码/名称一并返回，
+    单项核对与加总必须引用同一科目依据。
+    """
+    corrections = getattr(doc, 'text_corrections', None) or []
+    if not corrections:
+        return None
+    claim_refs = text.refs(claim.start(), claim.end(), '原文决算金额声明')
+    claim_page = claim_refs[0]['page'] if claim_refs else None
+    window_start = max(int(item.end()), int(claim.start()) - 160)
+    window_stop = min(int(stop), int(claim.end()) + 80)
+    # R5（2026-11-20 复审）：同页两笔原句（含同额）各改各的。
+    # - 校正带原句页内位置（pos）时按位置落条：原句起点落在本条目范围
+    #   （条目起点~下一条目起点）内才算本条的；
+    # - 无位置时要求原句在**整页**唯一（同形句多次出现时窗口内的局部唯一
+    #   不能证明是本条，不得把一处校正扩散到另一条）。
+    def _compact_index(raw_offset):
+        from bisect import bisect_left
+        return bisect_left(text.positions, raw_offset)
+
+    def _correction_compact_pos(correction):
+        pos = correction.get('pos')
+        if not isinstance(pos, int) or isinstance(pos, bool) or claim_page is None:
+            return None
+        page_left = text.pages[claim_page - 1][0] if 0 < claim_page <= len(text.pages) else None
+        if page_left is None:
+            return None
+        return _compact_index(page_left + int(pos))
+
+    matched = []
+    for correction in corrections:
+        try:
+            page = int(correction.get('page') or 0)
+        except (TypeError, ValueError):
+            continue
+        if claim_page is not None and page != claim_page:
+            continue
+        needle = _compact_text(correction.get('span'))
+        correction_pos = _correction_compact_pos(correction)
+        if correction_pos is not None:
+            if not (int(item.start()) <= correction_pos < int(stop)):
+                continue
+        elif needle:
+            found = text.compact.find(needle, window_start, window_stop)
+            if found < 0 or text.compact.find(needle, found + 1, window_stop) >= 0:
+                continue
+            page_left, page_right = text.pages[claim_page - 1]
+            page_compact_left, page_compact_right = (
+                _compact_index(page_left), _compact_index(page_right))
+            page_occurrences = text.compact.count(needle, page_compact_left, page_compact_right)
+            if page_occurrences > 1:
+                # 同页同形原句多处出现：没有位置证据时无法证明是本条，保持待核，
+                # 不能把一处校正同时落到两条。
+                continue
+        else:
+            continue
+        matched.append(correction)
+    if not matched:
+        return None
+    if len({str(item.get('target_id') or '') for item in matched}) > 1:
+        return None
+    fields = {}
+    for correction in matched:
+        field = str(correction.get('field') or '')
+        previous = fields.get(field)
+        if previous is not None and str(previous.get('value')) != str(correction.get('value')) \
+                and str(previous.get('analysis_basis_token') or '') == str(correction.get('analysis_basis_token') or ''):
+            # 同一分析版本内同字段互相冲突：不猜哪一个生效，保持待核。
+            return None
+        fields[field] = correction
+    amount = str(claim['amount'])
+    unit = claim['unit']
+    if 'raw_value' in fields:
+        amount = str(fields['raw_value'].get('value') or '').strip()
+    if 'unit' in fields:
+        unit = str(fields['unit'].get('value') or '').strip()
+    if unit not in {'元', '万元', '亿元'} or _wan(amount, unit) is None:
+        return None
+    last = matched[-1]
+    manual_subject = fields.get('subject_code')
+    manual_subject_name = fields.get('subject_name')
+    return {
+        'correction_id': last.get('correction_id'),
+        'correction_ids': [item.get('correction_id') for item in matched],
+        'actor': last.get('actor'),
+        'analysis_basis_token': last.get('analysis_basis_token'),
+        'reason': last.get('reason'),
+        'page': claim_page,
+        'span': str(last.get('span') or ''),
+        'original_amount': str(claim['amount']),
+        # R2：原文写明了单位才记 original_unit；裸声明（继承自表内依据）
+        # 的“单位”不是原文披露，展示为“原文未写单位”。
+        'original_unit': None if getattr(claim, 'inherited_unit', False) else claim['unit'],
+        'original_unit_written': not getattr(claim, 'inherited_unit', False),
+        'amount': amount,
+        'unit': unit,
+        'unit_field_applied': 'unit' in fields,
+        **({'subject_code': str(manual_subject.get('value') or '').strip()} if manual_subject else {}),
+        **({'subject_name': str(manual_subject_name.get('value') or '').strip()} if manual_subject_name else {}),
+    }
+
+
 def _dec(raw):
     from decimal import Decimal, InvalidOperation
 
@@ -71,6 +329,10 @@ def _dec(raw):
 
 _DECISION = re.compile(rf'(?:支出决算(?:数)?|决算支出(?:数)?|决算数)[，,]?(?:为|是)?'
                        rf'(?P<amount>{_NUMBER})[，,]?(?:为)?(?P<unit>{_UNIT})')
+_DECISION_WITHOUT_UNIT = re.compile(
+    rf'(?:支出决算(?:数)?|决算支出(?:数)?|决算数)[，,]?(?:为|是)?'
+    rf'(?P<amount>{_NUMBER})(?=[，,。；;]|$)(?![，,]\d)'
+)
 _GENERAL_AMOUNT = re.compile(
     rf'一般公共预算(?:财政拨款)?支出(?:决算(?:数)?)?(?:为|共计|合计为|是)?'
     rf'(?P<amount>{_NUMBER})(?P<unit>{_UNIT})')
@@ -93,7 +355,7 @@ _SELF_COUNT = re.compile(
     r'(?:开展|组织)?(?:项目支出)?绩效自评(?:项目)?(?:共|涉及)?)'
     r'(?P<count>\d+)个(?:项目)?')
 _RATING = re.compile(
-    r'(?:绩效)?评级为[“"「]?(?P<rating>不合格|合格|优|良)[”"」]?'
+    r'(?:绩效)?评级为[“"「]?(?P<rating>不合格|合格|优|良|中|低|差)[”"」]?'
     r'(?:的)?项目(?P<count>\d+)个')
 _RATING_DECLARATION = re.compile(
     r'(?:绩效)?评级为[“"「]?(?P<rating>[^“”"「」\d，,。；;()]{1,12}?)[”"」]?'
@@ -164,7 +426,7 @@ def _name(value):
     return re.sub(r'支出$', '', re.sub(r'\s+', '', str(value or '')))
 
 
-def _unresolved(rule, doc, key, reason, unresolved, facts=(), formula='text = table'):
+def _unresolved(rule, doc, key, reason, unresolved, facts=(), formula='text = table', *, disclosure_sources=()):
     unresolved.append(reason)
     codes = []
     if facts:
@@ -177,12 +439,18 @@ def _unresolved(rule, doc, key, reason, unresolved, facts=(), formula='text = ta
         text = str(reason or '')
         if '缺失或不唯一' in text:
             codes = ['operand_missing_or_ambiguous']
+        elif '矛盾' in text or '不一致' in text:
+            codes = ['code_name_conflict']
+        elif '无法在表内唯一确认' in text:
+            codes = ['text_binding_failed']
         elif '身份' in text or '识别状态' in text:
             codes = ['identity_unconfirmed']
         elif '未识别到' in text or '未找到' in text:
             codes = ['source_missing']
     receipt(rule, doc, key, list(facts), status='insufficient_data',
-            formula=formula, reason=reason, reason_codes=list(dict.fromkeys(codes)))
+            formula=formula, reason=reason,
+            disclosure_sources=list(disclosure_sources),
+            reason_codes=list(dict.fromkeys(codes)))
 
 
 def _source_refs(facts):
@@ -260,24 +528,153 @@ def _guard(doc, text, begin, start, end):
     return None
 
 
-def _amount(rule, doc, text, begin, end, amount, unit, fact, key, label, section, identity_sources=()):
+def _display_wan_diff(value) -> str:
+    """差额按金额格式显示：至少两位小数，存在更精细差异时保留有效位。"""
+    text = f"{abs(value):.4f}".rstrip("0")
+    if "." not in text or len(text.split(".", 1)[1]) < 2:
+        return f"{abs(value):.2f}"
+    return text
+
+
+def _accounting_unit_source(manual_correction):
+    if manual_correction.get('unit_field_applied'):
+        return '审核员明确确认'
+    if manual_correction.get('subject_basis'):
+        return '指定科目原表依据恢复'
+    return '原表同科目单位依据恢复'
+
+
+def _manual_disclosure_entry(manual_correction, unit, corrected_amount=None):
+    accounting_source = _accounting_unit_source(manual_correction)
+    return {
+        'page': manual_correction.get('page'),
+        'span': manual_correction.get('span'),
+        'role': '人工校正读数',
+        'correction_id': manual_correction.get('correction_id'),
+        'correction_ids': manual_correction.get('correction_ids'),
+        'actor': manual_correction.get('actor'),
+        'analysis_basis_token': manual_correction.get('analysis_basis_token'),
+        'original_amount': manual_correction.get('original_amount'),
+        'original_unit': manual_correction.get('original_unit'),
+        'original_unit_written': manual_correction.get('original_unit_written'),
+        'accounting_unit': unit,
+        'accounting_unit_source': accounting_source,
+        **({'subject_basis': manual_correction['subject_basis']} if manual_correction.get('subject_basis') else {}),
+        **({'subject_code': manual_correction['subject_code']} if manual_correction.get('subject_code') else {}),
+        **({'subject_name': manual_correction['subject_name']} if manual_correction.get('subject_name') else {}),
+        'corrected_amount': corrected_amount if corrected_amount is not None else manual_correction.get('amount'),
+        'corrected_unit': unit,
+        'reason': manual_correction.get('reason'),
+    }
+
+
+def _amount(rule, doc, text, begin, end, amount, unit, fact, key, label, section,
+            identity_sources=(), manual_correction=None, unit_inherited=False):
     declared = _wan(amount, unit)
     difference = declared - fact.normalized_value
     failed = amount_difference_exceeds_policy(difference)
     refs = text.refs(begin, end, '原文决算金额声明', unique_context=True)
+    file_hash = getattr(getattr(doc, 'fact_context', None), 'file_hash', None)
+    disclosure_sources = [dict(ref, file_hash=file_hash) for ref in refs]
+    unit_basis_extra = {}
+    if manual_correction:
+        # R4：校正值的依据、人员与分析版本随回执留痕；原文披露仍作为
+        # disclosure_sources 保留，不用校正值改写原句。
+        # R2：原文单位与核算单位分开——原文没写单位时如实标注“未写单位”，
+        # 核算单位单独给出并注明来源（审核员确认 or 原表依据恢复）。
+        accounting_source = _accounting_unit_source(manual_correction)
+        disclosure_sources.append(_manual_disclosure_entry(manual_correction, unit, corrected_amount=amount))
+        unit_basis_extra = {
+            'original_amount': manual_correction.get('original_amount'),
+            'original_unit': manual_correction.get('original_unit'),
+            'original_unit_written': manual_correction.get('original_unit_written'),
+            'accounting_unit': unit,
+            'accounting_unit_source': accounting_source,
+        }
+    elif unit_inherited:
+        basis_refs = _source_refs([fact])
+        basis_page = next((ref['page'] for ref in basis_refs if ref.get('page')), None)
+        basis_quote = next((ref['span'] for ref in basis_refs if ref.get('span')), None)
+        accounting_source = '原表同科目单位依据恢复'
+        disclosure_sources.append({
+            'page': basis_page,
+            'span': basis_quote,
+            'role': '同科目原表单位依据',
+            'original_amount': amount,
+            'original_unit': None,
+            'original_unit_written': False,
+            'accounting_unit': unit,
+            'accounting_unit_source': accounting_source,
+            'subject_basis': {
+                'subject_code': fact.subject_code,
+                'subject_name': fact.subject_name,
+                'table_amount_wan': str(fact.normalized_value),
+                'page': basis_page,
+            },
+            'reason': '原文未写单位，按同科目原表依据恢复核算单位',
+        })
+        unit_basis_extra = {
+            'original_amount': amount,
+            'original_unit': None,
+            'original_unit_written': False,
+            'accounting_unit': unit,
+            'accounting_unit_source': accounting_source,
+        }
+    formula = ('manual corrected narrative amount == current table amount (万元)'
+               if manual_correction else
+               'explicit narrative amount == current table amount (万元)')
     ids, evidence = receipt(rule, doc, key, [fact], status='fail' if failed else 'pass',
-            formula='explicit narrative amount == current table amount (万元)',
-            disclosure_sources=[dict(ref, file_hash=doc.fact_context.file_hash) for ref in refs]
-                               + list(identity_sources))
+            formula=formula,
+            disclosure_sources=disclosure_sources + list(identity_sources))
     if not failed:
         return []
     original = str(fact.raw_value or '').replace(',', '').replace('，', '').strip()
     original = re.sub(r'(?:亿元|万元|元)$', '', original)
     unit_error = (unit != fact.unit and re.fullmatch(_NUMBER, original or '')
                   and Decimal(original) == Decimal(amount.replace(',', '')))
-    message = (f'{label}金额单位口径错误：' if unit_error else f'{label}表文金额不一致：')
-    message += (f'原文{amount}{unit}折合{declared}万元，表内{fact.normalized_value:.2f}万元，'
-                f'相差{abs(difference):.4f}万元。')
+    if manual_correction:
+        message = f'{label}按人工校正读数核对：校正值{amount}{unit}折合{declared}万元，'
+        message += (f'表内{fact.normalized_value:.2f}万元，'
+                    f'相差{_display_wan_diff(difference)}万元。')
+    else:
+        message = (f'{label}金额单位口径错误：' if unit_error else f'{label}表文金额不一致：')
+        if unit_inherited:
+            # R2（2026-11-21 第三轮复审）：裸声明（原句漏写单位，单位继承自
+            # 条目/表内依据）不得写成“原文披露…万元”；原文披露、核算单位与
+            # 依据分开陈述，差额按方向表述。
+            basis_refs = _source_refs([fact])
+            basis_page = next((ref['page'] for ref in basis_refs if ref.get('page')), None)
+            direction = '多' if difference > 0 else '少'
+            message += (
+                f'原文披露{amount}（原文未写单位），'
+                f'核算单位{unit}（依据：第{basis_page or "?"}页科目{fact.subject_code}'
+                f'“{fact.subject_name}”原表），'
+                f'表内{fact.normalized_value:.2f}万元，'
+                f'正文{direction}{_display_wan_diff(difference)}万元。'
+            )
+        else:
+            message += f'原文{amount}{unit}折合{declared}万元，'
+            message += (f'表内{fact.normalized_value:.2f}万元，'
+                        f'相差{_display_wan_diff(difference)}万元。')
+    if manual_correction:
+        # R2：原文没写单位时不得写成“原文披露…万元”；核算单位与来源单独展示。
+        original_part = (
+            f'原文披露{manual_correction.get("original_amount")}'
+            f'（原文未写单位）'
+            if not manual_correction.get('original_unit_written')
+            else f'原文披露{manual_correction.get("original_amount")}{manual_correction.get("original_unit") or ""}'
+        )
+        accounting_source = _accounting_unit_source(manual_correction)
+        subject_part = (
+            f'，科目依据{manual_correction["subject_basis"].get("subject_code")}'
+            f'“{manual_correction["subject_basis"].get("subject_name")}”'
+            if manual_correction.get('subject_basis') else ''
+        )
+        message += (
+            f'（{original_part}，核算单位{unit}（来源：{accounting_source}）'
+            f'{subject_part}，校正记录'
+            f'{manual_correction.get("correction_id") or ""}）'
+        )
     from .native_empty_operands import NativeBlankTerm
     if isinstance(fact, NativeBlankTerm):
         message += '表内对应原件格经认证为空白，按已确认约定作为0参与核对。'
@@ -287,7 +684,9 @@ def _amount(rule, doc, text, begin, end, amount, unit, fact, key, label, section
                          table_amount_wan=str(fact.normalized_value),
                          declared_unit=unit, difference_wan=str(difference),
                          tolerance_wan=str(AMOUNT_TOLERANCE_WAN), unit_magnitude_error=bool(unit_error),
-                         portable_rule_id='R001' if unit_error else 'D-005')
+                         portable_rule_id='R001' if unit_error else 'D-005',
+                         **unit_basis_extra,
+                         **({'manual_correction': manual_correction} if manual_correction else {}))
     return [rule._issue(message, location, 'error',
                         evidence_text=_quote(location),
                         check_relation_id=f'{rule.code}:{key}', fact_ids=ids,
@@ -1607,6 +2006,85 @@ def _zero_item_parent_reconciles(doc, facts, item) -> bool:
     return level in {"ok", "rounding_hint", "within_policy_tolerance"}
 
 
+def decision_unit_from_table(doc, fact, amount, declared_unit):
+    """只恢复有原件证据且名义金额相同的决算单位。"""
+    if fact is None or fact.unit not in ('元', '万元', '亿元') or fact.unit == declared_unit:
+        return None
+    value = _dec(amount)
+    if not value or _wan(amount, fact.unit) != fact.normalized_value:
+        return None
+    original = unicodedata.normalize('NFKC', str(fact.raw_value or ''))
+    original = re.sub(r'(?:亿元|万元|元)$', '', re.sub(r'\s+', '', original))
+    if _dec(original) != value:
+        return None
+    refs = (fact.extra_dims or {}).get('evidence_refs') or []
+    return fact if _cell_refs_on_current_original(doc, refs) else None
+
+
+def detail_decision_unit_from_table(doc, facts, heading, amount, declared_unit):
+    """科目身份先由完整类款项名称解析，金额相同只用于验证单位。"""
+    text = _Text.from_pages([heading])
+    item = _ITEM.search(text.compact) or _DASH_ITEM.search(text.compact)
+    if item is None or not facts:
+        return None
+    tail = len(text.compact)
+    if (_guard(doc, text, 0, item.start(), item.end())
+            or _guard(doc, text, item.end(), tail, tail)):
+        return None
+    fact, error = _hierarchy_fact(doc, facts, item)
+    return None if error else decision_unit_from_table(doc, fact, amount, declared_unit)
+
+
+def unit_basis_by_subject_code(doc, facts, subject_code):
+    """复核人确认科目编码后，按该编码取唯一决算行的单位依据。
+
+    只接受同表、同年度/主体/资金口径/决算阶段且编码唯一的行；同码多行不猜。
+    """
+    from .fact_context import _canonical_budget_stage
+
+    code = str(subject_code or "").strip()
+    if not re.fullmatch(r"\d{3,7}", code):
+        return None
+    matches = [
+        fact for fact in facts
+        if fact.indicator == 'total_actual'
+        and str(fact.subject_code) == code
+        and _canonical_budget_stage(fact.budget_stage) == '决算'
+    ]
+    if len(matches) != 1:
+        return None
+    fact = matches[0]
+    if fact.unit not in ('元', '万元', '亿元'):
+        return None
+    refs = (fact.extra_dims or {}).get('evidence_refs') or []
+    return fact if _cell_refs_on_current_original(doc, refs) else None
+
+
+def detail_unit_basis_from_table(doc, facts, heading):
+    """按科目身份恢复单位依据，不要求正文金额与表内金额相同。
+
+    2026-11-19 四类边界：漏单位时先以主体、年度、资金口径、预算/决算阶段、
+    科目层级定位原表，再核验正文数字。金额是否相同是**核算结果**，不能反过来
+    决定单位能否确认；否则正文数字写错时会被当成“无单位依据”而掩盖差额。
+    只用于单位恢复，不用于金额相等性判断。
+    """
+    text = _Text.from_pages([heading])
+    item = _ITEM.search(text.compact) or _DASH_ITEM.search(text.compact)
+    if item is None or not facts:
+        return None
+    tail = len(text.compact)
+    if (_guard(doc, text, 0, item.start(), item.end())
+            or _guard(doc, text, item.end(), tail, tail)):
+        return None
+    fact, error = _hierarchy_fact(doc, facts, item)
+    if error or fact is None:
+        return None
+    if fact.unit not in ('元', '万元', '亿元'):
+        return None
+    refs = (fact.extra_dims or {}).get('evidence_refs') or []
+    return fact if _cell_refs_on_current_original(doc, refs) else None
+
+
 def check_function_disclosures(rule, doc):
     """FIN_05 合计、类级结构及每个类款项显式决算金额和单位。"""
     text, ranges = _general_ranges(doc)
@@ -1795,6 +2273,20 @@ def check_function_disclosures(rule, doc):
         # prefix can introduce a foreign owner or year for this item.
         error = error or _guard(doc, text, begin, item.start(), item.start())
         if not claims:
+            bare_claims = list(_DECISION_WITHOUT_UNIT.finditer(text.compact, item.end(), stop))
+            if len(bare_claims) == 1 and not error:
+                bare_claim = bare_claims[0]
+                basis = decision_unit_from_table(doc, fact, bare_claim['amount'], None)
+                if basis is None and fact is not None and fact.unit in ('元', '万元', '亿元'):
+                    # 四类边界：科目身份唯一且原件证据可认证时，单位依据成立；
+                    # 正文金额与表内不同是核算结果，不能用“金额不等”拒绝比数。
+                    refs = (fact.extra_dims or {}).get('evidence_refs') or []
+                    if _cell_refs_on_current_original(doc, refs):
+                        basis = fact
+                if basis is not None:
+                    claims = [_BareClaimWithUnit(bare_claim['amount'], basis.unit,
+                                                bare_claim.start(), bare_claim.end())]
+        if not claims:
             # IR-02（Codex 独立核验 2026-11-10）：同条目唯一单位继承——
             # 显式决算声明漏写单位（宜川 P29"支出决算为4.19。"，同条目首句
             # 已有"4.19 万元"）时，裸声明金额与条目首句带单位金额一致即按该
@@ -1818,6 +2310,7 @@ def check_function_disclosures(rule, doc):
                             bare_claims[0].start(), bare_claims[0].end())]
                 except (ValueError, ArithmeticError):
                     pass
+        recovered = None
         if len(claims) != 1:
             bad_unit_re = re.compile(
                 rf'(?:支出决算(?:数)?|决算数)[，,]?(?:为|是)?(?P<amount>{_NUMBER})(?P<bad_unit>万万元|亿亿元|元元|万元万)'
@@ -1853,13 +2346,18 @@ def check_function_disclosures(rule, doc):
                                  role=f'{item["xiang"]}条目决算金额单位错误',
                                  sub_check_id=key)
             else:
-                decision_error = f'{item["xiang"]}条目显式决算金额缺失或不唯一，不能用预算金额替代'
-                error = error or decision_error
-                # DH-02：说明条目内无法唯一确定显式决算金额；位置落在条目原文页。
-                _record_text_gap(doc, [decision_error, error], item,
-                                 codes=['operand_missing'],
-                                 role=f'{item["xiang"]}条目显式决算金额',
-                                 sub_check_id=key)
+                # R4（2026-11-21 第三轮复核）：显式读数人工校正可以驱动原解析
+                # 失败的单项完成核对——复核人输入合法读数并确认单位后，单项
+                # 与分项加总消费同一有效读数；未命中时保留原缺数判定。
+                recovered = _manual_claim_for_unparsed_item(doc, text, item, stop)
+                if recovered is None:
+                    decision_error = f'{item["xiang"]}条目显式决算金额缺失或不唯一，不能用预算金额替代'
+                    error = error or decision_error
+                    # DH-02：说明条目内无法唯一确定显式决算金额；位置落在条目原文页。
+                    _record_text_gap(doc, [decision_error, error], item,
+                                     codes=['operand_missing'],
+                                     role=f'{item["xiang"]}条目显式决算金额',
+                                     sub_check_id=key)
         if error:
             # 零额项被表内省略：说明明确写 0，且父级款合计 = 表内已列项之和。
             # 这不是“找不到科目”的取数不足，而是零值行未列示；不弹补核。
@@ -1881,9 +2379,91 @@ def check_function_disclosures(rule, doc):
                 continue
             _unresolved(rule, doc, key, error, unresolved, [fact] if fact else [])
         else:
-            claim = claims[0]
-            issues.extend(_amount(rule, doc, text, item.start(), claim.end(), claim['amount'],
-                          claim['unit'], fact, key, item['xiang'], title, identity_sources=aliases))
+            if recovered is not None:
+                claim, manual = recovered
+            else:
+                claim = claims[0]
+                # R4（2026-11-20 独立复核）：V33-222 单项表文核对必须与 V33-251
+                # 分项加总消费同一有效读数。人工校正只改变核算读数，原文披露
+                # 作为独立证据保留；校正命中不唯一时退回原文读数并保持待核。
+                manual = _manual_correction_for_item(doc, text, item, stop, claim)
+            effective = (
+                _ManualClaim(manual['amount'], manual['unit'], claim.start(), claim.end())
+                if manual else claim
+            )
+            comparison_fact = fact
+            if manual and (manual.get('subject_code') or manual.get('subject_name')):
+                # R4-A：复核人把正文条目指定到另一科目行（如同名 2160250→2011350）。
+                # 单项与加总必须引用同一科目依据；指定无法唯一落表或与所给名称
+                # 矛盾时，两条检查一致保持待核，不能回退原行判“通过”。
+                _normalize_subject = lambda value: re.sub(r'\s+|支出$', '', str(value or ''))
+                manual_refs = text.refs(item.start(), effective.end(), '原文决算金额声明', unique_context=True)
+                file_hash = getattr(getattr(doc, 'fact_context', None), 'file_hash', None)
+                manual_disclosure_sources = [
+                    *[dict(ref, file_hash=file_hash) for ref in manual_refs],
+                    _manual_disclosure_entry(manual, effective['unit']),
+                    *list(aliases),
+                ]
+                unresolved_reason = None
+                conflict_code = 'code_name_conflict'
+                if manual.get('subject_code'):
+                    designated = unit_basis_by_subject_code(doc, facts, manual['subject_code'])
+                    if designated is None:
+                        conflict_code = 'text_binding_failed'
+                        unresolved_reason = (
+                            f'复核人指定科目{manual["subject_code"]}无法在表内唯一确认，单项核对保持待核'
+                        )
+                    elif manual.get('subject_name') and _normalize_subject(
+                            designated.subject_name) != _normalize_subject(manual['subject_name']):
+                        # R4（2026-11-21 第三轮复核）：编码与名称矛盾时把矛盾本身写进
+                        # 待核原因，与分项加总的未决口径一致。
+                        unresolved_reason = (
+                            f'复核人指定科目{manual["subject_code"]}名称'
+                            f'“{manual["subject_name"]}”与表内该编码科目'
+                            f'“{designated.subject_name}”矛盾，科目身份未决，单项核对保持待核'
+                        )
+                else:
+                    designated = None
+                    if fact is None or _normalize_subject(fact.subject_name) != _normalize_subject(manual['subject_name']):
+                        table_name = getattr(fact, 'subject_name', None) or '未识别'
+                        unresolved_reason = (
+                            f'复核人指定科目名称“{manual["subject_name"]}”与表内对应科目'
+                            f'“{table_name}”不一致，科目身份未决，单项核对保持待核'
+                        )
+                if unresolved_reason is not None:
+                    _record_text_gap(
+                        doc, unresolved_reason, item,
+                        codes=[conflict_code],
+                        role=f'{item["xiang"]}条目指定科目身份',
+                        sub_check_id=key,
+                    )
+                    _unresolved(
+                        rule, doc, key, unresolved_reason,
+                        unresolved, [fact] if fact else [],
+                        formula='manual subject designation unresolved',
+                        disclosure_sources=manual_disclosure_sources,
+                    )
+                    continue
+                if designated is not None:
+                    comparison_fact = designated
+                    manual['subject_basis'] = {
+                        'subject_code': designated.subject_code,
+                        'subject_name': designated.subject_name,
+                        'table_amount_wan': str(designated.normalized_value),
+                    }
+                    if not manual.get('unit_field_applied') and getattr(claim, 'inherited_unit', False):
+                        # 正文未写单位且复核人未确认单位：单位依据跟随指定科目行恢复。
+                        if designated.unit in ('元', '万元', '亿元'):
+                            manual['unit'] = designated.unit
+                            effective = _ManualClaim(manual['amount'], manual['unit'], claim.start(), claim.end())
+            issues.extend(_amount(rule, doc, text, item.start(), effective.end(),
+                          effective['amount'], effective['unit'], comparison_fact, key,
+                          item['xiang'], title, identity_sources=aliases,
+                          manual_correction=manual,
+                          unit_inherited=(
+                              manual is None
+                              and getattr(claim, 'inherited_unit', False)
+                          )))
     return finish(rule, issues, unresolved)
 
 
@@ -1944,7 +2524,7 @@ def _amount_from_derived(rule, doc, text, begin, end, amount, unit, derived, key
                          derived_total_from=derived_from, derived_total_note=note)
     message = (f'{label}表文金额不一致：原文{amount}{unit}折合{declared}万元，'
                f'表内{basis}{value:.2f}万元（{note}），'
-               f'相差{abs(difference):.4f}万元。')
+               f'相差{_display_wan_diff(difference)}万元。')
     return [rule._issue(message, location, 'error',
                         evidence_text=_quote(location),
                         check_relation_id=f'{rule.code}:{key}', fact_ids=ids,
@@ -2355,7 +2935,12 @@ def check_performance_counts(rule, doc):
                 reason = '评级分项数量年度、主体或统计范围与本次自评不一致'
             parts = {claim['rating']: int(claim['count']) for claim in ratings}
             declared, computed = int(total['count']), sum(parts.values())
-            complete = set(parts) == {'优', '良', '合格', '不合格'}
+            # 标准评级体系有两套：优/良/合格/不合格，与优/良/中/低(差)。两套的档位
+            # 不互斥（“合格”与“中”不能放进同一组加总），混用时不能认定数量闭合。
+            if reason is None and set(parts) & {'合格', '不合格'} and set(parts) & {'中', '低', '差'}:
+                reason = '评级类别混用了两套评级体系，数量不能唯一绑定'
+            complete = set(parts) in ({'优', '良', '合格', '不合格'}, {'优', '良', '中', '差'},
+                                      {'优', '良', '中', '低'}, {'优', '良', '中', '低', '差'})
             cancelled = list(_CANCELLED_PROJECTS.finditer(text.compact, total.end(), group_end))
             cancelled_count = 0
             evidence_end = ratings[-1].end()

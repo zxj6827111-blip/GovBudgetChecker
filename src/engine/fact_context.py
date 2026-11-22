@@ -1388,6 +1388,7 @@ def make_fact_receipt(
     residual_difference_wan: Optional[str] = None,
     cascade_of: Optional[str] = None,
     evidence_nature: Optional[str] = None,
+    calculation_evidence: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """构造一条关系级 CheckReceipt（dict 形态，规则直接写入 doc.fact_receipts）。
 
@@ -1462,5 +1463,6 @@ def make_fact_receipt(
         residual_difference_wan=residual_difference_wan,
         cascade_of=cascade_of,
         evidence_nature=evidence_nature,
+        calculation_evidence=dict(calculation_evidence or {}),
     )
     return receipt.to_dict()

@@ -443,7 +443,11 @@ def _issue_to_dict(issue: Any, idx: int, doc: Any = None) -> Dict[str, Any]:
     if page is not None and _normalize_page({"page": location.get("page")}) is None:
         # 只在统一页字段缺失时补写主页；原始跨页集合不被覆盖。
         location["page"] = page
-    title = _infer_title(rule_code, message)
+    # 规则可在 location.display_title 固定展示标题；否则从消息推断。
+    # 关联核算说明追加到 message 后，不能让标题被说明截断。
+    title = str(location.get("display_title") or "").strip() or _infer_title(
+        rule_code, message
+    )
     created_at = int(time.time())
 
     evidence = [dict(ev) for ev in evidence_list if isinstance(ev, dict)]
@@ -575,6 +579,18 @@ def build_issues_payload(
     fact_receipts = list(getattr(doc, "fact_receipts", None) or [])
     if fact_receipts:
         payload["fact_receipts"] = fact_receipts
+    # 正文金额校正是否真正被规则消费，必须跨进程回传；父进程的 doc 不一定是
+    # 规则执行时的同一对象。
+    applied_text_corrections = list(
+        getattr(doc, "applied_text_correction_ids", None) or []
+    )
+    if applied_text_corrections:
+        payload["applied_text_correction_ids"] = applied_text_corrections
+    unapplied_text_corrections = list(
+        getattr(doc, "unapplied_text_corrections", None) or []
+    )
+    if unapplied_text_corrections:
+        payload["unapplied_text_corrections"] = unapplied_text_corrections
     # IR-01：交付抑制台账随 payload 返回（规则→问题/合法处理决定可对账）
     suppressions = list(getattr(doc, "delivery_suppression_ledger", None) or [])
     if suppressions:

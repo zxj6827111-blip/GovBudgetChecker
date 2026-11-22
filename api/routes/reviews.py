@@ -322,6 +322,7 @@ async def decide_obligation(
                 job_uuid=candidate,
                 analysis_basis_token=payload.analysis_basis_token,
                 scope_confirmed=payload.scope_confirmed,
+                scope_key=payload.scope_key,
             )
         )
     except review_lifecycle_service.ReviewLifecycleError as exc:

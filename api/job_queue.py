@@ -263,7 +263,12 @@ class DurableJobQueue:
         claim_path = job_dir / _CLAIM_FILENAME
         token = f"{self._instance_id}-{secrets.token_hex(8)}"
         payload = json.dumps(
-            {"token": token, "worker_id": self._instance_id, "ts": time.time()},
+            {
+                "token": token,
+                "worker_id": self._instance_id,
+                "pid": os.getpid(),
+                "ts": time.time(),
+            },
             ensure_ascii=False,
         )
         for _ in range(2):
@@ -276,7 +281,7 @@ class DurableJobQueue:
                     age = time.time() - claim_path.stat().st_mtime
                 except FileNotFoundError:
                     continue
-                if age <= self._claim_ttl_seconds:
+                if age <= self._claim_ttl_seconds and not self._claim_owner_gone(claim_path):
                     return None
                 try:
                     claim_path.unlink()
@@ -285,6 +290,45 @@ class DurableJobQueue:
                 except OSError:
                     return None
         return None
+
+    def _claim_owner_gone(self, claim_path: Path) -> bool:
+        """SIGKILL 后残留的僵尸锁：属主进程已退出就立即回收，不等 TTL。
+
+        看门狗强杀后任务锁留在盘上，旧逻辑要干等 900 秒才过期，重启的队列
+        对这批 queued 任务静默跳过，形成"干等 15 分钟→集中涌入→再次强杀"
+        的死循环（2026-11-18 事故）。判定依据：锁里记录的属主 PID 已不存在。
+        PID 复用等无法确认属主死亡的情形一律视为活着，回退 TTL 过期路径。
+        """
+        claim = runtime.read_json_file(claim_path, default={})
+        raw_pid = claim.get("pid")
+        if isinstance(raw_pid, int) and raw_pid > 0:
+            pid: Optional[int] = raw_pid
+        elif isinstance(raw_pid, str) and raw_pid.isdigit():
+            pid = int(raw_pid)
+        else:
+            # 兼容未记录 pid 的旧锁：worker_id 形如 "PID-hex"，前缀就是属主 PID。
+            worker_id = str(claim.get("worker_id") or "")
+            head = worker_id.split("-", 1)[0]
+            pid = int(head) if head.isdigit() else None
+        if pid is None:
+            return False
+        if pid == os.getpid():
+            # 本进程内其他 worker 持有（role=all 单进程部署）：活性由其协程保证。
+            return False
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            logger.warning(
+                "Reclaiming stale claim for job %s: owner pid %d no longer exists",
+                claim_path.parent.name,
+                pid,
+            )
+            return True
+        except PermissionError:
+            return False
+        except OSError:
+            return False
+        return False
 
     async def _claim_heartbeat(self, job_dir: Path, token: str) -> None:
         interval = max(5.0, min(30.0, self._claim_ttl_seconds / 3.0))

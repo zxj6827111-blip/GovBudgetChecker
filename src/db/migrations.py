@@ -1837,6 +1837,17 @@ MIGRATIONS.append({
     ],
 })
 
+MIGRATIONS.append({
+    "id": "2026-11-20_0046_obligation_decision_scope",
+    "description": "人工补核决定按原文位置/科目范围分别表态（同一义务多处阻塞不再一处放行全部）",
+    "sql": [
+        "ALTER TABLE review_obligation_decisions ADD COLUMN IF NOT EXISTS scope_key TEXT NOT NULL DEFAULT ''",
+        "DROP INDEX IF EXISTS uq_review_obligation_decisions_scope",
+        """CREATE UNIQUE INDEX IF NOT EXISTS uq_review_obligation_decisions_scoped_scope
+           ON review_obligation_decisions (review_session_id, obligation_id, scope_key)""",
+    ],
+})
+
 
 async def ensure_migrations_table(conn: asyncpg.Connection, schema: str):
     """Create the schema_migrations tracking table if not exists.

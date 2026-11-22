@@ -113,7 +113,7 @@ def order_and_number_issues(doc, issues):
 import logging
 
 from dataclasses import dataclass, field
-from typing import FrozenSet, List, Dict, Any, Optional, Sequence, Set, Tuple, TypedDict
+from typing import FrozenSet, List, Dict, Any, Mapping, Optional, Sequence, Set, Tuple, TypedDict
 
 import os
 import re
@@ -205,6 +205,9 @@ class Document:
     # ZC-03（AC-04）：规则在执行中写下的关系级子检查回执
     # （CheckReceipt.to_dict() 形态），由 build_issues_payload 收集上报。
     fact_receipts: List[Dict[str, Any]] = field(default_factory=list)
+    # 2026-11-19：正文金额人工校正（text_statement）。规则按物理页 + 原文区间
+    # 匹配后使用校正值重算；校正本身不改变原 PDF，材料缺陷仍照常报告。
+    text_corrections: List[Dict[str, Any]] = field(default_factory=list)
 
 
 # ---------- 工具 ----------
@@ -975,6 +978,7 @@ def _v33_relation_receipt(
     residual_difference_wan: Optional[str] = None,
     cascade_of: Optional[str] = None,
     evidence_nature: Optional[str] = None,
+    calculation_evidence: Optional[Mapping[str, Any]] = None,
 ) -> None:
     """RC-04：V33 族关系级回执——每条适用关系一条，携带真实操作数 ID。
 
@@ -1040,6 +1044,7 @@ def _v33_relation_receipt(
                       "fail": "real_amount_comparison",
                       "not_applicable": "applicability_judgment"}.get(status)
             ),
+            calculation_evidence=calculation_evidence,
         )
     )
 
@@ -1257,7 +1262,22 @@ def _is_non_table_page(raw: str) -> bool:
 
 def find_table_anchors(doc: Document) -> Dict[str, List[int]]:
     anchors: Dict[str, List[int]] = {it["name"]: [] for it in NINE_TABLES}
+    from .checklist_support import is_toc_page
+    from .diagnostic_fields import _toc_line_indexes
+
+    toc_continues = False
     for pidx, raw in enumerate(doc.page_texts):
+        has_actual_table = pidx < len(doc.page_tables) and bool(doc.page_tables[pidx])
+        # 目录续页可能没有“目录”二字。带序号的目录条目不能作为正文表头，
+        # 邻接页出现实体表或正文标题后立即结束目录范围。
+        if is_toc_page(raw):
+            toc_continues = True
+            continue
+        if toc_continues and not has_actual_table:
+            nonempty = {index for index, line in enumerate(raw.splitlines()) if line.strip()}
+            if nonempty and nonempty <= _toc_line_indexes(raw):
+                continue
+        toc_continues = False
         if _is_non_table_page(raw):
             continue
         ntxt = normalize_text(raw)
@@ -1281,8 +1301,6 @@ def find_table_anchors(doc: Document) -> Dict[str, List[int]]:
                 break
         
         # 检查是否实际包含表格
-        has_actual_table = len(doc.page_tables[pidx]) > 0 if pidx < len(doc.page_tables) else False
-        
         # 如果满足任何一个条件，就认为是表格页面
         if is_table_page or has_table_title or has_actual_table:
             for it in NINE_ALIAS_NORMAL:
@@ -1791,13 +1809,24 @@ class R33002_NineTablesCheck(Rule):
 
         missing, duplicates, order_pages = [], [], []
         # 逐张检查
-        for spec in NINE_TABLES:
+        for index, spec in enumerate(NINE_TABLES):
             nm = spec["name"]
             pages = anchors.get(nm, [])
             if not pages:
                 missing.append(nm)
             else:
-                order_pages.append((nm, min(pages)))
+                # 宽松别名可用于找表，但顺序优先采用整行正文表题，避免把其他表的
+                # 相似长标题当作本表首次出现。同表标题缺字时仍沿用现有锚点。
+                aliases = set(NINE_ALIAS_NORMAL[index]["aliases_norm"])
+                exact_pages = []
+                for page in pages:
+                    if not 0 < page <= len(doc.page_texts):
+                        continue
+                    lines = [normalize_text(re.sub(r"^\s*(?:表\s*\d+\s*|[一二三四五六七八九十\d]+[、.．])", "", line))
+                             for line in doc.page_texts[page - 1].splitlines()]
+                    if aliases.intersection(lines):
+                        exact_pages.append(page)
+                order_pages.append((nm, min(exact_pages or pages)))
                 if len(pages) > 1:
                     duplicates.append((nm, pages))
         
@@ -11782,12 +11811,24 @@ def _ensure_parsed_tables(doc: Document) -> bool:
     return bool(getattr(doc, "parsed_tables", None))
 
 
-def _cross_table_by_alias(doc: Document, aliases: Tuple[str, ...]):
-    """按表名身份定位**唯一**一张结构化表；命中 0 张或多张都返回 None。
+def _cross_table_by_alias(doc: Document, aliases: Tuple[str, ...], table_code: str = ""):
+    """按表身份定位**唯一**一张结构化表；命中 0 张或多张都返回 None。
 
     多张 = 表身份有歧义（同一份材料里出现两张同名表），此时宁可记取数不足，
     也不能随手取第一张——取错表会让整条跨表比较落在不同的表上。
+
+    表身份优先取解析层已确认的 ``table_code``（与其他规则同源）；表题不规范
+    （如三公表题写成“…三公经费及机关运行经费支出决算表”）时别名对不上，但
+    表本身已被识别，不应因此判成“未识别到目标表”。表题不规范另由 CMM-021
+    单独报出。table_code 命中 0 张或多张时才退回别名匹配。
     """
+    if table_code:
+        coded = [
+            table for table in (getattr(doc, "parsed_tables", None) or {}).values()
+            if getattr(table, "table_code", "") == table_code
+        ]
+        if len(coded) == 1:
+            return coded[0]
     hits: Dict[int, Any] = {}
     for alias in aliases:
         table = _find_parsed_table(doc, alias)
@@ -12097,8 +12138,8 @@ class R33CrossSanGongEcon(Rule):
             raise RuleDeferred(self.code, "结构化表模型不可用（page_tables/page_texts 不足）")
 
         unresolved: List[str] = []
-        table6 = _cross_table_by_alias(doc, _FIN_06_TABLE_ALIASES)
-        table7 = _cross_table_by_alias(doc, _FIN_07_TABLE_ALIASES)
+        table6 = _cross_table_by_alias(doc, _FIN_06_TABLE_ALIASES, "FIN_06_basic_expenditure")
+        table7 = _cross_table_by_alias(doc, _FIN_07_TABLE_ALIASES, "FIN_07_three_public")
         if table6 is None:
             unresolved.append(f"未定位到唯一的《{_FIN_06_TABLE_TITLE}》结构化表")
         if table7 is None:
@@ -12472,10 +12513,24 @@ class R33CrossSanGongEcon(Rule):
                           f"（{disclosure_note}；待人工复核）")
                 unresolved.append(reason)
                 blocked.add(key)
+                from .diagnostic_fields import blocker as _sg_blocker, record_gap as _sg_record_gap
+                _sg_record_gap(
+                    doc,
+                    reason,
+                    reason_codes=["cell_blank_semantics_unknown"],
+                    blocked_by=[
+                        _sg_blocker(
+                            dimension="cell",
+                            ref=f"第{int(hit.get('page') or page6)}页FIN_06_basic_expenditure:{subject}",
+                            reason_code="cell_blank_semantics_unknown",
+                        )
+                    ],
+                )
                 _v33_relation_receipt(
                     doc, self.code, relation_id,
                     status="insufficient_data", incomplete_reason=reason,
                     disclosure_sources=[dict(ref) for ref in (zero_refs or [])],
+                    reason_codes=["cell_blank_semantics_unknown"],
                 )
                 continue
             total = three_public[key]
@@ -14932,6 +14987,12 @@ class R33TrendCompletionRate(Rule):
             merged, offsets, sections, year, claims
         )
         boundaries = [b.start() for b in _WP4E_ENTRY_RE.finditer(merged)]
+        from .native_final_disclosure import GENERAL, detail_decision_unit_from_table
+        from .native_table_arithmetic import table_facts
+        from .native_table_text import is_general_expenditure_title
+
+        decision_facts, _ = table_facts(doc, GENERAL)
+        decision_units = {fact.unit for fact in decision_facts if fact.indicator == "total_actual"}
 
         for claim in claims:
             self._bind_entry(claim, boundaries, merged)
@@ -14943,7 +15004,25 @@ class R33TrendCompletionRate(Rule):
                 issues.extend(findings)
                 unresolved.extend(missing)
             else:
-                self._check_claim(claim, budgets, actuals, openings, year, issues, unresolved)
+                claim_actuals = actuals
+                if decision_units and is_general_expenditure_title(claim["section"]):
+                    in_entry = [
+                        actual for actual in actuals
+                        if actual["section_start"] == claim["section_start"]
+                        and claim["entry_start"] <= actual["start"] < claim["start"]
+                    ]
+                    if len(in_entry) == 1 and decision_units != {in_entry[0]["raw_unit"]}:
+                        actual = in_entry[0]
+                        basis = detail_decision_unit_from_table(
+                            doc, decision_facts, merged[claim["entry_start"]:actual["start"]],
+                            actual["amount_text"], actual["raw_unit"],
+                        )
+                        if basis is not None:
+                            proof = {**actual, "wan": basis.normalized_value,
+                                     "unit_basis_refs": (basis.extra_dims or {}).get("evidence_refs") or [],
+                                     "unit_for_check": basis.unit}
+                            claim_actuals = [proof if candidate is actual else candidate for candidate in actuals]
+                self._check_claim(claim, budgets, claim_actuals, openings, year, issues, unresolved)
             # DH-02：完成率卡点在产生处登记；页码由原文偏移映射，不编造。
             _record_trend_gaps(doc, unresolved[before:], claim, merged, offsets)
 
@@ -15595,6 +15674,8 @@ class R33TrendCompletionRate(Rule):
         refs.extend(_with_role(denom, "分母披露", denom["span"]))
         if actual is not None:
             refs.extend(_with_role(actual, "分子披露", actual["span"]))
+            refs.extend({**ref, "page": ref.get("physical_page"), "role": "核对采用的原表决算金额"}
+                        for ref in actual.get("unit_basis_refs", []))
         pages = {
             int(ref["page"])
             for ref in refs
@@ -15613,6 +15694,8 @@ class R33TrendCompletionRate(Rule):
             "actual_amount": actual["amount_text"] if actual else None,
             "actual_unit": actual["raw_unit"] if actual else None,
             "actual_unit_confirmed": actual["unit_confirmed"] if actual else None,
+            **({"actual_unit_for_check": actual["unit_for_check"]}
+               if actual and actual.get("unit_for_check") else {}),
             "normalized_actual_wan": (
                 _txt_fund_display(actual["wan"])
                 if actual is not None and actual["wan"] is not None

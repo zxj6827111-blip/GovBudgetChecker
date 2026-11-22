@@ -470,6 +470,10 @@ class DualModeAnalyzer:
                     "delivery_suppressions": (self.engine_runner.get_stats() or {}).get("delivery_suppressions", []) if self.engine_runner else [],
                     "structured_consumption": (self.engine_runner.get_stats() or {}).get("structured_consumption", []) if self.engine_runner else [],
                     "fact_context_summary": (self.engine_runner.get_stats() or {}).get("fact_context_summary") if self.engine_runner else None,
+                    # R4/R5（2026-11-20 复审）：正文校正消费回执随结果交付，
+                    # 发布层据此与 legacy pipeline 同键位持久化。
+                    "applied_text_correction_ids": (self.engine_runner.get_stats() or {}).get("applied_text_correction_ids", []) if self.engine_runner else [],
+                    "unapplied_text_corrections": (self.engine_runner.get_stats() or {}).get("unapplied_text_corrections", []) if self.engine_runner else [],
                     "config": config.dict()
                 }
             )

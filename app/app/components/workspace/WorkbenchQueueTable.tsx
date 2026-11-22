@@ -13,7 +13,7 @@
  * - 阶段与进度必须用 Task 3 的 stage_progress（resolve_stage_progress 的输出），
  *   经 StageProgress 组件渲染，未知态由该组件内部的 isProgressUnknown 处理，
  *   本文件不重新判定 null——避免出现"两处判断逻辑，一处漏改就产生分裂"。
- * - 质量状态徽章：review_required 必须显示"需要人工复核"，不可显示"分析完成"。
+ * - 已产出的结果统一显示“已生成结果”，未完成的自动核对另给直达入口。
  * - 复核条目：与审核台两个页签同口径，写“必须处理 N / 参考 M”（后端 queue_* 计数），
  *   参考再按审核台“结果类型”列出待核实、证据不足、提示、复核事项；旧摘要没有
  *   queue_* 时退回“N 问题 / 提示 / 复核事项”。
@@ -86,19 +86,13 @@ function resolveStageLabel(job: JobSummaryRecord): string {
 }
 
 /**
- * 质量状态徽章的 tone + 文案。
- *
- * review_required 必须走独立分支显示"需要人工复核"——严禁跟随 completed 分支
- * 显示"分析完成"（任务书明确写出的红线用例）。
+ * 任务执行状态。检查覆盖由旁边的详情入口展示。
  */
 function resolveQualityBadge(job: JobSummaryRecord): { tone: BadgeTone; label: string } {
   const status = normalizeUiTaskStatus(job.status);
   // uploaded（已上传未分析）是静止态：严禁显示成"正在分析"（任务书修复 3 红线）。
   if (status === "pending_analysis") {
     return { tone: "neutral", label: "待分析" };
-  }
-  if (status === "review_required") {
-    return { tone: "review", label: "需要人工复核" };
   }
   if (status === "failed") {
     return { tone: "failed", label: "处理失败" };
@@ -110,7 +104,7 @@ function resolveQualityBadge(job: JobSummaryRecord): { tone: BadgeTone; label: s
   if (job.quality_status === "degraded") {
     return { tone: "lowconf", label: "低置信度" };
   }
-  return { tone: "done", label: "分析完成" };
+  return { tone: "done", label: "已生成结果" };
 }
 
 function resolveStageTone(job: JobSummaryRecord): "primary" | "success" | "warning" | "danger" | "info" {
@@ -284,6 +278,32 @@ export function WorkbenchQueueTable({
             const checks = summarizeCheckTracks(job.check_progress);
             const findings = resolveFindingCountSummary(job);
             const queueCounts = resolveQueueCounts(job);
+            const unfinished = job.queue_unfinished_check_total;
+            const locations = job.queue_unfinished_location_total;
+            const blockingLocations = job.queue_unfinished_blocking_location_total;
+            const canOpenChecks = resolveReviewEntryDecision(job).canEnter;
+            // 任务列表只保留两种清晰状态：
+            // 1) 无须额外人工核对（含已并入「必须处理」和仅参考提示）→ 不挂额外标签，只显示「已生成结果」；
+            // 2) 确有需人工确认项（不表态不能点完成复核）→ 统一显示「X 处需人工核对 ↗」。
+            const showUnfinishedBadge = (() => {
+              if (!canOpenChecks) return false;
+              if (typeof blockingLocations === "number") return blockingLocations > 0;
+              return (typeof unfinished === "number" && unfinished > 0) || (status === "review_required" && unfinished == null);
+            })();
+            const blockingAffected = job.queue_unfinished_blocking_affected_total;
+            const unfinishedBadgeText = (() => {
+              if (typeof blockingLocations === "number") {
+                return typeof blockingAffected === "number" && blockingAffected > 0
+                  ? `${blockingLocations} 处需人工核对 · 影响 ${blockingAffected} 项检查`
+                  : `${blockingLocations} 处需人工核对`;
+              }
+              if (typeof unfinished !== "number") return "查看核对状态";
+              if (typeof locations === "number" && locations > 0) return `${locations} 处待核对 · 影响 ${unfinished} 项检查`;
+              return `${unfinished} 项核对未完成`;
+            })();
+            const unfinishedBadgeTitle = typeof blockingLocations === "number" && blockingLocations > 0
+              ? `有 ${blockingLocations} 处系统未能自动核对${typeof blockingAffected === "number" && blockingAffected > 0 ? `，影响 ${blockingAffected} 项检查` : ""}，对照原文确认后才能点击「完成复核」。`
+              : undefined;
             const meta = `${String(job.organization_name ?? "未关联单位")} · ${formatYearLabel(job.report_year)} · ${formatDocTypeLabel(job)}`;
             return (
               <tr key={jobId} data-testid={`gbc-workbench-queue-row-${jobId}`} className="align-top hover:bg-surface-100">
@@ -313,7 +333,19 @@ export function WorkbenchQueueTable({
                   <div className="mt-0.5 line-clamp-1 text-xs text-slate-400" title={meta}>{meta}</div>
                 </Td>
                 <Td className={`${TD} min-w-[8.5rem]`}>
-                  <Badge tone={qualityBadge.tone} className="whitespace-nowrap">{qualityBadge.label}</Badge>
+                  <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+                    <Badge tone={qualityBadge.tone} className="whitespace-nowrap">{qualityBadge.label}</Badge>
+                    {showUnfinishedBadge ? (
+                      <Link
+                        href={reviewDetailPath(jobId, reviewReturnTo, "checks") as Route}
+                        data-testid={`gbc-workbench-queue-unfinished-${jobId}`}
+                        title={unfinishedBadgeTitle}
+                        className="rounded bg-warning-50 px-1.5 py-0.5 text-xs font-medium text-warning-700 hover:underline focus-visible:outline-primary-500"
+                      >
+                        {unfinishedBadgeText} ↗
+                      </Link>
+                    ) : null}
+                  </div>
                   {showStage ? (
                     <StageProgress
                       stageLabel={resolveStageLabel(job)}
@@ -338,10 +370,25 @@ export function WorkbenchQueueTable({
                 {queueCounts ? (
                   // 与审核台两个页签同口径：点进去「必须处理」「参考」页签上的数字就是这两个。
                   <Td className={`${TD} min-w-[7rem]`} data-testid={`gbc-workbench-queue-findings-${jobId}`} title={queueCounts.detail}>
-                    <div className={`whitespace-nowrap font-medium ${queueCounts.required > 0 ? "text-warning-700" : ""}`}>必须处理 {queueCounts.required}</div>
-                    <div className="mt-0.5 flex flex-wrap gap-x-2 text-xs text-slate-500">
-                      <span className="whitespace-nowrap">参考 {queueCounts.reference}</span>
-                      {queueCounts.referenceParts.map((text) => <span key={text} className="whitespace-nowrap text-slate-400">{text}</span>)}
+                    {canOpenChecks && queueCounts.required > 0 ? (
+                      <Link href={reviewDetailPath(jobId, reviewReturnTo) as Route}
+                        className="whitespace-nowrap font-medium text-warning-700 hover:underline">
+                        必须处理 {queueCounts.required}
+                      </Link>
+                    ) : (
+                      <div className="whitespace-nowrap font-medium">必须处理 {queueCounts.required}</div>
+                    )}
+                    <div className="mt-0.5 text-xs">
+                      <span className="whitespace-nowrap text-slate-500">参考 {queueCounts.reference}</span>
+                      {/* 括号从属；每个类型（含尾随顿号/闭括号）是一个 nowrap 单元，换行不产生行首“、）”或行尾“（”。
+                          待核实用 info 蓝强调：橙=拦完成复核，蓝=建议人看不拦，灰=纯参考。 */}
+                      {queueCounts.referenceParts.map((part, index) => (
+                        <span key={part.label} className="whitespace-nowrap text-slate-400">
+                          {index === 0 ? "（" : ""}
+                          <span className={part.tone === "info" ? "text-info-700" : undefined}>{part.label} {part.count}</span>
+                          {index === queueCounts.referenceParts.length - 1 ? "）" : "、"}
+                        </span>
+                      ))}
                     </div>
                   </Td>
                 ) : (

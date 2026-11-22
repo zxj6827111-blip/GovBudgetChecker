@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 
-import { getDisplayIssueTotal, toUiProblems } from "../lib/uiAdapters";
+import {
+  displayRecommendedAction,
+  displayReviewReasonTitle,
+  displayTableName,
+  extractReviewDiagnostics,
+  getDisplayIssueTotal,
+  toUiProblems,
+} from "../lib/uiAdapters";
 import { evidenceExcerptLabel } from "../lib/evidenceIdentity";
 
 const baseDetail = {
@@ -382,4 +389,198 @@ for (const [evidenceStatus, sourceComplete, expected] of [
   assert.equal(untouched.title, "待人工复核：generic");
 }
 
+// 2026-11-18 系统缺口修复：英文诊断代码、建议动作与未识别表名必须中文化，且可定位到页码。
+{
+  assert.equal(displayReviewReasonTitle("table_reading_incomplete"), "部分表格读取未完成");
+  assert.equal(displayReviewReasonTitle("rules_not_executed"), "部分规则未执行");
+  assert.ok(displayRecommendedAction("inspect_table_column_mapping").includes("列头"));
+  assert.equal(displayTableName("UNKNOWN_P7_T0"), "第 7 页未识别表格");
+
+  const diagnostics = extractReviewDiagnostics({
+    job_id: "job-diag-cn",
+    review_report: {
+      schema_version: 3,
+      diagnostics: [
+        {
+          id: "reading:mapping:bc4af0d603379fb7",
+          record_type: "structured_review",
+          table_code: "FIN_02_income",
+          page_numbers: [6, 7],
+          message: "第 7 页《收入决算表》映射不完整",
+          recommended_action: "inspect_table_column_mapping",
+        },
+        {
+          record_type: "unfinished_check",
+          obligation_id: "OBL-TXT-FINAL-DETAIL",
+          title: "支出决算具体情况逐项细化到项、分项加总、不漏列",
+          detail: "另有1处金额缺少可归一单位或格式（定位：第21页「支出决算65.96 为万元」）",
+        },
+        {
+          record_type: "processing_notice",
+          code: "rules_not_executed",
+          title: "rules_not_executed",
+          message: "适用规则中仅 82/90 条得出结论",
+          pages: [7],
+        },
+      ],
+    },
+  });
+  assert.equal(diagnostics.length, 3);
+  assert.equal(diagnostics[0].title, "表格识别待复核：收入决算表");
+  assert.ok(diagnostics[0].suggestion?.includes("列头"));
+  assert.equal(diagnostics[0].page, 6);
+  assert.equal(diagnostics[1].page, 21);
+  assert.equal(diagnostics[2].title, "部分规则未执行");
+  assert.equal(diagnostics[2].page, 7);
+
+  // 旧版 v2 review_report 兼容投影：中文标题、中文建议与单元格定位坐标。
+  const legacyNotices = toUiProblems({
+    job_id: "job-v2-compat",
+    review_report: {
+      schema_version: 2,
+      issues: [],
+      tips: [],
+      manual_review: [
+        {
+          record_type: "review_reason",
+          code: "table_reading_incomplete",
+          title: "table_reading_incomplete",
+          message: "还有 0 处表格读取缺口",
+          pages: [7],
+        },
+        {
+          record_type: "structured_review",
+          id: "reading:mapping:x",
+          table_code: "UNKNOWN_P7_T0",
+          title: "结构化识别待复核：UNKNOWN_P7_T0",
+          message: "第 7 页映射不完整",
+          recommended_action: "inspect_table_column_mapping",
+          cells: [{ page: 7, bbox: [10, 20, 30, 40], raw_text: "55.31" }],
+        },
+      ],
+    },
+  } as any);
+  assert.equal(legacyNotices.length, 2);
+  assert.equal(legacyNotices[0].title, "部分表格读取未完成");
+  assert.equal(legacyNotices[0].page, 7);
+  assert.equal(legacyNotices[1].title, "表格识别待复核：第 7 页未识别表格");
+  assert.ok(legacyNotices[1].suggestion.includes("列头"));
+  assert.equal(legacyNotices[1].page, 7);
+  assert.deepEqual(legacyNotices[1].evidenceRefs?.[0]?.bbox, [10, 20, 30, 40]);
+}
+
+  // 漏单位已由同科目原表核对的，原表侧凭证要成为可点击证据（跳第16页）。
+  const verifiedBasis = toUiProblems({
+    job_id: "job-basis",
+    review_report: {
+      schema_version: 3,
+      issues: [{
+        id: "CMM-011-1",
+        rule_id: "CMM-011",
+        severity: "warn",
+        title: "金额缺少单位“万元”",
+        message: "金额缺少单位“万元”：“支出决算为 5,465.41”。；已按第16页核对",
+        evidence: [{ page: 26, bbox: [1, 2, 3, 4], verification_status: "verified", location_level: "exact_span", quote: "支出决算为 5,465.41" }],
+        location: {
+          page: 26,
+          verified_by: {
+            table_page: 16,
+            table_bbox: [278, 615, 353, 630],
+            table_value: "5,465.41",
+            table_quote: "5,465.41",
+            subject_code: "2160250",
+            subject_name: "事业运行",
+            sub_check_id: "V33-251:final:item_sum",
+          },
+        },
+      }],
+      tips: [],
+      manual_review: [],
+    },
+  } as any);
+  const basisRef = verifiedBasis[0]?.evidenceRefs?.find((ref) => ref.role === "原表科目决算依据");
+  assert.ok(basisRef);
+  assert.equal(basisRef?.page, 16);
+  assert.deepEqual(basisRef?.bbox, [278, 615, 353, 630]);
+  assert.ok(basisRef?.locationText.includes("2160250"));
+
+
 console.log("uiAdapters dual-mode tests passed");
+// ---------------------------------------------------------------------------
+// P24（2026-11-21 第三轮）：同页两科目"去处理"逐笔对应——科目绑定
+// ---------------------------------------------------------------------------
+import { isProblemSubjectBound } from "../lib/uiAdapters";
+
+const cultureGroup = {
+  subject: "文化产业发展专项支出",
+  relatedIssueIds: [] as string[],
+};
+const retireGroup = {
+  subject: "归口管理的行政单位离退休",
+  relatedIssueIds: ["issue-2080501"],
+};
+// 208-05-01 离退休正式问题（与文化产业卡同页同规则同检查项）
+const retireIssue = {
+  id: "issue-2080501",
+  actualName: "归口管理的行政单位离退休",
+  title: "说明5项级科目名称与T5不一致",
+  snippet: "表格“行政单位离退休”，说明“归口管理的行政单位离退休”",
+};
+// 207 类名称差异问题（实际名称是类名，不提项名）
+const classIssue = {
+  id: "issue-207",
+  actualName: "文化体育与传媒支出",
+  title: "说明5类级科目名称与T5不一致",
+  snippet: "表格“文化旅游体育与传媒支出”，说明“文化体育与传媒支出”",
+};
+
+assert.equal(
+  isProblemSubjectBound(cultureGroup, retireIssue), false,
+  "同页同规则的另一科目问题不得成为文化产业卡的\"去处理\"目标",
+);
+assert.equal(
+  isProblemSubjectBound(cultureGroup, classIssue), false,
+  "类名问题不含组科目时也不绑定（保留定位与状态，取消错误入口）",
+);
+assert.equal(
+  isProblemSubjectBound(retireGroup, retireIssue), true,
+  "related_issue_ids 命中的问题直接采纳",
+);
+assert.equal(
+  isProblemSubjectBound(retireGroup, classIssue), false,
+  "同页其他科目问题不得成为离退休卡的目标",
+);
+// 历史快照没有 related_issue_ids：退回科目名比对
+assert.equal(
+  isProblemSubjectBound(
+    { subject: "归口管理的行政单位离退休", relatedIssueIds: undefined }, retireIssue,
+  ), true, "无 related_issue_ids 时按科目名比对命中",
+);
+// 组没有科目锚点（整节加总）：不受科目约束
+assert.equal(
+  isProblemSubjectBound({ subject: "", relatedIssueIds: [] }, classIssue), true,
+  "空科目组不受科目约束",
+);
+// 聚合问题经 memberIssueIds 命中后端关联
+assert.equal(
+  isProblemSubjectBound(retireGroup, { id: "group-x", memberIssueIds: ["issue-2080501"] }),
+  true, "聚合成员命中 related_issue_ids 时采纳",
+);
+// 第三轮自检加固：related_issue_ids 是完整约束——列表外的问题即使摘句里
+// 含本科目名（同页长句同时含两科目）也不得绑定，否则互跳会重新打开。
+const compositeSentenceIssue = {
+  id: "issue-composite",
+  actualName: "文化体育与传媒支出",
+  title: "同页两科目金额不一致",
+  snippet:
+    "文化体育与传媒支出（类）……文化产业发展专项支出（项）……归口管理的行政单位离退休（项）……",
+};
+assert.equal(
+  isProblemSubjectBound(retireGroup, compositeSentenceIssue), false,
+  "related_issue_ids 在册时，摘句含本科目名的列表外问题仍不得绑定",
+);
+assert.equal(
+  isProblemSubjectBound(cultureGroup, compositeSentenceIssue), false,
+  "related_issue_ids 为空（未核证到唯一对应）时同页复合句问题仍不绑定",
+);
+console.log("P24 subject-binding tests passed");

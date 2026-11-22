@@ -255,22 +255,41 @@ def verified_blank_zero_by_code(doc, table_code, page, code):
     def norm(text):
         return re.sub(r'\s+', '', str(text or ''))
 
+    def _col_header(table, col: int) -> str:
+        return ''.join(
+            norm(row[col])
+            for row in table.rows[:table.header_row_count]
+            if col < len(row)
+        )
+
     hits = []
     for table in getattr(artifact, 'table_fragments', []) or []:
         if table.table_code != table_code or table.extraction_method not in {'lines', 'lines_strict'}:
             continue
         cells = {(c.row_idx, c.col_idx): c for c in table.cells}
         for cell in table.cells:
-            if cell.page_number == page and not cell.is_header and norm(cell.raw_text) == code:
-                hits.append((table, cells, cell))
+            if cell.page_number != page or cell.is_header:
+                continue
+            cell_norm = norm(cell.raw_text)
+            if cell_norm == code:
+                hits.append((table, cells, cell.row_idx, cell.col_idx + 1, cell.col_idx + 2))
+            elif len(code) == 5 and cell_norm == code[:3]:
+                sub_cell = cells.get((cell.row_idx, cell.col_idx + 1))
+                if (
+                    sub_cell is not None
+                    and sub_cell.page_number == page
+                    and not sub_cell.is_header
+                    and norm(sub_cell.raw_text) == code[3:]
+                    and '类' in _col_header(table, cell.col_idx)
+                    and '款' in _col_header(table, cell.col_idx + 1)
+                ):
+                    hits.append((table, cells, cell.row_idx, cell.col_idx + 2, cell.col_idx + 3))
     if len(hits) != 1:
         return None
-    table, cells, code_cell = hits[0]
-    name_cell = cells.get((code_cell.row_idx, code_cell.col_idx + 1))
-    amount_col = code_cell.col_idx + 2
-    target = cells.get((code_cell.row_idx, amount_col))
-    header = ''.join(norm(row[amount_col]) for row in table.rows[:table.header_row_count]
-                     if amount_col < len(row))
+    table, cells, row_idx, name_col, amount_col = hits[0]
+    name_cell = cells.get((row_idx, name_col))
+    target = cells.get((row_idx, amount_col))
+    header = _col_header(table, amount_col)
     if (name_cell is None or not norm(name_cell.raw_text) or target is None or '决算' not in header
             or target.is_header or target.raw_text.strip() or target.numeric_value is not None
             or not target.native_blank_verified or not target.bbox

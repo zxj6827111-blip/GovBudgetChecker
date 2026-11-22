@@ -297,7 +297,8 @@ def journal(rule, doc, facts):
 
 def receipt(rule, doc, relation, facts, *, status, formula, reason=None, disclosure_sources=(),
             reason_codes=(), amount_subcheck_status=None, explained_by=None,
-            residual_difference_wan=None, cascade_of=None, cell_observations=()):
+            residual_difference_wan=None, cascade_of=None, cell_observations=(),
+            calculation_evidence=None):
     from .rules_v33 import _v33_relation_receipt
     if any(f.table_code == 'FIN_06_basic_expenditure' for f in facts):
         disclosure_sources = [*disclosure_sources, *getattr(doc, '_economic_zero_layout_observations', [])]
@@ -336,7 +337,8 @@ def receipt(rule, doc, relation, facts, *, status, formula, reason=None, disclos
                           amount_subcheck_status=amount_subcheck_status,
                           explained_by=explained_by,
                           residual_difference_wan=residual_difference_wan,
-                          cascade_of=cascade_of)
+                          cascade_of=cascade_of,
+                          calculation_evidence=calculation_evidence)
     return ids, evidence
 
 
