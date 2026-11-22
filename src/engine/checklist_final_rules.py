@@ -2367,7 +2367,8 @@ class R33251_FunctionalDetailCompleteness(Rule):
                 manual_name = str(record.get("manual_subject_name") or "").strip()
                 subject_row = None
                 subject_unresolved = None
-                normalize = lambda value: re.sub(r"\s+|支出$", "", str(value or ""))
+                def normalize(value):
+                    return re.sub(r"\s+|支出$", "", str(value or ""))
                 if manual_code:
                     designated = unit_basis_by_subject_code(doc, facts, manual_code)
                     if designated is None:

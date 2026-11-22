@@ -2396,7 +2396,8 @@ def check_function_disclosures(rule, doc):
                 # R4-A：复核人把正文条目指定到另一科目行（如同名 2160250→2011350）。
                 # 单项与加总必须引用同一科目依据；指定无法唯一落表或与所给名称
                 # 矛盾时，两条检查一致保持待核，不能回退原行判“通过”。
-                _normalize_subject = lambda value: re.sub(r'\s+|支出$', '', str(value or ''))
+                def _normalize_subject(value):
+                    return re.sub(r'\s+|支出$', '', str(value or ''))
                 manual_refs = text.refs(item.start(), effective.end(), '原文决算金额声明', unique_context=True)
                 file_hash = getattr(getattr(doc, 'fact_context', None), 'file_hash', None)
                 manual_disclosure_sources = [

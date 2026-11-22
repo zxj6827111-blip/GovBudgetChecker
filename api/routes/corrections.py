@@ -1024,7 +1024,6 @@ async def get_correction_targets(
         """同一目标的读数记录：存在更晚提交、且在 at_revision 已生效的记录即被替代。"""
         if not at_revision:
             return False
-        record_id = str(record.get("record_id") or "")
         target = _raw_target_of(record)
         indices = _ledger_raw_order.get(target) or []
         try:

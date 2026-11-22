@@ -104,7 +104,7 @@ def test_r4_recovered_claim_uses_explicit_reading_and_unit():
     assert manual["original_amount"] == "54,65.41"
     assert manual["original_unit_written"] is False
     assert manual["recovered_claim"] is True
-    assert getattr(claim, "inherited_unit") is True
+    assert claim.inherited_unit is True
     # 声明区间必须落在条目范围内，供 text.refs 取原句证据。
     assert item_start <= claim.start() < claim.end() <= len(text.compact)
     refs = text.refs(claim.start(), claim.end(), "原文决算金额声明")

@@ -2210,7 +2210,7 @@ class PDFParser:
                     return False
 
         if has_detail_codes and len(coded_rows) >= 2:
-            for (prev_c, prev_tail), (cur_c, _) in zip(coded_rows, coded_rows[1:]):
+            for (prev_c, prev_tail), (cur_c, _) in zip(coded_rows, coded_rows[1:], strict=False):
                 if len(prev_c) == 3 and len(cur_c) == 3 and prev_c != cur_c:
                     if _tail_has_nonzero(prev_tail):
                         return False
