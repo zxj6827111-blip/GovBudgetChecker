@@ -2348,7 +2348,7 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                         fact_overlay_report["text_statement_overlay"]["unresolved"])
                     if fact_overlay_report.get("status") == "not_requested":
                         fact_overlay_report["status"] = "failed"
-            result = {
+            result: Dict[str, Any] = {
                 "summary": "",
                 "ai_findings": dual_ai_findings,
                 "rule_findings": dual_rule_findings,

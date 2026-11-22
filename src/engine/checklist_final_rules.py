@@ -2133,9 +2133,12 @@ def _conditional_trial(
     ]
     if not candidates:
         return None
-    values = [_dec(str(record.get("raw") or "")) for record in candidates]
-    if any(value is None for value in values):
-        return None
+    values: List[Decimal] = []
+    for record in candidates:
+        value = _dec(str(record.get("raw") or ""))
+        if value is None:
+            return None
+        values.append(value)
     assumed = subtotal + sum(values, Decimal(0))
     delta = assumed - stated
     return {
