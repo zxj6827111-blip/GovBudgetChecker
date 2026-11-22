@@ -594,9 +594,25 @@ def rule_level_entry(text: Any, rule_id: Any = None, doc: Any = None) -> Dict[st
                 row_key=None, column="科目名称", stage="决算")],
             "candidates": [],
         }
+    # 2026-11-17（RR-05 源头诊断）：提取/定位失败不是“材料未披露”。
+    # 规则级文本只能证明本次运行没有取到，不能证明原件没有披露；统一记
+    # 上游取数失败，并用规则级阻断项承接，不伪造说明章节缺数位置。
     if any(token in value for token in (
-        "未提取到", "未识别到", "未披露", "无法绑定", "未定位", "未找到",
-        "未明示", "未写明", "缺少显式决算金额", "年度未识别到", "属于其他年度",
+        "未提取到", "未识别到", "无法绑定", "未定位", "未找到",
+    )):
+        return {
+            "reason_codes": ["table_mapping_incomplete"],
+            "blocked_by": [{
+                "dimension": "instance_uid",
+                "ref": f"规则级:{rule_id or 'unknown'}",
+                "reason_code": "table_mapping_incomplete",
+            }],
+            "missing_operands": [],
+            "candidates": [],
+        }
+    if any(token in value for token in (
+        "未披露", "未明示", "未写明", "缺少显式决算金额",
+        "年度未识别到", "属于其他年度",
     )):
         page = _section_page(doc, value) if doc is not None else None
         return {

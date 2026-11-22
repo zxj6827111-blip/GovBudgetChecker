@@ -168,11 +168,20 @@ async def _startup_job_queue() -> None:
         return
 
     max_workers, ai_sequential_mode = compute_queue_workers()
-    if ai_sequential_mode and max_workers < 10:
+    # worker 数必须给 HTTP 轮询与队列发现留出连接余量：池小于 workers*2+6 时
+    # 批量重跑会再次打穿连接池（2026-11-18 事故）。
+    try:
+        pool_max_size = int(os.getenv("GOVBUDGET_POOL_MAX_SIZE") or 20)
+    except (TypeError, ValueError):
+        pool_max_size = 20
+    if max_workers * 2 + 6 > pool_max_size:
         logger.warning(
-            "AI_SEQUENTIAL_MODE is enabled but JOB_QUEUE_WORKERS=%d; "
-            "batch local-stage throughput may be limited (recommend >=10).",
+            "JOB_QUEUE_WORKERS=%d exceeds comfortable pool headroom "
+            "(GOVBUDGET_POOL_MAX_SIZE=%d, recommend >= workers*2+6=%d); "
+            "batch reruns may starve HTTP requests of database connections.",
             max_workers,
+            pool_max_size,
+            max_workers * 2 + 6,
         )
 
     queue = DurableJobQueue(
@@ -560,6 +569,12 @@ def _resolve_cascaded_quality_blockers(
         ignored_issue_ids=[],
     )
     visible_ids = {problem.issue_id for problem in problems}
+    # 结构化诊断根仍是表格读取连带项的根问题；它们不是业务问题，
+    # 但计算连带时必须在可见集合内，否则受影响的义务会被重新阻塞。
+    if isinstance(structured_ingest, dict):
+        for item in structured_ingest.get("review_items") or []:
+            if isinstance(item, dict) and item.get("id"):
+                visible_ids.add(str(item["id"]))
     all_items = list(coverage.items)
     raw_blocking = [
         item
@@ -1036,12 +1051,21 @@ def _evaluate_quality_gate(
                 }
             )
         if insufficient_rules > 0:
+            rule_hints: List[str] = []
+            for item in insufficient_unresolved[:3]:
+                rid = str(item.get("rule_id") or "").strip()
+                detail = str(item.get("detail") or "").strip().splitlines()[0][:80]
+                if rid and detail:
+                    rule_hints.append(f"{rid}（{detail}）")
+                elif rid:
+                    rule_hints.append(rid)
+            hint_suffix = f"；涉及：{'；'.join(rule_hints)}" if rule_hints else ""
             review_reasons.append(
                 {
                     "code": "rules_insufficient_data",
                     "message": (
                         f"有 {insufficient_rules} 条规则因数据缺失/解析歧义无法得出结论"
-                        "（如表缺失、行宽无法对齐），这些检查项未实际覆盖，需人工复核"
+                        f"（如表缺失、行宽无法对齐）{hint_suffix}，这些检查项未实际覆盖，需人工复核"
                     ),
                     "unresolved_rules": insufficient_unresolved[:20],
                 }
@@ -1080,17 +1104,26 @@ def _evaluate_quality_gate(
                 f"{labels.get(code, code)} {count} 项"
                 for code, count in sorted(by_reason.items(), key=lambda kv: -kv[1])
             ]
+            blocking_titles = [
+                str(getattr(item, "title", None) or item.obligation_id)
+                for item in remaining_blocking_obligations
+            ]
+            title_preview = "；".join(blocking_titles[:3])
+            if len(blocking_titles) > 3:
+                title_preview += f" 等 {len(blocking_titles)} 项"
+            title_suffix = f"；涉及：{title_preview}" if title_preview else ""
             review_reasons.append(
                 {
                     "code": "check_obligations_incomplete",
                     "message": (
                         f"应检查事项中有 {obligation_blocking} 项未完成"
-                        f"（{'、'.join(parts)}），本次结论只覆盖已完成的检查范围，"
+                        f"（{'、'.join(parts)}）{title_suffix}，本次结论只覆盖已完成的检查范围，"
                         "不能视为已完整审核"
                     ),
                     "blocking_obligation_ids": [
                         item.obligation_id for item in remaining_blocking_obligations
                     ][:40],
+                    "blocking_obligation_titles": blocking_titles[:40],
                     "catalog_version": (
                         obligation_coverage.get("catalog_version")
                         if isinstance(obligation_coverage, dict)
@@ -1112,17 +1145,31 @@ def _evaluate_quality_gate(
                 f"{labels.get(code, code)} {count} 项"
                 for code, count in sorted(by_reason.items(), key=lambda kv: -kv[1])
             ]
+            blocking_ids = [
+                str(oid) for oid in (obligation_coverage.get("blocking_obligation_ids") or [])[:40]
+                if str(oid)
+            ]
+            instances = obligation_coverage.get("instances")
+            title_by_id = {
+                str(inst.get("obligation_id") or ""): str(inst.get("title") or "")
+                for inst in (instances if isinstance(instances, list) else [])
+                if isinstance(inst, dict) and inst.get("obligation_id")
+            }
+            blocking_titles = [title_by_id.get(oid) or oid for oid in blocking_ids]
+            title_preview = "；".join(blocking_titles[:3])
+            if len(blocking_titles) > 3:
+                title_preview += f" 等 {len(blocking_titles)} 项"
+            title_suffix = f"；涉及：{title_preview}" if title_preview else ""
             review_reasons.append(
                 {
                     "code": "check_obligations_incomplete",
                     "message": (
                         f"应检查事项中有 {obligation_blocking} 项未完成"
-                        f"（{'、'.join(parts)}），本次结论只覆盖已完成的检查范围，"
+                        f"（{'、'.join(parts)}）{title_suffix}，本次结论只覆盖已完成的检查范围，"
                         "不能视为已完整审核"
                     ),
-                    "blocking_obligation_ids": (
-                        obligation_coverage.get("blocking_obligation_ids") or []
-                    )[:40],
+                    "blocking_obligation_ids": blocking_ids,
+                    "blocking_obligation_titles": blocking_titles,
                     "catalog_version": obligation_coverage.get("catalog_version"),
                 }
             )
@@ -1145,15 +1192,27 @@ def _evaluate_quality_gate(
             total_rules = int(rule_execution_summary.get("total_rules") or 0)
             executed_rules = int(rule_execution_summary.get("executed") or 0)
             if total_rules > 0 and executed_rules < total_rules:
-                review_reasons.append(
-                    {
-                        "code": "rules_not_executed",
-                        "message": (
-                            f"适用规则中仅 {executed_rules}/{total_rules} 条得出结论，"
-                            "不允许在规则未执行完毕时输出 no_findings"
-                        ),
-                    }
+                unresolved_ids = [
+                    str(item.get("rule_id") or "").strip()
+                    for item in (rule_execution_summary.get("unresolved_rules") or [])
+                    if isinstance(item, dict) and str(item.get("rule_id") or "").strip()
+                ]
+                rule_suffix = (
+                    f"（未完成规则：{'、'.join(unresolved_ids[:5])}"
+                    f"{'等' if len(unresolved_ids) > 5 else ''}）"
+                    if unresolved_ids
+                    else ""
                 )
+                reason_item: Dict[str, Any] = {
+                    "code": "rules_not_executed",
+                    "message": (
+                        f"适用规则中仅 {executed_rules}/{total_rules} 条得出结论{rule_suffix}，"
+                        "不允许在规则未执行完毕时输出 no_findings"
+                    ),
+                }
+                if unresolved_ids:
+                    reason_item["unresolved_rule_ids"] = unresolved_ids[:10]
+                review_reasons.append(reason_item)
 
     if review_reasons:
         status = JobStatus.REVIEW_REQUIRED.value
@@ -1544,7 +1603,6 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
         frozen_template_bindings = None
         from src.services.material_writing import enabled as template_scope_enabled
         if template_scope_enabled() and (os.getenv('DATABASE_URL') or '').strip():
-            from src.db.connection import DatabaseConnection
             from src.services.annual_templates import freeze_current_bindings
             template_conn=await DatabaseConnection.acquire()
             try:frozen_template_bindings=await freeze_current_bindings(template_conn)
@@ -1877,7 +1935,10 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             try:
                 from src.engine.fact_context import build_fact_context_from_artifact
 
-                fact_context_obj = build_fact_context_from_artifact(
+                # 大表材料的事实物化是秒级纯 CPU 计算，放线程里执行，
+                # 避免批量重跑时多个任务把事件循环叠出可观的延迟。
+                fact_context_obj = await asyncio.to_thread(
+                    build_fact_context_from_artifact,
                     parse_artifact_obj,
                     org_name=check_subject_name,
                     org_level=selected_org_basis["level"],
@@ -1912,9 +1973,10 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
         # 事实——校正不再只是留痕，重跑后规则消费的是校正后的事实版本。
         # RC-10：目标 UID 失效时先做跨解析身份重映射；身份字段类校正记为
         # "未生效"并转待复核——不能静默丢弃，也不能用未校正事实冒充成功。
-        raw_fact_context_obj = deepcopy(fact_context_obj)
+        raw_fact_context_obj = await asyncio.to_thread(deepcopy, fact_context_obj)
         fact_overlay_applied = 0
         fact_overlay_report: Dict[str, Any] = {"status": "not_requested"}
+        text_correction_records: List[Dict[str, Any]] = []
         if fact_context_obj is not None or parse_artifact_obj is not None:
             try:
                 from src.engine.fact_context import (
@@ -1927,6 +1989,8 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                 from src.services.correction_overlay_store import read_jsonl_records
 
                 overlay_records = read_jsonl_records(job_dir / "corrections.jsonl")
+                from src.services.text_correction_targets import text_corrections_from_records
+                text_correction_records = text_corrections_from_records(overlay_records)
                 # 人工补录格先写回表格，再应用人工列映射；两者都改变解析输入，事实须整体重建。
                 from src.services.manual_cell_overlay import apply_table_cell_overlays
                 cell_value_report = apply_table_cell_overlays(parse_artifact_obj, overlay_records)
@@ -1940,7 +2004,8 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                         "applied": column_mapping_report.get("applied", 0) + cell_value_report.get("applied", 0),
                         "cell_values": cell_value_report,
                     })
-                    fact_context_obj = build_fact_context_from_artifact(
+                    fact_context_obj = await asyncio.to_thread(
+                        build_fact_context_from_artifact,
                         parse_artifact_obj,
                         org_name=check_subject_name,
                         org_level=selected_org_basis["level"],
@@ -2147,6 +2212,7 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             document.structure_view = structure_view
             document.writing_page_texts = profile_page_texts
             document.writing_source_spans = writing_source_spans
+            document.text_corrections = text_correction_records
             return document
 
         doc = await loop.run_in_executor(None, _sync_build_document)
@@ -2194,6 +2260,9 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                     "structure_view": structure_view,
                     "writing_page_texts": profile_page_texts,
                     "writing_source_spans": writing_source_spans,
+                    # R4/R5（2026-11-20 复审）：双模式规则进程消费同一份正文
+                    # 校正台账；消费回执经 runner.stats 随结果返回。
+                    "text_corrections": text_correction_records,
                 },
             )
 
@@ -2234,11 +2303,61 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             )
             from src.services.ai_execution import summarize_ai_diagnostics
             ai_diagnostics = summarize_ai_diagnostics(dual_result.meta)
-            result = {
+            # R4/R5（2026-11-20 复审）：正文校正消费回执（规则进程收割）随
+            # 结果持久化，与 legacy pipeline 的 payload 键位一致。
+            engine_stats = (dual_result.meta or {})
+            applied_text_correction_ids = [
+                str(item) for item in (engine_stats.get("applied_text_correction_ids") or []) if str(item)
+            ]
+            unapplied_text_corrections = list(
+                engine_stats.get("unapplied_text_corrections") or []
+            )
+            if text_correction_records:
+                if applied_text_correction_ids:
+                    fact_overlay_report["text_statement_overlay"] = {
+                        "applied": len(set(applied_text_correction_ids)),
+                        "unresolved": [
+                            {
+                                "correction_id": str(item.get("correction_id") or ""),
+                                "reason": "同页多处命中，无法唯一应用" if any(
+                                    isinstance(row, dict)
+                                    and str(row.get("correction_id") or "") == str(item.get("correction_id") or "")
+                                    for row in unapplied_text_corrections
+                                ) else "正文金额校正未匹配当前原文区间",
+                            }
+                            for item in text_correction_records
+                            if str(item.get("correction_id") or "") not in set(applied_text_correction_ids)
+                        ],
+                    }
+                    residual = fact_overlay_report["text_statement_overlay"]["unresolved"]
+                    if residual:
+                        fact_overlay_report.setdefault("unresolved", []).extend(residual)
+                        fact_overlay_report["status"] = "partial"
+                    elif fact_overlay_report.get("status") == "not_requested":
+                        fact_overlay_report["status"] = "applied"
+                else:
+                    fact_overlay_report["text_statement_overlay"] = {
+                        "applied": 0,
+                        "unresolved": [
+                            {"correction_id": str(item.get("correction_id") or ""),
+                             "reason": "正文金额校正未匹配当前原文区间"}
+                            for item in text_correction_records
+                        ],
+                    }
+                    fact_overlay_report.setdefault("unresolved", []).extend(
+                        fact_overlay_report["text_statement_overlay"]["unresolved"])
+                    if fact_overlay_report.get("status") == "not_requested":
+                        fact_overlay_report["status"] = "failed"
+            result: Dict[str, Any] = {
                 "summary": "",
                 "ai_findings": dual_ai_findings,
                 "rule_findings": dual_rule_findings,
                 "merged": dual_result.merged.dict(),
+                # R4/R5：校正消费回执（legacy pipeline 同键位）
+                **({
+                    "applied_text_correction_ids": applied_text_correction_ids,
+                    "unapplied_text_corrections": unapplied_text_corrections,
+                } if text_correction_records else {}),
                 # R2-06：结构化抑制台账随结果持久化/读回/导出
                 "delivery_suppressions": list(
                     (dual_result.meta or {}).get("delivery_suppressions") or []),
@@ -2393,6 +2512,53 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                 update_progress(job_dir.name, "local", state="completed", current_step="本地规则检查完成")
                 fact_receipts = list(payload_issues.get("fact_receipts") or [])
                 structured_consumption = list(payload_issues.get("structured_consumption") or [])
+                # 2026-11-19：正文金额校正是否真正被规则消费，必须随分析回执
+                # 亮出来。未命中的校正转 correction_overlay_incomplete，不能
+                # 静默假装已重算。
+                if text_correction_records:
+                    applied_ids = {
+                        str(item) for item in
+                        (
+                            payload_issues.get("applied_text_correction_ids")
+                            or getattr(doc, "applied_text_correction_ids", None)
+                            or []
+                        )
+                        if str(item)
+                    }
+                    unapplied_reasons = {
+                        str(item.get("correction_id")): str(item.get("reason") or "")
+                        for item in (payload_issues.get("unapplied_text_corrections") or [])
+                        if isinstance(item, dict) and item.get("correction_id")
+                    }
+                    reason_labels = {
+                        "ambiguous_match": "同页多处命中，无法唯一应用",
+                        "not_found": "未匹配当前原文区间",
+                        "invalid_unit": "校正单位不合法",
+                        "invalid_raw_value": "校正读数不合法",
+                        "unsupported_field": "校正字段不受支持",
+                    }
+                    unresolved_text = [
+                        {
+                            "correction_id": item.get("correction_id"),
+                            "reason": reason_labels.get(
+                                unapplied_reasons.get(str(item.get("correction_id") or ""), ""),
+                                "正文金额校正未匹配当前原文区间",
+                            ),
+                        }
+                        for item in text_correction_records
+                        if str(item.get("correction_id") or "") not in applied_ids
+                    ]
+                    fact_overlay_report["text_statement_overlay"] = {
+                        "applied": len(applied_ids),
+                        "unresolved": unresolved_text,
+                    }
+                    if unresolved_text:
+                        fact_overlay_report.setdefault("unresolved", []).extend(unresolved_text)
+                        fact_overlay_report["status"] = (
+                            "partial" if applied_ids else "failed"
+                        )
+                    elif applied_ids and fact_overlay_report.get("status") == "not_requested":
+                        fact_overlay_report["status"] = "applied"
                 # MR-3（2026-09-27）：文档级可读性闸门——扫描件/低覆盖材料的
                 # error 级假阳性整体转人工，防止"扫描件静默漏检却报高危矛盾"
                 apply_readability_gate(payload_issues, page_assessment)
@@ -2460,6 +2626,16 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             result = {
                 "summary": "",  # 现在没有汇总，可后续填充
                 "issues": payload_issues["issues"],  # 统一分桶结构
+                # R6（2026-11-21 第三轮复审）：legacy 路径同样随结果持久化
+                # 正文校正回执——历史页按版本回读"该版实际生效的记录"依赖
+                # 这两个键（dual 路径 2356-2360 已带，此前 legacy 丢弃导致
+                # 兼容模式历史视图为空、生效版本为 null）。
+                "applied_text_correction_ids": [
+                    str(item) for item in (payload_issues.get("applied_text_correction_ids") or [])
+                    if str(item)
+                ],
+                "unapplied_text_corrections": list(
+                    payload_issues.get("unapplied_text_corrections") or []),
                 # R2-06：结构化抑制台账随结果持久化/读回/导出
                 "delivery_suppressions": list(
                     payload_issues.get("delivery_suppressions") or []),
@@ -2539,7 +2715,11 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
         )
         if (os.getenv("DATABASE_URL") or "").strip():
             current_ingest_status = runtime.read_json_file(job_dir / "status.json", default={})
-            latest_ingest = runtime.resolve_latest_structured_ingest_job(
+            # 冷缓存下本判定要遍历全部任务的 status.json（GB 级），必须放线程里
+            # 执行：同步跑在事件循环上会把后端冻住十几秒，批量重跑时连环触发
+            # 数据库连接池超时与看门狗强杀（2026-11-18 事故根因之一）。
+            latest_ingest = await asyncio.to_thread(
+                runtime.resolve_latest_structured_ingest_job,
                 job_dir.name,
                 organization_id=organization_id,
                 organization_name=organization_name,
@@ -2595,15 +2775,24 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                     candidate_only=candidate_only,
                 )
             else:
-                structured_ingest_summary = {
-                    "job_id": job_dir.name,
-                    "status": "skipped",
-                    "reason": "not_latest_version",
-                    "latest_job_id": latest_ingest.get("latest_job_id"),
-                    "latest_filename": latest_ingest.get("latest_filename"),
-                    "review_item_count": 0,
-                    "review_items": [],
-                }
+                # 非最新版本任务不再跳过整条结构化入库而导致 98% 阶段崩溃；
+                # 改为以 candidate_only=True 独立落库自身事实与快照，不改写材料槽位。
+                structured_ingest_summary = await run_structured_ingest(
+                    job_id=job_dir.name,
+                    pdf_path=pdf_path,
+                    metadata=structured_metadata,
+                    parse_artifact=parse_artifact_obj,
+                    raw_fact_context=raw_fact_context_obj,
+                    effective_fact_context=fact_context_obj,
+                    analysis_revision=analysis_revision,
+                    execution_manifest=execution_manifest,
+                    candidate_only=True,
+                )
+                if isinstance(structured_ingest_summary, dict):
+                    structured_ingest_summary["slot_sync_skipped"] = True
+                    structured_ingest_summary["slot_sync_skip_reason"] = "not_latest_version"
+                    structured_ingest_summary["latest_job_id"] = latest_ingest.get("latest_job_id")
+                    structured_ingest_summary["latest_filename"] = latest_ingest.get("latest_filename")
         else:
             structured_ingest_summary = await run_structured_ingest(
                 job_id=job_dir.name,
@@ -2675,7 +2864,9 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
         # Binding replaces calculated summaries with the original operands.
         # Authenticate those new per-cell coordinates against the PDF before
         # evidence completeness and persisted annotation targets are computed.
-        result["meta"]["rule_source_locations"] = verify_bound_rule_locations(
+        # 逐条证据打开 PDF 核对坐标是重 IO 计算，放线程里执行。
+        result["meta"]["rule_source_locations"] = await asyncio.to_thread(
+            verify_bound_rule_locations,
             result, source_pdf_path=str(pdf_path),
         )
         # AI quotes have no trusted native coordinates when emitted by the
@@ -2685,7 +2876,8 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
         result["meta"]["ai_source_binding"] = bind_ai_literal_sources(
             result, page_texts=page_texts or [], source_file_hash=source_file_hash,
         )
-        result["meta"]["ai_source_locations"] = verify_bound_ai_locations(
+        result["meta"]["ai_source_locations"] = await asyncio.to_thread(
+            verify_bound_ai_locations,
             result, source_pdf_path=str(pdf_path),
         )
         evidence_completeness = apply_evidence_completeness(
@@ -2888,6 +3080,19 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                 extra=safe_log_extra({"job_id": job_dir.name}),
             )
         payload["review_report"] = build_review_report(payload)
+        # R5：把“原文位置分组 + 稳定表态范围”随分析结果一起落库，复核门禁
+        # 与页面读同一份分组快照；同一义务下多处独立阻塞必须逐处表态。
+        try:
+            result_meta = payload.setdefault("result", {}).setdefault("meta", {})
+            if isinstance(result_meta, dict):
+                result_meta["unfinished_check_groups"] = (
+                    payload["review_report"].get("unfinished_check_groups") or []
+                )
+        except Exception:
+            logger.warning(
+                "unfinished group snapshot skipped",
+                extra=safe_log_extra({"job_id": job_dir.name}),
+            )
         persisted = await persist_analysis_job_snapshot(payload, include_results=True)
         if (os.getenv("DATABASE_URL") or "").strip() and not persisted:
             raise RuntimeError("trusted_analysis_result_not_committed: pending_retry")

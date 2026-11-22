@@ -520,7 +520,9 @@ _YUAN_AMOUNT_RE = re.compile(r"(?<![\d.,，])(\d[\d,]*(?:\.\d+)?)\s*元(?![/／�
 _YUAN_RATE_CONTEXT_RE = re.compile(r"(?:单价|标准|每人|每天|每月|每年|人均|每次|每台|补助标准|收费)\S{0,6}$")
 
 # 2A：正文金额漏写单位“万元”——金额带小数、后接“占X%”，且同段存在万元金额。
-_MISSING_UNIT_RE = re.compile(r"(?<![\d.,，])(\d[\d,]*(?:\.\d+)?)\s*(?=[，,；;]?\s*占)")
+# R3（2026-11-20 复审）：异常字串（"54,65.41"、"5,465.41.00"）必须整段保留，
+# 引文与校正目标不得截成合法前缀，所以小数组用 + 允许多个小数点连写。
+_MISSING_UNIT_RE = re.compile(r"(?<![\d.,，])(\d[\d,]*(?:\.\d+)+)\s*(?=[，,；;]?\s*占)")
 _SIBLING_WAN_RE = re.compile(r"\d[\d,]*(?:\.\d+)?\s*万元")
 _MISSING_UNIT_SUBJECT_RE = re.compile(r"(?:支出|收入|预算|决算)[^，。；]{0,12}$")
 # 2A：零值金额写作“0 元”，但同段其余金额以万元列示。
@@ -529,9 +531,11 @@ _ZERO_UNIT_BEFORE_RE = re.compile(r"(?:年初预算|预算数|支出决算|决�
 # D0 RC-3b：带小数的金额直接跟在“年初预算为/支出决算为/决算数为”等金额
 # 语境词后且不带任何单位——同段其余金额以万元列示时判漏写“万元”
 # （宜川部门决算 P29"支出决算为 4.19。"实证）。
+# R3（2026-11-20 复审）：小数组 + 允许捕获完整异常字串（"5,465.41.00"），
+# 引文不得停在第一个小数点截成合法前缀。
 _AFTER_HEAD_AMOUNT_RE = re.compile(
     r"(?:年初预算|预算数|支出决算|收入决算|决算数|决算|预算)为?是?\s*"
-    r"(?P<amount>\d[\d,]*\.\d+)(?![\d%．])"
+    r"(?P<amount>\d[\d,]*(?:\.\d+)+)(?![\d%．])"
 )
 
 
@@ -608,8 +612,10 @@ class CMM011_AmountUnitWan(Rule):
                     before = chunk[max(0, match.start() - 14):match.start()]
                     if re.search(r"[万亿千百]$", before):
                         continue
-                    after = chunk[match.end():match.end() + 4]
-                    if re.match(r"\s*(?:元|万元|亿元|％|%)", after):
+                    after = chunk[match.end():match.end() + 6]
+                    # 2026-11-16：后接“万万元/元元”等重复单位时，缺单位问题
+                    # 由重复单位检查独立报出；同一处不能再追加一条“缺少万元”。
+                    if re.match(r"\s*(?:万万元|亿亿元|元元|万元万|元|万元|亿元|％|%)", after):
                         continue
                     # 引文含金额语境词起点，能说明是哪个槽位漏了万元
                     head_start, end = flat_span(positions,

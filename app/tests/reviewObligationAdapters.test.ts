@@ -139,13 +139,13 @@ assert.equal(obligationDecisionTone(null), "lowconf");
 
 const label = blockerLabel("blocking_obligations", 2);
 assert.ok(label.includes("还有 2 项"), "计数必须说出来");
-assert.ok(label.includes("未能自动核对"), "用页面上同一个说法");
-assert.ok(label.includes("必须处理"), "必须指路到处理位置");
+assert.ok(label.includes("内部检查未完成"), "用页面上同一个说法");
+assert.ok(!label.includes("未能自动核对"), "技术诊断不再生成业务补核卡片");
 assert.ok(!label.includes("检查补核"), "补核页签已取消，不能再指过去");
 assert.ok(!label.includes("将在"), "不再说能力『将来才有』");
 assert.equal(
   blockerLabel("blocking_obligations", null),
-  "还有“未能自动核对”的检查待处理",
+  "本次分析仍有内部检查未完成",
 );
 
 // ---- 上下文解析对 obligation_review 的容忍 --------------------------------------

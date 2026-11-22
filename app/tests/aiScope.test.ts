@@ -153,7 +153,7 @@ const aiDoneObligationsPending = deriveAiScope({
   conclusion_scope: "incomplete_scope",
 });
 assert.equal(aiDoneObligationsPending.tone, "success");
-assert.equal(aiDoneObligationsPending.conclusionScopeShort, "仍有未能自动核对的检查待处理");
+assert.equal(aiDoneObligationsPending.conclusionScopeShort, "仍有内部检查未完成，结果尚不完整");
 
 // 未覆盖页进入短句，避免单行状态条漏掉页码。
 const uncovered = deriveAiScope({

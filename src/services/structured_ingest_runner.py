@@ -372,7 +372,23 @@ async def run_structured_ingest(
                 WHERE v.file_hash=$1 AND d.fiscal_year IS NOT DISTINCT FROM $2
                   AND d.doc_type=$3 AND o.org_name=$4 AND d.subject_org_id=$5''', checksum,fiscal_year,doc_type,org_name,str(metadata.get('organization_id') or ''))
             if len(existing) > 1:
-                raise ValueError('candidate original document identity is ambiguous')
+                bound_version_id = await conn.fetchval(
+                    "SELECT structured_document_version_id FROM analysis_jobs WHERE job_uuid=$1",
+                    job_id,
+                )
+                matched = (
+                    [
+                        row
+                        for row in existing
+                        if int(row["document_version_id"]) == int(bound_version_id)
+                    ]
+                    if bound_version_id is not None
+                    else []
+                )
+                if len(matched) == 1:
+                    existing = matched
+                else:
+                    raise ValueError('candidate original document identity is ambiguous')
             document_info = dict(existing[0]) if existing else None
         if document_info is None:
             document_info = await _ensure_document_version(

@@ -105,6 +105,27 @@ def test_name_variant_never_bypasses_identity_or_evidence(defect):
     assert not any(s.get('basis') == 'unique_native_code_parent_and_name_variant' for s in sources)
 
 
+def test_same_named_leaf_under_different_kuan_binds_only_with_unique_parent():
+    """同名“事业运行”分属不同款：款名唯一确定对象才比金额，否则保留待核。"""
+    doc, facts = document(extra=(
+        ('21202', '其他城乡社区管理事务'),
+        ('2120150', '事业运行'),
+        ('2120250', '事业运行'),
+    ))
+    fact, error = _hierarchy_fact(
+        doc, facts, _item_match('城乡社区支出', '城乡社区管理事务', '事业运行')
+    )
+    assert error is None and fact.subject_code == '2120150'
+    fact, error = _hierarchy_fact(
+        doc, facts, _item_match('城乡社区支出', '其他城乡社区管理事务', '事业运行')
+    )
+    assert error is None and fact.subject_code == '2120250'
+    fact, error = _hierarchy_fact(
+        doc, facts, _item_match('城乡社区支出', '不存在的款', '事业运行')
+    )
+    assert fact is None and error
+
+
 @pytest.fixture(scope='module')
 def original_prison_document():
     from src.services.pdf_parser import PDFParser

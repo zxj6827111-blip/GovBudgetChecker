@@ -21,6 +21,7 @@ from src.engine.budget_rules import (
 )
 from src.engine.common_rules import CMM004_CodeMirrorConsistency, _close
 from src.engine.rule_policy import AMOUNT_TOLERANCE_WAN
+from src.engine.rule_outcome import RuleNotApplicable
 from src.engine.rules_v33 import R33SGCompletion, build_document
 from src.engine.three_public_counts import count_issues
 from src.schemas.parse_artifact import FiscalFact
@@ -237,10 +238,14 @@ def test_three_public_counts_satisfied_by_disclosure_and_assets_section() -> Non
     assert _counts(_three_public_doc(scope, assets), scope) == set()
 
 
-# ---- 决议⑤：决算同科目收入≠支出 → 待人工复核 ---------------------------------
+# ---- 2026-11-19 决议：决算同科目收入≠支出不再逐科目提示 -----------------------
+# 原决议⑤（2026-10-22）对差额超 max(1万元,10%) 的科目报待人工复核。跨 9 份
+# 真实材料实证：科目级收支不同普遍存在（9/9 份、约 46% 共同科目），属正常
+# 结转结余运动；2026-11-19 决议废止该提示，规则对决算登记为 not_applicable，
+# 真实数据错位（如明细行左错一列）由明细错列/表内勾稽规则判定。
 
 
-def test_cmm004_final_flags_large_income_expense_gap_for_manual_review() -> None:
+def test_cmm004_final_income_expense_gap_no_longer_reported() -> None:
     doc = build_document(path="dept-2025-final.pdf", page_texts=["2025年度部门决算"], page_tables=[[]], filesize=1)
     doc.report_kind = "final"
     _attach_facts(doc, [
@@ -248,15 +253,11 @@ def test_cmm004_final_flags_large_income_expense_gap_for_manual_review() -> None
         _fact("FIN_02_income", "20133", "total_actual", "37.06"),
         _fact("FIN_03_expenditure", "201", "total_actual", "77.00"),
         _fact("FIN_03_expenditure", "20133", "total_actual", "77.00"),
-        # 10% 以内的差额属结转结余正常形态，不提示
         _fact("FIN_02_income", "2080505", "total_actual", "100.00"),
         _fact("FIN_03_expenditure", "2080505", "total_actual", "105.00"),
     ])
-    # table_facts 要求单一表实例：两张表各自一个实例
-    issues = CMM004_CodeMirrorConsistency().apply(doc)
-    assert [issue.location["subject_code"] for issue in issues] == ["20133"]
-    assert issues[0].severity == "manual_review"
-    assert "结转结余" in issues[0].message
+    with pytest.raises(RuleNotApplicable, match="结转结余"):
+        CMM004_CodeMirrorConsistency().apply(doc)
 
 
 # ---- 容差收紧后在样张回归中暴露的误报（2026-10-22 修复） -----------------------

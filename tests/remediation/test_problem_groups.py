@@ -31,6 +31,8 @@ def _v33_222(amount="179.82", page=20, quote="179.82"):
     return {
         "id": "V33-222-6", "rule_id": "V33-222", "severity": "error",
         "message": f"金额单位口径错误：原文{amount}元",
+        "evidence_status": "complete",
+        "evidence_verification": {"status": "verified", "source_identity_complete": True},
         "location": {
             "page": page, "unit_magnitude_error": True, "declared_unit": "元",
             "table_refs": [{
@@ -47,6 +49,8 @@ def _cmm_011(amount="179.82", page=20):
     return {
         "id": "CMM-011-7", "rule_id": "CMM-011", "severity": "warn",
         "message": f"金额单位疑似漏写“万”字：“{amount}元”，说明正文金额应以万元为单位。",
+        "evidence_status": "complete",
+        "evidence_verification": {"status": "verified", "source_identity_complete": True},
         "location": {"page": page, "pos": 302, "checklist_item": "C-14"},
     }
 
@@ -184,6 +188,7 @@ def _conflict_issue():
     return {
         "id": "pg-canonical", "rule_id": "V33-222", "severity": "high",
         "title": "单位错误", "message": "同源单位问题", "evidence_status": "complete",
+        "evidence_verification": {"status": "verified", "source_identity_complete": True},
         "location": {"member_issue_ids": ["member-a", "member-b"]},
     }
 

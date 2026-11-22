@@ -111,4 +111,23 @@ assert.match(String(parseDraftRows("1|2|3|4", 3).error), /最多 3 列/);
 assert.match(String(parseDraftRows("  ", 3).error), /至少一行/);
 assert.match(String(validateDraftRows([{ cells: { 1: "住房保障支出", 2: "两百" } }], new Set([2]), new Set([2]))), /只能填写数字/);
 
+const withStatements: CorrectionTargets = {
+  ...targets,
+  text_statements: [
+    {
+      target_id: "txt-1",
+      page: 26,
+      subject: { code: "2011350", name: "事业运行" },
+      span: "支出决算为 5,465.41",
+      amount_raw: "5,465.41",
+      unit_current: "万元",
+      effective_value: "5455.41",
+      effective_source: "manual_correction",
+      effective_correction_id: "cor-2",
+    },
+  ],
+};
+assert.equal(withStatements.text_statements?.length, 1);
+assert.equal(withStatements.text_statements?.[0].effective_value, "5455.41");
+
 console.log("correctionAdapters rows/identity test passed");

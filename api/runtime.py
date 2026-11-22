@@ -23,7 +23,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Iterable, List, Optional, Set
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 import aiofiles
 from fastapi import HTTPException, Request, UploadFile
@@ -124,6 +124,10 @@ _JOB_ACCESS_FIELD_KEYS = (
     "organization_match_confidence",
     "created_by",
 )
+# 结构化入库"是否最新版本"判定只关心每个任务的范围字段（组织/年度/文种/文件名）
+# 与版本时间戳，却被完整结果淹在数 MB 的 status.json 里。按文件签名缓存这份
+# 轻量记录，批量重跑时 98% 阶段不再反复全量解析（300+ 任务合计 GB 级）。
+_JOB_INGEST_SCOPE_CACHE: Dict[str, Tuple[Tuple[int, int, int], Optional[Dict[str, Any]]]] = {}
 STRUCTURED_INGEST_FILENAME = "structured_ingest.json"
 IGNORED_ISSUES_FILENAME = "ignored_issues.json"
 PERSISTENCE_STATE_FILENAME = "persistence.json"
@@ -138,7 +142,10 @@ JOB_SUMMARY_FILENAME = "job_summary.json"
 # 摘要字段口径的版本：新增或改变摘要字段时递增，旧快照因键失配自动重建。
 # 2：增加审核台两个页签的条数（queue_*）；3：必须处理计入“未能自动核对”（queue_obligation_total）；
 # 4：缺表/空表的连带核对不再计入“未能自动核对”（挂在根问题下）。
-JOB_SUMMARY_SCHEMA_VERSION = 4
+# 5：技术诊断不再计入“必须处理”；queue_obligation_total 仅作内部覆盖统计。
+# 6：增加核对未完成检查数。7：增加按原文归并后的待核对位置数。
+# 8：增加阻塞组关联的检查数与受影响检查数（10：schema 版本随字段增量推进）。
+JOB_SUMMARY_SCHEMA_VERSION = 10
 JOB_META_KEYS = (
     "job_id",
     "checksum",
@@ -1225,6 +1232,71 @@ def build_structured_ingest_scope(
     }
 
 
+def _ingest_scope_cache_signature(job_dir: Path) -> Optional[Tuple[int, int, int]]:
+    """status.json 的 (mtime_ns, size) 加目录 mtime 组合签名。
+
+    目录 mtime 也进签名：version_created_at 缺失时回退用目录 stat 推断，
+    任务目录增删文件必须让缓存失配，避免"最新版本"判定读到旧时间戳。
+    """
+    status_file = job_dir / "status.json"
+    try:
+        status_stat = status_file.stat()
+        dir_mtime_ns = job_dir.stat().st_mtime_ns
+    except OSError:
+        return None
+    return (status_stat.st_mtime_ns, status_stat.st_size, dir_mtime_ns)
+
+
+def _build_ingest_scope_record(
+    job_dir: Path, status_payload: Optional[Dict[str, Any]]
+) -> Optional[Dict[str, Any]]:
+    payload = status_payload if isinstance(status_payload, dict) else {}
+    if not payload:
+        return None
+    return {
+        "scope": build_structured_ingest_scope(
+            organization_id=payload.get("organization_id"),
+            organization_name=payload.get("organization_name"),
+            fiscal_year=payload.get("fiscal_year"),
+            report_year=payload.get("report_year"),
+            doc_type=payload.get("doc_type"),
+            report_kind=payload.get("report_kind"),
+            filename=str(payload.get("filename") or ""),
+        ),
+        "filename": str(payload.get("filename") or ""),
+        "version_created_at": get_job_version_timestamp(job_dir, payload),
+        "job_created_at": get_job_created_timestamp(job_dir, payload),
+    }
+
+
+def _remember_ingest_scope_record(
+    job_dir: Path,
+    record: Optional[Dict[str, Any]],
+    signature: Optional[Tuple[int, int, int]] = None,
+) -> None:
+    # 签名必须在读取内容之前取样：读取中途的并发重写若配到读取之后的新签名，
+    # 撕裂读出的"负记录"会被钉在新签名下，直到文件再次变化才失效。
+    if signature is None:
+        signature = _ingest_scope_cache_signature(job_dir)
+    if signature is None:
+        return
+    _JOB_INGEST_SCOPE_CACHE[job_dir.name] = (signature, record)
+    if len(_JOB_INGEST_SCOPE_CACHE) > _JOB_SUMMARY_CACHE_MAX_SIZE:
+        _JOB_INGEST_SCOPE_CACHE.pop(next(iter(_JOB_INGEST_SCOPE_CACHE)))
+
+
+def _ingest_scope_record_for(job_dir: Path) -> Optional[Dict[str, Any]]:
+    """带签名缓存的入库范围记录；未变化时不再重复解析数 MB 的 status.json。"""
+    signature = _ingest_scope_cache_signature(job_dir)
+    cached = _JOB_INGEST_SCOPE_CACHE.get(job_dir.name)
+    if signature is not None and cached is not None and cached[0] == signature:
+        return cached[1]
+    status_payload = read_json_file(job_dir / "status.json", default={})
+    record = _build_ingest_scope_record(job_dir, status_payload)
+    _remember_ingest_scope_record(job_dir, record, signature=signature)
+    return record
+
+
 def resolve_latest_structured_ingest_job(
     job_id: str,
     *,
@@ -1237,7 +1309,15 @@ def resolve_latest_structured_ingest_job(
     filename: str = "",
     current_status_payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Resolve whether the current job is the latest report version for ingest scope."""
+    """Resolve whether the current job is the latest report version for ingest scope.
+
+    98% 结构化入库前逐任务判定"是否最新版本"。旧实现每判一次就完整解析
+    uploads/ 下全部 status.json（300+ 任务合计 GB 级、单次实测 13 秒以上），
+    直接在事件循环上执行会把整个后端冻住十几秒，是 2026-11-18 批量重跑
+    连锁雪崩的根因。现在按文件签名缓存每个任务的轻量范围记录；调用方
+    （api/main.py）另通过 asyncio.to_thread 执行本函数，冷缓存首次扫描
+    也不再阻塞事件循环。
+    """
     scope = build_structured_ingest_scope(
         organization_id=organization_id,
         organization_name=organization_name,
@@ -1260,30 +1340,24 @@ def resolve_latest_structured_ingest_job(
     for job_dir in iter_job_dirs():
         candidate_job_id = job_dir.name
         if candidate_job_id == job_id and isinstance(current_status_payload, dict):
-            status_payload = dict(current_status_payload)
+            record = _build_ingest_scope_record(job_dir, dict(current_status_payload))
+            if record is not None:
+                _remember_ingest_scope_record(job_dir, record)
         else:
-            status_payload = read_json_file(job_dir / "status.json", default={})
-        if not isinstance(status_payload, dict):
+            record = _ingest_scope_record_for(job_dir)
+        if record is None:
             continue
 
-        candidate_scope = build_structured_ingest_scope(
-            organization_id=status_payload.get("organization_id"),
-            organization_name=status_payload.get("organization_name"),
-            fiscal_year=status_payload.get("fiscal_year"),
-            report_year=status_payload.get("report_year"),
-            doc_type=status_payload.get("doc_type"),
-            report_kind=status_payload.get("report_kind"),
-            filename=str(status_payload.get("filename") or ""),
-        )
+        candidate_scope = record.get("scope")
         if not candidate_scope or candidate_scope.get("scope_key") != scope.get("scope_key"):
             continue
 
         candidates.append(
             {
                 "job_id": candidate_job_id,
-                "filename": str(status_payload.get("filename") or ""),
-                "version_created_at": get_job_version_timestamp(job_dir, status_payload),
-                "job_created_at": get_job_created_timestamp(job_dir, status_payload),
+                "filename": record.get("filename") or "",
+                "version_created_at": record.get("version_created_at"),
+                "job_created_at": record.get("job_created_at"),
                 "quick_ts": get_job_quick_timestamp(job_dir),
             }
         )
@@ -1892,6 +1966,63 @@ async def cleanup_structured_ingest_history(
     }
 
 
+_RESOLVED_SCOPE_DECISIONS = frozenset({"verified_ok", "verified_issue", "not_applicable"})
+
+
+def apply_scope_decisions_to_summary(
+    summary: Dict[str, Any],
+    decisions: Dict[str, Dict[str, Dict[str, str]]],
+) -> None:
+    """按有效会话的范围决定重算队列“需人工核对”口径（R5-B，2026-11-20 复审）。
+
+    ``decisions`` 形如 ``{obligation_id: {scope_key: decision}}``，来自当前
+    分析代际的有效复核会话。判定与完成门禁 ``obligation_decision_resolved``
+    一致：一处阻塞位置在其 (义务, decision_scope) 上拿到 resolved 决定才算
+    已处理；该义务只剩一个待表态范围时，义务级决定同样放行。已处理位置从
+    blocking 口径中扣除，其余字段（位置总数等）保持分析产出不变。
+    """
+    scopes = summary.get("queue_unfinished_blocking_scopes") or []
+    if not scopes:
+        return
+    job_decisions = decisions or {}
+    # 该义务需要分别表态的范围全集：与门禁 required_obligation_scopes 同源，
+    # 取自当前发布版本的全部阻塞组，而不是“已有决定的范围数”。
+    required: Dict[str, set] = {}
+    for item in scopes:
+        scope = str(item.get("scope") or "")
+        if not scope:
+            continue
+        for obligation in (item.get("obligations") or []):
+            required.setdefault(str(obligation), set()).add(scope)
+
+    def _resolved(obligation: str, scope: str) -> bool:
+        obligation_scopes = job_decisions.get(obligation) or {}
+        obligation_level = obligation_scopes.get("", "") in _RESOLVED_SCOPE_DECISIONS
+        scope_resolved = obligation_scopes.get(scope, "") in _RESOLVED_SCOPE_DECISIONS
+        all_required = required.get(obligation) or set()
+        if len(all_required) > 1:
+            # 多处独立阻塞：每一处都必须有自己的表态，义务级决定不替代。
+            return scope_resolved
+        if len(all_required) == 1:
+            return scope_resolved or obligation_level
+        return obligation_level
+
+    pending = [
+        item for item in scopes
+        if item.get("scope") and not any(
+            _resolved(str(obligation), str(item["scope"]))
+            for obligation in (item.get("obligations") or [])
+        )
+    ]
+    summary["queue_unfinished_blocking_location_total"] = len(pending)
+    summary["queue_unfinished_blocking_check_total"] = sum(
+        len(item.get("obligations") or []) for item in pending
+    )
+    summary["queue_unfinished_blocking_affected_total"] = sum(
+        int(item.get("affected") or 0) for item in pending
+    )
+
+
 def _blocking_obligation_total(job_id: str, status_data: Dict[str, Any], ignored_issue_ids: Any) -> Optional[int]:
     """审核台“未能自动核对”的条数：与完成门禁同一函数，取不到覆盖记录时返回 None（未知不当 0）。"""
     from src.services.material_detail_query_service import build_coverage
@@ -2076,6 +2207,9 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
     if isinstance(raw_status, dict) and raw_status and status_mtime_ns >= 0:
         # 摘要已经解析过状态文件，顺手记住授权字段，复核清单的权限判断不必再读一遍。
         _remember_job_access_fields(job_dir.name, (status_mtime_ns, status_size), raw_status)
+        # 同理顺手填充入库范围缓存：后台预热一次后，批量重跑 98% 阶段的
+        # "是否最新版本"判定全程命中缓存，不必再冷扫描。
+        _remember_ingest_scope_record(job_dir, _build_ingest_scope_record(job_dir, raw_status))
         # 冷缓存/启动预热时顺手回填轻量 sidecar；下一次上传查重不必再解析大文件。
         if not get_job_meta_path(job_dir).exists():
             try:
@@ -2479,16 +2613,55 @@ def collect_job_summary(job_dir: Path) -> Dict[str, Any]:
     # review reason or rounding tip must not inflate the material issue count.
     from src.schemas.review_report import build_review_report, review_queue_counts, review_report_counts
 
-    review_report = build_review_report(status_data)
+    review_report = build_review_report(status_data, resolve_pdf_bboxes=False)
     ignored_issue_ids = status_data.get("ignored_issue_ids") or []
     review_counts = review_report_counts(review_report, ignored_issue_ids)
     # 列表显示审核台两个页签（必须处理 / 参考）的条数，点进去看到的就是这两个数。
     queue_counts = review_queue_counts(review_report, ignored_issue_ids)
-    # 补核已并入审核台「必须处理」（“未能自动核对”），列表的必须处理也计入同一批条目。
+    unfinished_groups = review_report.get("unfinished_check_groups") or []
+    queue_counts["queue_unfinished_check_total"] = len(review_report.get("unfinished_checks") or [])
+    queue_counts["queue_unfinished_location_total"] = len(unfinished_groups)
+    queue_counts["queue_unfinished_blocking_location_total"] = sum(
+        1 for group in unfinished_groups if isinstance(group, dict) and group.get("blocks_completion")
+    )
+    queue_counts["queue_unfinished_covered_location_total"] = sum(
+        1 for group in unfinished_groups if isinstance(group, dict) and group.get("covered_by_issue")
+    )
+    queue_counts["queue_unfinished_notice_location_total"] = sum(
+        1 for group in unfinished_groups
+        if isinstance(group, dict) and not group.get("blocks_completion") and not group.get("covered_by_issue")
+    )
+    # “X 处需人工核对 · 影响 N 项检查”：处数按 group，N 按该组关联的
+    # 义务/问题检查数；只统计真正阻塞完成的组。
+    blocking_groups = [
+        group for group in unfinished_groups
+        if isinstance(group, dict) and group.get("blocks_completion")
+    ]
+    queue_counts["queue_unfinished_blocking_check_total"] = sum(
+        len(group.get("blocking_obligation_ids") or []) for group in blocking_groups
+    )
+    queue_counts["queue_unfinished_blocking_affected_total"] = sum(
+        int(group.get("affected_check_count") or len(group.get("check_ids") or []))
+        for group in blocking_groups
+    )
+    # R5-B（2026-11-20 复审）：范围表态后队列必须把已处理位置从未处理口径中
+    # 扣除。这里先带上每组的表态范围身份（义务 + decision_scope + 影响数），
+    # 列表路由再按有效会话的范围决定重算 pending 口径；决定在 PG，收集摘要
+    # 的同步线程里读不到。
+    queue_counts["queue_unfinished_blocking_scopes"] = [
+        {
+            "scope": str(group.get("decision_scope") or ""),
+            "obligations": [str(value) for value in (group.get("blocking_obligation_ids") or [])],
+            "affected": int(group.get("affected_check_count") or len(group.get("check_ids") or [])),
+        }
+        for group in blocking_groups
+    ]
+    # 技术诊断只作内部覆盖统计：保留 queue_obligation_total 供维护/导出对账，
+    # 不再计入业务「必须处理」。业务必须处理只由正式问题决定。
     obligation_total = _blocking_obligation_total(job_dir.name, status_data, ignored_issue_ids)
     if obligation_total is not None:
         queue_counts["queue_obligation_total"] = obligation_total
-        queue_counts["queue_required_total"] += obligation_total
+        queue_counts["queue_diagnostic_total"] = obligation_total
 
     ai_participated = bool(use_ai_assist) and (
         dual_mode_enabled

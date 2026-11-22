@@ -1523,13 +1523,17 @@ class CMM004_CodeMirrorConsistency(Rule):
     code, severity = "CMM-004", "warn"
     desc = "\u6536\u5165/\u652f\u51fa\u603b\u8868\u7c7b\u6b3e\u9879\u7f16\u7801\u4e0e\u91d1\u989d\u955c\u50cf\u4e00\u81f4\u6027"
 
-    #: 口径决议⑤：决算同科目收入≠支出只作待人工复核提示的差额门槛。
-    _FINAL_REVIEW_MIN_WAN = Decimal("1")
-    _FINAL_REVIEW_MIN_SHARE = Decimal("0.10")
-
     def apply(self, doc: Document) -> List[Issue]:
         if _infer_report_kind(doc) == "final":
-            return self._final_income_expense_review(doc)
+            # 2026-11-19 决议：决算同科目收入与支出可因结转结余合理不等。
+            # 跨 9 份真实材料实证：9/9 均存在科目级收支不同（约 46% 共同科目），
+            # 逐科目提示属常态噪音，不再报出；真实数据错位（如明细行左错一列）
+            # 由明细错列检测与表内勾稽规则负责判定。
+            raise RuleNotApplicable(
+                self.code,
+                "决算同科目收入\u2260支出属正常结转结余运动，按 2026-11-19 决议不再逐科目提示；"
+                "真实数据错位由明细错列/表内勾稽规则判定",
+            )
         income, expense = _extract_code_amount_pairs(_page_texts(doc))
         if len(income) < 2 or len(expense) < 2:
             raise RuleDeferred(
@@ -1610,89 +1614,6 @@ class CMM004_CodeMirrorConsistency(Rule):
                 )
             )
 
-        return issues
-
-    def _final_income_expense_review(self, doc: Document) -> List[Issue]:
-        """决算：同一功能科目收入决算表与支出决算表差额较大时提示人工复核。
-
-        决算同科目收入与支出可因结转结余合理不等，不存在镜像相等关系，
-        所以只在差额超过 max(1 万元, 10%) 时报 manual_review（口径决议⑤，
-        清单决算 B-10），不计入错误；只在最细一级报出，避免类/款/项重复。
-        """
-        from .fact_context import _canonical_budget_stage, operand_rejection_reason
-        from .native_table_arithmetic import table_facts
-
-        income_facts, blocked_in = table_facts(doc, "FIN_02_income")
-        expense_facts, blocked_out = table_facts(doc, "FIN_03_expenditure")
-        if blocked_in or blocked_out:
-            raise RuleNotApplicable(
-                self.code,
-                "决算同科目收入与支出可因结转结余不同，只做逐科目对照复核提示；"
-                f"收入/支出决算表事实不可用：{blocked_in or blocked_out}",
-            )
-        org_name = getattr(doc.fact_context, "org_name", None)
-
-        def by_code(facts):
-            picked: Dict[str, List[Any]] = {}
-            for fact in facts:
-                code = str(fact.subject_code or "")
-                if (fact.indicator != "total_actual" or not code.isdigit() or len(code) not in (3, 5, 7)
-                        or fact.normalized_value is None or fact.period not in (None, "本年")
-                        or _canonical_budget_stage(fact.budget_stage) != "决算"
-                        or operand_rejection_reason(fact, org_name)):
-                    continue
-                picked.setdefault(code, []).append(fact)
-            return {code: items[0] for code, items in picked.items() if len(items) == 1}
-
-        income, expense = by_code(income_facts), by_code(expense_facts)
-        flagged: Dict[str, Tuple[Any, Any, Decimal]] = {}
-        for code in sorted(set(income) & set(expense)):
-            inc = Decimal(str(income[code].normalized_value))
-            exp = Decimal(str(expense[code].normalized_value))
-            diff = abs(inc - exp)
-            if diff > max(self._FINAL_REVIEW_MIN_WAN, max(abs(inc), abs(exp)) * self._FINAL_REVIEW_MIN_SHARE):
-                flagged[code] = (income[code], expense[code], diff)
-
-        from .native_table_arithmetic import receipt
-        from .native_three_public_ratios import operand_ref
-
-        issues: List[Issue] = []
-        for code, (inc_fact, exp_fact, diff) in flagged.items():
-            if any(other != code and other.startswith(code) for other in flagged):
-                continue
-            facts = (inc_fact, exp_fact)
-            pages = sorted({ref.get("physical_page") for fact in facts
-                            for ref in (fact.extra_dims or {}).get("evidence_refs", [])
-                            if ref.get("physical_page")})
-            relation = f"final_income_expense:{code}"
-            fact_ids, evidence_ids = receipt(
-                self, doc, relation, list(facts), status="fail",
-                formula="收入决算表.本年收入合计 ≈ 支出决算表.本年支出合计（差额 > max(1万元, 10%) 提示复核）",
-            )
-            message = (
-                f"同一科目在收入决算表与支出决算表金额差异较大（{code} {inc_fact.subject_name or ''}）："
-                f"收入{inc_fact.normalized_value:.2f}万元、支出{exp_fact.normalized_value:.2f}万元，"
-                f"相差{diff:.2f}万元。可能因结转结余造成，请人工核对。"
-            )
-            issues.append(
-                self._issue(
-                    message,
-                    {"page": pages[0] if pages else None, "pages": pages, "subject_code": code,
-                     "table": "收入决算表↔支出决算表",
-                     "operand_refs": [
-                         {**operand_ref(fact, role), "operand_id": f"{code}:{role}",
-                          "relation_id": relation,
-                          "evidence_refs": list((fact.extra_dims or {}).get("evidence_refs", []))}
-                         for fact, role in ((inc_fact, "income"), (exp_fact, "expense"))
-                     ],
-                     "fact_context_version_token": getattr(doc.fact_context, "version_token", None)},
-                    "manual_review",
-                    evidence_text=message,
-                    check_relation_id=f"{self.code}:{relation}",
-                    fact_ids=fact_ids,
-                    evidence_ids=evidence_ids,
-                )
-            )
         return issues
 
 

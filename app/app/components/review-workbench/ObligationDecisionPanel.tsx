@@ -55,6 +55,8 @@ export interface ObligationDecisionPanelProps {
   defaultNote?: string | null;
   /** 义务条目（R2.2 A3：用于展示全量阻断点与覆盖范围确认）。 */
   item?: ObligationReviewItemRecord | null;
+  /** R5：按原文位置/科目分别表态时的本次范围说明；空=整条义务。 */
+  scopeLabel?: string | null;
   isSubmitting: boolean;
   onSubmit: (note: string) => void;
   onCancel: () => void;
@@ -88,6 +90,7 @@ export function ObligationDecisionPanel({
   checkName,
   defaultNote,
   item,
+  scopeLabel = null,
   isSubmitting,
   onSubmit,
   onCancel,
@@ -153,9 +156,11 @@ export function ObligationDecisionPanel({
           data-blocked-count={counts.blocked}
         >
           <h3 className="mb-1 text-xs font-semibold text-slate-600">
-            {noDetail
-              ? "阻断范围"
-              : `阻断点清单（${counts.missing + counts.blocked}）· 缺数位置 ${counts.missing} 项 · 结构卡点 ${counts.blocked} 项`}
+            {scopeLabel
+              ? `本次表态范围：${scopeLabel}`
+              : noDetail
+                ? "阻断范围"
+                : `阻断点清单（${counts.missing + counts.blocked}）· 缺数位置 ${counts.missing} 项 · 结构卡点 ${counts.blocked} 项`}
           </h3>
           {noDetail ? (
             <p className="text-xs leading-relaxed text-slate-600">
@@ -235,9 +240,11 @@ export function ObligationDecisionPanel({
               className="mt-0.5 accent-primary-600"
             />
             <span data-testid="gbc-review-obligation-scope-text">
-              {noDetail
-                ? "本人确认：本决定覆盖该义务全部阻断点（上方清单即完整集合）。范围确认不能代替适用性/核对依据。"
-                : `本人确认：本决定覆盖该义务全部阻断点（缺数位置 ${counts.missing} 项、结构卡点 ${counts.blocked} 项，上方清单即完整集合）。范围确认不能代替适用性/核对依据。`}
+              {scopeLabel
+                ? "本人确认：本决定只覆盖上方本次范围；同一义务的其他原文位置需分别核对、分别表态。范围确认不能代替核对依据。"
+                : noDetail
+                  ? "本人确认：本决定覆盖该义务全部阻断点（上方清单即完整集合）。范围确认不能代替适用性/核对依据。"
+                  : `本人确认：本决定覆盖该义务全部阻断点（缺数位置 ${counts.missing} 项、结构卡点 ${counts.blocked} 项，上方清单即完整集合）。范围确认不能代替适用性/核对依据。`}
             </span>
           </label>
         ) : null}

@@ -24,6 +24,7 @@ import {
   upsertPending,
   validateCellValue,
   validateDraftRows,
+  type CorrectionHistoryRecord,
   type CorrectionLocation,
   type CorrectionTable,
   type CorrectionTargets,
@@ -56,6 +57,8 @@ interface CorrectionsTabProps {
   pickedRegion: CorrectionLocation | null;
   onRequestRegion: (label: string) => void;
   onClearRegion: () => void;
+  /** R6：查看历史分析版本时，只显示属于该版本的校正记录。 */
+  revisionFilter?: string | null;
 }
 
 interface SelectedCell {
@@ -446,7 +449,25 @@ function TableCard({
   );
 }
 
-export function CorrectionsTab({ jobId, disabled, onFocus, onSubmitted, pickedRegion, onRequestRegion, onClearRegion }: CorrectionsTabProps) {
+function formatHistoryChanges(changes: CorrectionHistoryRecord["changes"]): string {
+  const fieldLabels: Record<string, string> = {
+    raw_value: "读数",
+    unit: "单位",
+    subject_code: "科目编码",
+    subject_name: "科目名称",
+  };
+  const parts = changes
+    .map((change) => {
+      const field = String(change.field ?? "");
+      if (!field || typeof change.value === "object") return null;
+      const label = fieldLabels[field] ?? field;
+      return `${label}=${String(change.value ?? "")}`;
+    })
+    .filter((item): item is string => Boolean(item));
+  return parts.length ? parts.join("、") : `${changes.length} 项`;
+}
+
+export function CorrectionsTab({ jobId, disabled, onFocus, onSubmitted, pickedRegion, onRequestRegion, onClearRegion, revisionFilter = null }: CorrectionsTabProps) {
   const [targets, setTargets] = useState<CorrectionTargets | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingCorrection[]>([]);
@@ -454,21 +475,32 @@ export function CorrectionsTab({ jobId, disabled, onFocus, onSubmitted, pickedRe
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
-  const [showHistory, setShowHistory] = useState(false);
+  const [showHistory, setShowHistory] = useState(true);
 
   const load = useCallback(async () => {
     setLoadError(null);
     try {
-      const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/correction-targets`, { cache: "no-store" });
+      // R6：历史版本的读取请求必须绑定 analysis_revision；服务端按该版本
+      // 返回目标与生效记录，缺历史数据时显式报错，不回退当前版本。
+      const revisionPath = revisionFilter
+        ? `?analysis_revision=${encodeURIComponent(revisionFilter)}`
+        : "";
+      const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/correction-targets${revisionPath}`, { cache: "no-store" });
       if (!response.ok) {
-        setLoadError(describeSubmitError(response.status, await response.json().catch(() => ({}))));
+        const body = await response.json().catch(() => ({}));
+        const detail = (body as { detail?: { message?: string } | string }).detail;
+        setLoadError(
+          response.status === 404 || response.status === 409
+            ? (typeof detail === "string" ? detail : detail?.message) || "该历史版本的校正数据不可用"
+            : describeSubmitError(response.status, body),
+        );
         return;
       }
       setTargets((await response.json()) as CorrectionTargets);
     } catch {
       setLoadError("校正数据暂时无法读取");
     }
-  }, [jobId]);
+  }, [jobId, revisionFilter]);
 
   useEffect(() => {
     void load();
@@ -532,12 +564,30 @@ export function CorrectionsTab({ jobId, disabled, onFocus, onSubmitted, pickedRe
 
   const tableIds = new Set(targets.tables.map((table) => table.fragment_uid));
   const looseGaps = targets.gaps.filter((gap) => !(gap.affected_fragment_uids ?? []).some((uid) => tableIds.has(uid)));
+  const textStatements = targets.text_statements ?? [];
   const overlay = targets.overlay_status;
   const overlayProblems = overlay && (overlay.status === "partial" || overlay.status === "failed") ? overlay.unresolved ?? [] : [];
+  // R6：历史页的记录由服务端按版本绑定返回（只含该版本生效的记录）；
+  // 当前版本返回全部记录。客户端不再按 basis_token 二次过滤。
+  const visibleHistory = targets.history;
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="gbc-review-corrections-tab">
       <div className="min-h-0 flex-1 overflow-y-auto">
+        {targets.historical ? (
+          <p className="border-b border-border bg-surface-100 px-4 py-2 text-xs text-slate-600" data-testid="gbc-corrections-history-banner">
+            历史版本（{String(targets.analysis_revision ?? revisionFilter ?? "")}）· 只读：
+            下方目标、读数与生效记录均为该版本发布时状态；当前版本的校正不会出现在这里。
+          </p>
+        ) : null}
+        {targets.history_note ? (
+          <p className="border-b border-border bg-warning-50 px-4 py-2 text-xs text-warning-700" data-testid="gbc-corrections-history-note">
+            {targets.history_note}
+            {targets.records_without_effect_version?.length
+              ? `（记录：${targets.records_without_effect_version.join("、")}）`
+              : null}
+          </p>
+        ) : null}
         <p className="border-b border-border px-4 py-2 text-xs leading-relaxed text-slate-500">
           对照左侧原页：点击表格中的格子补录或确认内容，或在表头上方指定金额列的含义。提交后自动重新分析；原始读取结果保留，
           用到补录数据的问题会标注“含人工补录数据”。
@@ -550,8 +600,60 @@ export function CorrectionsTab({ jobId, disabled, onFocus, onSubmitted, pickedRe
             </ul>
           </div>
         ) : null}
-        {targets.tables.length === 0 && looseGaps.length === 0 ? (
+        {targets.tables.length === 0 && looseGaps.length === 0 && textStatements.length === 0 ? (
           <p className="px-4 py-6 text-sm text-slate-500">当前没有需要人工补录或校正的表格。</p>
+        ) : null}
+        {textStatements.length > 0 ? (
+          <section className="border-b border-border px-4 py-3 text-xs" data-testid="gbc-corrections-text-statements">
+            <div className="mb-2 font-semibold text-slate-800">
+              正文金额读取与当版有效读数（{textStatements.length}）
+            </div>
+            <ul className="space-y-2">
+              {textStatements.map((stmt) => {
+                const effectiveValue = stmt.effective_value ?? stmt.amount_raw ?? "未识别";
+                const isManual = stmt.effective_source === "manual_correction";
+                const subjectLabel = [stmt.subject?.name, stmt.subject?.code ? `科目 ${stmt.subject.code}` : null]
+                  .filter(Boolean)
+                  .join(" · ");
+                return (
+                  <li
+                    key={stmt.target_id}
+                    className="space-y-1 rounded border border-border bg-surface-50 px-3 py-2 text-slate-700"
+                    data-testid={`gbc-corrections-text-statement-${stmt.target_id}`}
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium text-slate-900">
+                        {stmt.page ? `第 ${stmt.page} 页` : "正文"}
+                        {subjectLabel ? ` · ${subjectLabel}` : ""}
+                      </span>
+                      {stmt.page ? (
+                        <button
+                          type="button"
+                          className="ml-auto text-primary-600 hover:text-primary-700"
+                          onClick={() => {
+                            const bbox = stmt.evidence?.find((ref) => Array.isArray(ref.bbox))?.bbox ?? null;
+                            onFocus({ page: stmt.page!, bbox, label: stmt.title || "正文金额原句" });
+                          }}
+                        >
+                          定位原页
+                        </button>
+                      ) : null}
+                    </div>
+                    {stmt.span ? <p className="text-slate-700">原句：{stmt.span}</p> : null}
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-slate-600">
+                      <span>原文读数：{stmt.amount_raw ?? "未识别"}</span>
+                      <span className="font-medium text-slate-900" data-testid="gbc-corrections-effective-reading">
+                        当版有效读数：{effectiveValue}
+                        {isManual
+                          ? `（人工校正${stmt.effective_correction_id ? ` · ${stmt.effective_correction_id}` : ""}）`
+                          : "（原文披露）"}
+                      </span>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
         ) : null}
         {looseGaps.length > 0 ? (
           <section className="border-b border-border px-4 py-3 text-xs">
@@ -590,16 +692,26 @@ export function CorrectionsTab({ jobId, disabled, onFocus, onSubmitted, pickedRe
             onClearRegion={onClearRegion}
           />
         ))}
-        {targets.history.length > 0 ? (
+        {visibleHistory.length > 0 ? (
           <section className="px-4 py-3 text-xs">
             <button type="button" className="font-medium text-slate-600 hover:text-slate-800" onClick={() => setShowHistory((value) => !value)}>
-              {showHistory ? "收起" : "查看"}以往校正记录（{targets.history.length}）
+              {showHistory ? "收起" : "查看"}以往校正记录（{visibleHistory.length}）
             </button>
             {showHistory ? (
               <ul className="mt-2 space-y-1 text-slate-600">
-                {[...targets.history].reverse().map((record) => (
+                {[...visibleHistory].reverse().map((record) => (
                   <li key={record.record_id} className="rounded bg-surface-100 px-2 py-1">
-                    {record.created_at?.slice(0, 16).replace("T", " ")} · {record.actor} · {record.changes.length} 项 · {record.reason}
+                    {record.created_at?.slice(0, 16).replace("T", " ")} · {record.actor} · {formatHistoryChanges(record.changes)} · {record.reason}
+                    {record.effective_in_revision && record.submitted_against_revision ? (
+                      <span className="ml-1 text-slate-500">
+                        （基于 {record.submitted_against_revision} 提交、在 {record.effective_in_revision} 首次生效）
+                      </span>
+                    ) : null}
+                    {record.superseded ? (
+                      <span className="ml-1 text-warning-700" data-testid="gbc-corrections-superseded">
+                        该记录读数已被后续校正替代
+                      </span>
+                    ) : null}
                   </li>
                 ))}
               </ul>

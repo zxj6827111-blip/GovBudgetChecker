@@ -6,6 +6,8 @@
 掩盖了“材料数值不可用”与“系统列映射未完成”的区别。
 """
 
+import pytest
+
 from src.services.structured_ingest_runner import _reading_review_items
 
 
@@ -117,6 +119,31 @@ def test_trailing_unit_does_not_split_a_single_lexeme():
     }
     items = _reading_review_items(quality)
     assert [i["type"] for i in items] == ["invalid_number_format"]
+
+
+@pytest.mark.parametrize("raw", ["79,85.49", "1,8415.60", "1234,567.89"])
+def test_misplaced_thousands_grouping_is_a_format_defect(raw):
+    """错位千分位至少有两种读数解释，只报格式缺陷、不猜值。"""
+    quality = {
+        "gaps": [],
+        "mapping_incomplete_tables": [_table(count=1)],
+        "unbound_money_cells": [_cell("t3:r0c3", 9, raw)],
+    }
+    items = _reading_review_items(quality)
+    assert [i["type"] for i in items] == ["invalid_number_format"]
+    assert items[0]["recommended_action"] == "correct_original_number_format"
+    assert "保持材料阻断" in items[0]["message"]
+
+
+@pytest.mark.parametrize("raw", ["1,860.33", "1860.33", "12,345,678.90"])
+def test_valid_thousands_grouping_is_not_a_format_defect(raw):
+    quality = {
+        "gaps": [],
+        "mapping_incomplete_tables": [_table(count=1)],
+        "unbound_money_cells": [_cell("t3:r0c3", 9, raw)],
+    }
+    items = _reading_review_items(quality)
+    assert not [i for i in items if i["type"] == "invalid_number_format"]
 
 
 def test_independent_binding_conflict_survives_format_classification():

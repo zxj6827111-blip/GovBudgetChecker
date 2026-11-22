@@ -7,7 +7,7 @@ import { expect, test, type Page } from "../../app/node_modules/playwright/test"
  * 1. 只显示终态任务（processing/queued 不出现在历史里）；
  * 2. 报告下载入口可达（PDF/CSV/JSON 三格式链接指向既有 /api/reports/download）；
  * 3. 筛选（状态/年份"未识别到"）缩小结果；
- * 4. 反例：review_required 行显示"需要人工复核"，不显示"分析完成"（继承红线）；
+ * 4. 有历史分析结果时显示检查状态入口；
  * 5. 普通审核员（非管理员）可访问本页（任务历史不属于管理组）。
  */
 
@@ -162,14 +162,14 @@ test.describe("History page (Task 8.2)", () => {
     expect(bodyText).not.toContain("2000");
   });
 
-  test("REGRESSION: review_required row shows 需要人工复核, never 分析完成", async ({ page }) => {
+  test("旧分析未提供核对数量时，历史列表提供查看入口", async ({ page }) => {
     await page.context().addCookies([sessionCookie]);
     await installHistoryMocks(page);
     await page.goto("/history");
 
     const row = page.getByTestId("gbc-workbench-queue-row-job-review");
-    await expect(row).toContainText("需要人工复核");
-    await expect(row).not.toContainText("分析完成");
+    await expect(row).toContainText("已生成结果");
+    await expect(row.getByRole("link", { name: /查看核对状态/ })).toHaveAttribute("href", /[?&]tab=checks/);
   });
 
   test("non-admin reviewer can access the history page", async ({ page }) => {

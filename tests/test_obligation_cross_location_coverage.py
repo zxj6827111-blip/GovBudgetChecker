@@ -256,7 +256,7 @@ def test_receipt_obligation_api_export_keep_relation_identity():
         "issues": {"critical": [], "error": [], "warn": [], "info": [], "tips": []},
     })
     exported = next(
-        row for row in report["manual_review"]
+        row for row in report["diagnostics"]
         if row.get("record_type") == "unfinished_check"
     )
     assert exported["missing_operands"][0]["check_relation_id"] == RELATION

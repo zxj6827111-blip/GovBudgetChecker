@@ -222,3 +222,118 @@ test("读取校正：框选坐标按 MediaBox 平移矩阵换回解析坐标", a
   expect(body.changes[0].location.physical_page).toBe(2);
   bbox.forEach((value, index) => expect(Math.abs(value - expected[index])).toBeLessThan(2));
 });
+
+test("R6 读取校正：正文声明有效读数按 A/B/C/当前版本分屏展示，历史版本零写请求且标记被替代记录", async ({page}) => {
+  await page.setViewportSize({width: 1440, height: 900});
+  await page.context().addCookies([{name: "gbc_session", value: "e2e-session", url: "http://127.0.0.1:3000", sameSite: "Lax"}]);
+  const writeRequests: string[] = [];
+  const revA = "rev-20261121T152029-f60bf34c";
+  const revB = "rev-20261121T152101-c0a02766";
+  const revC = "rev-20261121T152138-5ec6003b";
+  const recB = {
+    record_id: "cor-b",
+    actor: "reviewer",
+    reason: "首次人工改数",
+    created_at: "2026-11-21T15:21:00Z",
+    analysis_basis_token: `${JOB_ID}:${revA}`,
+    submitted_against_revision: revA,
+    effective_in_revision: revB,
+    superseded: false,
+    changes: [{field: "raw_value", target_id: "txt-1", value: "5455.41"}],
+  };
+  const recC = {
+    record_id: "cor-c",
+    actor: "reviewer",
+    reason: "二次修正",
+    created_at: "2026-11-21T15:21:37Z",
+    analysis_basis_token: `${JOB_ID}:${revB}`,
+    submitted_against_revision: revB,
+    effective_in_revision: revC,
+    superseded: false,
+    changes: [{field: "raw_value", target_id: "txt-1", value: "5445.41"}],
+  };
+  await page.route("**/api/**", async (route) => {
+    const req = route.request();
+    const url = new URL(req.url());
+    const p = url.pathname;
+    if (req.method() !== "GET" && req.method() !== "HEAD") {
+      writeRequests.push(`${req.method()} ${p}`);
+    }
+    const json = (body: unknown, status = 200) =>
+      route.fulfill({status, contentType: "application/json", body: JSON.stringify(body)});
+    if (p === "/api/auth/me") return json({user: {username: "r6-auditor", is_admin: true}});
+    if (p === "/api/workflow") return json({issues: {}});
+    if (p === `/api/jobs/${JOB_ID}`) {
+      const rev = url.searchParams.get("analysis_revision") || revC;
+      return json({
+        job_id: JOB_ID,
+        filename: "R6版本链样本.pdf",
+        status: "review_required",
+        analysis_revision: rev,
+        current_analysis_revision: revC,
+        result: {rule_findings: [], ai_findings: [], meta: {pages: 30, ai_execution: {state: "succeeded"}}},
+      });
+    }
+    if (p === `/api/jobs/${JOB_ID}/correction-targets`) {
+      const rev = url.searchParams.get("analysis_revision");
+      const baseStmt = {
+        target_id: "txt-1",
+        page: 26,
+        span: "支出决算为 5,465.41",
+        amount_raw: "5,465.41",
+        unit_current: null,
+        subject: {code: "2160250", name: "事业运行"},
+      };
+      if (rev === revA) {
+        return json({
+          job_id: JOB_ID, analysis_revision: revA, analysis_basis_token: `${JOB_ID}:${revA}`,
+          tables: [], gaps: [], orphaned_amounts: [], history: [],
+          text_statements: [{...baseStmt, effective_value: "5,465.41", effective_source: "original_disclosure", effective_correction_id: null}],
+        });
+      }
+      if (rev === revB) {
+        return json({
+          job_id: JOB_ID, analysis_revision: revB, analysis_basis_token: `${JOB_ID}:${revB}`,
+          tables: [], gaps: [], orphaned_amounts: [], history: [recB],
+          text_statements: [{...baseStmt, effective_value: "5455.41", effective_source: "manual_correction", effective_correction_id: "cor-b"}],
+        });
+      }
+      return json({
+        job_id: JOB_ID, analysis_revision: revC, analysis_basis_token: `${JOB_ID}:${revC}`,
+        tables: [], gaps: [], orphaned_amounts: [],
+        history: [{...recB, superseded: true}, recC],
+        text_statements: [{...baseStmt, effective_value: "5445.41", effective_source: "manual_correction", effective_correction_id: "cor-c"}],
+      });
+    }
+    return json({});
+  });
+
+  for (const [rev, effective, sourceLabel, supersededCount] of [
+    [revA, "5,465.41", "原文披露", 0],
+    [revB, "5455.41", "人工校正", 0],
+    [revC, "5445.41", "人工校正", 1],
+    [null, "5445.41", "人工校正", 1],
+  ] as const) {
+    await page.goto(rev ? `/review?job=${JOB_ID}&analysis_revision=${rev}` : `/review?job=${JOB_ID}`);
+    if (rev) {
+      await expect(page.getByTestId("gbc-review-history-banner")).toContainText(rev);
+    }
+    await page.getByTestId("gbc-review-tab-more").click();
+    await page.getByTestId("gbc-review-tab-corrections").click();
+    const stmts = page.getByTestId("gbc-corrections-text-statements");
+    await expect(stmts).toBeVisible();
+    await expect(stmts).toContainText("原句：支出决算为 5,465.41");
+    await expect(stmts).toContainText("原文读数：5,465.41");
+    await expect(stmts).toContainText(`当版有效读数：${effective}`);
+    await expect(stmts).toContainText(sourceLabel);
+    await expect(page.getByTestId("gbc-corrections-superseded")).toHaveCount(supersededCount);
+    if (rev === revB || rev === revC || !rev) {
+      await expect(page.getByTestId("gbc-review-corrections-tab")).toContainText(`在 ${revB} 首次生效`);
+    }
+    if (rev === revC || !rev) {
+      await expect(page.getByTestId("gbc-review-corrections-tab")).toContainText("该记录读数已被后续校正替代");
+      await expect(page.getByTestId("gbc-review-corrections-tab")).toContainText("读数=5455.41");
+    }
+  }
+  expect(writeRequests).toEqual([]);
+});

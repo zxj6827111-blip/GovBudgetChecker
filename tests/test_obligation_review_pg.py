@@ -341,6 +341,7 @@ async def test_migration_0021_creates_decision_table(review_db):
             "review_session_id",
             "slot_id",
             "obligation_id",
+            "scope_key",
             "decision",
             "note",
             "evidence_reference",
@@ -359,7 +360,10 @@ async def test_migration_0021_creates_decision_table(review_db):
                 schema,
             )
         }
-        assert "uq_review_obligation_decisions_scope" in indexes
+        # R5：唯一约束扩为 (session, obligation, scope_key)，同一义务多处
+        # 阻塞可以分别表态；旧的无范围唯一索引已由迁移 0046 替换。
+        assert "uq_review_obligation_decisions_scoped_scope" in indexes
+        assert "uq_review_obligation_decisions_scope" not in indexes
 
 
 async def test_migration_0021_is_additive_and_idempotent(review_db):
@@ -400,9 +404,11 @@ async def test_manual_decisions_are_recorded_under_signoff(review_db):
         )
         assert first.decision.decision == "verified_ok"
         assert first.decision.revision == 1
-        # 还剩 OBL-B 未处理：新门禁不再阻塞，补核清单只作参考
-        assert first.completion_gate.can_complete is True
-        assert first.completion_gate.blockers == []
+        # 还剩 OBL-B 未处理：与页面“需人工核对”同口径，门禁必须继续阻塞。
+        assert first.completion_gate.can_complete is False
+        assert [(item.code, item.count) for item in first.completion_gate.blockers] == [
+            ("blocking_obligations", 1)
+        ]
 
         second = await _decide_with_current_basis(
             conn,
@@ -528,8 +534,11 @@ async def test_decisions_belong_to_the_session(review_db):
             conn, ctx["slot_id"], actor="reviewer-b"
         )
         assert reopened.session.review_session_id != old_session
-        # 签核分离后不再以门禁表达；新会话的补核清单必须回到待处理
-        assert reopened.completion_gate.can_complete is True
+        # 新会话的补核清单必须回到待处理，并重新拦完成门禁。
+        assert reopened.completion_gate.can_complete is False
+        assert [(item.code, item.count) for item in reopened.completion_gate.blockers] == [
+            ("blocking_obligations", 1)
+        ]
         reopened_state = await review_lifecycle_service.load_review_by_slot(
             conn, ctx["slot_id"]
         )
@@ -846,9 +855,11 @@ async def test_pending_and_supported_resolved_decisions_are_allowed(review_db):
             decision="pending", actor="r",  # pending 允许零依据（只是置回待处理）
         )
         assert reset_pending.decision.decision == "pending"
-        # pending 只是置回待处理，不再拦签核（补核清单仍按参考展示）
-        assert reset_pending.completion_gate.can_complete is True
-        assert reset_pending.completion_gate.blockers == []
+        # pending 置回待处理，重新拦完成门禁。
+        assert reset_pending.completion_gate.can_complete is False
+        assert [(item.code, item.count) for item in reset_pending.completion_gate.blockers] == [
+            ("blocking_obligations", 1)
+        ]
 
 
 # ==== G：服务端 candidate 校验（任务书 §四/§九） ==============================

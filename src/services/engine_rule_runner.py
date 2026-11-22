@@ -6,7 +6,7 @@
 import logging
 import time
 import uuid
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from src.schemas.issues import JobContext, AnalysisConfig, IssueItem
 from src.services.check_progress import update_progress
@@ -31,6 +31,11 @@ from src.utils.rule_text import default_rule_suggestion, infer_rule_title
 
 logger = logging.getLogger(__name__)
 
+#: 关系回执上的未完成态：恢复后的有效回执不得仍是这些状态（RR-05B）。
+_FAILING_RECEIPT_STATUSES = frozenset({
+    STATUS_INSUFFICIENT_DATA, STATUS_PARSE_ERROR, STATUS_EXECUTION_ERROR,
+})
+
 
 class EngineRuleRunner:
     """Execute local engine rules and normalize findings."""
@@ -42,6 +47,9 @@ class EngineRuleRunner:
             "failed_rules": 0,
         }
         self._outcomes: List[RuleOutcome] = []
+        from src.services.bounded_recovery import RecoveryCoordinator
+
+        self._recovery = RecoveryCoordinator()
 
     @staticmethod
     def _normalize_severity(raw_severity: Any) -> str:
@@ -278,11 +286,20 @@ class EngineRuleRunner:
         receipts = getattr(document, "fact_receipts", None)
         if not isinstance(receipts, list):
             return
+        # 当前有效回执 = 同一 (rule_id, sub_check_id) 的最后一次写入：
+        # 恢复重跑会补写新回执，旧失败回执只作历史审计，不再参与聚合
+        # （与 _supersede_recovered_receipts 的有效/历史分层一致）。
+        effective: Dict[Tuple[str, str, int], dict] = {}
+        for index, receipt in enumerate(receipts[max(0, receipt_start):]):
+            if not isinstance(receipt, dict) or str(receipt.get("rule_id") or "") != rule_id:
+                continue
+            sub_check = str(receipt.get("sub_check_id") or "")
+            # 无关系标识的回执没有可替换语义，逐条保留，不做覆盖。
+            key = (rule_id, sub_check, index) if not sub_check else (rule_id, sub_check, -1)
+            effective[key] = receipt
         pending = [
-            receipt for receipt in receipts[max(0, receipt_start):]
-            if isinstance(receipt, dict)
-            and str(receipt.get("rule_id") or "") == rule_id
-            and str(receipt.get("status") or "") in {
+            receipt for receipt in effective.values()
+            if str(receipt.get("status") or "") in {
                 STATUS_INSUFFICIENT_DATA, STATUS_PARSE_ERROR, STATUS_EXECUTION_ERROR,
             }
         ]
@@ -338,6 +355,101 @@ class EngineRuleRunner:
             refs = finding_ids_by_relation.get(relation_id, [])
             if refs:
                 receipt["issue_refs"] = list(dict.fromkeys([*(receipt.get("issue_refs") or []), *refs]))
+
+    @staticmethod
+    def _make_recovery_rerun(document: Optional[Document], rule_id: str, rule_obj: Any):
+        """恢复后的重跑必须经过与首次执行相同的规则身份约束。"""
+
+        def _rerun() -> Any:
+            from src.engine.rule_identity import rule_identity_requirements
+
+            with rule_identity_requirements(document, str(rule_id)):
+                return rule_obj.apply(document)
+
+        return _rerun
+
+    @staticmethod
+    def _make_receipt_verifier(
+        document: Optional[Document],
+        receipt_start: int,
+        failing_relations: Set[str],
+    ):
+        """恢复是否成功以重算后的有效关系回执为准，不看 rerun 是否返回了列表。
+
+        原先失败的每条关系必须有重跑后写下的新回执、且不再是未完成态；
+        未被重跑覆盖的关系按仍失败处理，继续阻塞。
+        """
+        if not failing_relations:
+            return None
+
+        def _verify(_result: Any) -> bool:
+            receipts = getattr(document, "fact_receipts", None) or []
+            last_by_relation: Dict[str, dict] = {}
+            for receipt in receipts[max(0, receipt_start):]:
+                if isinstance(receipt, dict) and receipt.get("sub_check_id"):
+                    last_by_relation[str(receipt["sub_check_id"])] = receipt
+            for relation in failing_relations:
+                receipt = last_by_relation.get(relation)
+                if receipt is None:
+                    return False
+                if str(receipt.get("status") or "") in _FAILING_RECEIPT_STATUSES:
+                    return False
+            return True
+
+        return _verify
+
+    def _supersede_recovered_receipts(
+        self,
+        document: Optional[Document],
+        receipt_start: int,
+        pre_recovery_count: int,
+    ) -> None:
+        """恢复成功后区分历史尝试回执与当前有效回执（RR-05B）。
+
+        被重跑回执覆盖的旧失败回执移出 ``fact_receipts``（下游聚合只看当前
+        有效回执），失败历史留存审计（stats.recovery_superseded_receipts 与
+        document.superseded_fact_receipts）；未被重跑覆盖的关系回执继续留在
+        有效集合中阻塞，已有 partial findings 不受影响。
+        """
+        if document is None:
+            return
+        receipts = getattr(document, "fact_receipts", None)
+        if not isinstance(receipts, list):
+            return
+        start = max(0, int(receipt_start))
+        recovery_start = max(start, int(pre_recovery_count))
+        if recovery_start > len(receipts):
+            recovery_start = len(receipts)
+        rewritten_ids = {
+            str(receipt.get("sub_check_id") or "")
+            for receipt in receipts[recovery_start:]
+            if isinstance(receipt, dict) and receipt.get("sub_check_id")
+        }
+        if not rewritten_ids:
+            return
+        keep: List[Any] = []
+        superseded: List[dict] = []
+        for index, receipt in enumerate(receipts):
+            if (
+                start <= index < recovery_start
+                and isinstance(receipt, dict)
+                and str(receipt.get("sub_check_id") or "") in rewritten_ids
+            ):
+                superseded.append(receipt)
+            else:
+                keep.append(receipt)
+        if not superseded:
+            return
+        document.fact_receipts = keep
+        audit = getattr(document, "superseded_fact_receipts", None)
+        if not isinstance(audit, list):
+            audit = []
+            try:
+                document.superseded_fact_receipts = audit
+            except Exception:
+                audit = []
+        audit.extend(superseded)
+        self._stats.setdefault("recovery_superseded_receipts", []).extend(superseded)
 
     def _resolve_report_kind(
         self,
@@ -486,6 +598,83 @@ class EngineRuleRunner:
                     logger.debug(f"Rule {rule_id} found {len(findings)} issues")
 
                 except RuleOutcomeSignal as signal:
+                    # 有界恢复：只对取数/绑定类原因尝试一次既有恢复策略，
+                    # 成功后重跑本条规则；材料缺陷与执行异常不在此重试。
+                    # 恢复输入同时来自信号与本次已登记的关系回执（RR-05B：
+                    # 原因码只写在关系回执上时，恢复也要能触发）。
+                    attempt_receipts = [
+                        receipt
+                        for receipt in (getattr(document, "fact_receipts", None) or [])[receipt_start:]
+                        if isinstance(receipt, dict)
+                    ]
+                    receipt_reason_codes = [
+                        str(code).strip()
+                        for receipt in attempt_receipts
+                        for code in (receipt.get("reason_codes") or [])
+                        if str(code).strip()
+                    ]
+                    failing_relations = {
+                        str(receipt.get("sub_check_id") or "")
+                        for receipt in attempt_receipts
+                        if receipt.get("sub_check_id")
+                        and str(receipt.get("status") or "") in _FAILING_RECEIPT_STATUSES
+                    }
+                    recovery_relation_key = str(getattr(signal, "sub_check_id", "") or "")
+                    if not recovery_relation_key and failing_relations:
+                        recovery_relation_key = sorted(failing_relations)[0]
+                    pre_recovery_receipt_count = len(getattr(document, "fact_receipts", None) or [])
+                    recovered = self._recovery.recover(
+                        document,
+                        rule_id=str(rule_id),
+                        reason_codes=list(dict.fromkeys([
+                            *(getattr(signal, "reason_codes", []) or []),
+                            *receipt_reason_codes,
+                        ])),
+                        relation_key=recovery_relation_key,
+                        rerun=self._make_recovery_rerun(document, rule_id, rule_obj),
+                        verify=self._make_receipt_verifier(
+                            document, receipt_start, failing_relations
+                        ),
+                    )
+                    if recovered is not None:
+                        self._supersede_recovered_receipts(
+                            document, receipt_start, pre_recovery_receipt_count
+                        )
+                        recovered_issues = list(recovered or [])
+                        from src.engine.rules_v33 import apply_delivery_suppressions
+
+                        recovered_issues = apply_delivery_suppressions(document, recovered_issues)
+                        findings, conversion_errors = self._convert_and_locate_issues(
+                            issues=recovered_issues,
+                            rule_id=rule_id,
+                            document=document,
+                            rule_version=rule_version,
+                            bbox_locator=bbox_locator,
+                        )
+                        self._link_relation_receipts(document, rule_id, receipt_start, findings)
+                        all_findings.extend(findings)
+                        self._stats["total_findings"] += len(findings)
+                        if conversion_errors:
+                            self._stats["failed_rules"] += 1
+                            detail = (
+                                f"{len(conversion_errors)} 个 finding 转换失败，"
+                                f"异常类型={sorted(set(conversion_errors))}"
+                            )
+                            self._outcomes.append(RuleOutcome(
+                                rule_id=str(rule_id), status=STATUS_PARSE_ERROR,
+                                detail=detail, partial_findings_count=len(findings),
+                                unresolved_reasons=[detail],
+                            ))
+                        else:
+                            self._stats["successful_rules"] += 1
+                            outcome = RuleOutcome(
+                                rule_id=str(rule_id),
+                                status="fail" if findings else "pass",
+                            )
+                            self._escalate_from_relation_receipts(
+                                document, str(rule_id), receipt_start, outcome)
+                            self._outcomes.append(outcome)
+                        continue
                     # 非 fail 结局（insufficient_data/not_applicable 等）：
                     # 保留已确认的 partial_issues，原因双保留
                     partial_list = list(getattr(signal, "partial_issues", []) or [])
@@ -606,6 +795,14 @@ class EngineRuleRunner:
         # IR-01：交付抑制台账随统计收割（双模式路径可持久化对账）
         self._stats["delivery_suppressions"] = list(
             getattr(document, "delivery_suppression_ledger", None) or [])
+        self._stats["recovery"] = list(self._recovery.records)
+        # R4/R5（2026-11-20 复审）：正文校正消费回执随统计收割，双模式结果
+        # 与 legacy payload 同源——未命中的校正在发布层转 correction_overlay
+        # 未生效清单，不再静默。
+        self._stats["applied_text_correction_ids"] = list(
+            getattr(document, "applied_text_correction_ids", None) or [])
+        self._stats["unapplied_text_corrections"] = list(
+            getattr(document, "unapplied_text_corrections", None) or [])
         if getattr(document, "fact_context", None) is not None:
             try:
                 self._stats["fact_context_summary"] = document.fact_context.summary()
@@ -642,6 +839,12 @@ class EngineRuleRunner:
                 filesize=getattr(job_context, "filesize", 0) or job_context.meta.get("filesize", 0),
             )
             document.structure_view = job_context.meta.get("structure_view")
+            # R4/R5（2026-11-20 复审）：双模式路径与 legacy 路径消费同一份
+            # 人工正文校正台账——dual 模式此前没有挂载，校正提交后重算仍按
+            # 原文跑（R3 合法读数 202 后新版本不变即此根因）。
+            document.text_corrections = [
+                dict(item) for item in ((job_context.meta or {}).get("text_corrections") or [])
+            ]
             # ZC-01（AC-01）：双模式路径消费与 legacy 路径同一版本的统一事实
             fact_snapshot = getattr(job_context, "fact_context", None)
             if isinstance(fact_snapshot, dict) and fact_snapshot:

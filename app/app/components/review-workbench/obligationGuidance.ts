@@ -84,7 +84,7 @@ const KNOWN_GUIDANCE: Record<string, KnownGuidance> = {
   "OBL-STRUCT-EMPTY-STATEMENT": {
     category: "review",
     whatToConfirm:
-      "总表里有一处空白金额格，系统不把空白当 0；空表说明已经有了不是问题，问题是总表空白格能不能由说明证明为零。",
+      "总表里有一处空白金额格，原件经网格认证的空白金额格按无发生额（0）参与勾稽；横线、扫描漏识或不清晰空白仍需人工核实；空表说明已经有了不是问题，问题是总表空白格能不能由说明证明为零。",
     howToDecide:
       "空表说明（如第15/16页）能证明该空白格确为零 → 核对无误；说明缺失、表名不符或金额对不上 → 确认有问题。",
     evidenceExample: "总表空白行所在页 + 对应空表说明页",

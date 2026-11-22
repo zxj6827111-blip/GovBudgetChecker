@@ -35,6 +35,7 @@ _DECISION_COLUMNS = """
     review_session_id::text AS review_session_id,
     slot_id::text AS slot_id,
     obligation_id,
+    scope_key,
     decision,
     note,
     evidence_reference,
@@ -82,8 +83,12 @@ async def insert_decision(
     note: Optional[str],
     evidence_reference: Optional[str],
     reviewer: str,
+    scope_key: str = "",
 ) -> Optional[Dict[str, Any]]:
     """首次写入一条决定；并发撞唯一约束时返回 ``None``（调用方回 409）。
+
+    ``scope_key`` 是同一义务下的原文位置/科目范围（R5）：同一 OBL 在不同
+    科目各阻塞一处时，两处必须分别表态，不能一处决定放行全部。
 
     ``ON CONFLICT DO NOTHING`` 而不是 ``DO UPDATE``：后者会在后到者的视角里
     **静默覆盖**先到者的决定——两个复核人同时表态时，必须先有人看见冲突，
@@ -92,16 +97,17 @@ async def insert_decision(
     row = await conn.fetchrow(
         f"""
         INSERT INTO review_obligation_decisions (
-            review_session_id, slot_id, obligation_id,
+            review_session_id, slot_id, obligation_id, scope_key,
             decision, note, evidence_reference, reviewer
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT (review_session_id, obligation_id) DO NOTHING
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        ON CONFLICT (review_session_id, obligation_id, scope_key) DO NOTHING
         RETURNING {_DECISION_COLUMNS}
         """,
         review_session_id,
         slot_id,
         obligation_id,
+        str(scope_key or ""),
         decision,
         note,
         evidence_reference,

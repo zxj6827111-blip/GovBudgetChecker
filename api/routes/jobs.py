@@ -72,6 +72,19 @@ async def published_job_view(job_id,payload,user):
         view.setdefault('human_decisions',[])
     # 展示层按关联节点区分部门/单位；这不补齐原件尚未明确的材料汇总口径。
     view['organization_level'] = runtime.resolve_organization_level(view.get('organization_id'))
+    if (
+        str(published.get('status') or '').strip().lower() in runtime.TERMINAL_ANALYSIS_STATUSES
+        and (published.get('result') or published.get('review_report'))
+    ):
+        from src.schemas.review_report import build_review_report
+
+        view['review_report'] = build_review_report(
+            {
+                **published,
+                'job_id': job_id,
+                'human_decisions': view.get('human_decisions') or [],
+            }
+        )
     return view
 
 
@@ -143,6 +156,46 @@ def _job_overview_view(request: Request, summaries: list) -> Dict[str, Any]:
     )
 
 
+async def _apply_scope_decisions_to_summaries(summaries: list) -> None:
+    """队列徽标按有效会话的范围决定扣减已处理位置（R5-B，2026-11-20 复审）。
+
+    只处理带阻塞范围的摘要；数据库不可用或没有决定时保持分析产出口径。
+    """
+    candidates = {
+        str(summary.get("job_id")): str(summary.get("analysis_revision") or "")
+        for summary in summaries
+        if summary.get("queue_unfinished_blocking_scopes")
+    }
+    if not candidates or not os.getenv("DATABASE_URL", "").strip():
+        return
+    from src.db.connection import DatabaseConnection
+    from src.services.review_lifecycle_service import effective_scope_decisions_for_jobs
+
+    tokens = [
+        f"{job_id}:{revision}" if revision else ""
+        for job_id, revision in candidates.items()
+    ]
+    try:
+        conn = None
+        try:
+            conn = await DatabaseConnection.acquire()
+            decisions = await effective_scope_decisions_for_jobs(conn, tokens)
+        finally:
+            if conn is not None:
+                await DatabaseConnection.release(conn)
+    except Exception:
+        logging.getLogger("api.routes.jobs").exception(
+            "Failed to load scope decisions for queue badges"
+        )
+        return
+    if not decisions:
+        return
+    for summary in summaries:
+        job_id = str(summary.get("job_id"))
+        if job_id in decisions and summary.get("queue_unfinished_blocking_scopes"):
+            runtime.apply_scope_decisions_to_summary(summary, decisions.get(job_id) or {})
+
+
 @router.get("/api/jobs")
 @router.get("/jobs")
 async def list_jobs(
@@ -174,6 +227,7 @@ async def list_jobs(
 
     # 冷缓存需要读取文件和重建报告；不要在事件循环里堵住其他列表/健康请求。
     summaries = await run_in_threadpool(_collect_summaries)
+    await _apply_scope_decisions_to_summaries(summaries)
 
     # view=counts / page / overview 由服务端汇总与分页，页面不必再下载全部摘要。
     # 旧前端不带 view 参数，下面的返回形状保持不变。
@@ -427,6 +481,13 @@ async def get_job_detail(job_id: str, request: Request, analysis_revision: Optio
         except Exception:
             logger.warning("historical human decisions projection skipped", exc_info=True)
             payload.setdefault("human_decisions", [])
+        if (
+            str(payload.get("status") or "").strip().lower() in runtime.TERMINAL_ANALYSIS_STATUSES
+            and (payload.get("result") or payload.get("review_report"))
+        ):
+            from src.schemas.review_report import build_review_report
+
+            payload["review_report"] = build_review_report({**payload, "job_id": job_id})
     else:payload=await published_job_view(job_id,payload,user)
     payload.setdefault("job_id", job_id)
     try:

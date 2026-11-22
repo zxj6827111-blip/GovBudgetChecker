@@ -836,17 +836,37 @@ class PDFParser:
         if not words:
             return table
         values = [[] for _ in range(width)]
+        mapped_words: List[Tuple[int, Dict[str, Any]]] = []
         for word in sorted(words, key=lambda w: w["x0"]):
             center = (word["x0"] + word["x1"]) / 2
             columns = [col for col, box in enumerate(boxes) if box[0] <= center < box[2]]
             if len(columns) != 1:
                 return table
-            values[columns[0]].append(word["text"])
+            col = columns[0]
+            values[col].append(word["text"])
+            mapped_words.append((col, word))
         # Wrapped subject names may occupy two lines. Codes and amounts must
-        # remain separate literal words on the same baseline.
-        numeric_words = [w for w in words if self._parse_numeric(w["text"]) is not None]
-        if (not numeric_words or max(w["top"] for w in numeric_words) - min(w["top"] for w in numeric_words) > 3
-                or any(len(values[col]) > 1 for col in [0, *range(2, width)])):
+        # remain separate literal words on the same baseline; a top-aligned
+        # code cell and vertically centered amount cells on the same physical
+        # row can differ by a few points, so align amounts first and check row
+        # overlap for the single code word.
+        amount_words = [
+            w for col, w in mapped_words
+            if col >= 2 and self._parse_numeric(w["text"]) is not None
+        ]
+        code_words = [w for col, w in mapped_words if col == 0]
+        if (
+            not amount_words
+            or len(code_words) != 1
+            or max(w["top"] for w in amount_words) - min(w["top"] for w in amount_words) > 3
+            or any(len(values[col]) > 1 for col in [0, *range(2, width)])
+        ):
+            return table
+        amount_top = min(w["top"] for w in amount_words)
+        amount_bottom = max(w["bottom"] for w in amount_words)
+        code_word = code_words[0]
+        vertical_overlap = min(code_word["bottom"], amount_bottom) > max(code_word["top"], amount_top)
+        if not vertical_overlap and abs(code_word["top"] - amount_top) > height * 0.45:
             return table
         row = ["".join(parts) for parts in values]
         if (not row[0].isdigit() or len(row[0]) not in {3, 5, 7}
@@ -1173,9 +1193,8 @@ class PDFParser:
     def _coalesce_tables(self, tables: Sequence[ParsedTable]) -> List[ParsedTable]:
         merged: List[ParsedTable] = []
         hints = [table for table in tables if table.extraction_method == 'page_text_fallback']
-        for table in tables:
-            if table.extraction_method == 'page_text_fallback':
-                continue  # Narrative/title hints cannot interrupt physical continuation.
+        physical_tables = [table for table in tables if table.extraction_method != 'page_text_fallback']
+        for idx, table in enumerate(physical_tables):
             if not merged:
                 merged.append(table)
                 continue
@@ -1196,7 +1215,9 @@ class PDFParser:
             table = self._align_native_continuation_columns(previous, table)
             table = self._collapse_native_split_label_columns(previous, table)
             table = self._pad_native_trailing_columns(previous, table)
-            if self._is_continuation_table(previous, table) or self._is_detached_body(previous, table):
+            next_table = physical_tables[idx + 1] if idx + 1 < len(physical_tables) else None
+            if (self._is_continuation_table(previous, table, next_table=next_table)
+                    or self._is_detached_body(previous, table)):
                 merged[previous_index] = self._append_table(previous, table)
                 continue
             merged.append(table)
@@ -1689,7 +1710,530 @@ class PDFParser:
         width_score = min(width / 6, 1.0)
         return round(0.4 * richness + 0.35 * numeric_ratio + 0.25 * width_score, 4)
 
-    def _is_continuation_table(self, previous: ParsedTable, current: ParsedTable) -> bool:
+    #: 政府收支分类科目“类”级（3 位编码）法定关键词映射（含 2007–2026 口径常见简称），
+    #: 用于校验无表头续页中 3 位编码与名称是否匹配，防止“217 办公桌”类非财政清单混入。
+    _EXPENDITURE_CLASS_KEYWORDS: dict[str, tuple[str, ...]] = {
+        "201": ("一般公共", "公共服务"),
+        "202": ("外交",),
+        "203": ("国防",),
+        "204": ("公共安全",),
+        "205": ("教育",),
+        "206": ("科学", "技术", "科技"),
+        "207": ("文化", "旅游", "体育", "传媒", "文物", "广播", "新闻"),
+        "208": ("社会保障", "就业", "社保"),
+        "209": ("社会保险", "社保基金"),
+        "210": ("卫生", "健康", "医疗", "计生"),
+        "211": ("节能", "环保", "生态", "环境"),
+        "212": ("城乡", "社区"),
+        "213": ("农林水", "农业", "林业", "水利", "农村", "扶贫"),
+        "214": ("交通", "运输"),
+        "215": ("资源", "勘探", "工业", "信息", "电力"),
+        "216": ("商业", "服务业", "商贸"),
+        "217": ("金融",),
+        "219": ("援助",),
+        "220": ("自然资源", "国土", "海洋", "气象"),
+        "221": ("住房", "保障"),
+        "222": ("粮油", "物资", "储备"),
+        "223": ("国有资本", "国资"),
+        "224": ("灾害", "防治", "应急", "消防"),
+        "227": ("预备费",),
+        "228": ("地震", "灾后", "恢复重建"),
+        "229": ("其他支出",),
+        "230": ("转移",),
+        "231": ("债务", "还本"),
+        "232": ("债务", "付息"),
+        "233": ("债务", "发行"),
+        "234": ("抗疫", "特别国债", "国债"),
+    }
+    _REVENUE_CLASS_KEYWORDS: dict[str, tuple[str, ...]] = {
+        "101": ("税收", "税"),
+        "102": ("社会保险", "社保"),
+        "103": ("非税", "基金", "行政事业", "罚没", "国有", "专项"),
+        "104": ("贷款", "转贷", "回收"),
+        "105": ("债务", "借款", "债券"),
+        "106": ("转移", "补助", "返还"),
+        "107": ("一般公共预算", "预算"),
+        "110": ("转移", "调入", "结转", "结余"),
+    }
+    _FUNCTIONAL_CONTINUATION_CODES = {
+        "FIN_02_income",
+        "FIN_03_expenditure",
+        "FIN_05_general_public_expenditure",
+        "FIN_08_gov_fund",
+        "FIN_09_state_capital",
+    }
+
+    @classmethod
+    def _class_code_matches_label(
+        cls, code_3: str, label: object, *, allow_revenue: bool = False
+    ) -> bool:
+        norm_label = PDFParser._normalize_code_cell(normalize_text(str(label or "")))
+        if not norm_label:
+            return False
+        keywords = cls._EXPENDITURE_CLASS_KEYWORDS.get(code_3)
+        if keywords is None and allow_revenue:
+            keywords = cls._REVENUE_CLASS_KEYWORDS.get(code_3)
+        if not keywords:
+            return False
+        return any(kw in norm_label for kw in keywords)
+
+    @staticmethod
+    def _normalize_code_cell(value: object) -> str:
+        """规范化单元格中的科目编码，保留格内折行（如 21000\\n00）里的有效数字。"""
+        return re.sub(r"\s+", "", str(value or ""))
+
+    @staticmethod
+    def _looks_like_nonfiscal_quantity_label(label: object) -> bool:
+        """名称仅为实物计量单位或以“（台）/（个）”等结尾时，属非财政实物清单。"""
+        text = PDFParser._normalize_code_cell(label)
+        if not text:
+            return False
+        unit_body = r"(?:[台个件套张把只辆支条块盒箱瓶本册组副吨米]|台套|平方米|平米|㎡|千克|公斤|公里|人次|批次)"
+        if re.fullmatch(unit_body, text):
+            return True
+        return bool(re.search(rf"[（(\[/]{unit_body}[）)\]]?$", text))
+
+    @staticmethod
+    def _has_split_code_headers(table: ParsedTable) -> bool:
+        """识别分栏“类｜款｜项”编码表布局。
+
+        部分决算模板把「类｜款｜项｜合计」印在第 4 行（header_row_count=3 之后），
+        同时续页可能无表头而直接在数据行呈现 ``210 | 11 | 01 | 名称``。
+        """
+        header_limit = max(int(getattr(table, "header_row_count", 1) or 1), 1)
+        scan_limit = min(len(table.rows), max(header_limit + 2, 5))
+        tokens = {
+            normalize_text(str(val or ""))
+            for row in table.rows[:scan_limit]
+            for val in (row or [])[:4]
+            if str(val or "").strip()
+        }
+        if "类" in tokens and "款" in tokens:
+            return True
+        for row in table.rows:
+            if not row or len(row) < 4:
+                continue
+            c0 = PDFParser._normalize_code_cell(row[0])
+            c1 = PDFParser._normalize_code_cell(row[1])
+            c2 = PDFParser._normalize_code_cell(row[2])
+            if (
+                re.fullmatch(r"\d{3}", c0)
+                and re.fullmatch(r"\d{2}", c1)
+                and (not c2 or re.fullmatch(r"\d{2}", c2))
+                and bool(re.search(r"[\u4e00-\u9fff]", str(row[3] or "")))
+            ):
+                return True
+        return False
+
+    @staticmethod
+    def _row_subject_code(row: Sequence[str]) -> Optional[str]:
+        for value in (row or [])[:2]:
+            code = PDFParser._normalize_code_cell(value)
+            if re.fullmatch(r"\d{3}|\d{5}|\d{7}", code):
+                return code
+        return None
+
+    @staticmethod
+    def _row_subject_code_column(row: Sequence[str]) -> tuple:
+        """行内科目编码及所在列：编码只认前两列中的 3/5/7 位数字（R7）。
+
+        返回 ``(code, column_index)``；设备数量（"办公桌|300|…"第二列的
+        300）虽然形似 3 位编码，但要与前行同列才有连续性资格。
+        """
+        for index, value in enumerate((row or [])[:2]):
+            code = PDFParser._normalize_code_cell(value)
+            if re.fullmatch(r"\d{3}|\d{5}|\d{7}", code):
+                return code, index
+        return None, -1
+
+    @staticmethod
+    def _row_full_subject_code(
+        row: Sequence[str], split_code_cols: bool = False
+    ) -> tuple[Optional[str], int]:
+        """提取行内完整 3/5/7 位科目编码，兼容折行、分栏类/款/项及跨格线溢位。"""
+        row = row or []
+        c0 = PDFParser._normalize_code_cell(row[0]) if len(row) > 0 else ""
+        c1 = PDFParser._normalize_code_cell(row[1]) if len(row) > 1 else ""
+        c2 = PDFParser._normalize_code_cell(row[2]) if len(row) > 2 else ""
+
+        if split_code_cols and re.fullmatch(r"\d{3}", c0):
+            if re.fullmatch(r"\d{2}", c1):
+                if re.fullmatch(r"\d{2}", c2):
+                    return c0 + c1 + c2, 0
+                return c0 + c1, 0
+            return c0, 0
+
+        code, col = PDFParser._row_subject_code_column(row)
+        if code:
+            return code, col
+
+        # 兼容极窄编码列在格线处拆断："216025" | "0事业运行"
+        if re.fullmatch(r"\d{4,6}", c0) and c1:
+            matched = re.match(r"^(\d+)", c1)
+            if matched and len(c0) + len(matched.group(1)) in {5, 7}:
+                return c0 + matched.group(1), 0
+        return None, -1
+
+    def _continuation_subject_label(
+        self, row: Sequence[str], code_column: int, split_code_cols: bool
+    ) -> str:
+        for column in range(code_column + 1, len(row)):
+            label = str(row[column] or "").strip()
+            if not label:
+                continue
+            if split_code_cols and column in {1, 2} and re.fullmatch(r"\d{2}", self._normalize_code_cell(label)):
+                continue
+            return label
+        return ""
+
+    def _split_continuation_has_subject_evidence(self, previous: ParsedTable, current: ParsedTable) -> bool:
+        """拼出的款项编码还须有前表分栏依据及可核对的科目身份。"""
+        previous_is_split = self._has_split_code_headers(previous)
+        if not previous_is_split:
+            return not self._has_split_code_headers(current)
+
+        known_parents = set()
+        for row in previous.rows:
+            code, _ = self._row_full_subject_code(row, split_code_cols=True)
+            if code and len(code) in {3, 5}:
+                known_parents.add(code)
+
+        allow_revenue = previous.table_code == "FIN_02_income"
+        for row in current.rows:
+            code, column = self._row_full_subject_code(row, split_code_cols=True)
+            if not code:
+                continue
+            label = self._continuation_subject_label(row, column, split_code_cols=True)
+            has_subject_evidence = (
+                self._class_code_matches_label(code[:3], label, allow_revenue=allow_revenue)
+                or code[:-2] in known_parents
+            )
+            if column == 0 and len(code) > 3 and re.fullmatch(r"\d{3}", self._normalize_code_cell(row[0])):
+                # 同一类码或相同列线都可能出现在设备编号中。款项行要有类名相符
+                # 或已识别的上一级科目支持，不能只依赖后页推断出来的分栏形状。
+                if (
+                    not has_subject_evidence
+                    or not label
+                    or self._looks_numeric(label)
+                    or self._looks_like_nonfiscal_quantity_label(label)
+                ):
+                    return False
+            if len(code) in {3, 5} and has_subject_evidence:
+                known_parents.add(code)
+        return True
+
+    def _row_is_total_close(self, row) -> bool:
+        """行首标签格（编码列或名称列）出现“合计/总计/小计”即视为收口行。
+
+        R7（2026-11-21 第三轮复审）：合计标签可能印在名称列而编码列空白
+        （含类/款/项三列编码后第 4 列），不能只认编码列；否则跨页设备清单会
+        接在收口行后被并进决算表。
+        """
+        for cell in (row or [])[:4]:
+            norm = normalize_text(str(cell or ""))
+            if not norm:
+                continue
+            if self._looks_numeric(norm):
+                break
+            if (
+                norm.startswith(("合计", "总计", "小计", "本页合计", "本页小计"))
+                or norm in {"收入总计", "支出总计"}
+            ):
+                return True
+        return False
+
+    @staticmethod
+    def _table_has_subject_code_rows(table: ParsedTable) -> bool:
+        start = max(int(getattr(table, "header_row_count", 1) or 1), 1)
+        for header_row in table.rows[:start]:
+            for value in (header_row or [])[:4]:
+                if "编码" in normalize_text(str(value or "")):
+                    return True
+        split_cols = PDFParser._has_split_code_headers(table)
+        for row in table.rows[start:]:
+            code, _ = PDFParser._row_full_subject_code(row, split_code_cols=split_cols)
+            if code:
+                return True
+        return False
+
+    def _table_top_total_already_balanced(self, table: ParsedTable) -> bool:
+        """表首“合计/总计”行已被本页后续科目行金额闭合时，本表已完整收口。"""
+        start = max(int(getattr(table, "header_row_count", 1) or 1), 1)
+        rows = table.rows[start:]
+        if len(rows) < 2:
+            return False
+        top_index = next(
+            (idx for idx in range(min(2, len(rows))) if self._row_is_total_close(rows[idx])),
+            None,
+        )
+        if top_index is None:
+            return False
+        top_row = rows[top_index]
+        amount_col = next(
+            (idx for idx, val in enumerate(top_row) if self._parse_numeric(str(val or "")) is not None),
+            None,
+        )
+        if amount_col is None:
+            return False
+        stated = self._parse_numeric(str(top_row[amount_col] or ""))
+        if stated is None or stated <= 0:
+            return False
+        split_cols = self._has_split_code_headers(table)
+        leaf_sum = 0.0
+        top_sum = 0.0
+        has_leaf = False
+        has_top = False
+        has_detail = False
+        for row in rows[top_index + 1:]:
+            if amount_col >= len(row):
+                continue
+            code, _ = self._row_full_subject_code(row, split_code_cols=split_cols)
+            val = self._parse_numeric(str(row[amount_col] or ""))
+            if not code or val is None:
+                continue
+            if len(code) in {5, 7}:
+                has_detail = True
+            if len(code) == 7:
+                leaf_sum += val
+                has_leaf = True
+            elif len(code) == 3:
+                top_sum += val
+                has_top = True
+        if has_detail:
+            return has_leaf and abs(leaf_sum - stated) <= 0.02
+        return has_top and abs(top_sum - stated) <= 0.02
+
+    def _continuation_row_sequence_evidence(
+        self, previous: ParsedTable, current: ParsedTable
+    ) -> bool:
+        """连续科目行证据：前页末行与后页首行是同一类/款下递增的科目编码。
+
+        仅相邻页、列数相近、数值格多不足以合并（R7）。这里要求两行都有
+        可读的 3/5/7 位科目编码、**同一列**、同一上级前缀、编码严格递增；
+        前页以“合计/总计”收口或后页首行是量词标签（台/个等）时不算续页。
+        """
+        last = next(
+            (row for row in reversed(previous.rows)
+             if any(str(cell or "").strip() for cell in row)),
+            [],
+        )
+        first = next(
+            (row for row in current.rows if any(str(cell or "").strip() for cell in row)),
+            [],
+        )
+        if not last or not first:
+            return False
+        if str(last[0] or "").strip().startswith(("合计", "总计")) or self._row_is_total_close(last):
+            return False
+        split_cols = self._has_split_code_headers(previous) or self._has_split_code_headers(current)
+        previous_code, previous_col = self._row_subject_code_column(last)
+        current_code, current_col = self._row_subject_code_column(first)
+        if not previous_code or not current_code:
+            return False
+        if previous_col != current_col:
+            # R7：前行编码在第 0 列、后行"编码"却在第 1 列（办公桌|300|…），
+            # 是设备数量列不是科目编码列，不构成连续科目证据。
+            return False
+        continuity = False
+        if len(previous_code) == len(current_code):
+            prefix_len = {3: 0, 5: 3, 7: 5}.get(len(previous_code))
+            if prefix_len is None:
+                return False
+            continuity = (
+                previous_code[:prefix_len] == current_code[:prefix_len]
+                and int(current_code) > int(previous_code)
+            )
+        elif len(current_code) > len(previous_code):
+            # 前页以款级行收尾、后页列出其所辖项级行：编码前缀连续。
+            continuity = current_code.startswith(previous_code)
+        if not continuity:
+            return False
+        # 后页首行的“名称”若只是量词/单位（办公桌 | 台 | 3 …、办公桌（台）），或 3 位类码与名称不符，不是财政科目行。
+        label = self._continuation_subject_label(first, current_col, split_cols)
+        if self._looks_like_nonfiscal_quantity_label(label):
+            return False
+        full_current_code, _ = self._row_full_subject_code(first, split_code_cols=split_cols)
+        if (
+            previous.table_code in self._FUNCTIONAL_CONTINUATION_CODES
+            and len(full_current_code or current_code) == 3
+            and not self._class_code_matches_label(
+                current_code,
+                label,
+                allow_revenue=(previous.table_code == "FIN_02_income"),
+            )
+        ):
+            return False
+        return True
+
+    def _continuation_first_row_is_subject(self, previous: ParsedTable, current: ParsedTable) -> bool:
+        """后页无表头片段的首行是否仍是与前表同列的科目编码行（R7）。
+
+        前表编码列取表头“编码”列或末个科目行的编码列；后页首行必须在该列
+        读到 3/5/7 位编码，且名称格不是量词/实物单位（台/办公桌（台）等）。
+        """
+        first = next(
+            (row for row in current.rows if any(str(cell or "").strip() for cell in row)),
+            [],
+        )
+        if not first:
+            return False
+        split_cols = self._has_split_code_headers(previous) or self._has_split_code_headers(current)
+        code_column = 0
+        for header_row in previous.rows[: max(previous.header_row_count, 1)]:
+            for index, value in enumerate(header_row[:3]):
+                if "编码" in str(value or ""):
+                    code_column = index
+                    break
+            else:
+                continue
+            break
+        else:
+            for row in reversed(previous.rows):
+                code, column = self._row_full_subject_code(row, split_code_cols=split_cols)
+                if code:
+                    code_column = column
+                    break
+        code, column = self._row_full_subject_code(first, split_code_cols=split_cols)
+        if not code or column != code_column:
+            return False
+        label = self._continuation_subject_label(first, column, split_cols)
+        if self._looks_like_nonfiscal_quantity_label(label):
+            return False
+        return True
+
+    def _next_page_confirms_class_children(
+        self,
+        current: ParsedTable,
+        next_table: Optional[ParsedTable],
+        class_codes: Sequence[str],
+        split_cols: bool,
+    ) -> bool:
+        """若本页仅有 3 位类行，查看紧邻下一页是否列出该类下属 5/7 位款项子行（R7）。"""
+        if next_table is None or not class_codes:
+            return False
+        if next_table.page_number - self._last_page_number(current) != 1:
+            return False
+        if not self._compatible_column_count(current, next_table):
+            return False
+        if self._unit_hints_conflict(current, next_table):
+            return False
+        target_class = class_codes[-1]
+        next_split = split_cols or self._has_split_code_headers(next_table)
+        for row in next_table.rows:
+            code, _ = self._row_full_subject_code(row, split_code_cols=next_split)
+            if code and len(code) in {5, 7} and code.startswith(target_class):
+                return True
+        return False
+
+    def _headerless_functional_continuation_is_valid(
+        self,
+        previous: ParsedTable,
+        current: ParsedTable,
+        next_table: Optional[ParsedTable] = None,
+    ) -> bool:
+        """无表头功能分类续页的整片语义与层级粒度复核（R7）。
+
+        1. 每条非总计/非注释数据行都不能带有非财政实物单位（如“办公桌（台）”）；
+        2. 每个科目编码的前三位类码须在允许区间内（收入 100-299，支出 200-299），
+           且 3 位类级行名称必须与法定功能分类科目类目匹配（防止 217 办公桌混入）；
+        3. 若前表已是含 5/7 位款项编码的明细表，无表头续页全片若仅含非零 3 位“类”
+           编码而无任何 5/7 位子行，只有紧邻下一页确实列出该类下属 5/7 位款项子行时
+           才视为跨页前序树衔接，否则拒绝合并；
+        4. 若前表或本片段属于含 5/7 位款项编码的明细表，则本片段内不能出现两个
+           连续非零 3 位“类”编码而中间无任何 5/7 位款/项子行（防止 217/218 设备清单混入）。
+        """
+        split_cols = self._has_split_code_headers(previous) or self._has_split_code_headers(current)
+        prev_start = max(int(getattr(previous, "header_row_count", 1) or 1), 1)
+        prev_has_detail_codes = False
+        for row in previous.rows[prev_start:]:
+            prev_code, _ = self._row_full_subject_code(row, split_code_cols=split_cols)
+            if prev_code and len(prev_code) in {5, 7}:
+                prev_has_detail_codes = True
+                break
+        has_detail_codes = prev_has_detail_codes
+
+        coded_rows: list[tuple[str, Sequence[str]]] = []
+        for row_idx, row in enumerate(current.rows):
+            if not any(str(cell or "").strip() for cell in (row or [])):
+                continue
+            if self._is_full_width_note_row(current, row_idx):
+                continue
+            if self._row_is_total_close(row):
+                continue
+            first_label = next((str(val or "").strip() for val in (row or []) if str(val or "").strip()), "")
+            if normalize_text(first_label).startswith("注"):
+                continue
+
+            full_code, code_col = self._row_full_subject_code(row, split_code_cols=split_cols)
+            label = (
+                self._continuation_subject_label(row, code_col, split_cols)
+                if code_col >= 0 else first_label
+            )
+
+            if self._looks_like_nonfiscal_quantity_label(label):
+                return False
+
+            if full_code:
+                head_class = int(full_code[:3])
+                allow_rev = previous.table_code == "FIN_02_income"
+                if allow_rev:
+                    if not (100 <= head_class <= 299):
+                        return False
+                elif not (200 <= head_class <= 299):
+                    return False
+                if len(full_code) == 3 and not self._class_code_matches_label(
+                    full_code, label, allow_revenue=allow_rev
+                ):
+                    return False
+                tail = row[code_col + 1:]
+                if any(self._parse_numeric(str(val or "")) is not None for val in tail):
+                    if len(full_code) in {5, 7}:
+                        has_detail_codes = True
+                    coded_rows.append((full_code, tail))
+
+        def _tail_has_nonzero(tail: Sequence[str]) -> bool:
+            return any(
+                num is not None and abs(num) > 0
+                for val in tail
+                for num in (self._parse_numeric(str(val or "")),)
+            )
+
+        if prev_has_detail_codes and coded_rows:
+            # 前表已是含 5/7 位款项编码的明细功能表，无表头续页若全片仅含非零 3 位“类”编码、
+            # 没有本页 5/7 位子行，只有当下一页紧接着给出该类的 5/7 位款项子行才合法衔接。
+            if all(len(c) == 3 for c, _ in coded_rows) and any(
+                _tail_has_nonzero(tail) for _, tail in coded_rows
+            ):
+                if not self._next_page_confirms_class_children(
+                    current, next_table, [c for c, _ in coded_rows], split_cols
+                ):
+                    return False
+
+        if has_detail_codes and len(coded_rows) >= 2:
+            for (prev_c, prev_tail), (cur_c, _) in zip(coded_rows, coded_rows[1:], strict=False):
+                if len(prev_c) == 3 and len(cur_c) == 3 and prev_c != cur_c:
+                    if _tail_has_nonzero(prev_tail):
+                        return False
+        return True
+
+    def _continuation_identity_evidence(
+        self, previous: ParsedTable, current: ParsedTable
+    ) -> bool:
+        """实际合并前的身份证据：可复核的表头、列边界或连续科目行列。
+
+        回退到这条路径时原生列边界已经不匹配，因此只接受重复表头或
+        连续科目编码行；数值密度、列数相近只用于发现候选，不能单独合并。
+        """
+        if self._headers_look_repeated(previous, current):
+            return True
+        return self._continuation_row_sequence_evidence(previous, current)
+
+    def _is_continuation_table(
+        self,
+        previous: ParsedTable,
+        current: ParsedTable,
+        next_table: Optional[ParsedTable] = None,
+    ) -> bool:
         if (current.page_number - self._last_page_number(previous) != 1
                 and not self._is_native_footer_follow_on(previous, current)):
             return False
@@ -1703,7 +2247,8 @@ class PDFParser:
         )
         if (
             final_nonempty_row
-            and str(final_nonempty_row[0] or "").strip().startswith(("合计", "总计"))
+            and (str(final_nonempty_row[0] or "").strip().startswith(("合计", "总计"))
+                 or self._row_is_total_close(final_nonempty_row))
             and self._headers_look_repeated(previous, current)
         ):
             return False
@@ -1733,15 +2278,59 @@ class PDFParser:
         if current_code.startswith("UNKNOWN_") and not previous_code.startswith("UNKNOWN_"):
             if self._fragment_titles_conflict(previous, current):
                 return False
+            # R7（2026-11-21 第三轮复审）：前页已以“合计/总计/小计”行收口（含表首
+            # 合计已被本页科目行闭合的情形），该表已经结束；后页无表头片段是另一张表。
+            if final_nonempty_row and self._row_is_total_close(final_nonempty_row):
+                return False
+            if self._table_top_total_already_balanced(previous):
+                return False
+            repeated_header = self._headers_look_repeated(previous, current)
+            functional_with_codes = (
+                previous_code in self._FUNCTIONAL_CONTINUATION_CODES
+                and self._table_has_subject_code_rows(previous)
+            )
+            # 原生列线匹配和连续编码回退共享同一身份检查，避免某一条路径只凭数字形状并表。
+            if functional_with_codes and not repeated_header:
+                if not self._split_continuation_has_subject_evidence(previous, current):
+                    return False
             if self._native_continuation_columns_match(previous, current):
+                first_nonempty_row = next(
+                    (row for row in current.rows if any(str(cell or "").strip() for cell in row)),
+                    [],
+                )
+                is_headerless_data = (
+                    not repeated_header
+                    and not (first_nonempty_row and self._row_is_total_close(first_nonempty_row))
+                )
+                if is_headerless_data:
+                    if functional_with_codes:
+                        if not self._continuation_first_row_is_subject(previous, current):
+                            return False
+                        if not self._headerless_functional_continuation_is_valid(
+                            previous, current, next_table=next_table
+                        ):
+                            return False
+                    elif previous.table_code == "FIN_06_basic_expenditure" and current.extraction_method != "native_footer":
+                        # 经济分类表（含双栏 8 列）无表头续页首行必须含 3xx 经济分类编码或注记尾行。
+                        has_econ_code = any(
+                            re.fullmatch(r"3\d{2}(?:\d{2}){0,2}", self._normalize_code_cell(val))
+                            for val in (first_nonempty_row or [])[:6]
+                        )
+                        first_text = normalize_text(str((first_nonempty_row or [""])[0] or ""))
+                        if not has_econ_code and not first_text.startswith(("注", "人员经费合计", "公用经费合计")):
+                            return False
                 return True
             if current.extraction_method == "native_footer":
                 return False  # Exact native footer proof must not fall back to ratio heuristics.
             if self._looks_like_data_continuation(current) and (
                 current.header_row_count <= 1
-                or self._headers_look_repeated(previous, current)
+                or repeated_header
             ):
-                return True
+                # R7（2026-11-20 独立复核）：数值密度和列数相近只能发现候选。
+                # 原生列边界不匹配时必须另有可复核身份：重复表头或连续科目
+                # 编码行；否则片段单独保留，不能把“办公桌/台/3/1/2”这类
+                # 行并进已以“合计”收口的决算表。
+                return self._continuation_identity_evidence(previous, current)
 
         return False
 

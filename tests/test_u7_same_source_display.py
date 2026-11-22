@@ -126,6 +126,6 @@ def test_unfinished_export_keeps_amount_obligation():
         "rule_findings": _finding("V33-227")["rule_findings"],
         "issues": {"critical": [], "error": [], "warn": [], "info": [], "tips": []},
     })
-    unfinished = [item for item in report["manual_review"]
+    unfinished = [item for item in report["diagnostics"]
                   if item.get("record_type") == "unfinished_check"]
     assert [item.get("obligation_id") for item in unfinished] == ["OBL-TXT-T5"]

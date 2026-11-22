@@ -69,6 +69,14 @@ class CheckReceipt:
     # - 零推导比较（以被核对另一侧反推本侧空白为0）**不允许**出现在 pass
     #   回执里，此类关系只能保持未知。
     evidence_nature: Optional[str] = None
+    # 2026-11-19：逐项算式证据。记录原文数字、原文单位、用于核算的单位或
+    # 科目、依据所在页及原句/原表格；条件试算单独标记且不计通过率。
+    # 结构（全部键可缺省）：
+    #   included_count / subtotal_wan / stated_total_wan / difference_wan
+    #   items[{page,span,raw,unit,value_wan,basis{...}}]
+    #   not_included[{page,span,raw,unit,reason}]
+    #   trial{assumption,included_count,subtotal_wan,is_conditional,counts_as_pass}
+    calculation_evidence: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.status not in SUB_CHECK_STATUSES:
@@ -110,6 +118,7 @@ class CheckReceipt:
             residual_difference_wan=_opt_str(data.get("residual_difference_wan")),
             cascade_of=_opt_str(data.get("cascade_of")),
             evidence_nature=_opt_str(data.get("evidence_nature")),
+            calculation_evidence=dict(data.get("calculation_evidence") or {}),
             formula=_opt_str(data.get("formula")),
             tolerance=dict(data.get("tolerance") or {}),
             status=str(data.get("status") or "insufficient_data"),

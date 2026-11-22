@@ -586,7 +586,8 @@ def test_equal_rating_sum_cannot_override_identity_or_scope_conflict(conflict):
     body = rating_body(78, [('优', 76), ('良', 2)])
     if conflict == 'duplicate_zero': body += '绩效评级为“优”的项目0个。'
     elif conflict == 'duplicate_positive': body = rating_body(78, [('优', 75), ('优', 1), ('良', 2)])
-    elif conflict == 'unknown_rating': body += '绩效评级为“中”的项目0个。'
+    # 2026-11-19：中/低/差已纳入第二套标准评级；真正的未知评级用“乙”验证。
+    elif conflict == 'unknown_rating': body += '绩效评级为“乙”的项目0个。'
     else:
         prefix = {'rating_year': '2024年度', 'rating_previous': '上年',
                   'rating_owner': '乙局', 'rating_scope': '调整统计范围后'}[conflict]

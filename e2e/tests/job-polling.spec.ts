@@ -125,7 +125,7 @@ test.describe("Job status polling (fix 1)", () => {
     // 后端任务完成（mock 翻转相位）：下一次 /api/jobs 轮询（≤5 秒）必须让
     // 列表自动更新到终态，无需任何手动刷新。
     state.phase = "done";
-    await expect(row).toContainText("分析完成", { timeout: 15_000 });
+    await expect(row).toContainText("已生成结果", { timeout: 15_000 });
     await expect(row).toContainText("3");
 
     const marker = await page.evaluate(
@@ -189,7 +189,7 @@ test.describe("Job status polling (fix 1)", () => {
 
     // 后续轮询继续工作：processing -> done 自动更新。
     state.phase = "done";
-    await expect(row).toContainText("分析完成", { timeout: 15_000 });
+    await expect(row).toContainText("已生成结果", { timeout: 15_000 });
   });
 });
 

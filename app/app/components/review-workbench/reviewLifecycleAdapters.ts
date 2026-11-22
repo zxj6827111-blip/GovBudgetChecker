@@ -123,6 +123,18 @@ export interface ObligationReviewItemRecord {
   note: string | null;
   evidence_reference: string | null;
   /**
+   * R5：同一义务下按原文位置/科目范围分别表态的记录（scope_key → 决定）。
+   * 页面按分组的 decision_scope 取对应记录；缺失表示该处尚未表态。
+   */
+  scope_decisions?: Record<string, {
+    decision: string | null;
+    decision_revision: number | null;
+    decided_by: string | null;
+    decided_at: string | null;
+    note: string | null;
+    evidence_reference: string | null;
+  }>;
+  /**
    * DH-02 结构化卡点：后端原样透传。旧后端没有这些字段，保持可选，
    * 展示层只在字段存在时使用；不在适配层推断或补默认原因。
    */
@@ -198,6 +210,34 @@ export const RESOLVED_OBLIGATION_DECISIONS = [
 /** 这条义务在当前会话上是否已被人工处理（待处理 = 无记录 / pending / 未知值）。 */
 export function isObligationHandled(item: ObligationReviewItemRecord | null | undefined): boolean {
   const decision = String(item?.decision ?? "").trim();
+  return (RESOLVED_OBLIGATION_DECISIONS as readonly string[]).includes(decision);
+}
+
+/** R5：某条义务在指定原文范围上的决定；没有范围记录时回退义务级决定。 */
+export function obligationDecisionForScope(
+  item: ObligationReviewItemRecord | null | undefined,
+  scope: string | null | undefined,
+): { decision: string | null; revision: number | null } {
+  const key = String(scope ?? "").trim();
+  if (key && item?.scope_decisions) {
+    const scoped = item.scope_decisions[key];
+    if (scoped) {
+      return { decision: scoped.decision ?? null, revision: scoped.decision_revision ?? null };
+    }
+    // 同一义务已出现按范围表态时，未覆盖的范围保持待处理；不能再拿
+    // 义务级旧决定冒充“这一处已核对”。
+    if (Object.keys(item.scope_decisions).length > 0) {
+      return { decision: null, revision: null };
+    }
+  }
+  return { decision: item?.decision ?? null, revision: item?.decision_revision ?? null };
+}
+
+export function isObligationScopeHandled(
+  item: ObligationReviewItemRecord | null | undefined,
+  scope: string | null | undefined,
+): boolean {
+  const decision = String(obligationDecisionForScope(item, scope).decision ?? "").trim();
   return (RESOLVED_OBLIGATION_DECISIONS as readonly string[]).includes(decision);
 }
 

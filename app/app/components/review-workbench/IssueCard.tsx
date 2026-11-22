@@ -21,8 +21,10 @@ import { evidenceExcerptLabel } from "@/lib/evidenceIdentity";
 
 import { getSeverityMeta, normalizeSeverityCode, type SeverityCode } from "../../../lib/issueSeverity";
 import type { Problem } from "../../../lib/mock";
+import type { UnfinishedCheckGroup } from "../../../lib/uiAdapters";
 import { parseDecisionNote } from "./reviewDecisionNotes";
-import type { ObligationCascadeItemRecord } from "./reviewLifecycleAdapters";
+import type { ObligationCascadeItemRecord, ObligationReviewItemRecord } from "./reviewLifecycleAdapters";
+import type { ObligationPanelDecision } from "./ObligationDecisionPanel";
 import {
   buildAmountComparison,
   buildCalculationGroups,
@@ -112,6 +114,23 @@ export function IssueRow({ problem, isActive, workflowStatus, onSelect }: IssueR
   );
 }
 
+export interface LinkedUnfinishedGroupContext {
+  group: UnfinishedCheckGroup;
+  mode: "manual_required" | "covered_by_issue" | "notice_only";
+  records: ObligationReviewItemRecord[];
+  unhandledRecords: ObligationReviewItemRecord[];
+  handledLabel: string | null;
+  handledNote: string | null;
+  open: () => void;
+  locate: () => void;
+}
+
+export interface UnfinishedChecksLinkData {
+  count: number;
+  open: () => void;
+  groups?: LinkedUnfinishedGroupContext[];
+}
+
 export interface IssueCardProps {
   problem: Problem;
   workflowStatus: string | null;
@@ -122,6 +141,14 @@ export interface IssueCardProps {
   onSelectEvidenceRef?: (refKey: string) => void;
   /** 因本问题（缺表/空表）而无法自动进行的核对；不单独处理，随本问题了结。 */
   cascadedChecks?: ObligationCascadeItemRecord[];
+  unfinishedChecksLink?: UnfinishedChecksLinkData;
+  readOnly?: boolean;
+  submittingUnfinishedGroupId?: string | null;
+  onStartUnfinishedGroupDecision?: (ctx: LinkedUnfinishedGroupContext, decision: ObligationPanelDecision) => void;
+  onUndoUnfinishedGroupDecision?: (ctx: LinkedUnfinishedGroupContext) => void;
+  /** 漏单位问题的正文校正入口：确认单位后重算，不把业务判断当事实。 */
+  onConfirmUnit?: (problem: Problem) => void;
+  confirmUnitBusy?: boolean;
 }
 
 const SECTION_TITLE = "mb-2 text-[0.8em] font-semibold text-slate-500";
@@ -214,6 +241,13 @@ export function IssueCard({
   selectedEvidenceRefKey,
   onSelectEvidenceRef,
   cascadedChecks,
+  unfinishedChecksLink,
+  readOnly = false,
+  submittingUnfinishedGroupId = null,
+  onStartUnfinishedGroupDecision,
+  onUndoUnfinishedGroupDecision,
+  onConfirmUnit,
+  confirmUnitBusy = false,
 }: IssueCardProps) {
   const severityCode = normalizeSeverityCode(problem.severity);
   const severityMeta = getSeverityMeta(problem.severity, problem.severityLabel);
@@ -241,10 +275,35 @@ export function IssueCard({
   const looseRoundingCases = (problem.roundingCases ?? []).filter((item) => !groups.some((group) => group.relationId === item.relationId));
   const summary = detailSummary(problem.title, problem.description);
   const { ignoreReason, userNote } = parseDecisionNote(workflowNote);
-  const missingOperands = groups.length === 0 && /合计|加总|之和|分项/.test(`${problem.title}${problem.description}`);
+  const isSystemNotice = problem.reviewKind === "review_notice"
+    || problem.source === "manual_review"
+    || problem.source === "structured_ingest";
+  const missingOperands = !isSystemNotice
+    && groups.length === 0
+    && /合计|加总|之和|分项/.test(`${problem.title}${problem.description}`);
   const hasBasis = Boolean(problem.check || problem.tableOrSection || problem.amountsProvenance);
   const compactComparison = comparison?.values.every(isCompactValue) ?? false;
   const quote = problem.snippet ? (problem.sourceIdentityVerified ? `“${problem.snippet}”` : problem.snippet) : "";
+  const linkedGroups = unfinishedChecksLink?.groups ?? [];
+  const manualLinkedGroups = linkedGroups.filter((ctx) => ctx.mode === "manual_required");
+  const resolvedManualGroups = manualLinkedGroups.filter(
+    (ctx) => ctx.records.length > 0 && ctx.unhandledRecords.length === 0 && Boolean(ctx.handledLabel),
+  );
+  const pendingManualGroups = manualLinkedGroups.filter(
+    (ctx) => !(ctx.records.length > 0 && ctx.unhandledRecords.length === 0 && Boolean(ctx.handledLabel)),
+  );
+  const allLinkedManualResolved =
+    linkedGroups.length > 0
+    && manualLinkedGroups.length > 0
+    && pendingManualGroups.length === 0;
+  const hasPartialManualResolved =
+    linkedGroups.length > 0
+    && manualLinkedGroups.length > 0
+    && resolvedManualGroups.length > 0
+    && pendingManualGroups.length > 0;
+  const resolvedDecisionSummary = Array.from(
+    new Set(resolvedManualGroups.map((ctx) => ctx.handledLabel).filter((label): label is string => Boolean(label))),
+  ).join(" / ");
 
   return (
     <article
@@ -296,6 +355,63 @@ export function IssueCard({
 
       <h2 className="mb-2 break-words text-[1.25em] font-semibold leading-snug text-slate-900">{problem.title}</h2>
       {summary ? <p className="mb-3 whitespace-pre-line text-[0.92em] leading-relaxed text-slate-600">{summary}</p> : null}
+      {problem.ruleId === "V33-227" ? (
+        unfinishedChecksLink ? (
+          allLinkedManualResolved ? (
+            <section
+              className="mb-4 rounded-md border border-border bg-surface-50 px-3.5 py-2.5 text-[0.84em] leading-relaxed text-slate-700"
+              data-testid="gbc-review-amount-check-status"
+              data-amount-check-state="resolved"
+            >
+              <span className="mr-1.5 inline-block rounded bg-success-50 px-1.5 py-0.5 font-medium text-success-700">
+                影响金额自动核对 · 已人工表态
+              </span>
+              <span>
+                因说明与表格的科目名称存在实质差异，系统此前未能自动核对；受影响的 {resolvedManualGroups.length} 项表文金额核对已完成人工表态（{resolvedDecisionSummary}），可在下方查看记录或撤销。
+              </span>
+            </section>
+          ) : hasPartialManualResolved ? (
+            <section
+              className="mb-4 rounded-md border border-warning-200 bg-warning-50 px-3.5 py-2.5 text-[0.84em] leading-relaxed text-slate-700"
+              data-testid="gbc-review-amount-check-status"
+              data-amount-check-state="pending"
+            >
+              <span className="mr-1.5 inline-block rounded bg-warning-100 px-1.5 py-0.5 font-medium text-warning-700">
+                影响金额自动核对
+              </span>
+              <span>
+                因说明与表格的科目名称存在实质差异，系统拒绝按相似名称猜测对应表行，受影响的 {manualLinkedGroups.length} 项表文金额核对中还有 {pendingManualGroups.length} 项尚未完成（已完成 {resolvedManualGroups.length} 项，可在下方继续核对表态）。
+              </span>
+            </section>
+          ) : (
+            <section
+              className="mb-4 rounded-md border border-warning-200 bg-warning-50 px-3.5 py-2.5 text-[0.84em] leading-relaxed text-slate-700"
+              data-testid="gbc-review-amount-check-status"
+              data-amount-check-state="pending"
+            >
+              <span className="mr-1.5 inline-block rounded bg-warning-100 px-1.5 py-0.5 font-medium text-warning-700">
+                影响金额自动核对
+              </span>
+              <span>
+                因说明与表格的科目名称存在实质差异，系统拒绝按相似名称猜测对应表行，受影响的 {unfinishedChecksLink.count} 项表文金额核对尚未完成（可在下方直接核对表态，无需切换页签）。
+              </span>
+            </section>
+          )
+        ) : !(cascadedChecks && cascadedChecks.length > 0) ? (
+          <section
+            className="mb-4 rounded-md border border-border bg-surface-50 px-3.5 py-2.5 text-[0.84em] leading-relaxed text-slate-700"
+            data-testid="gbc-review-amount-check-status"
+            data-amount-check-state="auto_verified"
+          >
+            <span className="mr-1.5 inline-block rounded bg-success-50 px-1.5 py-0.5 font-medium text-success-700">
+              仅文字规范 · 金额已自动核对
+            </span>
+            <span>
+              系统已唯一匹配对应表格科目并完成金额比对，此处仅涉及科目名称写法规范，无需人工补核金额。
+            </span>
+          </section>
+        ) : null
+      ) : null}
 
       {comparison || hasBasis ? (
         <div className="mb-5" data-testid={`gbc-review-issue-explanation-${problem.id}`}>
@@ -408,7 +524,164 @@ export function IssueCard({
         </section>
       ) : null}
 
-      {cascadedChecks && cascadedChecks.length > 0 ? (
+      {unfinishedChecksLink ? (
+        <section
+          className="mb-5 rounded-md border border-border bg-surface-50 px-3.5 py-3 text-[0.86em]"
+          data-testid="gbc-review-linked-unfinished"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="font-semibold text-slate-800">
+              {allLinkedManualResolved
+                ? (problem.ruleId === "V33-227"
+                    ? `影响金额自动核对 · 已完成 ${resolvedManualGroups.length} 项人工核对`
+                    : `受此问题影响的 ${resolvedManualGroups.length} 项核对已完成人工表态`)
+                : hasPartialManualResolved
+                  ? (problem.ruleId === "V33-227"
+                      ? `影响金额自动核对 · 还有 ${pendingManualGroups.length} 项核对未完成（已完成 ${resolvedManualGroups.length} 项）`
+                      : `受此问题影响，还有 ${pendingManualGroups.length} 项核对未完成（已完成 ${resolvedManualGroups.length} 项）`)
+                  : (problem.ruleId === "V33-227"
+                      ? `影响金额自动核对 · 有 ${unfinishedChecksLink.count} 项核对未完成`
+                      : `受此问题影响，有 ${unfinishedChecksLink.count} 项核对未完成`)}
+            </h3>
+          </div>
+          {problem.ruleId === "V33-227" ? (
+            <p className="mt-1 text-[0.9em] leading-relaxed text-slate-600">
+              {allLinkedManualResolved
+                ? "因说明与表格的科目名称存在实质差异，系统此前未自动绑定核对；涉及条目的表文金额已完成人工表态，可在下方查看记录或撤销。"
+                : hasPartialManualResolved
+                  ? `因说明与表格的科目名称存在实质差异，系统拒绝按相似名称猜测对应表行，仍有 ${pendingManualGroups.length} 项表文金额待人工核对。`
+                  : "因说明与表格的科目名称存在实质差异，系统拒绝按相似名称猜测对应表行，涉及条目的表文金额尚未自动核对。"}
+            </p>
+          ) : null}
+          {unfinishedChecksLink.groups && unfinishedChecksLink.groups.length > 0 ? (
+            <div className="mt-2.5 space-y-2">
+              {unfinishedChecksLink.groups.map((ctx) => {
+                const { group, mode, records, unhandledRecords, handledLabel, handledNote } = ctx;
+                const isBusy = submittingUnfinishedGroupId === group.id;
+                const titleLabel = [group.page ? `第 ${group.page} 页` : null, group.subject || group.title]
+                  .filter(Boolean)
+                  .join(" · ");
+                return (
+                  <div
+                    key={group.id}
+                    className="rounded-md border border-border bg-white px-3 py-2.5 text-slate-700"
+                    data-testid={`gbc-review-linked-group-${group.id}`}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-medium text-slate-900">{titleLabel}</span>
+                      {handledLabel ? (
+                        <span className="rounded bg-success-50 px-1.5 py-0.5 text-[0.85em] font-medium text-success-700">
+                          已核对 · {handledLabel}
+                        </span>
+                      ) : mode === "manual_required" ? (
+                        <span className="rounded bg-warning-50 px-1.5 py-0.5 text-[0.85em] font-medium text-warning-700">
+                          需同步人工核对
+                        </span>
+                      ) : mode === "covered_by_issue" ? (
+                        <span className="rounded bg-info-50 px-1.5 py-0.5 text-[0.85em] font-medium text-info-700">
+                          已并入本问题
+                        </span>
+                      ) : (
+                        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[0.85em] text-slate-600">
+                          参考提示
+                        </span>
+                      )}
+                    </div>
+                    {group.plainReason ? (
+                      <p className="mt-1 text-[0.9em] leading-relaxed text-slate-600">{group.plainReason}</p>
+                    ) : null}
+                    {mode === "covered_by_issue" ? (
+                      <p className="mt-2 rounded bg-info-50 px-2.5 py-1.5 text-[0.88em] text-info-700">
+                        无需重复确认：处理完本问题后，该项核对将自动办结。
+                      </p>
+                    ) : mode === "manual_required" && records.length > 0 ? (
+                      <div className="mt-2 space-y-1.5 border-t border-border pt-2">
+                        {handledLabel ? (
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-[0.9em]">
+                            <span className="text-success-700">
+                              已完成金额核对（{handledLabel}）{handledNote ? `：${handledNote}` : ""}
+                            </span>
+                            {!readOnly && onUndoUnfinishedGroupDecision ? (
+                              <button
+                                type="button"
+                                disabled={isBusy}
+                                data-testid={`gbc-inline-unfinished-undo-${group.id}`}
+                                onClick={() => onUndoUnfinishedGroupDecision(ctx)}
+                                className="text-[0.92em] text-slate-500 hover:text-slate-800 hover:underline disabled:opacity-50"
+                              >
+                                {isBusy ? "处理中…" : "撤销表态"}
+                              </button>
+                            ) : null}
+                          </div>
+                        ) : !readOnly && onStartUnfinishedGroupDecision ? (
+                          <>
+                            <p className="text-[0.88em] leading-relaxed text-slate-500">
+                              对照左侧原页核对对应金额后，可在此直接表态（与「核对未完成」同步生效，无需切页重复确认）：
+                            </p>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <button
+                                type="button"
+                                disabled={isBusy}
+                                data-testid={`gbc-inline-unfinished-decide-ok-${group.id}`}
+                                onClick={() => onStartUnfinishedGroupDecision(ctx, "verified_ok")}
+                                className="rounded border border-primary-600 bg-primary-600 px-2.5 py-1 text-[0.88em] font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                核对无误
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isBusy}
+                                data-testid={`gbc-inline-unfinished-decide-issue-${group.id}`}
+                                onClick={() => onStartUnfinishedGroupDecision(ctx, "verified_issue")}
+                                className="rounded border border-border bg-white px-2.5 py-1 text-[0.88em] font-medium text-slate-700 hover:bg-surface-100 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                确认有问题
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isBusy}
+                                data-testid={`gbc-inline-unfinished-decide-na-${group.id}`}
+                                onClick={() => onStartUnfinishedGroupDecision(ctx, "not_applicable")}
+                                className="rounded border border-border bg-white px-2.5 py-1 text-[0.88em] font-medium text-slate-700 hover:bg-surface-100 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                不适用
+                              </button>
+                              {group.page ? (
+                                <button
+                                  type="button"
+                                  onClick={ctx.locate}
+                                  className="ml-auto text-[0.88em] text-primary-700 hover:underline"
+                                >
+                                  定位第 {group.page} 页原文 ↖
+                                </button>
+                              ) : null}
+                            </div>
+                          </>
+                        ) : readOnly ? (
+                          <p className="text-[0.88em] text-slate-500">
+                            {unhandledRecords.length > 0
+                              ? "历史版本或未开始复核状态下仅供查看，开始复核后可在此直接表态。"
+                              : "当前为只读状态。"}
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
+          <button
+            type="button"
+            className="mt-2.5 text-sm font-medium text-primary-700 hover:underline"
+            onClick={unfinishedChecksLink.open}
+          >
+            {allLinkedManualResolved
+              ? `查看关联的 ${unfinishedChecksLink.count} 项核对记录 →`
+              : `查看受影响的 ${unfinishedChecksLink.count} 项核对 →`}
+          </button>
+        </section>
+      ) : cascadedChecks && cascadedChecks.length > 0 ? (
         <section className="mb-5 border-t border-border pt-3" data-testid="gbc-review-cascaded-checks">
           <h3 className={SECTION_TITLE}>受此问题影响，以下 {cascadedChecks.length} 项核对未能自动进行</h3>
           <p className="mb-1.5 text-[0.82em] text-slate-500">无需单独处理：补齐或更正本问题涉及的表格或说明内容后重新检查即可。</p>
@@ -464,6 +737,8 @@ export interface IssueDecisionFooterProps {
   onAction: (action: IssueWorkflowAction) => void;
   /** 「未能自动核对」条目的三个结论（及置回待处理），提交到补核接口。 */
   onObligationDecision?: (decision: ObligationDecision) => void;
+  onConfirmUnit?: (problem: Problem) => void;
+  confirmUnitBusy?: boolean;
   notice: IssueDecisionNoticeView | null;
   nextStep?: { label: string; onClick: () => void } | null;
 }
@@ -478,6 +753,8 @@ export function IssueDecisionFooter({
   isSubmitting,
   onAction,
   onObligationDecision,
+  onConfirmUnit,
+  confirmUnitBusy = false,
   notice,
   nextStep,
 }: IssueDecisionFooterProps) {
@@ -542,6 +819,19 @@ export function IssueDecisionFooter({
         </div>
       ) : actions ? (
         <div className="flex flex-wrap items-center gap-2">
+          {problem.ruleId === "CMM-011"
+            && `${problem.title} ${problem.description}`.includes("缺少单位")
+            && onConfirmUnit ? (
+            <button
+              type="button"
+              onClick={() => onConfirmUnit(problem)}
+              disabled={isSubmitting || confirmUnitBusy}
+              data-testid={`gbc-review-confirm-unit-${problem.id}`}
+              className="rounded-md border border-info-300 bg-info-50 px-3.5 py-1.5 text-xs font-medium text-info-700 transition-colors hover:bg-info-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {confirmUnitBusy ? "提交中…" : "校正正文读数/单位并重算"}
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={() => onAction("confirm")}

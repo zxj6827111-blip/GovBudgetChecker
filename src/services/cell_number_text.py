@@ -33,14 +33,42 @@ def single_amount_lexeme(text: Any) -> bool:
     return bool(value) and not re.search(r"\s", value)
 
 
-def invalid_number_text(text: Any) -> bool:
-    """是否“单个数字词但小数点重复”。
+_THOUSANDS_BODY_RE = re.compile(r"^(?P<int>[0-9,]+)(?:\.(?P<frac>\d+))?$")
 
-    只有这种形态才可能是原件印错；多个数拼在一起属读取异常。
+
+def _invalid_thousands_grouping(value: str) -> bool:
+    """千分位分组是否非法（如 ``79,85.49`` / ``1,8415.60``）。
+
+    分组非法时同一串字符至少有两种可解释读数（去掉逗号 / 把逗号当小数点），
+    不能唯一还原；只报格式缺陷，不采用任何候选值。
+    """
+    match = _THOUSANDS_BODY_RE.match(value)
+    if match is None or "," not in match.group("int"):
+        return False
+    groups = match.group("int").split(",")
+    if not groups or not all(group.isdigit() for group in groups):
+        return True
+    if len(groups[0]) not in (1, 2, 3):
+        return True
+    return any(len(group) != 3 for group in groups[1:])
+
+
+def invalid_number_text(text: Any) -> bool:
+    """是否“单个数字词但数字格式不可唯一还原”。
+
+    覆盖两类纸面/抽取格式缺陷：
+    - 小数点重复（``2.359.46``）；
+    - 千分位分组非法（``79,85.49``、``1,8415.60``）。
+
+    多个数拼在一起（换行/空格分隔）属读取异常，不在此列。
     """
     value = str(text or "").strip()
     if not value or not any(ch.isdigit() for ch in value):
         return False
     if not single_amount_lexeme(value):
         return False
-    return len(_DECIMAL_POINT_RE.findall(value)) > 1
+    match = _TRAILING_UNIT_RE.match(value)
+    body = match.group(1).strip() if match else value
+    if len(_DECIMAL_POINT_RE.findall(body)) > 1:
+        return True
+    return _invalid_thousands_grouping(body)

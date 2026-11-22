@@ -113,7 +113,7 @@ def order_and_number_issues(doc, issues):
 import logging
 
 from dataclasses import dataclass, field
-from typing import FrozenSet, List, Dict, Any, Optional, Sequence, Set, Tuple, TypedDict
+from typing import FrozenSet, List, Dict, Any, Mapping, Optional, Sequence, Set, Tuple, TypedDict
 
 import os
 import re
@@ -205,6 +205,9 @@ class Document:
     # ZC-03（AC-04）：规则在执行中写下的关系级子检查回执
     # （CheckReceipt.to_dict() 形态），由 build_issues_payload 收集上报。
     fact_receipts: List[Dict[str, Any]] = field(default_factory=list)
+    # 2026-11-19：正文金额人工校正（text_statement）。规则按物理页 + 原文区间
+    # 匹配后使用校正值重算；校正本身不改变原 PDF，材料缺陷仍照常报告。
+    text_corrections: List[Dict[str, Any]] = field(default_factory=list)
 
 
 # ---------- 工具 ----------
@@ -975,6 +978,7 @@ def _v33_relation_receipt(
     residual_difference_wan: Optional[str] = None,
     cascade_of: Optional[str] = None,
     evidence_nature: Optional[str] = None,
+    calculation_evidence: Optional[Mapping[str, Any]] = None,
 ) -> None:
     """RC-04：V33 族关系级回执——每条适用关系一条，携带真实操作数 ID。
 
@@ -1006,7 +1010,14 @@ def _v33_relation_receipt(
         except ValueError:
             structured = {}
         if structured:
-            reason_codes = tuple(structured.get("reason_codes") or ())
+            # 规则显式断言的原因码即使未能定位也保留在回执上（不伪造缺数
+            # 位置，定位门禁继续约束 blocked_by/missing_operands）。
+            # RR-05B：原因码只写在关系回执上时，有界恢复与义务聚合同样
+            # 需要拿到真实失败类型，不能被收敛成 rule_no_reason。
+            reason_codes = tuple(dict.fromkeys([
+                *(str(code) for code in structured.get("reason_codes") or ()),
+                *(str(code) for code in reason_codes if str(code).strip()),
+            ]))
     receipts.append(
         make_fact_receipt(
             rule_code,
@@ -1033,6 +1044,7 @@ def _v33_relation_receipt(
                       "fail": "real_amount_comparison",
                       "not_applicable": "applicability_judgment"}.get(status)
             ),
+            calculation_evidence=calculation_evidence,
         )
     )
 
@@ -1250,7 +1262,22 @@ def _is_non_table_page(raw: str) -> bool:
 
 def find_table_anchors(doc: Document) -> Dict[str, List[int]]:
     anchors: Dict[str, List[int]] = {it["name"]: [] for it in NINE_TABLES}
+    from .checklist_support import is_toc_page
+    from .diagnostic_fields import _toc_line_indexes
+
+    toc_continues = False
     for pidx, raw in enumerate(doc.page_texts):
+        has_actual_table = pidx < len(doc.page_tables) and bool(doc.page_tables[pidx])
+        # 目录续页可能没有“目录”二字。带序号的目录条目不能作为正文表头，
+        # 邻接页出现实体表或正文标题后立即结束目录范围。
+        if is_toc_page(raw):
+            toc_continues = True
+            continue
+        if toc_continues and not has_actual_table:
+            nonempty = {index for index, line in enumerate(raw.splitlines()) if line.strip()}
+            if nonempty and nonempty <= _toc_line_indexes(raw):
+                continue
+        toc_continues = False
         if _is_non_table_page(raw):
             continue
         ntxt = normalize_text(raw)
@@ -1274,8 +1301,6 @@ def find_table_anchors(doc: Document) -> Dict[str, List[int]]:
                 break
         
         # 检查是否实际包含表格
-        has_actual_table = len(doc.page_tables[pidx]) > 0 if pidx < len(doc.page_tables) else False
-        
         # 如果满足任何一个条件，就认为是表格页面
         if is_table_page or has_table_title or has_actual_table:
             for it in NINE_ALIAS_NORMAL:
@@ -1784,13 +1809,24 @@ class R33002_NineTablesCheck(Rule):
 
         missing, duplicates, order_pages = [], [], []
         # 逐张检查
-        for spec in NINE_TABLES:
+        for index, spec in enumerate(NINE_TABLES):
             nm = spec["name"]
             pages = anchors.get(nm, [])
             if not pages:
                 missing.append(nm)
             else:
-                order_pages.append((nm, min(pages)))
+                # 宽松别名可用于找表，但顺序优先采用整行正文表题，避免把其他表的
+                # 相似长标题当作本表首次出现。同表标题缺字时仍沿用现有锚点。
+                aliases = set(NINE_ALIAS_NORMAL[index]["aliases_norm"])
+                exact_pages = []
+                for page in pages:
+                    if not 0 < page <= len(doc.page_texts):
+                        continue
+                    lines = [normalize_text(re.sub(r"^\s*(?:表\s*\d+\s*|[一二三四五六七八九十\d]+[、.．])", "", line))
+                             for line in doc.page_texts[page - 1].splitlines()]
+                    if aliases.intersection(lines):
+                        exact_pages.append(page)
+                order_pages.append((nm, min(exact_pages or pages)))
                 if len(pages) > 1:
                     duplicates.append((nm, pages))
         
@@ -2410,6 +2446,11 @@ def _make_issue_location(
     return location
 
 
+def _compact_total_label(value: Any) -> str:
+    """合计标签归一：全半角、空白不影响“合计/总计”识别。"""
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(value or "")))
+
+
 def _extract_table_total(table: List[List[str]]) -> Optional[float]:
     """提取合计行的「合计」列数值（None 安全）。
 
@@ -2424,7 +2465,7 @@ def _extract_table_total(table: List[List[str]]) -> Optional[float]:
     header_total_col = None
     for row in table[:5]:
         for i, cell in enumerate(row):
-            if str(cell or "").strip() == "合计":
+            if _compact_total_label(cell) == "合计":
                 header_total_col = i
                 break
         if header_total_col is not None:
@@ -2437,7 +2478,8 @@ def _extract_table_total(table: List[List[str]]) -> Optional[float]:
             continue
         if any(str(c or "").strip().isdigit() and len(str(c).strip()) in (3, 5, 7) for c in row[:3]):
             continue
-        if not (any(str(c or "").strip() == "合计" for c in row) or str(row[0] or "").strip().startswith("合计")):
+        if not (any(_compact_total_label(c) == "合计" for c in row)
+                or _compact_total_label(row[0] if row else "").startswith("合计")):
             continue
         if header_total_col is not None and header_total_col < len(cells) and cells[header_total_col] is not None:
             return float(cells[header_total_col])
@@ -3248,9 +3290,13 @@ def _extract_final_functional_narrative_mentions(
     if getattr(doc, "parse_artifact", None) is not None:
         merged, offsets = _txt_fund_merged_pages(doc)
         # 2022 版三公章节标题也带“一般公共预算”，不能顶替说明五。
+        # 2026-11-16：第六节标题漏“基”时（“本支出”）同样必须排除，否则
+        # 它会被当成最后一节，V33-227 误选第六节并报“未提取到科目提及”
+        # （市政府办公厅 p22 实证）。
         sections = [section for section in _nar_repeat_sections(merged, doc, offsets)
                     if "一般公共预算" in section[0] and "支出决算" in section[0]
-                    and "基本支出" not in section[0] and "三公" not in section[0]]
+                    and "基本支出" not in section[0] and "本支出" not in section[0]
+                    and "三公" not in section[0]]
         if not sections:
             return mentions
         _title, begin, _section_end = sections[-1]
@@ -4715,8 +4761,9 @@ class R33110_BudgetVsFinal_TextConsistency(Rule):
     desc = "（三）一般公共预算财政拨款支出决算（具体）情况:数字与大于/小于/持平一致性，并校验是否说明原因"
 
     # 1) 小节起止（行首匹配 + 变体）
-    _SEC_START = re.compile(r"(?m)^\s*(（三）|三、)\s*一般公共预算财政拨款支出决算(?:具体)?情况")
-    _NEXT_SEC  = re.compile(r"(?m)^\s*(（四）|四、|（六）|六、|一般公共预算财政拨款基本支出决算情况说明)")
+    # 2026-11-16：半角“(三)”与全角“（三）”同等识别；不能因括号字形漏章。
+    _SEC_START = re.compile(r"(?m)^\s*([（(]三[)）]|三、)\s*一般公共预算财政拨款支出决算(?:具体)?情况")
+    _NEXT_SEC  = re.compile(r"(?m)^\s*([（(]四[)）]|四、|[（(]六[)）]|六、|一般公共预算财政拨款基本支出决算情况说明)")
 
     # 2) 优化后的主配对模式：缩小匹配窗口，增加上下文约束
     _PAIR = re.compile(
@@ -5632,6 +5679,43 @@ def _total_structural_contradiction(
 _SECTION_DISTRACTOR_PREFIXES = ("一般公共预算", "政府性基金", "国有资本", "财政拨款")
 
 
+#: 决算说明章节标题：中文/阿拉伯序号与全半角括号统一识别。
+#: 2026-11-16：原文“（三）”写成半角“(三)”时不再漏章（审计局 p21 实证）。
+_SECTION_TITLE_START = (
+    r"(?:[（(][一二三四五六七八九十]{1,3}[)）]"
+    r"|[一二三四五六七八九十]{1,3}、"
+    r"|\d{1,2}[、.．])"
+)
+_SECTION_TITLE_RE = re.compile(
+    r"(?:^|\n)\s*" + _SECTION_TITLE_START + r"[^。；;！!？?\n]{0,60}(?:说明|情况)"
+)
+#: 章节边界只认“一、/1、”这类同级标题；括号子标题（如“（一）总体情况”）
+#: 是章节正文的一部分，不能把章节截断在第一个子标题处。
+_SECTION_BOUNDARY_RE = re.compile(
+    r"(?:^|\n)\s*(?:[一二三四五六七八九十]{1,3}、|\d{1,2}[、.．])"
+    r"[^。；;！!？?\n]{0,60}(?:说明|情况)"
+)
+#: 目录行尾部：点线引导 + 页码，或行尾孤立页码（与 diagnostic_fields 同口径）。
+_SECTION_TOC_TAIL_RE = re.compile(
+    r"(?:……|…{2,}|\.{2,}|·{2,})\s*\d+\s*$|\s\d{1,3}\s*$"
+)
+
+
+def _section_scope_body_is_catalog_only(raw: str, match: re.Match, next_start: int) -> bool:
+    """标题命中了目录、而不是正文。
+
+    目录条目后面紧跟下一条同级目录行，标题与下一同级标题之间没有正文；
+    正文章节即使以“（一）”子标题开头，也会继续到下一个“六、”同级标题，
+    因此正文间距充足。只用于“排除目录”，不改写正文。
+    """
+    line_end = raw.find("\n", match.end())
+    line_tail = raw[match.end(): line_end if line_end >= 0 else len(raw)]
+    if _SECTION_TOC_TAIL_RE.search(line_tail.strip()):
+        return True
+    body = raw[match.end():next_start].strip()
+    return len(body) < 12
+
+
 def _final_section_scope(
     doc: Document,
     title_keywords: Tuple[str, ...],
@@ -5645,9 +5729,8 @@ def _final_section_scope(
     （「本年收入合计 203 \\n 23.21 万元」）。near_number 按换行分句后
     只能拿到半截数字。
 
-    处理：在合并文本上定位标题（取**最后一次**出现——目录条目在前、
-    正文标题在后；泛标题用 exclude_tokens 排除专项章节后缀陷阱），
-    截取到下一个中文序号标题为止，然后做两类修复：
+    处理：在合并文本上定位标题（先排除目录条目，再取**最后一次**正文出现），
+    截取到下一个同级中文序号标题为止，然后做两类修复：
       1. 断号融合：数字 \\n 数字 → 一个数（"203\\n23.21" → "20323.21"）；
       2. 行尾续行融合：行尾为非句末标点且次行以数字开头（"人员经费\\n12192.15 万元"）。
     仅在章节范围内修复，不触碰 merge_page_texts 的全局页界语义。
@@ -5661,24 +5744,31 @@ def _final_section_scope(
                 lines.pop()  # A literal trailing physical page label is not an amount.
             page_texts.append("\n".join(lines))
     raw = merge_page_texts(page_texts)
-    title_pat = re.compile(
-        r"(?:^|\n)\s*(?:[一二三四五六七八九十]+、|\d{1,2}、)"
-        r"[^。；;！!？?\n]{0,60}(?:说明|情况)"
-    )
-    starts = []
-    for m in title_pat.finditer(raw):
+    candidates = []
+    for m in _SECTION_TITLE_RE.finditer(raw):
         title = m.group(0)
         if not all(kw in title for kw in title_keywords):
             continue
         if any(tok in title for tok in exclude_tokens):
             continue
-        starts.append(m.start())
-    if not starts:
+        nxt = _SECTION_BOUNDARY_RE.search(raw, m.end())
+        next_start = nxt.start() if nxt else len(raw)
+        if _section_scope_body_is_catalog_only(raw, m, next_start):
+            continue
+        candidates.append((m, next_start))
+    if not candidates:
+        # 兼容旧标题变体：错字标题（如“本支出”缺“基”）只在正常标题无正文
+        # 候选时才由调用方的 fallback 关键词再试；这里不凭空放宽。
         return None
-    start = starts[-1]
-    nxt = title_pat.search(raw, start + 5)
-    end = nxt.start() if nxt else len(raw)
-    scope = raw[start:end]
+    # 同级“七、…”章节优先于其内部“（二）…”子标题：子标题也含关键词时，
+    # 不能把章节截成从子标题开始（V33-108 三公章节实测）。
+    top_level = [
+        item for item in candidates
+        if re.match(r"^\s*(?:[一二三四五六七八九十]{1,3}、|\d{1,2}[、.．])",
+                    item[0].group(0))
+    ]
+    start_match, next_start = (top_level or candidates)[-1]
+    scope = raw[start_match.start():next_start]
     scope = re.sub(r"(\d)[ \t]*\r?\n[ \t]*(\d)", r"\1\2", scope)
     scope = re.sub(
         r"([^\n。；;！!？\d])[ \t]*\r?\n[ \t]*(\d)", r"\1\2", scope
@@ -11721,12 +11811,24 @@ def _ensure_parsed_tables(doc: Document) -> bool:
     return bool(getattr(doc, "parsed_tables", None))
 
 
-def _cross_table_by_alias(doc: Document, aliases: Tuple[str, ...]):
-    """按表名身份定位**唯一**一张结构化表；命中 0 张或多张都返回 None。
+def _cross_table_by_alias(doc: Document, aliases: Tuple[str, ...], table_code: str = ""):
+    """按表身份定位**唯一**一张结构化表；命中 0 张或多张都返回 None。
 
     多张 = 表身份有歧义（同一份材料里出现两张同名表），此时宁可记取数不足，
     也不能随手取第一张——取错表会让整条跨表比较落在不同的表上。
+
+    表身份优先取解析层已确认的 ``table_code``（与其他规则同源）；表题不规范
+    （如三公表题写成“…三公经费及机关运行经费支出决算表”）时别名对不上，但
+    表本身已被识别，不应因此判成“未识别到目标表”。表题不规范另由 CMM-021
+    单独报出。table_code 命中 0 张或多张时才退回别名匹配。
     """
+    if table_code:
+        coded = [
+            table for table in (getattr(doc, "parsed_tables", None) or {}).values()
+            if getattr(table, "table_code", "") == table_code
+        ]
+        if len(coded) == 1:
+            return coded[0]
     hits: Dict[int, Any] = {}
     for alias in aliases:
         table = _find_parsed_table(doc, alias)
@@ -11880,10 +11982,18 @@ def _econ_item_amount_from_lane(
         }
     if not _econ_item_code_matches(code, expected_code):
         # 名称命中，但同行编码指向**另一个**业务项：两栏身份不一致，
-        # 无法确认这一行到底记的是哪个业务项 → 交给调用方记取数不足。
+        # 无法确认这一行到底记的是哪个业务项 → 交给调用方记取数不足，
+        # 同时把已由原件行证明的编码/名称错配作为具体材料问题交付。
+        cell = cells[amount_col]
         return {
             "conflict": f"{code} {label}（expected {expected_code}，actual {code}："
                         "行内编码与名称指向不同业务项）",
+            "conflict_code": code,
+            "expected_code": expected_code,
+            "conflict_name": label,
+            "page": cell.page or cells[start].page,
+            "row_label": "".join(c.text or "" for c in cells[start:amount_col] if c.text),
+            "cell_text": str(cell.text or (cell.number if cell.number is not None else "")).strip(),
         }
     return {
         "amount": cells[amount_col].number,
@@ -12028,8 +12138,8 @@ class R33CrossSanGongEcon(Rule):
             raise RuleDeferred(self.code, "结构化表模型不可用（page_tables/page_texts 不足）")
 
         unresolved: List[str] = []
-        table6 = _cross_table_by_alias(doc, _FIN_06_TABLE_ALIASES)
-        table7 = _cross_table_by_alias(doc, _FIN_07_TABLE_ALIASES)
+        table6 = _cross_table_by_alias(doc, _FIN_06_TABLE_ALIASES, "FIN_06_basic_expenditure")
+        table7 = _cross_table_by_alias(doc, _FIN_07_TABLE_ALIASES, "FIN_07_three_public")
         if table6 is None:
             unresolved.append(f"未定位到唯一的《{_FIN_06_TABLE_TITLE}》结构化表")
         if table7 is None:
@@ -12088,6 +12198,7 @@ class R33CrossSanGongEcon(Rule):
         # 用集合逐项记账而不是拿原因文本做子串匹配——后者会把"别项的失败"错连到本项。
         blocked: Set[str] = set()
         basic: Dict[str, Dict[str, Any]] = {}
+        identity_conflicts: List[Dict[str, Any]] = []
         codes_2025 = _econ_table_uses_2025_codes(table6)
         for key, subject, names, expected_code in _SAN_GONG_ECON_ITEM_SPECS:
             if codes_2025:
@@ -12106,6 +12217,7 @@ class R33CrossSanGongEcon(Rule):
                         continue
                     if hit.get("conflict"):
                         conflict = str(hit["conflict"])
+                        identity_conflicts.append({**hit, "subject": subject})
                         break
                     found.append(hit)
                 if conflict:
@@ -12297,6 +12409,35 @@ class R33CrossSanGongEcon(Rule):
         # 保持未知。禁止"取不到金额就静默跳过"——那是 pass 掩盖未比较项的
         # 缺陷形态（残联 p14 FIN_06 三个空白决算格实证）。
         issues: List[Issue] = []
+        # 2026-11-16：原件行内编码与名称指向不同业务项（如 31007 与
+        # “公务用车购置”同处一行）已由原文行证明，交付具体材料问题；
+        # 仅该业务项的跨表金额比较保持 unknown，不借错位数据完成核对。
+        for conflict in identity_conflicts:
+            conflict_code = str(conflict.get("conflict_code") or "")
+            expected_code = str(conflict.get("expected_code") or "")
+            row_label = str(conflict.get("row_label") or "")
+            evidence = row_label or str(conflict.get("cell_text") or conflict.get("conflict") or "")
+            location = {
+                "table": _FIN_06_TABLE_TITLE,
+                "table_code": "FIN_06_basic_expenditure",
+                "page": conflict.get("page") or page6,
+                "pages": [conflict.get("page") or page6],
+                "code": conflict_code or None,
+                "expected_code": expected_code or None,
+                "subject": conflict.get("subject"),
+                "row": row_label or None,
+                "defect_type": "economic_code_name_mismatch",
+            }
+            issues.append(self._issue(
+                f"基本支出经济分类表科目编码与名称不一致：“{conflict_code} "
+                f"{conflict.get('conflict_name') or conflict.get('subject')}”"
+                f"（应为 {expected_code}：行内编码与名称指向不同业务项）。"
+                "该行金额不能作为对应业务项的核对依据，请核对原件编码/名称。",
+                location,
+                severity="warn",
+                evidence_text=evidence,
+                check_relation_id=f"{self.code}:econ_identity:{conflict.get('subject')}",
+            ))
         item_relation_prefix = f"{self.code}:cross:san_gong"
         for key, subject, _names, _expected_code in _SAN_GONG_ECON_ITEM_SPECS:
             relation_id = f"{item_relation_prefix}:{key}"
@@ -12372,10 +12513,24 @@ class R33CrossSanGongEcon(Rule):
                           f"（{disclosure_note}；待人工复核）")
                 unresolved.append(reason)
                 blocked.add(key)
+                from .diagnostic_fields import blocker as _sg_blocker, record_gap as _sg_record_gap
+                _sg_record_gap(
+                    doc,
+                    reason,
+                    reason_codes=["cell_blank_semantics_unknown"],
+                    blocked_by=[
+                        _sg_blocker(
+                            dimension="cell",
+                            ref=f"第{int(hit.get('page') or page6)}页FIN_06_basic_expenditure:{subject}",
+                            reason_code="cell_blank_semantics_unknown",
+                        )
+                    ],
+                )
                 _v33_relation_receipt(
                     doc, self.code, relation_id,
                     status="insufficient_data", incomplete_reason=reason,
                     disclosure_sources=[dict(ref) for ref in (zero_refs or [])],
+                    reason_codes=["cell_blank_semantics_unknown"],
                 )
                 continue
             total = three_public[key]
@@ -14832,6 +14987,12 @@ class R33TrendCompletionRate(Rule):
             merged, offsets, sections, year, claims
         )
         boundaries = [b.start() for b in _WP4E_ENTRY_RE.finditer(merged)]
+        from .native_final_disclosure import GENERAL, detail_decision_unit_from_table
+        from .native_table_arithmetic import table_facts
+        from .native_table_text import is_general_expenditure_title
+
+        decision_facts, _ = table_facts(doc, GENERAL)
+        decision_units = {fact.unit for fact in decision_facts if fact.indicator == "total_actual"}
 
         for claim in claims:
             self._bind_entry(claim, boundaries, merged)
@@ -14843,7 +15004,25 @@ class R33TrendCompletionRate(Rule):
                 issues.extend(findings)
                 unresolved.extend(missing)
             else:
-                self._check_claim(claim, budgets, actuals, openings, year, issues, unresolved)
+                claim_actuals = actuals
+                if decision_units and is_general_expenditure_title(claim["section"]):
+                    in_entry = [
+                        actual for actual in actuals
+                        if actual["section_start"] == claim["section_start"]
+                        and claim["entry_start"] <= actual["start"] < claim["start"]
+                    ]
+                    if len(in_entry) == 1 and decision_units != {in_entry[0]["raw_unit"]}:
+                        actual = in_entry[0]
+                        basis = detail_decision_unit_from_table(
+                            doc, decision_facts, merged[claim["entry_start"]:actual["start"]],
+                            actual["amount_text"], actual["raw_unit"],
+                        )
+                        if basis is not None:
+                            proof = {**actual, "wan": basis.normalized_value,
+                                     "unit_basis_refs": (basis.extra_dims or {}).get("evidence_refs") or [],
+                                     "unit_for_check": basis.unit}
+                            claim_actuals = [proof if candidate is actual else candidate for candidate in actuals]
+                self._check_claim(claim, budgets, claim_actuals, openings, year, issues, unresolved)
             # DH-02：完成率卡点在产生处登记；页码由原文偏移映射，不编造。
             _record_trend_gaps(doc, unresolved[before:], claim, merged, offsets)
 
@@ -15495,6 +15674,8 @@ class R33TrendCompletionRate(Rule):
         refs.extend(_with_role(denom, "分母披露", denom["span"]))
         if actual is not None:
             refs.extend(_with_role(actual, "分子披露", actual["span"]))
+            refs.extend({**ref, "page": ref.get("physical_page"), "role": "核对采用的原表决算金额"}
+                        for ref in actual.get("unit_basis_refs", []))
         pages = {
             int(ref["page"])
             for ref in refs
@@ -15513,6 +15694,8 @@ class R33TrendCompletionRate(Rule):
             "actual_amount": actual["amount_text"] if actual else None,
             "actual_unit": actual["raw_unit"] if actual else None,
             "actual_unit_confirmed": actual["unit_confirmed"] if actual else None,
+            **({"actual_unit_for_check": actual["unit_for_check"]}
+               if actual and actual.get("unit_for_check") else {}),
             "normalized_actual_wan": (
                 _txt_fund_display(actual["wan"])
                 if actual is not None and actual["wan"] is not None

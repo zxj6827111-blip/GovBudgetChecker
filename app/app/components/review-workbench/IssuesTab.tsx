@@ -18,13 +18,14 @@ import {
   problemReviewKind,
   sortProblemsForReview,
 } from "./reviewWorkbenchAdapters";
-import type { IssueWorkflowAction } from "./IssueCard";
+import type { IssueWorkflowAction, LinkedUnfinishedGroupContext, UnfinishedChecksLinkData } from "./IssueCard";
 import { IssueCard, IssueDecisionFooter, IssueRow } from "./IssueCard";
 import { IgnoreReasonPanel } from "./IgnoreReasonPanel";
 import { ObligationCard } from "./ObligationCard";
 import { ObligationDecisionPanel, type ObligationPanelDecision } from "./ObligationDecisionPanel";
 import { isObligationProblem, obligationAutoEvidence, readableObligationReason, type ObligationDecision } from "./obligationProblems";
 import { parseDecisionNote, type IgnoreReason } from "./reviewDecisionNotes";
+import { groupEvidenceReference, mergeObligationRecords } from "./UnfinishedChecksTab";
 import type { ObligationCascadeItemRecord, ObligationReviewItemRecord } from "./reviewLifecycleAdapters";
 import type { Problem } from "../../../lib/mock";
 import { groupProblemsByCategory, issueCategory } from "../../../lib/issueCategories";
@@ -102,11 +103,23 @@ export interface IssuesTabProps {
   obligationItems?: Record<string, ObligationReviewItemRecord>;
   /** 根问题 id → 因它（缺表/空表）无法自动进行的核对。 */
   cascadedChecks?: Record<string, ObligationCascadeItemRecord[]>;
+  onOpenUnfinishedChecks?: (problemId: string) => UnfinishedChecksLinkData | undefined;
+  /** 从问题卡内联同步表态关联的未完成核对组（与「核对未完成」共用提交逻辑）。 */
+  onDecideUnfinishedGroup?: (
+    items: ObligationReviewItemRecord[],
+    decision: ObligationDecision,
+    note: string,
+    evidenceReference: string,
+    scopeConfirmed: boolean,
+    decisionScope: string | null,
+  ) => Promise<boolean>;
   /** 提交补核结论；返回是否已保存（用于处理后接续下一条）。 */
   onObligationDecision?: (problem: Problem, decision: ObligationDecision, note: string, evidenceReference: string, scopeConfirmed: boolean) => Promise<boolean>;
   /** 文种口径类补核需要先确认材料口径时的入口。 */
   onOpenScope?: () => void;
   onSelectEvidenceRef: (problem: Problem, refKey: string) => void;
+  onConfirmUnit?: (problem: Problem) => void;
+  confirmUnitBusy?: boolean;
   readOnly?: boolean;
   /** 不能提交判定时，操作栏位置显示的说明（预览、失效、历史、已完成）。 */
   readOnlyHint?: { text: string; invalidatedReason: string | null; completed?: boolean } | null;
@@ -204,9 +217,13 @@ export function IssuesTab({
   onUndo,
   obligationItems = {},
   cascadedChecks = {},
+  onOpenUnfinishedChecks,
+  onDecideUnfinishedGroup,
   onObligationDecision,
   onOpenScope,
   onSelectEvidenceRef,
+  onConfirmUnit,
+  confirmUnitBusy = false,
   readOnly = false,
   readOnlyHint = null,
   savedAtText = null,
@@ -235,9 +252,17 @@ export function IssuesTab({
   const [obligationPanel, setObligationPanel] = useState<{ problem: Problem; decision: ObligationPanelDecision; queue: ReviewQueue } | null>(null);
   const obligationPanelTarget = obligationPanel?.queue === queue ? obligationPanel : null;
   const [obligationSubmitting, setObligationSubmitting] = useState(false);
+  const [linkedGroupPanel, setLinkedGroupPanel] = useState<{
+    ctx: LinkedUnfinishedGroupContext;
+    decision: ObligationPanelDecision;
+    queue: ReviewQueue;
+  } | null>(null);
+  const linkedGroupPanelTarget = linkedGroupPanel?.queue === queue ? linkedGroupPanel : null;
+  const [submittingUnfinishedGroupId, setSubmittingUnfinishedGroupId] = useState<string | null>(null);
   // 处理后接续、撤销恢复这些流程自己决定选中哪一条；父组件跟上之前不自动选首条。
   const flowSelectionRef = useRef<string | null | undefined>(undefined);
-  const [queueView, setQueueView] = useState<QueueView>("pending");
+  const [queueView, setQueueView] = useState<QueueView>(() =>
+    selectedProblemId && isProcessedStatus(workflowStatusByIssueId[selectedProblemId]) ? "all" : "pending");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [restoreTarget, setRestoreTarget] = useState<string | null>(null);
   // 外部跳转（例如从「AI 文字检查」点“查看大模型参考条目”）要直接落到大模型来源，
@@ -351,9 +376,10 @@ export function IssuesTab({
     if (detailProblemId && detailProblemId !== selectedProblemId) onSelectProblem(detailProblemId, { keepLayout: true });
   }, [detailProblemId, selectedProblemId, restoreTarget, onSelectProblem]);
 
-  // 换一条问题时解释从头读起。
+  // 换一条问题时解释从头读起，同时收起上一条关联的内联表态面板。
   useEffect(() => {
     if (readingRef.current) readingRef.current.scrollTop = 0;
+    setLinkedGroupPanel(null);
   }, [detailProblemId]);
 
   // 列表展开时把当前条目滚进视野并聚焦，↑/↓ 可直接接着切换。
@@ -430,6 +456,29 @@ export function IssuesTab({
       setStatusFilter("all");
       setRestoreTarget(problem.id);
     }
+  };
+
+  const handleLinkedGroupSubmit = async (
+    ctx: LinkedUnfinishedGroupContext,
+    decision: ObligationDecision,
+    note: string,
+    scopeConfirmed: boolean,
+  ) => {
+    if (!onDecideUnfinishedGroup || !ctx.records.length) return;
+    const targetRecords = decision === "pending"
+      ? ctx.records
+      : (ctx.unhandledRecords.length ? ctx.unhandledRecords : ctx.records);
+    setSubmittingUnfinishedGroupId(ctx.group.id);
+    const saved = await onDecideUnfinishedGroup(
+      targetRecords,
+      decision,
+      note,
+      groupEvidenceReference(ctx.group),
+      scopeConfirmed,
+      ctx.group.decisionScope ?? null,
+    );
+    setSubmittingUnfinishedGroupId(null);
+    if (saved) setLinkedGroupPanel(null);
   };
 
   const handleUndo = async () => {
@@ -558,6 +607,21 @@ export function IssuesTab({
         </button>
       </div>
 
+      {/* 参考页签把「结果类型」快筛常驻外露：列表行写「参考 13（待核实 2、提示 11）」，
+          点进来第一眼就能对上同样的两个数，不必先开「分类列表」。抽屉打开时它被覆盖，
+          且抽屉里仍有同一组筛选按钮，这里收起避免出现重复的 testid。 */}
+      {queue === "reference" && !listOpen && categoryOptions.length > 1 ? (
+        <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border px-3 py-1.5"
+          aria-label="按结果分类筛选参考条目" data-testid="gbc-review-reference-category-bar">
+          <span className="mr-1 w-14 text-xs text-slate-500">结果类型</span>
+          {categoryOptions.map(([id, count]) => (
+            <button key={id} type="button" aria-pressed={reviewFilter === id} onClick={() => setReviewFilter(id)}
+              data-testid={`gbc-review-category-${id}`} className={chipClass(reviewFilter === id)}
+            >{REVIEW_FILTER_LABELS[id]} <span className="opacity-75">{count}</span></button>
+          ))}
+        </div>
+      ) : null}
+
       <div className="relative min-h-0 min-w-0 flex-1" data-testid="gbc-review-issue-detail-pane">
         <div ref={readingRef} className="h-full overflow-y-auto" style={{ fontSize: REVIEW_TEXT_SIZE_PX[textSize] }} data-text-size={textSize}>
           {priorDecisions.length > 0 ? <details className="border-b border-border px-4 py-3 text-[0.85em]" data-testid="gbc-prior-decisions">
@@ -608,7 +672,19 @@ export function IssuesTab({
               workflowInherited={workflowInheritedByIssueId[detailProblem.id]}
               selectedEvidenceRefKey={detailProblem.id === selectedProblemId ? selectedEvidenceRefKey : null}
               onSelectEvidenceRef={(refKey) => onSelectEvidenceRef(detailProblem, refKey)}
+              onConfirmUnit={readOnly ? undefined : onConfirmUnit}
+              confirmUnitBusy={confirmUnitBusy}
               cascadedChecks={cascadedChecks[detailProblem.id]}
+              unfinishedChecksLink={onOpenUnfinishedChecks?.(detailProblem.id)}
+              readOnly={readOnly}
+              submittingUnfinishedGroupId={submittingUnfinishedGroupId}
+              onStartUnfinishedGroupDecision={onDecideUnfinishedGroup ? (ctx, decision) => {
+                setListOpen(false);
+                setLinkedGroupPanel({ ctx, decision, queue });
+              } : undefined}
+              onUndoUnfinishedGroupDecision={onDecideUnfinishedGroup ? (ctx) => {
+                void handleLinkedGroupSubmit(ctx, "pending", "", false);
+              } : undefined}
             />
           ) : (
             <div className="p-6 text-center text-sm text-slate-500" data-testid="gbc-review-issues-empty">
@@ -781,7 +857,7 @@ export function IssuesTab({
               })}
             </div>
             <div className="shrink-0 border-t border-border px-4 py-2 text-[11px] text-slate-500">
-              {queue === "required" ? "这些条目计入完成条件：问题逐条确认或记录理由后忽略；未能自动核对的检查选核对无误、确认有问题或不适用。" : "参考项不影响完成复核；可按需确认、忽略或补充意见。"}
+              {queue === "required" ? "这些条目计入完成条件：问题逐条确认或记录理由后忽略。" : "参考项不影响完成复核；可按需确认、忽略或补充意见。"}
               <span className="ml-1 text-slate-400">同类集中展示，各项分别记录结论；↑ ↓ 切换，Esc 关闭。</span>
             </div>
           </div>
@@ -809,18 +885,56 @@ export function IssuesTab({
             onCancel={() => setObligationPanel(null)}
           />
         ) : null}
+
+        {linkedGroupPanelTarget ? (
+          <ObligationDecisionPanel
+            key={`linked:${linkedGroupPanelTarget.ctx.group.id}:${linkedGroupPanelTarget.decision}`}
+            decision={linkedGroupPanelTarget.decision}
+            checkName={`${linkedGroupPanelTarget.ctx.group.page ? `第 ${linkedGroupPanelTarget.ctx.group.page} 页 · ` : ""}${linkedGroupPanelTarget.ctx.group.title}${
+              (linkedGroupPanelTarget.ctx.unhandledRecords.length || linkedGroupPanelTarget.ctx.records.length) > 1
+                ? `（同步处理 ${linkedGroupPanelTarget.ctx.unhandledRecords.length || linkedGroupPanelTarget.ctx.records.length} 项检查）`
+                : ""
+            }`}
+            defaultNote={
+              linkedGroupPanelTarget.ctx.group.plainReason ||
+              readableObligationReason(linkedGroupPanelTarget.ctx.records[0]?.detail)
+            }
+            item={mergeObligationRecords(
+              linkedGroupPanelTarget.ctx.group,
+              linkedGroupPanelTarget.ctx.unhandledRecords.length
+                ? linkedGroupPanelTarget.ctx.unhandledRecords
+                : linkedGroupPanelTarget.ctx.records,
+            )}
+            scopeLabel={linkedGroupPanelTarget.ctx.group.decisionScope
+              ? [
+                  linkedGroupPanelTarget.ctx.group.page ? `第 ${linkedGroupPanelTarget.ctx.group.page} 页` : null,
+                  linkedGroupPanelTarget.ctx.group.subject || linkedGroupPanelTarget.ctx.group.title,
+                ].filter(Boolean).join(" · ")
+              : null}
+            isSubmitting={submittingUnfinishedGroupId === linkedGroupPanelTarget.ctx.group.id}
+            onSubmit={(note) => void handleLinkedGroupSubmit(
+              linkedGroupPanelTarget.ctx,
+              linkedGroupPanelTarget.decision,
+              note,
+              true,
+            )}
+            onCancel={() => setLinkedGroupPanel(null)}
+          />
+        ) : null}
       </div>
 
       {detailProblem || lastDecision || readOnlyHint ? (
         <IssueDecisionFooter
           problem={detailProblem}
           workflowStatus={detailProblem ? workflowStatusByIssueId[detailProblem.id] ?? null : null}
-          showActions={Boolean(detailProblem) && !readOnly && !obligationPanelTarget && (sourceView === "all" || (detailProblem !== null && baseProblemIds.has(detailProblem.id)))}
+          showActions={Boolean(detailProblem) && !readOnly && !obligationPanelTarget && !linkedGroupPanelTarget && (sourceView === "all" || (detailProblem !== null && baseProblemIds.has(detailProblem.id)))}
           readOnlyHint={readOnlyHint}
           savedAtText={savedAtText}
           isSubmitting={submittingIssueId !== null || obligationSubmitting}
           onAction={(action) => { if (detailProblem) void handleAction(detailProblem, action); }}
           onObligationDecision={(decision) => { if (detailProblem) void handleObligation(detailProblem, decision); }}
+          onConfirmUnit={readOnly ? undefined : onConfirmUnit}
+          confirmUnitBusy={confirmUnitBusy}
           notice={lastDecision ? { text: noticeText, canUndo: !readOnly, onUndo: () => void handleUndo() } : null}
         />
       ) : null}

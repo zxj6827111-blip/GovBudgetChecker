@@ -32,9 +32,58 @@ const MEASURE_LABELS: Record<string, string> = {
   reception: "公务接待费",
 };
 
-function displayTableName(value: unknown): string {
+export const REVIEW_REASON_TITLES: Record<string, string> = {
+  table_reading_incomplete: "部分表格读取未完成",
+  fact_identity_incomplete: "部分数据身份不完整",
+  low_page_coverage: "部分页面未覆盖",
+  scanned_pages_detected: "存在扫描页",
+  unknown_report_kind: "报告类型未识别",
+  unknown_report_year: "报告年度未识别",
+  ai_assist_required_but_failed: "语义复核未完成",
+  ai_not_run: "大模型检查未执行",
+  ai_failed: "大模型检查未完整完成",
+  evidence_incomplete_findings: "大模型发现证据不足",
+  correction_overlay_incomplete: "人工校正未完全生效",
+  structured_ingest_failed: "结构化保存失败",
+  missing_required_table: "核心表未识别",
+  ambiguous_table_schema: "表结构识别存在歧义",
+  fact_materialization_empty: "表格未生成可用事实",
+  rule_evidence_incomplete: "规则问题证据不足",
+  rule_execution_error: "部分规则执行异常",
+  rules_insufficient_data: "部分规则检查数据不足",
+  check_obligations_incomplete: "仍有必查事项未完成",
+  rules_not_executed: "部分规则未执行",
+  report_type_mismatch: "报告类型不一致",
+  org_scope_pending: "材料汇总口径待确认",
+};
+
+const STRUCTURED_ACTION_SUGGESTIONS: Record<string, string> = {
+  inspect_table_column_mapping: "请核对原始 PDF 对应页的表格标题、列头与金额列对齐关系（重点检查跨页续表及表头延续是否完整）。",
+  inspect_original_table_reading: "请核对原始 PDF 对应页的表格区域，确认单元格内容及数字是否完整提取。",
+  inspect_original_cell_identity: "请核对原始 PDF 中该金额所属的科目编码、科目名称及列归属是否正确。",
+  correct_original_number_format: "请核对原始 PDF 对应页的金额格式（如重复小数点或异常分隔符），必要时以原文为准补正。",
+  review_table_title_and_headers: "请核对原始 PDF 对应页的表格标题和表头，确认其属于哪张核心表或附表。",
+};
+
+export function displayReviewReasonTitle(code: unknown): string {
+  const raw = String(code ?? "").trim();
+  if (!raw) return "处理状态说明";
+  return REVIEW_REASON_TITLES[raw] ?? raw;
+}
+
+export function displayRecommendedAction(action: unknown, fallback = "核对原始材料后确认。"): string {
+  const raw = String(action ?? "").trim();
+  if (!raw) return fallback;
+  return STRUCTURED_ACTION_SUGGESTIONS[raw] ?? raw;
+}
+
+export function displayTableName(value: unknown): string {
   const raw = String(value ?? "").trim();
-  return TABLE_CODE_LABELS[raw] ?? raw;
+  if (!raw) return raw;
+  if (TABLE_CODE_LABELS[raw]) return TABLE_CODE_LABELS[raw];
+  const unknownMatch = /^UNKNOWN_P(\d+)_T\d+$/i.exec(raw);
+  if (unknownMatch) return `第 ${unknownMatch[1]} 页未识别表格`;
+  return raw;
 }
 
 function displayMeasureName(value: unknown): string {
@@ -74,8 +123,15 @@ export interface JobSummaryRecord {
   /** 审核台两个页签的条数（后端 review_queue_counts）；旧摘要可能没有。 */
   queue_required_total?: number;
   queue_reference_total?: number;
-  /** 必须处理里“未能自动核对”的条数（已含在 queue_required_total 内）。 */
+  /** 内部未完成检查条数；只作覆盖统计，不再计入 queue_required_total。 */
   queue_obligation_total?: number;
+  queue_unfinished_check_total?: number;
+  queue_unfinished_location_total?: number;
+  queue_unfinished_blocking_location_total?: number;
+  queue_unfinished_blocking_check_total?: number;
+  queue_unfinished_blocking_affected_total?: number;
+  queue_unfinished_covered_location_total?: number;
+  queue_unfinished_notice_location_total?: number;
   queue_candidate_total?: number;
   queue_degraded_total?: number;
   queue_tip_total?: number;
@@ -366,7 +422,8 @@ export function getDisplayIssueTotal(
   }
   const merged = Number(job.merged_issue_total);
   const ruleAndAiTotal = Number.isFinite(merged) ? merged : toNumber(job.issue_total, 0);
-  return ruleAndAiTotal + toNumber(job.review_item_count, 0);
+  // 结构化识别项属于技术诊断，不计入业务问题总数。
+  return ruleAndAiTotal;
 }
 
 export function getHighRiskCount(job: Pick<JobSummaryRecord, "issue_error">): number {
@@ -776,16 +833,23 @@ function collectStructuredReviewIssues(detail: JobDetailRecord): Record<string, 
     : [];
 
   return reviewItems.map((item, index) => {
-    const rawPage = toNumber(item.page ?? item.page_number);
-    const page = rawPage > 0 ? rawPage : undefined;
+    const cells = Array.isArray(item.cells) ? item.cells.filter(isRecord) : [];
+    const firstCellPage = cells.map((cell) => toNumber(cell.page)).find((value) => value > 0) ?? 0;
+    const rawPage = toNumber(
+      item.page
+      ?? item.page_number
+      ?? (Array.isArray(item.page_numbers) ? item.page_numbers[0] : undefined)
+      ?? firstCellPage,
+    );
+    const page = rawPage > 0 ? Math.floor(rawPage) : undefined;
     const tableCode = String(item.table_code ?? "").trim();
     const itemType = String(item.type ?? "review").trim() || "review";
     const rawId = String(item.id ?? "").trim();
     // id 合成仍用原始表代码，与后端 review_problem_set 逐字一致；只有标题换成中文表名。
     const id = rawId || `${detail.job_id}:structured-review:${itemType}:${tableCode || "document"}:${page ?? "unlocated"}:${index + 1}`;
     const title = tableCode
-      ? `结构化识别待复核：${displayTableName(tableCode)}`
-      : "结构化识别结果待复核";
+      ? `表格识别待复核：${displayTableName(tableCode)}`
+      : "表格识别待复核";
     const message = String(item.message ?? "该项材料识别结果需要人工确认后再作为审校依据。").trim();
     const location: Record<string, unknown> = {};
     if (page) {
@@ -794,17 +858,39 @@ function collectStructuredReviewIssues(detail: JobDetailRecord): Record<string, 
     if (tableCode) {
       location.table = tableCode;
     }
+    const tableRefs = cells.flatMap((cell, cellIndex) => {
+      const cellPage = toNumber(cell.page ?? page);
+      if (cellPage <= 0) return [];
+      const bbox = Array.isArray(cell.bbox) && cell.bbox.length === 4 ? cell.bbox.map((v) => Number(v)) : undefined;
+      return [{
+        role: "待复核表格单元格",
+        page: Math.floor(cellPage),
+        table: tableCode,
+        value: cell.raw_text == null ? undefined : String(cell.raw_text),
+        bbox,
+        location_level: bbox ? "exact_cell" : "region",
+        verification_status: bbox ? "verified" : "unverified",
+        index: cellIndex,
+      }];
+    });
+    if (tableRefs.length > 0) {
+      location.table_refs = tableRefs;
+    }
 
     return {
       id,
       source: "structured_ingest",
+      review_kind: "review_notice",
       rule_id: `STRUCTURED-${itemType.toUpperCase()}`,
       severity: String(item.severity ?? "manual_review"),
       title,
       message,
       location,
       evidence: [],
-      suggestion: String(item.recommended_action ?? "核对原始 PDF 对应页的表格标题、金额和单位后确认。").trim(),
+      suggestion: displayRecommendedAction(
+        item.recommended_action,
+        "核对原始 PDF 对应页的表格标题、金额和单位后确认。",
+      ),
     };
   });
 }
@@ -838,25 +924,37 @@ function collectReviewReportManualIssues(reviewReport: Record<string, unknown>):
       : mergeSides
           .map(({ finding }) => isRecord(finding.location) ? finding.location : null)
           .find((location) => location !== null) ?? {};
-    const rawPage = toNumber(item.page ?? item.page_number);
+    const cells = Array.isArray(item.cells) ? item.cells.filter(isRecord) : [];
+    const cellPage = cells.map((cell) => toNumber(cell.page)).find((value) => value > 0) ?? 0;
+    const listPage = Array.isArray(item.pages)
+      ? item.pages.map((value) => toNumber(value)).find((value) => value > 0) ?? 0
+      : Array.isArray(item.page_numbers)
+        ? item.page_numbers.map((value) => toNumber(value)).find((value) => value > 0) ?? 0
+        : 0;
+    const rawPage = toNumber(item.page ?? item.page_number ?? (listPage || cellPage));
     const candidatePage = toNumber(
       candidateFinding.page_number ?? candidateLocation.page,
     );
-    const page = rawPage > 0 ? rawPage : candidatePage > 0 ? candidatePage : undefined;
-    const reviewReasonTitles: Record<string, string> = {
-      org_scope_pending: "材料汇总口径待确认",
-      ai_failed: "大模型检查未完整完成",
-      evidence_incomplete_findings: "大模型发现证据不足",
-      rule_evidence_incomplete: "规则问题证据不足",
-      rules_insufficient_data: "部分规则检查数据不足",
-      check_obligations_incomplete: "仍有必查事项未完成",
-    };
+    const page = rawPage > 0 ? Math.floor(rawPage) : candidatePage > 0 ? Math.floor(candidatePage) : undefined;
     const code = String(item.code ?? "");
-    const title = String(
-      recordType === "review_reason"
-        ? reviewReasonTitles[code] ?? item.display_title ?? item.title ?? code
-        : item.title ?? candidateFinding.title ?? item.code ?? item.obligation_id ?? "待人工复核事项",
-    ).trim();
+    const rawTableCode = String(item.table_code ?? candidateLocation.table ?? "").trim();
+    const rawItemTitle = String(item.title ?? "").trim();
+    let title: string;
+    if (recordType === "review_reason") {
+      title = REVIEW_REASON_TITLES[code]
+        ?? (rawItemTitle && rawItemTitle !== code ? rawItemTitle : String(item.display_title ?? rawItemTitle ?? code));
+    } else if (recordType === "structured_review") {
+      if (rawItemTitle.startsWith("结构化识别待复核：") && rawTableCode) {
+        title = `表格识别待复核：${displayTableName(rawTableCode)}`;
+      } else {
+        title = rawItemTitle || (rawTableCode ? `表格识别待复核：${displayTableName(rawTableCode)}` : "表格识别待复核");
+      }
+    } else {
+      title = String(
+        item.title ?? candidateFinding.title ?? item.code ?? item.obligation_id ?? "待人工复核事项",
+      );
+    }
+    title = title.trim();
     const message = String(
       item.message ?? candidateFinding.message ?? item.detail ?? item.reason ?? "需人工复核后确认。",
     ).trim();
@@ -887,8 +985,26 @@ function collectReviewReportManualIssues(reviewReport: Record<string, unknown>):
         }];
       });
       if (tableRefs.length > 0) location.table_refs = tableRefs;
+    } else if (cells.length > 0 && !Array.isArray(location.table_refs)) {
+      const cellRefs = cells.flatMap((cell, cellIndex) => {
+        const refPage = toNumber(cell.page ?? page);
+        if (refPage <= 0) return [];
+        const bbox = Array.isArray(cell.bbox) && cell.bbox.length === 4 ? cell.bbox.map((v) => Number(v)) : undefined;
+        return [{
+          role: "待复核表格单元格",
+          page: Math.floor(refPage),
+          table: rawTableCode,
+          value: cell.raw_text == null ? undefined : String(cell.raw_text),
+          bbox,
+          location_level: bbox ? "exact_cell" : "region",
+          verification_status: bbox ? "verified" : "unverified",
+          index: cellIndex,
+        }];
+      });
+      if (cellRefs.length > 0) location.table_refs = cellRefs;
     }
     const id = String(item.id ?? `${recordType}:${item.code ?? item.obligation_id ?? index}`);
+    const rawSuggestion = item.suggestion ?? candidateFinding.suggestion ?? item.recommended_action;
     return [{
       id,
       source: String(candidateFinding.source ?? (isFindingCandidate ? "ai" : "manual_review")),
@@ -919,9 +1035,7 @@ function collectReviewReportManualIssues(reviewReport: Record<string, unknown>):
       table_or_section: candidateFinding.table_or_section,
       amounts_provenance: candidateFinding.amounts_provenance,
       calculation_basis: candidateFinding.calculation_basis,
-      suggestion: String(
-        item.suggestion ?? candidateFinding.suggestion ?? item.recommended_action ?? "核对原始材料后确认。",
-      ),
+      suggestion: displayRecommendedAction(rawSuggestion, "核对原始材料后确认。"),
     }];
   });
 }
@@ -1043,9 +1157,8 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
     : null;
   const issues = dedupeIssuesById([
     ...(canonicalIssues ?? collectDisplayIssues(result)),
-    ...(canonicalIssues
-      ? collectReviewReportManualIssues(reviewReport)
-      : collectStructuredReviewIssues(detail)),
+    // v3：结构化识别项属于技术诊断，不再进入业务问题集合。
+    ...(canonicalIssues ? collectReviewReportManualIssues(reviewReport) : []),
   ]);
   const includeEvidencePreview = options.includeEvidencePreview ?? true;
 
@@ -1120,6 +1233,38 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
           verificationStatus,
         }];
       });
+      // 漏单位等问题已由同科目原表核对时，把原表侧凭证也作为可选证据：
+      // 点它即可从第 26 页正文跳到第 16 页原表（不塞进 table_refs，避免
+      // 多证据路径把整条正式问题误降级）。
+      const verifiedBy = isRecord(rawLocation.verified_by) ? rawLocation.verified_by : null;
+      const verifiedBasisPage = toNumber(verifiedBy?.table_page);
+      if (verifiedBy && Number.isFinite(verifiedBasisPage) && verifiedBasisPage > 0) {
+        const basisSubject = [verifiedBy.subject_name, verifiedBy.subject_code ? `科目 ${verifiedBy.subject_code}` : null]
+          .map((item) => String(item ?? "").trim())
+          .filter(Boolean)
+          .join(" · ");
+        const basisValue = verifiedBy.table_value == null ? undefined : String(verifiedBy.table_value);
+        const basisQuote = normalizeEvidenceQuoteText(verifiedBy.table_quote ?? verifiedBy.table_value);
+        evidenceRefs.push({
+          key: `verified-basis|${Math.floor(verifiedBasisPage)}|${String(verifiedBy.sub_check_id ?? "")}`,
+          role: "原表科目决算依据",
+          ...(basisQuote && basisQuote !== basisValue ? { quoteText: basisQuote } : {}),
+          relationId: undefined,
+          operandId: undefined,
+          sourceCellId: verifiedBy.table_source_cell_id == null
+            ? undefined
+            : String(verifiedBy.table_source_cell_id),
+          blankAsZero: false,
+          page: Math.floor(verifiedBasisPage),
+          locationText: [`第 ${Math.floor(verifiedBasisPage)} 页`, basisSubject].filter(Boolean).join(" · "),
+          valueText: basisValue,
+          bbox: Array.isArray(verifiedBy.table_bbox)
+            ? verifiedBy.table_bbox.map((item) => Number(item))
+            : undefined,
+          locationLevel: Array.isArray(verifiedBy.table_bbox) ? "exact_cell" : "region",
+          verificationStatus: Array.isArray(verifiedBy.table_bbox) ? "verified" : "unverified",
+        });
+      }
       const factRefs = Array.isArray(rawLocation.fact_source_refs)
         ? rawLocation.fact_source_refs.filter(isRecord).flatMap((ref, refIndex) => {
             const refPage = toNumber(ref.physical_page ?? ref.page);
@@ -1259,6 +1404,262 @@ export function toUiProblems(detail: JobDetailRecord, options: { includeEvidence
  * source-specific projection is for comparison views, so AI-only candidates
  * remain inspectable even when they are not part of the formal merged review set.
  */
+export interface ReviewDiagnosticItem {
+  id: string;
+  recordType: "unfinished_check" | "structured_review" | "processing_notice" | string;
+  title: string;
+  message: string;
+  suggestion?: string;
+  page?: number;
+  causeKind?: string;
+  obligationId?: string;
+  evidence?: { page: number; bbox?: number[] }[];
+  rootIssueIds?: string[];
+}
+
+export interface UnfinishedCheckGroup {
+  id: string;
+  title: string;
+  checkIds: string[];
+  page?: number;
+  tableName?: string;
+  section?: string;
+  subject?: string;
+  locationLevel: "exact" | "table" | "page" | "unlocated";
+  unlocatedReason?: string;
+  evidence: { page: number; bbox?: number[] }[];
+  blockingObligationIds?: string[];
+  coveredObligationIds?: string[];
+  obligationIds?: string[];
+  handlingMode?: "manual_required" | "covered_by_issue" | "notice_only";
+  blocksCompletion?: boolean;
+  coveredByIssue?: boolean;
+  relatedIssueIds?: string[];
+  relatedIssueRules?: string[];
+  affectedCheckCount?: number;
+  relatedIssueCount?: number;
+  /** R5：该分组稳定的表态范围键；同一义务多处阻塞按它分别表态。 */
+  decisionScope?: string;
+  analysisRevision?: string;
+  plainReason?: string;
+  actionHint?: string;
+}
+
+/**
+ * P24（2026-11-21 第三轮复审）：同页两科目共享页码、规则甚至检查项时，
+ * "去处理"必须逐笔对应本科目。绑定规则：
+ * 1. 后端已按科目核证的 related_issue_ids 是完整约束（含核证为空的 []）：
+ *    问题本体或聚合成员命中即采纳；列表外的一律不绑定，不走名称比对；
+ * 2. 无该字段的历史快照（undefined）退回科目名称比对（问题科目名/标题/
+ *    摘句须包含组科目）；
+ * 3. 组没有科目锚点（如整节加总）不受科目约束；
+ * 4. 没有可唯一对应的正式问题时返回 false——卡片不渲染错误的"去处理"入口。
+ */
+export function isProblemSubjectBound(
+  group: Pick<UnfinishedCheckGroup, "subject" | "relatedIssueIds">,
+  problem: {
+    id: string;
+    memberIssueIds?: string[];
+    actualName?: string;
+    title?: string;
+    snippet?: string;
+  },
+): boolean {
+  const compact = (value: string) => value.normalize("NFKC").replace(/\s+/g, "");
+  const subject = compact(group.subject ?? "");
+  if (!subject) return true;
+  const related = group.relatedIssueIds;
+  if (related) {
+    // 后端已按科目核证的关联（含核证为空的 []）是**完整约束**：列表外的
+    // 问题不得再经科目名比对放行——同页长句常同时含多个科目名，穿透会
+    // 重新打开互跳。
+    if (related.includes(problem.id)) return true;
+    return problem.memberIssueIds?.some((id) => related.includes(id)) ?? false;
+  }
+  // 历史快照没有 related_issue_ids（undefined 才是缺字段）：退回科目名比对
+  // （问题科目名/标题/摘句包含组科目才算对应）。
+  const haystack = compact(
+    `${problem.actualName ?? ""}|${problem.title ?? ""}|${problem.snippet ?? ""}`,
+  );
+  return haystack.includes(subject);
+}
+
+export function extractUnfinishedCheckGroups(
+  detail: JobDetailRecord | null,
+  checks: ReviewDiagnosticItem[],
+): UnfinishedCheckGroup[] {
+  const report = isRecord(detail?.review_report) ? detail.review_report : {};
+  const groups = report.unfinished_check_groups;
+  if (!Array.isArray(groups)) {
+    return checks.map((check) => ({
+      id: check.id, title: check.title, checkIds: [check.id], page: check.page,
+      locationLevel: check.evidence?.some((ref) => ref.bbox && ref.page === check.page) ? "exact" : "unlocated",
+      evidence: check.evidence ?? [],
+    }));
+  }
+  const checkIds = new Set(checks.map((check) => check.id));
+  return groups.filter(isRecord).flatMap((group) => {
+    const ids = Array.isArray(group.check_ids) ? group.check_ids.map(String).filter((id) => checkIds.has(id)) : [];
+    if (!ids.length) return [];
+    const page = toNumber(group.page);
+    const evidence = Array.isArray(group.evidence) ? group.evidence.filter(isRecord).flatMap((ref) => {
+      const bbox = ref.bbox;
+      if (toNumber(ref.page) !== page || !Array.isArray(bbox) || bbox.length !== 4 ||
+          !bbox.every((value) => typeof value === "number" && Number.isFinite(value)) ||
+          bbox[2] <= bbox[0] || bbox[3] <= bbox[1]) return [];
+      return [{ page, bbox }];
+    }) : [];
+    const rawLevel = String(group.location_level ?? "");
+    const locationLevel: UnfinishedCheckGroup["locationLevel"] =
+      rawLevel === "table" && page > 0 ? "table"
+        : rawLevel === "page" && page > 0 ? "page"
+        : page > 0 && evidence.length ? "exact"
+        : page > 0 ? "page"
+        : "unlocated";
+    const blockingObligationIds = Array.isArray(group.blocking_obligation_ids)
+      ? group.blocking_obligation_ids.map(String).filter(Boolean)
+      : undefined;
+    const coveredObligationIds = Array.isArray(group.covered_obligation_ids)
+      ? group.covered_obligation_ids.map(String).filter(Boolean)
+      : undefined;
+    const obligationIds = Array.isArray(group.obligation_ids)
+      ? group.obligation_ids.map(String).filter(Boolean)
+      : undefined;
+    const rawMode = String(group.handling_mode ?? "");
+    const handlingMode: UnfinishedCheckGroup["handlingMode"] =
+      rawMode === "manual_required" || rawMode === "covered_by_issue" || rawMode === "notice_only"
+        ? rawMode
+        : undefined;
+    const blocksCompletion = typeof group.blocks_completion === "boolean" ? group.blocks_completion : undefined;
+    const coveredByIssue = typeof group.covered_by_issue === "boolean" ? group.covered_by_issue : undefined;
+    return [{
+      id: String(group.id),
+      title: String(group.title),
+      checkIds: ids,
+      page: Number.isInteger(page) && page > 0 ? page : undefined,
+      tableName: String(group.table_name ?? ""),
+      section: String(group.section ?? ""),
+      subject: String(group.subject ?? ""),
+      locationLevel,
+      unlocatedReason: typeof group.unlocated_reason === "string" && group.unlocated_reason ? group.unlocated_reason : undefined,
+      evidence,
+      blockingObligationIds,
+      coveredObligationIds,
+      obligationIds,
+      handlingMode,
+      blocksCompletion,
+      coveredByIssue,
+      relatedIssueIds: Array.isArray(group.related_issue_ids)
+        ? group.related_issue_ids.map(String).filter(Boolean)
+        : undefined,
+      relatedIssueRules: Array.isArray(group.related_issue_rules)
+        ? group.related_issue_rules.map(String).filter(Boolean)
+        : undefined,
+      affectedCheckCount: toNumber(group.affected_check_count) > 0
+        ? toNumber(group.affected_check_count) : undefined,
+      relatedIssueCount: toNumber(group.related_issue_count) > 0
+        ? toNumber(group.related_issue_count) : undefined,
+      decisionScope: typeof group.decision_scope === "string" && group.decision_scope
+        ? group.decision_scope : undefined,
+      analysisRevision: typeof group.analysis_revision === "string" && group.analysis_revision
+        ? group.analysis_revision : undefined,
+      plainReason: typeof group.plain_reason === "string" && group.plain_reason ? group.plain_reason : undefined,
+      actionHint: typeof group.action_hint === "string" && group.action_hint ? group.action_hint : undefined,
+    }];
+  });
+}
+
+function resolveDiagnosticPage(item: Record<string, unknown>, message: string): number | undefined {
+  const location = isRecord(item.location) ? item.location : {};
+  const listPage = Array.isArray(item.pages)
+    ? item.pages.map((value) => toNumber(value)).find((value) => value > 0) ?? 0
+    : Array.isArray(item.page_numbers)
+      ? item.page_numbers.map((value) => toNumber(value)).find((value) => value > 0) ?? 0
+      : 0;
+  const cells = Array.isArray(item.cells) ? item.cells.filter(isRecord) : [];
+  const cellPage = cells.map((cell) => toNumber(cell.page)).find((value) => value > 0) ?? 0;
+  const direct = toNumber(location.page ?? item.page_number ?? item.page ?? (listPage || cellPage));
+  if (direct > 0) return Math.floor(direct);
+  const blockedBy = Array.isArray(item.blocked_by) ? item.blocked_by.filter(isRecord) : [];
+  for (const blk of blockedBy) {
+    const blkPage = toNumber(blk.page);
+    if (blkPage > 0) return Math.floor(blkPage);
+    const refMatch = /第\s*(\d+)\s*页/.exec(String(blk.ref ?? ""));
+    if (refMatch) return Number(refMatch[1]);
+  }
+  const msgMatch = /第\s*(\d+)\s*页/.exec(message);
+  if (msgMatch) return Number(msgMatch[1]);
+  return undefined;
+}
+
+export function extractReviewDiagnostics(
+  detail: JobDetailRecord | null | undefined,
+  field: "diagnostics" | "unfinished_checks" = "diagnostics",
+): ReviewDiagnosticItem[] {
+  if (!detail || !isRecord(detail.review_report)) return [];
+  const records = detail.review_report[field];
+  const rawDiagnostics = Array.isArray(records) ? records.filter(isRecord) : [];
+  return rawDiagnostics.map((item, index) => {
+    const recordType = String(item.record_type ?? "diagnostic").trim();
+    const location = isRecord(item.location) ? item.location : {};
+    const tableCode = String(item.table_code ?? location.table ?? "").trim();
+    const code = String(item.code ?? "").trim();
+    let title = String(item.title ?? "").trim();
+    if (recordType === "structured_review") {
+      if (!title || title.startsWith("结构化识别待复核：") || title.startsWith("表格识别待复核：")) {
+        title = tableCode ? `表格识别待复核：${displayTableName(tableCode)}` : "表格识别待复核";
+      }
+    } else if (recordType === "processing_notice") {
+      title = title && title !== code ? title : displayReviewReasonTitle(code);
+    } else if (recordType === "unfinished_check") {
+      title = title || String(item.obligation_id ?? "未完成检查项").trim();
+    } else {
+      title = title || displayReviewReasonTitle(code);
+    }
+
+    const message = String(
+      recordType === "unfinished_check"
+        ? item.detail ?? item.message ?? item.reason ?? "本次未能自动完成该项核对。"
+        : item.message ?? item.detail ?? item.reason ?? "该检查状态需要复核说明。",
+    ).trim();
+
+    const rawSuggestion = item.suggestion ?? item.recommended_action;
+    const suggestion = rawSuggestion ? displayRecommendedAction(rawSuggestion) : undefined;
+    const page = resolveDiagnosticPage(item, message);
+    const evidence: NonNullable<ReviewDiagnosticItem["evidence"]> = [];
+    for (const record of [item.cells, item.missing_operands].flatMap((value) =>
+      Array.isArray(value) ? value.filter(isRecord) : [])) {
+      const physicalPage = toNumber(record.page ?? record.physical_page);
+      if (!Number.isInteger(physicalPage) || physicalPage <= 0) continue;
+      const bbox = record.bbox;
+      evidence.push({ page: physicalPage, bbox: Array.isArray(bbox) && bbox.length === 4
+        && bbox.every((value) => typeof value === "number" && Number.isFinite(value))
+        && bbox[2] > bbox[0] && bbox[3] > bbox[1] ? bbox : undefined });
+    }
+    const pages = [page, ...Array.from(message.matchAll(/第\s*(\d+)\s*页/g), (match) => Number(match[1]))];
+    for (const n of pages) {
+      if (n && !evidence.some((ref) => ref.page === n)) evidence.push({ page: n });
+    }
+    const obligationId = item.obligation_id ? String(item.obligation_id) : undefined;
+    const id = String(
+      item.id
+      ?? (obligationId ? `unfinished:${obligationId}` : `${recordType}:${code || tableCode || index}`),
+    );
+    return {
+      id,
+      recordType,
+      title,
+      message,
+      suggestion,
+      page,
+      causeKind: item.cause_kind ? String(item.cause_kind) : undefined,
+      obligationId,
+      ...(evidence.length ? { evidence } : {}),
+      ...(Array.isArray(item.root_issue_ids) ? { rootIssueIds: item.root_issue_ids.map(String) } : {}),
+    };
+  });
+}
+
 export function toUiSourceProblems(
   detail: JobDetailRecord,
   source: "ai" | "rule",

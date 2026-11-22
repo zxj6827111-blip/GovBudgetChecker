@@ -92,7 +92,7 @@ export function blockerLabel(code: string, count?: number | null): string {
   }
   if (key === "blocking_obligations" && hasCount) {
     // 补核已并入「必须处理」：告诉用户**去哪里**处理，而不只是"不能完成"。
-    return `还有 ${n} 项“未能自动核对”的检查待处理（在「必须处理」里逐项选择结论）`;
+    return `本次分析还有 ${n} 项内部检查未完成（技术处理范围，不影响已展示问题的复核）`;
   }
 
   return (
@@ -104,7 +104,7 @@ export function blockerLabel(code: string, count?: number | null): string {
       pending_findings: "还有问题待处理",
       needs_review_findings: "还有问题标记为待复核",
       coverage_unavailable: "检查覆盖不可用，无法证明已完成检查",
-      blocking_obligations: "还有“未能自动核对”的检查待处理",
+      blocking_obligations: "本次分析仍有内部检查未完成",
       analysis_unavailable: "当前版本还没有可复核的分析结果",
       analysis_not_completed: "当前分析尚未完成",
       no_current_document_version: "这条材料还没有当前文件版本",

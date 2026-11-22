@@ -354,13 +354,10 @@ async function openIssueList(page: Page) {
 /** 必须处理里补核条目的 id（与 obligationProblems.obligationProblemId 一致）。 */
 const entry = (obligationId: string) => `obligation:${obligationId}`;
 
-test.describe("人工补核（WP3-B）：参考区处理，签核不阻断", () => {
-  test("系统提示可处理并保存；补核义务在参考区处理，不进入完成门禁", async ({ page }) => {
+test.describe("技术诊断退出业务问题队列（2026-11-16）", () => {
+  test("未完成检查不再是业务卡片：只作材料层技术汇总，不影响已展示问题的复核", async ({ page }) => {
     const state = freshState();
-    state.systemReviewCodes = [
-      "evidence_incomplete_findings", "rule_evidence_incomplete",
-      "rules_insufficient_data", "check_obligations_incomplete",
-    ];
+    state.systemReviewCodes = ["rules_insufficient_data", "check_obligations_incomplete"];
     state.obligations = [obligationItem("OBL-TXT-T5", "一般公共预算支出决算表与功能分类说明一致")];
     await page.context().addCookies([sessionCookie]);
     await installMocks(page, state);
@@ -370,158 +367,28 @@ test.describe("人工补核（WP3-B）：参考区处理，签核不阻断", () 
     // 不再有单独的「检查补核」页签。
     await expect(page.getByTestId("gbc-review-tab-obligations")).toHaveCount(0);
 
-    // 系统提示不计入完成条件，放在参考页签。
-    await page.getByTestId("gbc-review-tab-reference").click();
-    for (const code of state.systemReviewCodes) {
-      const id = `review_reason:${code}`;
-      await openIssueList(page);
-      await page.getByTestId(`gbc-review-issue-card-${id}`).click();
-      await page.getByTestId(`gbc-review-issue-confirm-${id}`).click();
-      await openIssueList(page);
-      await expect(page.getByTestId(`gbc-review-issue-card-${id}`)).toHaveCount(0);
-      await expect(page.getByTestId("gbc-review-undo")).toBeEnabled();
-      await expect(page.getByTestId("gbc-review-action-notice")).toHaveCount(0);
-      await page.getByTestId("gbc-review-close-list").click();
-    }
-    await page.reload();
-    await page.getByTestId("gbc-review-tab-reference").click();
-    await openIssueList(page);
-    // 补核义务仍在参考队列待处理（系统提示已确认后从待处理视图消失）。
-    await expect(page.getByTestId(`gbc-review-issue-card-${entry("OBL-TXT-T5")}`)).toHaveCount(1);
-    // 补核义务已移入参考区：必须处理为空，完成门禁不再因补核阻塞。
+    // 技术诊断不再进入「必须处理」，也不再生成 obligation:* 业务问题卡片。
     await expect(page.getByTestId("gbc-review-tab-issues")).toContainText("必须处理 0");
-    await expectGateBlockers(page, null);
-    await expect(page.getByTestId("gbc-review-complete")).toBeEnabled();
-
-    // 参考区打开补核义务，确认有问题：面板预填系统发现的情况，可直接提交。
-    await page.getByTestId(`gbc-review-issue-card-${entry("OBL-TXT-T5")}`).click();
-    await page.getByTestId(`gbc-review-obligation-verified_issue-${entry("OBL-TXT-T5")}`).click();
-    await expect(page.getByTestId("gbc-review-obligation-note")).toHaveValue("该要求尚无规则实现（V33-TEST）");
-    await page.getByTestId("gbc-review-obligation-note").fill("说明第 18 页科目名称与表内不一致");
-    await expect(page.getByTestId("gbc-review-obligation-save")).toBeDisabled();
-    await page.getByTestId("gbc-review-obligation-scope-confirm").check();
-    await page.getByTestId("gbc-review-obligation-save").click();
-    expect(state.decideCalls[0].body).toMatchObject({ decision: "verified_issue", note: "说明第 18 页科目名称与表内不一致" });
-    // 全部处理完毕后参考队列无待处理项；查看全部仍能看到已确认痕迹。
-    await expect(page.getByTestId("gbc-review-issues-empty")).toContainText("当前队列已无待处理项");
-    await page.getByTestId("gbc-review-view-all").click();
+    await page.getByTestId("gbc-review-tab-reference").click();
     await openIssueList(page);
-    await expect(page.getByTestId(`gbc-review-issue-card-${entry("OBL-TXT-T5")}`)).toHaveCount(1);
-    for (const code of state.systemReviewCodes) {
-      await expect(page.getByTestId(`gbc-review-issue-card-review_reason:${code}`)).toContainText("已确认");
+    for (const item of state.obligations) {
+      await expect(page.getByTestId(`gbc-review-issue-card-${entry(item.obligation_id)}`)).toHaveCount(0);
     }
+
+    // 材料层只保留一条技术汇总：内部关系未完成，结果尚不完整；
+    // 不要求业务人员既确认具体问题又逐条替系统表态。
+    await page.getByTestId("gbc-review-state-progress").click();
+    await expect(page.getByTestId("gbc-review-gate-blockers")).toHaveCount(0);
+    await expect(page.getByTestId("gbc-review-info-panel")).toContainText("内部关系未完成");
+    await expect(page.getByTestId("gbc-review-info-panel")).toContainText("不需要逐项人工表态");
+    await page.getByTestId("gbc-review-info-panel-close").click();
+
+    // 已展示问题的复核仍可完成；技术覆盖缺口不阻断签核。
     await expect(page.getByTestId("gbc-review-complete")).toBeEnabled();
     await page.getByTestId("gbc-review-complete").click();
     await expect(page.getByTestId("gbc-review-completed-summary")).toContainText("e2e-reviewer");
-    await page.reload();
-    await expect(page.getByTestId("gbc-review-complete")).toHaveText("重新复核");
     expect(state.completeCalls).toBe(1);
-  });
-
-  test("主链路：参考区逐条核对补核义务 → 完成复核（不阻断签核）", async ({ page }) => {
-    const state = freshState();
-    state.obligations[0].locations = [{ page: 11, label: "测试表", bbox: null }];
-    await page.context().addCookies([sessionCookie]);
-    await installMocks(page, state);
-
-    await page.goto(`/review?job=${JOB_ID}`);
-    // 43cb2266 起：进入工作台自动开始复核，不再手动点「开始复核」。
-    await expect(page.getByTestId("gbc-review-lifecycle-badge")).toContainText("复核中");
-    expect(state.startCalls).toBe(1);
-
-    // 补核义务进入参考区，不进入必须处理，也不阻断完成门禁。
-    const requiredTab = page.getByTestId("gbc-review-tab-issues");
-    await expect(requiredTab).toContainText("必须处理 0");
-    await expect(page.getByTestId("gbc-review-tab-reference")).toContainText("参考 2");
-    await expectGateBlockers(page, null);
-    await expect(page.getByTestId("gbc-review-complete")).toBeEnabled();
-
-    await page.getByTestId("gbc-review-tab-reference").click();
-    await openIssueList(page);
-    await expect(page.getByTestId("gbc-review-category-count")).toContainText("2 项");
-    await page.getByTestId(`gbc-review-issue-card-${entry("OBL-CROSS-SAN-GONG-ECON")}`).click();
-
-    // 卡片说清：为什么没核对成、请你核对什么、怎么判断、原文在哪。
-    const detail = page.getByTestId("gbc-review-issue-detail");
-    await expect(detail).toContainText("三公经费表与财政拨款经济分类表资金来源一致性");
-    await expect(page.getByTestId("gbc-review-obligation-reason-OBL-CROSS-SAN-GONG-ECON")).toContainText("为什么没能自动核对");
-    await expect(page.getByTestId("gbc-obligation-guidance-OBL-CROSS-SAN-GONG-ECON")).toContainText("请你核对");
-    await expect(page.getByTestId("gbc-obligation-guidance-OBL-CROSS-SAN-GONG-ECON")).toContainText("怎么判断");
-    await expect(detail).toContainText("疑似材料问题");
-    const ref = `${entry("OBL-CROSS-SAN-GONG-ECON")}|location|0`;
-    await page.getByTestId(`gbc-review-evidence-ref-${entry("OBL-CROSS-SAN-GONG-ECON")}-${ref}`).click();
-    await expect(page.getByTestId("gbc-review-pdf-page-input")).toHaveValue("11");
-    await expect(page.getByTestId("gbc-review-pdf-locator")).toContainText("第 11 页");
-
-    // 核对无误（R2.2 A3/IR04）：系统定位只作证据位置附件；仍须经面板写明
-    // 核对关系/数字并确认覆盖范围后提交——一键绕过已取消。
-    await page.getByTestId(`gbc-review-obligation-verified_ok-${entry("OBL-CROSS-SAN-GONG-ECON")}`).click();
-    await expect(page.getByTestId("gbc-review-obligation-panel")).toHaveAttribute("data-obligation-decision", "verified_ok");
-    await expect(page.getByTestId("gbc-review-obligation-save")).toBeDisabled();
-    await page.getByTestId("gbc-review-obligation-note").fill("第 11 页三公表与基本支出经济分类表逐项比较一致");
-    await page.getByTestId("gbc-review-obligation-scope-confirm").check();
-    await page.getByTestId("gbc-review-obligation-save").click();
-    const firstCall = state.decideCalls[0];
-    expect(firstCall.obligationId).toBe("OBL-CROSS-SAN-GONG-ECON");
-    expect(firstCall.body.decision).toBe("verified_ok");
-    expect(firstCall.body.evidence_reference).toBe("第 11 页 · 测试表（按系统定位核对）");
-    expect(firstCall.body.note).toBe("第 11 页三公表与基本支出经济分类表逐项比较一致");
-    expect(firstCall.body.scope_confirmed).toBe(true);
-    await expect(page.getByTestId("gbc-review-complete")).toBeEnabled();
-
-    // 处理后接续到下一条；不适用：选原因即可，原因写进补核说明。
-    await expect(detail).toHaveAttribute("data-detail-problem-id", entry("OBL-TXT-FUND-DETAIL"));
-    await page.getByTestId(`gbc-review-obligation-not_applicable-${entry("OBL-TXT-FUND-DETAIL")}`).click();
-    await expect(page.getByTestId("gbc-review-obligation-save")).toBeDisabled();
-    await page.getByTestId("gbc-review-obligation-reason-not_involved").check();
-    await page.getByTestId("gbc-review-obligation-note").fill("本单位本年度无政府性基金预算");
-    // R2.2 A3：整项决定须先确认覆盖范围（"本决定覆盖该义务全部阻断点"）。
-    await page.getByTestId("gbc-review-obligation-scope-confirm").check();
-    await page.getByTestId("gbc-review-obligation-save").click();
-    expect(state.decideCalls[1].body).toMatchObject({ decision: "not_applicable", note: "本材料不涉及此项：本单位本年度无政府性基金预算" });
-
-    // 完成复核：补核处理完毕与否都不影响签核，点击后显示已完成复核及复核人
-    await expect(requiredTab).toContainText("必须处理 0");
-    await expectGateBlockers(page, null);
-    const completeButton = page.getByTestId("gbc-review-complete");
-    await expect(completeButton).toBeEnabled();
-    await completeButton.click();
-    await expect(page.getByTestId("gbc-review-completed-summary")).toContainText("已完成复核");
-    await expect(page.getByTestId("gbc-review-completed-summary")).toContainText("e2e-reviewer");
-    expect(state.completeCalls).toBe(1);
-  });
-
-  test("没有系统定位的核对无误必须写一句核对了哪里；已处理的可恢复待处理", async ({ page }) => {
-    const state = freshState();
-    state.obligations = [obligationItem("OBL-TXT-FUND-DETAIL", "政府性基金表与对应说明逐项一致")];
-    await page.context().addCookies([sessionCookie]);
-    await installMocks(page, state);
-
-    await page.goto(`/review?job=${JOB_ID}`);
-    // 43cb2266 起：进入工作台自动开始复核，不再手动点「开始复核」。
-    await expect(page.getByTestId("gbc-review-lifecycle-badge")).toContainText("复核中");
-
-    const id = entry("OBL-TXT-FUND-DETAIL");
-    // 补核义务在参考区：展开列表并选中该条，再走决定面板。
-    await page.getByTestId("gbc-review-tab-reference").click();
-    await openIssueList(page);
-    await page.getByTestId(`gbc-review-issue-card-${id}`).click();
-    await page.getByTestId(`gbc-review-obligation-verified_ok-${id}`).click();
-    await expect(page.getByTestId("gbc-review-obligation-panel")).toHaveAttribute("data-obligation-decision", "verified_ok");
-    await expect(page.getByTestId("gbc-review-obligation-save")).toBeDisabled();
+    // 页面不再调用补核决定接口：技术诊断不要求逐条业务决定。
     expect(state.decideCalls).toHaveLength(0);
-    await page.getByTestId("gbc-review-obligation-note").fill("第 20 页基金表与第 26 页说明逐项一致");
-    // R2.2 A3：核对无误的面板路径同样须确认覆盖范围后才能提交。
-    await page.getByTestId("gbc-review-obligation-scope-confirm").check();
-    await page.getByTestId("gbc-review-obligation-save").click();
-    expect(state.decideCalls[0].body).toMatchObject({ decision: "verified_ok", note: "第 20 页基金表与第 26 页说明逐项一致" });
-    await expect(page.getByTestId("gbc-review-complete")).toBeEnabled();
-
-    // 查看全部条目，恢复待处理：补核状态可回退，但不改变签核门禁。
-    await page.getByTestId("gbc-review-view-all").click();
-    await expect(page.getByTestId("gbc-review-issue-detail")).toContainText("已核对无误");
-    await page.getByTestId(`gbc-review-obligation-pending-${id}`).click();
-    expect(state.decideCalls[1].body.decision).toBe("pending");
-    await expect(page.getByTestId("gbc-review-complete")).toBeEnabled();
   });
 });

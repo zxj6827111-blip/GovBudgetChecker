@@ -53,12 +53,12 @@ def test_zc04_review_report_is_the_shared_issue_and_receipt_source() -> None:
     report = build_review_report(payload)
     exported_payload = {**payload, "review_report": report}
 
-    assert report["schema_version"] == 2
+    assert report["schema_version"] == 3
     assert report["metadata"]["year"] == 2025
     assert len(report["issues"]) == 1
     assert {key: report["issues"][0][key] for key in finding} == finding
     assert report["check_receipts"] == payload["result"]["meta"]["check_receipts"]
-    assert any(item.get("obligation_id") == "BUD-03" for item in report["manual_review"])
+    assert any(item.get("obligation_id") == "BUD-03" for item in report["diagnostics"])
     assert _extract_issues(exported_payload) == report["issues"]
 
     # 未完成原文核验的同一发现必须进入候选区，不能成为已确认问题。

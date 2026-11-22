@@ -305,6 +305,12 @@ def _finding(issue_id: str, **extra: Any) -> Dict[str, Any]:
         "location": {"page": 3, "table": "T1"},
     }
     payload.update(extra)
+    # v3 正式问题必须具备来源核验元数据；degraded 夹具仍按显式降级处理。
+    payload.setdefault("evidence_status", "complete")
+    payload.setdefault(
+        "evidence_verification",
+        {"status": "verified", "source_identity_complete": True},
+    )
     return payload
 
 
@@ -530,8 +536,8 @@ async def test_issue_status_resolution_matrix(review_db, status, expected_blocke
     assert ("pending_findings" in codes or "needs_review_findings" in codes) is expected_blocked
 
 
-async def test_structured_review_items_block_completion(review_db):
-    """§四十四：结构化识别待复核项没人表态时，完成必须被阻塞。"""
+async def test_structured_review_items_are_diagnostics_not_gate_blockers(review_db):
+    """v3：结构化识别项只进入 diagnostics，不再阻塞完成复核。"""
     schema, pool = review_db
     review_items = [
         {"id": "T1:low_confidence", "type": "low_confidence_table", "table_code": "T1",
@@ -544,21 +550,13 @@ async def test_structured_review_items_block_completion(review_db):
         await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
 
     async with _conn(schema, pool) as conn:
-        blocked = await review_lifecycle_service.load_review_by_slot(conn, ctx["slot_id"])
-    assert [item.code for item in blocked.completion_gate.blockers] == ["pending_findings"]
-    assert blocked.completion_gate.blockers[0].count == 2
-
-    # 两个结构化条目都可以通过工作流表态（此前它们在 ai/rule findings 里找不到，
-    # 更新请求会 404，用户"处理"了却什么也没发生）
-    _write_decisions(
-        {
-            f"{ctx['job_uuid']}::T1:low_confidence": "confirmed",
-            f"{ctx['job_uuid']}::T9:missing": "no_issue",
-        }
-    )
-    async with _conn(schema, pool) as conn:
-        allowed = await review_lifecycle_service.load_review_by_slot(conn, ctx["slot_id"])
-    assert allowed.completion_gate.can_complete is True
+        state = await review_lifecycle_service.load_review_by_slot(conn, ctx["slot_id"])
+    assert state.completion_gate.can_complete is True
+    assert [item.code for item in state.completion_gate.blockers] == []
+    # 历史/审计读回仍能定位原始结构化条目，不会被物理删除。
+    from src.services.issue_workflow_store import _find_structured_review_item
+    payload = {"job_id": ctx["job_uuid"], "structured_ingest": {"review_items": review_items}}
+    assert _find_structured_review_item(payload, "T1:low_confidence") is not None
 
 
 async def test_legacy_ignored_issue_ids_do_not_block(review_db):
@@ -605,8 +603,8 @@ async def test_coverage_unavailable_allows_signoff_without_claiming_clean(review
     assert state.obligation_review.reason == "coverage_unavailable"
 
 
-async def test_blocking_obligations_do_not_block_signoff(review_db):
-    """签核分离（Step 3）：阻塞义务不再拦完成，但完成快照必须如实记下未处理数。"""
+async def test_blocking_obligations_block_signoff(review_db):
+    """2026-11-19：页面“需人工核对”与完成门禁同口径；未处理阻塞义务拦完成。"""
     schema, pool = review_db
     async with _conn(schema, pool) as conn:
         ctx = await _make_reviewable_slot(
@@ -614,14 +612,16 @@ async def test_blocking_obligations_do_not_block_signoff(review_db):
         )
         await review_lifecycle_service.start_review(conn, ctx["slot_id"], actor="r")
         state = await review_lifecycle_service.load_review_by_slot(conn, ctx["slot_id"])
-        completed = await review_lifecycle_service.complete_review(
-            conn, ctx["slot_id"], actor="r"
-        )
-    assert state.completion_gate.blockers == []
-    coverage = completed.session.review_result["coverage"]
-    assert coverage["blocking_count"] == 4
-    assert coverage["blocking_engine_total"] == 4
-    assert coverage["blocking_obligations_closed_by"] == "automatic_only"
+        assert state.completion_gate.can_complete is False
+        assert [(item.code, item.count) for item in state.completion_gate.blockers] == [
+            ("blocking_obligations", 4)
+        ]
+        with pytest.raises(review_lifecycle_service.ReviewLifecycleError) as excinfo:
+            await review_lifecycle_service.complete_review(
+                conn, ctx["slot_id"], actor="r"
+            )
+    assert excinfo.value.status_code == 409
+    assert [item.code for item in excinfo.value.blockers] == ["blocking_obligations"]
 
 
 # ==== 门禁：身份与口径 ======================================================

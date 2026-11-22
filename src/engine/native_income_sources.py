@@ -68,12 +68,16 @@ def check_income_sources(rule, doc):
     for code in rows:
         terms, errors, unknown_cells = [], [], []
         for role in ('total_actual', *SOURCES):
-            term, error = select(doc, facts, role, code=code, allow_native_blank=role in SOURCES)
+            mapping = next(item for item in mappings if item['canonical_measure'] == role)
+            cell = next((c for c in table.cells if c.row_idx == rows[code]
+                         and c.col_idx == mapping['source_col_idx']), None)
+            # 2026-11-16：整行金额格均为原件认证空白的科目（如 2013499），
+            # 合计列同样按 U-5 约定取 0；不能只允许来源列取零而让合计列
+            # 永远“取数不足”。空白项仍须逐格通过 blank_term 的原页复验。
+            term, error = select(doc, facts, role, code=code, allow_native_blank=True,
+                                 source_cell=cell)
             if error:
                 errors.append(error)
-                mapping = next(item for item in mappings if item['canonical_measure'] == role)
-                cell = next((c for c in table.cells if c.row_idx == rows[code]
-                             and c.col_idx == mapping['source_col_idx']), None)
                 unknown_cells.append({'indicator': role, 'column_name': mapping.get('source_col_name'),
                     'physical_page': cell.page_number if cell else None,
                     'bbox': list(cell.bbox) if cell and cell.bbox else None,
