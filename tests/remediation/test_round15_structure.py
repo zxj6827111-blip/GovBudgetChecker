@@ -68,6 +68,22 @@ def test_unit_title_aliases_empty_and_landscape_pages_are_structural():
     assert anchors["BUD_T3"] == [3]
 
 
+def test_budget_repeat_titles_distinguish_continuations_from_separate_tables():
+    title = "部门一般公共预算基本支出部门预算经济分类预算表"
+    doc = build_document("budget.pdf", [title] * 3, [[]] * 3, 100)
+    code = "FIN_06_basic_expenditure"
+    fragments = [SimpleNamespace(page_number=page, table_code=code, extraction_method="lines",
+                                 fragment_uid=str(page)) for page in (1, 2, 3)]
+    instance = SimpleNamespace(table_code=code, fragment_uids=["1", "2", "3"], identity_conflict=False)
+    doc.parse_artifact = SimpleNamespace(physical_fragments=fragments, logical_tables=[instance], text_blocks=[])
+    assert not any("表题重复过多" in i.message for i in BUD001_StructureAndAnchors().apply(doc))
+
+    instance.fragment_uids = ["1", "2"]
+    doc.parse_artifact.logical_tables.append(SimpleNamespace(table_code=code, fragment_uids=["3"],
+                                                            identity_conflict=False))
+    assert any("表题重复过多" in i.message for i in BUD001_StructureAndAnchors().apply(doc))
+
+
 def test_unread_scan_has_no_conditional_missing_claim():
     doc = _scan_doc()
     doc.structure_view["page_texts"][0] = "政府性基金预算100万元"

@@ -21,12 +21,14 @@ from src.engine.rules_v33 import (
 )
 from src.schemas.issues import IssueItem
 from src.schemas.material_detail import CoverageObligationItem
+from src.schemas.review_report import build_review_report
 from src.services.evidence_guard import (
     EVIDENCE_STATUS_RULE_WARNING,
     apply_evidence_completeness,
 )
 from src.services.obligation_finding_coverage import cascade_root_issue_ids
 from src.services.review_lifecycle_service import (
+    _blocking_obligations,
     blocking_coverage_obligations,
     cascaded_coverage_obligations,
 )
@@ -349,6 +351,7 @@ def test_quality_gate_suppresses_cascaded_table_blockers_while_keeping_reading_g
         "not_applicable_total": 0,
         "unresolved_total": 1,
         "blocking_total": 1,
+        "blocking_obligation_ids": ["OBL-CROSS-T5-T6"],
         "instances": [
             {
                 "obligation_id": "OBL-CROSS-T5-T6",
@@ -397,3 +400,16 @@ def test_quality_gate_suppresses_cascaded_table_blockers_while_keeping_reading_g
     codes = {r["code"] for r in gate["review_reasons"]}
     assert gate["status"] == "review_required"
     assert codes == {"table_reading_incomplete"}
+
+    # 执行门禁只提示一处读取根因，工作台仍需提供实际的补核入口。
+    payload = {**gate, "job_id": "job-gate-cascade", "structured_ingest": structured_ingest,
+               "result": {**result_row, "meta": {"obligation_coverage": coverage_dict}}}
+    report = build_review_report(payload, resolve_pdf_bboxes=False)
+    group = next(g for g in report["unfinished_check_groups"] if "OBL-CROSS-T5-T6" in g["check_ids"])
+    assert group["handling_mode"] == "manual_required"
+    assert group["related_issue_ids"] == []
+    from src.services.material_detail_query_service import build_coverage
+
+    state = SimpleNamespace(problems=[], coverage_items=build_coverage(coverage_dict).items,
+                            analysis=SimpleNamespace(result_row=result_row, structured_ingest=structured_ingest))
+    assert [item.obligation_id for item in _blocking_obligations(state)] == ["OBL-CROSS-T5-T6"]

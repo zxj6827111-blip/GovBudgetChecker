@@ -1590,10 +1590,32 @@ class CMM004_CodeMirrorConsistency(Rule):
             income_value = income[code]
             expense_value = expense[code]
             diff_value = abs(income_value - expense_value)
+            location = {**base_location, "row": code}
+            message = f"类款项编码 {code} 金额不一致"
+            context = getattr(doc, "fact_context", None)
+            if context is not None and context.fiscal_year is not None:
+                from .fact_context import resolve_operand
+                from .native_three_public_ratios import operand_ref
+
+                # 两侧必须是本年度同口径合计，金额和坐标都交给当前原格证据绑定。
+                left, right = [resolve_operand(
+                    context, "total_actual", table_code=table, subject_code=code,
+                    report_year=context.fiscal_year, budget_stages=("年初预算",),
+                    fund_scope="all_funds", period="本年",
+                ) for table in ("FIN_02_income", "FIN_03_expenditure")]
+                if (left.fact is not None and right.fact is not None
+                        and left.value is not None and right.value is not None):
+                    difference = abs(left.value - right.value)
+                    if not amount_difference_exceeds_policy(difference):
+                        continue
+                    location["operand_refs"] = [operand_ref(left.fact, "收入预算合计"),
+                                                operand_ref(right.fact, "支出预算合计")]
+                    location["fact_context_version_token"] = context.version_token
+                    message += f"：收入预算 {left.value:.2f} 万元，支出预算 {right.value:.2f} 万元，差额 {difference:.2f} 万元。"
             issues.append(
                 self._issue(
-                    f"\u7c7b\u6b3e\u9879\u7f16\u7801 {code} \u91d1\u989d\u4e0d\u4e00\u81f4",
-                    {**base_location, "row": code},
+                    message,
+                    location,
                     "warn",
                     evidence_text=(
                         f"code={code}; income={income_value}; expense={expense_value}; diff={diff_value}"
