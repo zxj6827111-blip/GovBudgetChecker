@@ -14,9 +14,10 @@ from tests.remediation.test_native_narrative_checks import run
 from tests.test_cover_independent_name import run as check_cover
 
 
-def zero_document(body, *, nonzero=None):
+def zero_document(body, *, nonzero=None, general_budget_title=False):
+    title = '一般公共预算' if general_budget_title else ''
     doc = build_document('zero.pdf', ['上海市甲中心2025年度单位决算',
-        '七、财政拨款“三公”经费支出决算情况说明\n' + body], [], 0)
+        '七、' + title + '财政拨款“三公”经费支出决算情况说明\n' + body], [], 0)
     facts = []
     for stage in ('年初预算', '决算'):
         for indicator in ('total_actual', 'overseas', 'vehicle_purchase_operation',
@@ -32,9 +33,10 @@ def zero_document(body, *, nonzero=None):
     return doc
 
 
-def test_whole_three_public_no_spending_disclosure_checks_printed_zero_cells():
+@pytest.mark.parametrize('general_budget_title', [True, False])
+def test_whole_three_public_no_spending_disclosure_checks_printed_zero_cells(general_budget_title):
     body = '上海市甲中心2025年度无“三公”经费财政拨款支出。'
-    doc = zero_document(body)
+    doc = zero_document(body, general_budget_title=general_budget_title)
     assert check_three_public_totals(R33224_Narrative7_T7(), doc) == []
     assert check_three_public_details(R33224_Narrative7_T7(), doc) == []
     assert len(doc.fact_context.facts) == 12, '不物化或回写叙述性推导值'
@@ -69,7 +71,7 @@ def test_whole_three_public_no_spending_disclosure_checks_printed_zero_cells():
     '上海市甲中心2025年度无“三公”经费财政拨款支出。公务接待费支出决算1万元。',
 ])
 def test_no_spending_disclosure_does_not_bypass_assertion_scope_or_conflicts(body):
-    doc = zero_document(body)
+    doc = zero_document(body, general_budget_title=True)
     with pytest.raises(RuleDeferred):
         check_three_public_details(R33224_Narrative7_T7(), doc)
     assert not any('explicit_absence' in r['sub_check_id'] and r['status'] == 'pass'

@@ -234,6 +234,52 @@ def _kind_from_page_texts(page_texts: Sequence[str]) -> Optional[str]:
     return None
 
 
+def native_report_table_titles(artifact: Any, page_texts: Sequence[str]) -> List[str]:
+    """只使用与原生表网格对应的独立原文标题，不读目录项或附件关键词。"""
+    def literal(value):
+        return re.sub(r"^(?:\d+[.．、]\s*)?(?:20\d{2}年度?)?", "", normalize_cover_line(value))
+
+    result = []
+    for fragment in getattr(artifact, "physical_fragments", ()) or ():
+        page = fragment.page_number
+        if (not 1 <= page <= len(page_texts) or not fragment.title
+                or fragment.extraction_method not in {"lines", "lines_strict"}
+                or not fragment.table_code.startswith(("FIN_", "BUD_"))
+                or fragment.confidence < .8 or not fragment.header_row_count
+                or len(fragment.rows) <= fragment.header_row_count):
+            continue
+        title = literal(fragment.title)
+        original = str(page_texts[page - 1] or "").splitlines()
+        if any(literal(line) == title for line in original):
+            result.append(title)
+    return list(dict.fromkeys(result))
+
+
+def _kind_from_table_titles(titles: Sequence[str]) -> Optional[str]:
+    """两种不同的规范主表表题同文种才足以补充缺失的封面证据。"""
+    from src.services.fiscal_table_rules import NINE_TABLE_RULES, normalize_text
+
+    kinds: Dict[str, set[str]] = {"budget": set(), "final": set()}
+    for title in titles:
+        normalized = normalize_text(title)
+        suffix = re.search(r"(预算|决算)(?:总)?表$", normalized)
+        if suffix is None:
+            continue
+        kind = "budget" if suffix[1] == "预算" else "final"
+        probes = {normalized, re.sub(r"^(?:部门|单位)", "", normalized)}
+        codes = {
+            code for code, rule in NINE_TABLE_RULES.items()
+            if probes & {normalize_text(alias) for alias in rule.aliases}
+        }
+        if len(codes) == 1:
+            kinds[kind].update(codes)
+    if len(kinds["budget"]) >= 2 and not kinds["final"]:
+        return "budget"
+    if len(kinds["final"]) >= 2 and not kinds["budget"]:
+        return "final"
+    return None
+
+
 def _pick(
     name: str,
     candidates: Sequence[Tuple[str, Any, str]],
@@ -396,6 +442,11 @@ def resolve_document_profile(
             ),
         ),
     )
+    if not report_kind.value and titles and (table_kind := _kind_from_table_titles(titles)):
+        report_kind = ProfileField(
+            value=table_kind, source=SOURCE_TABLE_TITLE,
+            evidence="至少两种原生主表的标题一致：" + "、".join(titles),
+        )
 
     conflicts: List[Dict[str, Any]] = []
     if report_kind.rejected:

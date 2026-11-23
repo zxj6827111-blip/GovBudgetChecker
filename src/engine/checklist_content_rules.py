@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter, defaultdict
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -34,6 +35,7 @@ from .checklist_support import (
 )
 from .checklist_identity_rules import body_scope
 from .rule_outcome import RuleDeferred, RuleNotApplicable
+from src.services.fiscal_table_rules import ECONOMIC_CODES
 from src.utils.narration import normalize_amount_punctuation
 from .rules_v33 import Document, Issue, Rule
 
@@ -298,29 +300,6 @@ class CMM021_TableTitleNormative(Rule):
 # CMM-022 科目编码
 # ---------------------------------------------------------------------------
 
-#: 部门预算支出经济分类科目：编码 → 名称。各地、各年度款级编号有差异（如上海市级
-#: 决算表 30203 为“手续费”），所以只用类级（前三位：301 工资福利 / 302 商品和服务 /
-#: 303 对个人和家庭的补助 / 310 资本性支出）反查“名称所属类别与编码类别是否一致”，
-#: 款级编号不判。
-ECONOMIC_CODES: Dict[str, str] = {
-    "30101": "基本工资", "30102": "津贴补贴", "30103": "奖金", "30106": "伙食补助费", "30107": "绩效工资",
-    "30108": "机关事业单位基本养老保险缴费", "30109": "职业年金缴费", "30110": "职工基本医疗保险缴费",
-    "30111": "公务员医疗补助缴费", "30112": "其他社会保障缴费", "30113": "住房公积金", "30114": "医疗费",
-    "30199": "其他工资福利支出", "30201": "办公费", "30202": "印刷费", "30203": "咨询费", "30204": "手续费",
-    "30205": "水费", "30206": "电费", "30207": "邮电费", "30208": "取暖费", "30209": "物业管理费",
-    "30211": "差旅费", "30212": "因公出国（境）费用", "30213": "维修（护）费", "30214": "租赁费",
-    "30215": "会议费", "30216": "培训费", "30217": "公务接待费", "30218": "专用材料费", "30224": "被装购置费",
-    "30225": "专用燃料费", "30226": "劳务费", "30227": "委托业务费", "30228": "工会经费", "30229": "福利费",
-    "30231": "公务用车运行维护费", "30239": "其他交通费用", "30240": "税金及附加费用",
-    "30299": "其他商品和服务支出", "30301": "离休费", "30302": "退休费", "30303": "退职（役）费",
-    "30304": "抚恤金", "30305": "生活补助", "30306": "救济费", "30307": "医疗费补助", "30308": "助学金",
-    "30309": "奖励金", "30310": "个人农业生产补贴", "30311": "代缴社会保险费", "30399": "其他对个人和家庭的补助",
-    "31001": "房屋建筑物购建", "31002": "办公设备购置", "31003": "专用设备购置", "31005": "基础设施建设",
-    "31006": "大型修缮", "31007": "信息网络及软件购置更新", "31008": "物资储备", "31009": "土地补偿",
-    "31010": "安置补助", "31011": "地上附着物和青苗补偿", "31012": "拆迁补偿", "31013": "公务用车购置",
-    "31019": "其他交通工具购置", "31021": "文物和陈列品购置", "31022": "无形资产购置",
-    "31099": "其他资本性支出",
-}
 _ECONOMIC_BY_NAME = {re.sub(r"[（）()]", "", name): code for code, name in ECONOMIC_CODES.items()}
 
 
@@ -375,58 +354,70 @@ class CMM022_SubjectCodeFormat(Rule):
         }
         for page_index, tables in enumerate(getattr(doc, "page_tables", None) or []):
             text = str(texts[page_index] if page_index < len(texts) else "")
-            for table in tables or []:
+            code_tables = [[entry for row in table or [] for entry in table_code_rows(row)]
+                           for table in tables or []]
+            row_counts = Counter((tuple(segments), name) for table in code_tables for _, segments, name in table)
+            occurrences: Dict[Tuple[Tuple[str, ...], str], int] = defaultdict(int)
+            for table in code_tables:
                 seen: Dict[str, str] = {}
                 # 功能分类表的层级前缀：款/项编码前三位必须等于其上最近的“类”行。
                 # 只在该前缀本身也作为类行出现在本材料的表里时才判（编码属于另一个
                 # 已存在的类），避免没有类行或双栏表造成误报；不依赖科目字典。
                 class_rows = doc_class_rows
                 current_class = ""
-                for row in table or []:
-                    for code, segments, name in table_code_rows(row):
-                        if len(code) == 3 and len(segments) == 1:
-                            current_class = code
-                        quote_start = self._locate(text, segments, name)
-                        if quote_start is None:
-                            continue
-                        start, end = quote_start
-                        if (len(code) in (5, 7) and current_class and code[:3] != current_class
-                                and code[:3] in class_rows and not code.startswith("3")):
-                            issues.append(issue_at(
-                                self, f"科目编码层级错位：“{code} {name}”位于“{current_class}”类下，"
-                                f"但编码前三位为“{code[:3]}”，与所属类不一致（疑似编码误写，请对照原表核对）。",
-                                page_index + 1, text, start, end, severity="warn", checklist_item="B-04",
-                            ))
-                        if len(segments) > 1 and any(len(seg) == 1 for seg in segments[1:]):
-                            fixed = " ".join([segments[0]] + [seg.zfill(2) for seg in segments[1:]])
-                            issues.append(issue_at(
-                                self, f"科目编码缺前导0：“{' '.join(segments)} {name}”应为“{fixed} {name}”。",
-                                page_index + 1, text, start, end, severity="warn", checklist_item="B-04",
-                            ))
-                            continue
-                        plain = re.sub(r"[（）()]", "", name)
-                        expected = _ECONOMIC_BY_NAME.get(plain)
-                        if expected and len(code) == 5 and code.startswith("3") and code[:3] != expected[:3]:
-                            issues.append(issue_at(
-                                self, f"经济分类科目编码类别与名称不匹配：“{' '.join(segments)} {name}”属于"
-                                f"“{expected[:3]}”类（如 {expected[:3]} {expected[3:]}），编码类别写成了“{code[:3]}”。",
-                                page_index + 1, text, start, end, severity="warn", checklist_item="B-04",
-                            ))
-                        previous = seen.get(code)
-                        if previous is not None and previous != name:
-                            issues.append(issue_at(
-                                self, f"同一张表内科目编码重复：“{code}”同时对应“{previous}”与“{name}”。",
-                                page_index + 1, text, start, end, severity="warn", checklist_item="B-04",
-                            ))
-                        seen.setdefault(code, name)
+                for code, segments, name in table:
+                    if len(code) == 3 and len(segments) == 1:
+                        current_class = code
+                    key = (tuple(segments), name)
+                    matches = self._locations(text, segments, name)
+                    index = occurrences[key]
+                    occurrences[key] += 1
+                    if not matches:
+                        continue
+                    aligned = len(matches) == row_counts[key]
+                    start, end = matches[index if aligned else 0]
+                    if (len(code) in (5, 7) and current_class and code[:3] != current_class
+                            and code[:3] in class_rows and not code.startswith("3")):
+                        # 同一科目可能在本页重复刊印。仅在网格与逐字文本的次数一致时按顺序定位。
+                        quote = unique_quote(text, start, end, max_len=320) if aligned else text[start:end]
+                        issues.append(self._issue(
+                            f"科目编码层级错位：“{code} {name}”位于“{current_class}”类下，"
+                            f"但编码前三位为“{code[:3]}”，与所属类不一致（疑似编码误写，请对照原表核对）。",
+                            {"page": page_index + 1, "pos": start, "checklist_item": "B-04"},
+                            severity="warn", evidence_text=quote,
+                        ))
+                    if len(segments) > 1 and any(len(seg) == 1 for seg in segments[1:]):
+                        fixed = " ".join([segments[0]] + [seg.zfill(2) for seg in segments[1:]])
+                        issues.append(issue_at(
+                            self, f"科目编码缺前导0：“{' '.join(segments)} {name}”应为“{fixed} {name}”。",
+                            page_index + 1, text, start, end, severity="warn", checklist_item="B-04",
+                        ))
+                        continue
+                    plain = re.sub(r"[（）()]", "", name)
+                    expected = _ECONOMIC_BY_NAME.get(plain)
+                    if expected and len(code) == 5 and code.startswith("3") and code[:3] != expected[:3]:
+                        issues.append(issue_at(
+                            self, f"经济分类科目编码类别与名称不匹配：“{' '.join(segments)} {name}”属于"
+                            f"“{expected[:3]}”类（如 {expected[:3]} {expected[3:]}），编码类别写成了“{code[:3]}”。",
+                            page_index + 1, text, start, end, severity="warn", checklist_item="B-04",
+                        ))
+                    previous = seen.get(code)
+                    if previous is not None and previous != name:
+                        issues.append(issue_at(
+                            self, f"同一张表内科目编码重复：“{code}”同时对应“{previous}”与“{name}”。",
+                            page_index + 1, text, start, end, severity="warn", checklist_item="B-04",
+                        ))
+                    seen.setdefault(code, name)
         return issues
 
     @staticmethod
-    def _locate(text: str, segments: Sequence[str], name: str) -> Optional[Tuple[int, int]]:
-        """原页文本中“编码…名称”的位置（名称可能被单元格折行，只取前 4 个字）。"""
-        pattern = r"\s*".join(re.escape(seg) for seg in segments) + r"\s*" + r"\s*".join(map(re.escape, name[:4]))
-        match = re.search(pattern, text)
-        return (match.start(), match.end()) if match else None
+    def _locations(text: str, segments: Sequence[str], name: str) -> List[Tuple[int, int]]:
+        """优先核对全名。单元格折行时兼容同页中可定位的名称开头。"""
+        code = r"(?<!\d)" + r"\s*".join(re.escape(seg) for seg in segments) + r"\s*"
+        matches = list(re.finditer(code + r"\s*".join(map(re.escape, name)), text))
+        if not matches:
+            matches = list(re.finditer(code + r"\s*".join(map(re.escape, name[:4])), text))
+        return [(match.start(), match.end()) for match in matches]
 
 
 # ---------------------------------------------------------------------------

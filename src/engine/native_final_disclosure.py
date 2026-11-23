@@ -25,6 +25,7 @@ from src.services.fiscal_code_hierarchy import hierarchy_paths
 
 GENERAL = 'FIN_05_general_public_expenditure'
 FUND = 'FIN_08_gov_fund'
+DUPLICATED_DECISION_UNITS = {'万万元': '万元', '万元万': '万元', '亿亿元': '亿元', '元元': '元'}
 _ITEM = re.compile(
     r'(?P<klass>[^\d，,。；;：:、.()“”\-—–]{1,60}?)\(类\)[\-—–]?'
     r'(?P<kuan>[^\d，,。；;：:、.()“”\-—–]{1,60}?)\(款\)[\-—–]?'
@@ -333,6 +334,11 @@ _DECISION_WITHOUT_UNIT = re.compile(
     rf'(?:支出决算(?:数)?|决算支出(?:数)?|决算数)[，,]?(?:为|是)?'
     rf'(?P<amount>{_NUMBER})(?=[，,。；;]|$)(?![，,]\d)'
 )
+_DECISION_WITH_DUPLICATED_UNIT = re.compile(
+    rf'(?:支出决算(?:数)?|决算支出(?:数)?|决算数)[，,]?(?:为|是)?'
+    rf'(?P<amount>{_NUMBER})[，,]?(?:为)?(?P<bad_unit>{"|".join(DUPLICATED_DECISION_UNITS)})'
+    r'(?![万亿千百十元])'
+)
 _GENERAL_AMOUNT = re.compile(
     rf'一般公共预算(?:财政拨款)?支出(?:决算(?:数)?)?(?:为|共计|合计为|是)?'
     rf'(?P<amount>{_NUMBER})(?P<unit>{_UNIT})')
@@ -437,7 +443,9 @@ def _unresolved(rule, doc, key, reason, unresolved, facts=(), formula='text = ta
         ) if code]
     if not codes:
         text = str(reason or '')
-        if '缺失或不唯一' in text:
+        if '科目名称差异候选' in text:
+            codes = ['name_mismatch_confirmed']
+        elif '缺失或不唯一' in text:
             codes = ['operand_missing_or_ambiguous']
         elif '矛盾' in text or '不一致' in text:
             codes = ['code_name_conflict']
@@ -569,7 +577,7 @@ def _manual_disclosure_entry(manual_correction, unit, corrected_amount=None):
 
 
 def _amount(rule, doc, text, begin, end, amount, unit, fact, key, label, section,
-            identity_sources=(), manual_correction=None, unit_inherited=False):
+            identity_sources=(), manual_correction=None, unit_inherited=False, duplicated_unit=None):
     declared = _wan(amount, unit)
     difference = declared - fact.normalized_value
     failed = amount_difference_exceeds_policy(difference)
@@ -601,8 +609,8 @@ def _amount(rule, doc, text, begin, end, amount, unit, fact, key, label, section
             'span': basis_quote,
             'role': '同科目原表单位依据',
             'original_amount': amount,
-            'original_unit': None,
-            'original_unit_written': False,
+            'original_unit': duplicated_unit,
+            'original_unit_written': duplicated_unit is not None,
             'accounting_unit': unit,
             'accounting_unit_source': accounting_source,
             'subject_basis': {
@@ -611,12 +619,13 @@ def _amount(rule, doc, text, begin, end, amount, unit, fact, key, label, section
                 'table_amount_wan': str(fact.normalized_value),
                 'page': basis_page,
             },
-            'reason': '原文未写单位，按同科目原表依据恢复核算单位',
+            'reason': ('原文单位重复，按同科目原表证实的单位核算'
+                       if duplicated_unit else '原文未写单位，按同科目原表依据恢复核算单位'),
         })
         unit_basis_extra = {
             'original_amount': amount,
-            'original_unit': None,
-            'original_unit_written': False,
+            'original_unit': duplicated_unit,
+            'original_unit_written': duplicated_unit is not None,
             'accounting_unit': unit,
             'accounting_unit_source': accounting_source,
         }
@@ -645,8 +654,9 @@ def _amount(rule, doc, text, begin, end, amount, unit, fact, key, label, section
             basis_refs = _source_refs([fact])
             basis_page = next((ref['page'] for ref in basis_refs if ref.get('page')), None)
             direction = '多' if difference > 0 else '少'
+            original_display = f'{amount}{duplicated_unit}' if duplicated_unit else f'{amount}（原文未写单位）'
             message += (
-                f'原文披露{amount}（原文未写单位），'
+                f'原文披露{original_display}，'
                 f'核算单位{unit}（依据：第{basis_page or "?"}页科目{fact.subject_code}'
                 f'“{fact.subject_name}”原表），'
                 f'表内{fact.normalized_value:.2f}万元，'
@@ -943,18 +953,7 @@ def _original_name_candidates(doc, pages, name, width):
     return candidates
 
 
-def _native_grid_name_rows(doc, pages):
-    """折行原表的码名身份：原生文字按格定位，且原文七位编码全集不能漏行。
-
-    用于名称有差异时的独立金额核对；不扩展全局名称别名。解析表若漏掉
-    原文中的任何项级编码，整条恢复路径拒收，不能拿幸存候选自证唯一。
-    """
-    artifact, context = getattr(doc, 'parse_artifact', None), getattr(doc, 'fact_context', None)
-    if (not pages or not artifact or not context or artifact.source_file_hash != context.file_hash
-            or artifact.parse_run_uid != context.parse_run_uid):
-        return {}, {}
-    if any(not isinstance(p, int) or not 1 <= p <= len(doc.page_texts) for p in pages):
-        return {}, {}
+def _general_table_source_pages(doc, pages):
     # 片段范围不能排除漏解析的续页：一直扫到下一张核心表的原文表头。
     # 找不到明确边界时扩大范围只会让完整性更难通过，不能缩小候选集合。
     pages = list(pages)
@@ -967,6 +966,22 @@ def _native_grid_name_rows(doc, pages):
         if next_table.search(head) and '一般公共预算财政拨款支出决算表' not in head:
             break
         pages.append(page)
+    return pages
+
+
+def _native_grid_name_rows(doc, pages):
+    """折行原表的码名身份：原生文字按格定位，且原文七位编码全集不能漏行。
+
+    用于名称有差异时的独立金额核对；不扩展全局名称别名。解析表若漏掉
+    原文中的任何项级编码，整条恢复路径拒收，不能拿幸存候选自证唯一。
+    """
+    artifact, context = getattr(doc, 'parse_artifact', None), getattr(doc, 'fact_context', None)
+    if (not pages or not artifact or not context or artifact.source_file_hash != context.file_hash
+            or artifact.parse_run_uid != context.parse_run_uid):
+        return {}, {}
+    if any(not isinstance(p, int) or not 1 <= p <= len(doc.page_texts) for p in pages):
+        return {}, {}
+    pages = _general_table_source_pages(doc, pages)
     raw_counts = Counter((page, m[1]) for page in pages for m in re.finditer(
         r'(?<!\d)(\d{7})(?!\d)', str(doc.page_texts[page - 1] or '')))
     if not raw_counts:
@@ -988,29 +1003,59 @@ def _native_grid_name_rows(doc, pages):
                 continue
             # 类/款/项三列在数据行常合并成一格，逻辑 col_idx 会留下两个占位列。
             # 相邻关系必须按原件网格边界判定，不能把“索引+1”当作物理相邻。
+            # 少数 PDF 末行编码格向下并入“合计/总计”行的空白编码格（上边与名称格对齐、
+            # 下边覆盖下方无编码的汇总行），确认覆盖区间内无其他编码格且全为汇总/空白行时放行。
+            def _vertically_compatible(cc, nc, table_cells=table.cells):
+                if abs(cc.bbox[1] - nc.bbox[1]) > .5:
+                    return False
+                if abs(cc.bbox[3] - nc.bbox[3]) <= .5:
+                    return True
+                if cc.bbox[3] <= nc.bbox[3] + .5:
+                    return False
+                below = [
+                    other for other in table_cells
+                    if other.page_number == cc.page_number
+                    and other.row_idx > cc.row_idx
+                    and other.bbox
+                    and other.bbox[1] >= nc.bbox[3] - .5
+                    and other.bbox[3] <= cc.bbox[3] + .5
+                ]
+                if not below:
+                    return False
+                has_summary = False
+                for other in below:
+                    raw = re.sub(r'\s+', '', str(other.raw_text or ''))
+                    if other.bbox[2] <= nc.bbox[0] + .5:
+                        if raw:
+                            return False
+                    elif abs(other.bbox[0] - nc.bbox[0]) <= .5 and abs(other.bbox[2] - nc.bbox[2]) <= .5:
+                        if raw in {'合计', '总计', '小计'}:
+                            has_summary = True
+                        elif raw:
+                            return False
+                return has_summary
+
             names = [c for c in table.cells if c.row_idx == code_cell.row_idx
                      and c.col_idx > code_cell.col_idx and c.page_number == code_cell.page_number
                      and c.bbox and code_cell.bbox
                      and abs(code_cell.bbox[2] - c.bbox[0]) <= .5
-                     and abs(code_cell.bbox[1] - c.bbox[1]) <= .5
-                     and abs(code_cell.bbox[3] - c.bbox[3]) <= .5]
+                     and _vertically_compatible(code_cell, c)]
             if len(names) != 1 or names[0].ocr_provenance:
-                continue
-            # row_idx 不能自证同排：必须为原网格中左右相邻、上下边界相同的两格。
-            if (not code_cell.bbox or not names[0].bbox
-                    or abs(code_cell.bbox[2] - names[0].bbox[0]) > .5
-                    or abs(code_cell.bbox[1] - names[0].bbox[1]) > .5
-                    or abs(code_cell.bbox[3] - names[0].bbox[3]) > .5):
                 continue
             proof = []
             for cell in (code_cell, names[0]):
                 if not cell.bbox:
                     break
                 x0, y0, x1, y1 = cell.bbox
-                native = sorted([t for t in tokens if t.physical_page == cell.page_number
-                    and x0 - .5 <= t.bbox[0] <= t.bbox[2] <= x1 + .5
-                    and y0 - .5 <= t.bbox[1] <= t.bbox[3] <= y1 + .5],
-                    key=lambda t: (t.bbox[1], t.bbox[0]))
+                # 折行字形底边偶有 1~2pt 下探出格线（如“出”字底边），按字框中心严格落格内 + 边距 <=2.5pt 核验，
+                # 既不漏收折行末字，也不可能跨行串格。
+                native = sorted([
+                    t for t in tokens if t.physical_page == cell.page_number
+                    and x0 - .5 <= (t.bbox[0] + t.bbox[2]) / 2.0 <= x1 + .5
+                    and y0 - .5 <= (t.bbox[1] + t.bbox[3]) / 2.0 <= y1 + .5
+                    and t.bbox[0] >= x0 - 2.0 and t.bbox[2] <= x1 + 2.0
+                    and t.bbox[1] >= y0 - 2.5 and t.bbox[3] <= y1 + 2.5
+                ], key=lambda t: (t.bbox[1], t.bbox[0]))
                 def literal(value):
                     return re.sub(r'\s+', '', str(value or ''))
 
@@ -1225,20 +1270,11 @@ def leaf_only_classes(doc, facts=None):
     return result
 
 
-def _native_name_variant_code(doc, facts, name, width, parent, paths, aliases):
-    """有限名称变体须由完整原生网格及逐级编码链证明，绝不用金额或编辑距离。"""
-    from src.services.fiscal_subject_names import literal_subject_name, subject_name_candidates
+def _verify_native_chain(doc, facts, rows, native_paths, code, width, paths):
+    """核验目标编码在完整原生网格和逐级 facts 中的身份链完整一致。"""
+    from src.services.fiscal_subject_names import literal_subject_name
 
-    rows, refs = _native_grid_name_rows(doc, _general_table_pages(doc, facts))
-    native_paths = hierarchy_paths(rows)
-    names = {code: value for code, value in rows.items()
-             if len(native_paths.get(code, '')) == width
-             and native_paths[code].startswith(parent)}
-    candidates = subject_name_candidates(name, names)
-    if len(candidates) != 1:
-        return None
-    code = candidates[0]
-    if paths.get(code) != native_paths[code]:
+    if paths.get(code) != native_paths.get(code):
         return None
     chain = []
     for size in (3, 5, 7):
@@ -1254,6 +1290,78 @@ def _native_name_variant_code(doc, facts, name, width, parent, paths, aliases):
                 or literal_subject_name(fact.subject_name) != literal_subject_name(rows[key])):
             return None
         chain.append(key)
+    return chain
+
+
+def _native_name_variant_code(doc, facts, name, width, parent, paths, aliases, *, competing_names=()):
+    """有限名称变体须由完整原生网格及逐级编码链证明，绝不用金额或编辑距离。"""
+    from src.services.fiscal_subject_names import (
+        literal_subject_name, scoped_subject_name_variant, subject_name_candidates,
+    )
+
+    def candidates_for(names):
+        candidates = subject_name_candidates(name, names)
+        if candidates or width != 7 or len(parent) != 5:
+            return candidates
+        return [
+            code for code, printed in names.items()
+            if scoped_subject_name_variant(code, printed) == literal_subject_name(name)
+            and not any(
+                code in subject_name_candidates(other, names)
+                or scoped_subject_name_variant(code, printed) == literal_subject_name(other)
+                for other in competing_names
+            )
+        ]
+
+    pages = _general_table_pages(doc, facts)
+    rows, refs = _native_grid_name_rows(doc, pages)
+    if not rows:
+        # 某条折行无法通过全表网格认证时，用完整原文候选集对照同层 facts。
+        # 当前链的每一级仍须有：印刷编码、同原行名称及同份原件的证据。
+        scoped = {
+            f.subject_code: f for f in facts
+            if f.indicator == 'total_actual' and len(paths.get(f.subject_code, '')) == width
+            and paths[f.subject_code].startswith(parent)
+        }
+        names = {code: f.subject_name for code, f in scoped.items()}
+        candidates = candidates_for(names)
+        if len(candidates) != 1:
+            return None
+        source_pages = _general_table_source_pages(doc, pages) if pages else []
+        source_rows = [(code, row_name) for code, row_name in _original_table_rows(doc, source_pages, codes=paths)
+                       if len(code) == width and code.startswith(parent)]
+        originals = {code: row_name for code, row_name in source_rows}
+        code = candidates[0]
+        printed_code = re.compile(rf'(?<![\d.,]){re.escape(code)}(?![\d.,])')
+        if (set(originals) != set(names) or candidates_for(originals) != [code]
+                or sum(len(printed_code.findall(doc.page_texts[page - 1])) for page in source_pages) != 1):
+            return None
+        for size in (3, 5, 7):
+            if size > width:
+                break
+            prefix = paths[code][:size]
+            keys = [key for key, path in paths.items() if path == prefix]
+            if len(keys) != 1:
+                return None
+            key = keys[0]
+            fact, error = select(doc, facts, 'total_actual', code=key)
+            if (error or not fact or fact.table_code != GENERAL
+                    or fact.fund_scope != 'general_public_budget' or fact.budget_stage != '决算'
+                    or not _anchor_row_identity_proven(doc, fact)):
+                return None
+            rows[key] = literal_subject_name(fact.subject_name)
+            refs[key] = list(fact.extra_dims.get('row_identity_sources') or ())
+    native_paths = hierarchy_paths(rows)
+    names = {code: value for code, value in rows.items()
+             if len(native_paths.get(code, '')) == width
+             and native_paths[code].startswith(parent)}
+    candidates = candidates_for(names)
+    if len(candidates) != 1:
+        return None
+    code = candidates[0]
+    chain = _verify_native_chain(doc, facts, rows, native_paths, code, width, paths)
+    if chain is None:
+        return None
     # 仅改变本条关系的定位依据，原表名称和事实快照保持原样。
     if aliases is not None:
         aliases.extend(ref for key in chain for ref in refs[key])
@@ -1526,29 +1634,32 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None, sub_check_id
               else [('klass', 3), ('kuan', 5), ('xiang', 7)])
 
     def rebind_leaf_under_class():
-        # 款名写错不能阻断独立金额检查：只在原表同类下项名唯一、
-        # 原文款名也确实存在时重新绑定，绝不按金额相近或科目字典猜配。
-        # 名称冲突仍由同一检查义务中的 V33-227 单独报告。原文款名在表内根本
-        # 不存在（如旧名“行政事业单位离退休（款）”）时不重新绑定，转人工。
+        # 款名写错不能阻断独立金额检查：只在原表同类下项名唯一（或经完整原生网格
+        # 唯一历史别名定位）、原文款名也确实存在时重新绑定，绝不按金额相近猜配。
+        # 名称冲突仍由同一检查义务中的 V33-227 单独报告。
         leaf_codes = {str(f.subject_code) for f in facts
                       if re.fullmatch(r'\d{7}', str(f.subject_code or ''))
                       and paths.get(str(f.subject_code), '').startswith(klass)
                       and _name(f.subject_name) == _name(item['xiang'])}
-        if len(leaf_codes) != 1:
-            return None
-        leaf_code = next(iter(leaf_codes))
-        actual_parent = next((code for code, path in paths.items()
-                              if path == paths[leaf_code][:5]), None)
-        parents = [f for f in facts if f.subject_code == actual_parent
-                   and f.indicator == 'total_actual']
-        if len(parents) != 1 or not _name(parents[0].subject_name):
-            return None
-        for path in (klass, parent, paths[actual_parent]):
-            code = next(code for code, candidate in paths.items() if candidate == path)
-            _, error = select(doc, facts, 'total_actual', code=code)
-            if error:
-                return None, error
-        return select(doc, facts, 'total_actual', code=leaf_code)
+        if len(leaf_codes) == 1:
+            leaf_code = next(iter(leaf_codes))
+            actual_parent = next((code for code, path in paths.items()
+                                  if path == paths[leaf_code][:5]), None)
+            parents = [f for f in facts if f.subject_code == actual_parent
+                       and f.indicator == 'total_actual']
+            if len(parents) != 1 or not _name(parents[0].subject_name):
+                return None
+            for path in (klass, parent, paths[actual_parent]):
+                code = next(code for code, candidate in paths.items() if candidate == path)
+                _, error = select(doc, facts, 'total_actual', code=code)
+                if error:
+                    return None, error
+            return select(doc, facts, 'total_actual', code=leaf_code)
+        if not leaf_codes and klass:
+            bound_code = _native_name_variant_code(doc, facts, item['xiang'], 7, klass, paths, aliases)
+            if bound_code is not None:
+                return select(doc, facts, 'total_actual', code=bound_code, allow_native_blank=True)
+        return None
 
     def _fact_identity_matches_context(fact):
         """绑定前核验事实与文档身份一致（年份/主体/资金/阶段），不依赖 select 内部。"""
@@ -1826,6 +1937,223 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None, sub_check_id
                                 narrative_parent=item['kuan'], table_parent=chain[1].subject_name))
         return chain[-1], None
 
+    def bind_near_name_leaf_under_parent():
+        """Tier 2：完整原生网格已认证且父级款已唯一确定时，同款下唯一近名项（如单字笔误/漏字）
+        可解耦绑定金额核对；原文名称错误仍由 V33-227 独立报告。绝不用金额猜配。"""
+        from src.services.fiscal_subject_names import subject_name_candidates
+
+        pages = _general_table_pages(doc, facts)
+        native_rows, native_refs = _native_grid_name_rows(doc, pages)
+        if not native_rows:
+            return None
+        native_paths = hierarchy_paths(native_rows)
+        requested = _name(item['xiang'])
+        if not requested:
+            return None
+        scope_leaves = {
+            code: val for code, val in native_rows.items()
+            if len(native_paths.get(code, '')) == 7 and native_paths[code].startswith(parent)
+        }
+        fact_leaves = {
+            str(f.subject_code) for f in facts
+            if f.indicator == 'total_actual'
+            and len(paths.get(str(f.subject_code), '')) == 7
+            and paths[str(f.subject_code)].startswith(parent)
+        }
+        if set(scope_leaves) != fact_leaves:
+            return None
+        near = [
+            code for code, val in scope_leaves.items()
+            if _is_near_subject_name_candidate(requested, _name(val))
+        ]
+        if len(near) != 1:
+            return None
+        target_code = near[0]
+        if not _truncation_ambiguity_guard(target_code):
+            return None
+        # 确认无其他同节条目指向该同一项级编码（防止多条说明抢占同一格）
+        item_span = (item.start(), item.end())
+        for other in siblings:
+            if (other.start(), other.end()) == item_span:
+                continue
+            other_hits = subject_name_candidates(other['xiang'], scope_leaves)
+            if target_code in other_hits:
+                return None
+            if (not other_hits
+                    and _is_near_subject_name_candidate(_name(other['xiang']), _name(scope_leaves[target_code]))):
+                return None
+        chain = _verify_native_chain(doc, facts, native_rows, native_paths, target_code, 7, paths)
+        if chain is None:
+            return None
+        fact, error = select(doc, facts, 'total_actual', code=target_code, allow_native_blank=True)
+        if error or fact is None or not _fact_identity_matches_context(fact):
+            return None
+        if aliases is not None:
+            aliases.extend(ref for key in chain for ref in native_refs[key])
+            aliases.append({
+                'role': 'native_near_name_leaf',
+                'subject_code': target_code,
+                'narrative_name': item['xiang'],
+                'table_name': native_rows[target_code],
+                'basis': 'unique_native_near_name_under_parent',
+            })
+        return fact, None
+
+    def bind_unique_unconsumed_leaf_in_scope(scope_prefix: str):
+        """Tier 3：全节条目集合排除法——在完整原生网格的同一已确认父级（款或类）下，
+        若其余全部同域条目均确定性命中不同原生项，且仅余当前 1 条未解条目与 1 个未消耗项级行，
+        形成严格 1 对 1 双射，则解耦绑定该项核对金额；名称错误仍由 V33-227 独立报告。"""
+        from src.services.fiscal_subject_names import subject_name_candidates, subject_variant_key
+
+        if len(siblings) < 2 or not scope_prefix:
+            return None
+        pages = _general_table_pages(doc, facts)
+        native_rows, native_refs = _native_grid_name_rows(doc, pages)
+        if not native_rows:
+            return None
+        native_paths = hierarchy_paths(native_rows)
+        scope_leaves = {
+            code: val for code, val in native_rows.items()
+            if len(native_paths.get(code, '')) == 7 and native_paths[code].startswith(scope_prefix)
+        }
+        fact_leaves = {
+            str(f.subject_code) for f in facts
+            if f.indicator == 'total_actual'
+            and len(paths.get(str(f.subject_code), '')) == 7
+            and paths[str(f.subject_code)].startswith(scope_prefix)
+        }
+        if not scope_leaves or set(scope_leaves) != fact_leaves:
+            return None
+
+        # 确定哪些同节条目落在该 scope_prefix 下
+        klass_code = next((c for c, p in native_paths.items() if p == scope_prefix[:3]), None)
+        kuan_code = (
+            next((c for c, p in native_paths.items() if p == scope_prefix), None)
+            if len(scope_prefix) == 5 else None
+        )
+        if not klass_code or (len(scope_prefix) == 5 and not kuan_code):
+            return None
+
+        def _same_label(a: str, b: str) -> bool:
+            return _name(a) == _name(b) or subject_variant_key(a) == subject_variant_key(b)
+
+        source_text, ranges = _general_ranges(doc)
+        item_span = (item.start(), item.end())
+        scope_others = []
+        for other in siblings:
+            if (other.start(), other.end()) == item_span:
+                continue
+            if ranges:
+                other_scope = next((begin for _t, begin, end in ranges if begin <= other.start() < end), None)
+                if other_scope is None or _guard(doc, source_text, other_scope, other.start(), other.start()):
+                    continue
+            if not _same_label(other['klass'], native_rows[klass_code]):
+                continue
+            if kuan_code is not None and not _same_label(other['kuan'], native_rows[kuan_code]):
+                continue
+            scope_others.append(other)
+
+        consumed: set[str] = set()
+        for other in scope_others:
+            # 先按款缩小池子（在类级 scope 下），再在池内按精确/变体/近名解析
+            pool = scope_leaves
+            if kuan_code is None:
+                matched_kuans = [
+                    c for c, p in native_paths.items()
+                    if len(p) == 5 and p.startswith(scope_prefix) and _same_label(other['kuan'], native_rows[c])
+                ]
+                if len(matched_kuans) == 1:
+                    k_path = native_paths[matched_kuans[0]]
+                    pool = {c: v for c, v in scope_leaves.items() if native_paths[c].startswith(k_path)}
+            hits = subject_name_candidates(other['xiang'], pool)
+            if len(hits) != 1:
+                near_hits = [
+                    c for c, v in pool.items()
+                    if _is_near_subject_name_candidate(_name(other['xiang']), _name(v))
+                ]
+                hits = near_hits if len(near_hits) == 1 else []
+            if len(hits) != 1 or hits[0] in consumed:
+                # 若同域另有条目同样无法确定性消解，说明存在 >=2 个未解条目，必须拒绝对号入座
+                return None
+            consumed.add(hits[0])
+
+        remaining = sorted(set(scope_leaves) - consumed)
+        if len(remaining) != 1:
+            return None
+        target_code = remaining[0]
+        if parent and len(scope_prefix) == 5 and not _truncation_ambiguity_guard(target_code):
+            return None
+        chain = _verify_native_chain(doc, facts, native_rows, native_paths, target_code, 7, paths)
+        if chain is None:
+            return None
+        fact, error = select(doc, facts, 'total_actual', code=target_code, allow_native_blank=True)
+        if error or fact is None or not _fact_identity_matches_context(fact):
+            return None
+        if aliases is not None:
+            aliases.extend(ref for key in chain for ref in native_refs[key])
+            aliases.append({
+                'role': 'native_unique_remaining_leaf',
+                'subject_code': target_code,
+                'narrative_name': item['xiang'],
+                'table_name': native_rows[target_code],
+                'scope_prefix': scope_prefix,
+                'consumed_sibling_codes': sorted(consumed),
+                'basis': 'unique_unconsumed_native_leaf_under_parent',
+            })
+        return fact, None
+
+    def bind_shifted_hierarchy_chain():
+        """Tier 4：完整原生网格上，正文将原表“款→项”整体错位写成“类→款”（如把“抚恤（款）死亡抚恤（项）”
+        写成“抚恤（类）死亡抚恤（款）…（项）”）时，凭逐字唯一的原生款→项父子链绑定金额。"""
+        from src.services.fiscal_subject_names import subject_name_candidates
+
+        pages = _general_table_pages(doc, facts)
+        native_rows, native_refs = _native_grid_name_rows(doc, pages)
+        if not native_rows:
+            return None
+        native_paths = hierarchy_paths(native_rows)
+        kuan_pool = {c: v for c, v in native_rows.items() if len(native_paths.get(c, '')) == 5}
+        kuan_hits = subject_name_candidates(item['klass'], kuan_pool)
+        if len(kuan_hits) != 1:
+            return None
+        kuan_code = kuan_hits[0]
+        kuan_path = native_paths[kuan_code]
+        leaf_pool = {
+            c: v for c, v in native_rows.items()
+            if len(native_paths.get(c, '')) == 7 and native_paths[c].startswith(kuan_path)
+        }
+        leaf_hits = subject_name_candidates(item['kuan'], leaf_pool)
+        if len(leaf_hits) != 1:
+            return None
+        leaf_code = leaf_hits[0]
+        # 确认无其他同节条目已正常绑定该项
+        item_span = (item.start(), item.end())
+        for other in siblings:
+            if (other.start(), other.end()) == item_span:
+                continue
+            if leaf_code in subject_name_candidates(other['xiang'], leaf_pool):
+                return None
+        chain = _verify_native_chain(doc, facts, native_rows, native_paths, leaf_code, 7, paths)
+        if chain is None:
+            return None
+        fact, error = select(doc, facts, 'total_actual', code=leaf_code, allow_native_blank=True)
+        if error or fact is None or not _fact_identity_matches_context(fact):
+            return None
+        if aliases is not None:
+            aliases.extend(ref for key in chain for ref in native_refs[key])
+            aliases.append({
+                'role': 'shifted_hierarchy_chain',
+                'klass_code': chain[0],
+                'kuan_code': kuan_code,
+                'xiang_code': leaf_code,
+                'narrative_klass': item['klass'],
+                'narrative_kuan': item['kuan'],
+                'narrative_xiang': item['xiang'],
+                'table_name': native_rows[leaf_code],
+                'basis': 'unique_native_shifted_kuan_xiang_chain',
+            })
+        return fact, None
+
     for group, width in levels:
         candidates = {str(f.subject_code) for f in facts
                       if len(paths.get(str(f.subject_code), '')) == width
@@ -1838,19 +2166,24 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None, sub_check_id
                 candidates = {bound_code}
         if group == 'klass' and not candidates:
             # A2（R2.2 QP-04）：类名缺口按独立身份链处理——显式编码或
-            # 款/项逐字唯一的层级链 + 原件共现核验。不成立则落入既有的
-            # "找不到同名科目"失败（金额仍未知，名称差异照报）。
+            # 款/项逐字唯一的层级链 + 原件共现核验。不成立则再尝试唯一移位层级链。
             chain_klass = _bind_klass_via_independent_chain(doc, facts, item, paths, aliases)
             if chain_klass is not None:
                 parent = paths[chain_klass]
                 klass = parent
                 continue
+            shifted = bind_shifted_hierarchy_chain()
+            if shifted is not None:
+                return shifted
         if len(candidates) != 1:
             if group == 'kuan' and not candidates:
                 bound = bind_under_parent_word_order_error()
                 if bound is not None:
                     return bound
                 bound = bind_exact_leaf_independent_of_parent_label()
+                if bound is not None:
+                    return bound
+                bound = bind_unique_unconsumed_leaf_in_scope(klass)
                 if bound is not None:
                     return bound
             if group == 'xiang' and not candidates:
@@ -1868,7 +2201,16 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None, sub_check_id
                     return fact, error
             if group == 'xiang':
                 # 已有的原格截断补全证据优先，避免把抽断的“缴费”误作可选后缀。
-                bound_code = _native_name_variant_code(doc, facts, item[group], width, parent, paths, aliases)
+                competing_names = [
+                    other['xiang'] for other in siblings
+                    if (other.start(), other.end()) != (item.start(), item.end())
+                    and _name(other['klass']) == _name(item['klass'])
+                    and _name(other['kuan']) == _name(item['kuan'])
+                ]
+                bound_code = _native_name_variant_code(
+                    doc, facts, item[group], width, parent, paths, aliases,
+                    competing_names=competing_names,
+                )
                 if bound_code is not None:
                     return select(doc, facts, 'total_actual', code=bound_code, allow_native_blank=True)
             if group == 'xiang' and not candidates:
@@ -1881,6 +2223,12 @@ def _hierarchy_fact(doc, facts, item, *, siblings=(), aliases=None, sub_check_id
                 anomaly_bound = bind_leaf_via_code_anomaly()
                 if anomaly_bound is not None:
                     return anomaly_bound
+                near_bound = bind_near_name_leaf_under_parent()
+                if near_bound is not None:
+                    return near_bound
+                bijection_bound = bind_unique_unconsumed_leaf_in_scope(parent)
+                if bijection_bound is not None:
+                    return bijection_bound
             level = {'klass': '类', 'kuan': '款', 'xiang': '项'}[group]
             if not candidates:
                 # 仅解释原文差异，不把近似名称或相同金额升级为同一科目身份。
@@ -2117,7 +2465,8 @@ def check_function_disclosures(rule, doc):
         if len(identities) != 1 or not next(iter(identities)):
             continue
         label = next(iter(identities))
-        pattern = re.compile(rf'{re.escape(label)}(?:支出)?(?:为)?'
+        literal = rf'{re.escape(label)}(?:支出)?'
+        pattern = re.compile(rf'(?:“{literal}”|"{literal}"|{literal})(?:科目)?(?:为)?'
                              rf'(?P<amount>{_NUMBER})(?P<unit>{_UNIT})')
         for claim in pattern.finditer(text.compact, begin, end):
             key = f'general:text:class:{code}:{claim.start()}'
@@ -2272,7 +2621,9 @@ def check_function_disclosures(rule, doc):
         # Their hierarchy is already validated above; only the declaration
         # prefix can introduce a foreign owner or year for this item.
         error = error or _guard(doc, text, begin, item.start(), item.start())
-        if not claims:
+        bad_claims = list(_DECISION_WITH_DUPLICATED_UNIT.finditer(text.compact, item.end(), stop))
+        duplicated_unit = None
+        if not claims and not bad_claims:
             bare_claims = list(_DECISION_WITHOUT_UNIT.finditer(text.compact, item.end(), stop))
             if len(bare_claims) == 1 and not error:
                 bare_claim = bare_claims[0]
@@ -2286,7 +2637,7 @@ def check_function_disclosures(rule, doc):
                 if basis is not None:
                     claims = [_BareClaimWithUnit(bare_claim['amount'], basis.unit,
                                                 bare_claim.start(), bare_claim.end())]
-        if not claims:
+        if not claims and not bad_claims:
             # IR-02（Codex 独立核验 2026-11-10）：同条目唯一单位继承——
             # 显式决算声明漏写单位（宜川 P29"支出决算为4.19。"，同条目首句
             # 已有"4.19 万元"）时，裸声明金额与条目首句带单位金额一致即按该
@@ -2311,20 +2662,18 @@ def check_function_disclosures(rule, doc):
                 except (ValueError, ArithmeticError):
                     pass
         recovered = None
-        if len(claims) != 1:
-            bad_unit_re = re.compile(
-                rf'(?:支出决算(?:数)?|决算数)[，,]?(?:为|是)?(?P<amount>{_NUMBER})(?P<bad_unit>万万元|亿亿元|元元|万元万)'
-            )
-            bad_claims = list(bad_unit_re.finditer(text.compact, item.end(), stop))
+        if len(claims) != 1 or bad_claims:
             if len(bad_claims) == 1 and not claims:
                 bad_claim = bad_claims[0]
+                raw_unit = bad_claim['bad_unit']
+                base_unit = DUPLICATED_DECISION_UNITS[raw_unit]
                 bad_refs = text.refs(bad_claim.start(), bad_claim.end(), '决算金额重复单位')
                 bad_page = bad_refs[0]['page'] if bad_refs else None
                 bad_span = bad_refs[0]['span'] if bad_refs else bad_claim.group(0)
                 bad_literal = f"{bad_claim.group('amount')}{bad_claim.group('bad_unit')}"
                 issues.append(rule._issue(
                     f"说明第{bad_page or '?'}页科目“{item['xiang']}”决算金额单位重复：“{bad_literal}”，"
-                    "请核对并修正原文单位（不作猜测换算）。",
+                    "请修正原文重复单位。",
                     {
                         **({'page': bad_page, 'pages': [bad_page]} if bad_page else {}),
                         'section': title,
@@ -2336,15 +2685,24 @@ def check_function_disclosures(rule, doc):
                     evidence_text=bad_span,
                     check_relation_id=f'{rule.code}:{key}:bad_unit',
                 ))
-                decision_error = (
-                    f'{item["xiang"]}条目决算金额单位书写有误（“{bad_literal}”），'
-                    '已报材料单位错误，本项金额核对未完成'
-                )
-                error = error or decision_error
-                _record_text_gap(doc, [decision_error, error], item,
-                                 codes=['text_statement_unparsed'],
-                                 role=f'{item["xiang"]}条目决算金额单位错误',
-                                 sub_check_id=key)
+                # 去掉重复单位须有唯一同科目原表格作证；表文数值独立比较。
+                fact_refs = (getattr(fact, 'extra_dims', None) or {}).get('evidence_refs') or []
+                if (not error and fact is not None and fact.unit == base_unit
+                        and _cell_refs_on_current_original(doc, fact_refs)
+                        and not _DECISION_WITHOUT_UNIT.search(text.compact, item.end(), stop)):
+                    duplicated_unit = raw_unit
+                    claims = [_BareClaimWithUnit(bad_claim['amount'], base_unit,
+                                                bad_claim.start(), bad_claim.end())]
+                else:
+                    decision_error = (
+                        f'{item["xiang"]}条目决算金额单位书写有误（“{bad_literal}”），'
+                        '已报材料单位错误，本项金额核对未完成'
+                    )
+                    error = error or decision_error
+                    _record_text_gap(doc, [decision_error, error], item,
+                                     codes=['text_statement_unparsed'],
+                                     role=f'{item["xiang"]}条目决算金额单位错误',
+                                     sub_check_id=key)
             else:
                 # R4（2026-11-21 第三轮复核）：显式读数人工校正可以驱动原解析
                 # 失败的单项完成核对——复核人输入合法读数并确认单位后，单项
@@ -2387,6 +2745,9 @@ def check_function_disclosures(rule, doc):
                 # 分项加总消费同一有效读数。人工校正只改变核算读数，原文披露
                 # 作为独立证据保留；校正命中不唯一时退回原文读数并保持待核。
                 manual = _manual_correction_for_item(doc, text, item, stop, claim)
+                if manual and duplicated_unit:
+                    manual['original_unit'] = duplicated_unit
+                    manual['original_unit_written'] = True
             effective = (
                 _ManualClaim(manual['amount'], manual['unit'], claim.start(), claim.end())
                 if manual else claim
@@ -2461,6 +2822,7 @@ def check_function_disclosures(rule, doc):
                           effective['amount'], effective['unit'], comparison_fact, key,
                           item['xiang'], title, identity_sources=aliases,
                           manual_correction=manual,
+                          duplicated_unit=duplicated_unit,
                           unit_inherited=(
                               manual is None
                               and getattr(claim, 'inherited_unit', False)

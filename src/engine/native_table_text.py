@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from decimal import Decimal
 
 from .native_narrative_checks import _Text, _NUMBER, _UNIT, _wan, _foreign_owner
@@ -36,7 +37,8 @@ def sections(doc, match):
     return text, ranges[-1:]
 
 
-def compare(rule, doc, text, start, end, value, fact, key, label, section, *, disclosure_sources=()):
+def compare(rule, doc, text, start, end, value, fact, key, label, section, *,
+            disclosure_sources=(), unresolved=None):
     refs = text.refs(start, end, '原文金额声明', unique_context=True)
     from .native_empty_operands import NativeBlankTerm, independent_blank_zero, blank_observations, blank_operand_refs
     if isinstance(fact, NativeBlankTerm) and not independent_blank_zero(doc, fact):
@@ -46,7 +48,10 @@ def compare(rule, doc, text, start, end, value, fact, key, label, section, *, di
                 formula='explicit narrative disclosure + certified blank observation', reason=reason,
                 disclosure_sources=[{**ref, 'file_hash': doc.fact_context.file_hash} for ref in refs])
         if value != 0:
-            raise RuleDeferred(rule.code, detail=reason)
+            if unresolved is None:
+                raise RuleDeferred(rule.code, detail=reason)
+            # 调用方还有其他金额声明时，只挂起当前关系，循环结束再汇总。
+            unresolved.append(reason)
         return []
     ids, evidence = receipt(rule, doc, key, [fact],
             status='fail' if amount_difference_exceeds_policy(value - fact.normalized_value) else 'pass',
@@ -113,7 +118,7 @@ def _inside_full_quotation(compact, start, end):
     return compact[:start].count('"') % 2 == compact[:end].count('"') % 2 == 1
 
 
-def _three_public_absence_span(doc, text, begin, end):
+def _three_public_absence_span(doc, text, title, begin, end):
     """本年财政拨款三公整体明确无支出，可核对各决算格；不证明预算为零。
 
     只接受原说明中的事实断言，复用零证据的否定/假设/引用/模板作用域守卫。
@@ -126,6 +131,10 @@ def _three_public_absence_span(doc, text, begin, end):
     context = getattr(doc, 'fact_context', None)
     if not context or not context.org_name or context.fiscal_year is None:
         return None
+    # 章节范围含标题。标题里的“一般公共预算”只限定资金口径，不是正文中的预算期声明。
+    heading = ''.join(unicodedata.normalize('NFKC', title).split())
+    if text.compact.startswith(heading, begin, end):
+        begin += len(heading)
     body = text.compact[begin:end]
     # 预测、局部期间或后置否定不能证明全年实际未发生。语义范围不清时
     # 仍保持未知，不能由当前表格的零值反推文字声明的期间与真实性。
@@ -191,7 +200,7 @@ def check_three_public_totals(rule, doc):
     if not ranges:
         return finish(rule, [], ['未找到三公经费决算说明原文范围'])
     title, begin, end = ranges[0]
-    absence_span = _three_public_absence_span(doc, text, begin, end)
+    absence_span = _three_public_absence_span(doc, text, title, begin, end)
     pattern = re.compile(rf'(?P<phase>年初预算|全年预算|调整后预算|支出决算(?:数)?|决算数)'
                          rf'(?:为|共计|合计为|是)?(?P<amount>{_NUMBER})(?P<unit>{_UNIT})')
     claims = {}
@@ -225,14 +234,67 @@ def check_three_public_totals(rule, doc):
             # Include the literal business subject in the source quote.
             _, offset = subject_before(text.compact[begin:match.start()])
             from .native_budget_phase import phase_reason
+            from .native_empty_operands import NativeBlankTerm
             phase_error = phase_reason(doc, fact, stage, "total_actual")
             if phase_error:
+                text_val = _wan(match.group('amount'), match.group('unit'))
+                diff = abs(text_val - fact.normalized_value) if fact.normalized_value is not None else None
+                explain_re = re.compile(
+                    r'预算调整|调整预算|调整后预算|全年预算|年中预算调整|追加预算|调减预算|核减预算|预算调减|预算追加'
+                )
+                if (
+                    not isinstance(fact, NativeBlankTerm)
+                    and fact.normalized_value is not None
+                    and diff is not None
+                    and amount_difference_exceeds_policy(text_val - fact.normalized_value)
+                    and not explain_re.search(text.compact[begin:end])
+                ):
+                    refs = text.refs(begin + offset, match.end(), '原文金额声明', unique_context=True)
+                    t_pages = sorted({
+                        e.get('physical_page')
+                        for e in fact.extra_dims.get('evidence_refs', [])
+                        if e.get('physical_page')
+                    })
+                    t_page_note = f"第{'、'.join(map(str, t_pages))}页" if t_pages else ''
+                    pages = sorted({ref['page'] for ref in refs} | set(t_pages))
+                    quote = '\n'.join(ref['span'] for ref in refs)
+                    ids, evidence = receipt(
+                        rule, doc, key, [fact], status='fail',
+                        formula='explicit narrative budget == table generic 预算数 (万元)',
+                        reason=(
+                            f'说明第{refs[0]["page"]}页写{stage}为{text_val:.2f}万元，'
+                            f'三公表{t_page_note}“预算数”为{fact.normalized_value:.2f}万元，相差{diff:.2f}万元'
+                        ),
+                    )
+                    issues.append(rule._issue(
+                        f'三公经费合计{stage}表文差异（表头仅列“预算数”）：'
+                        f'说明第{refs[0]["page"]}页写{stage}为{text_val:.2f}万元，'
+                        f'三公表{t_page_note}“预算数”列示{fact.normalized_value:.2f}万元，'
+                        f'相差{diff:.2f}万元，且说明未披露预算调整或口径差异。'
+                        '请核实三公表“预算数”系调整后/全年预算口径还是存在填报差错。',
+                        {
+                            'page': refs[0]['page'], 'pages': pages, 'section': title,
+                            'table_code': fact.table_code, 'table_refs': refs,
+                            'budget_stage': stage,
+                            'table_instance_uid': fact.instance_uid,
+                            'operand_refs': [operand_ref(fact, key)],
+                            'fact_context_version_token': doc.fact_context.version_token,
+                            'defect_type': 'three_public_budget_phase_discrepancy',
+                            'difference_wan': f'{diff:.2f}',
+                        },
+                        'warn',
+                        evidence_text=quote,
+                        check_relation_id=f'{rule.code}:{key}',
+                        fact_ids=ids,
+                        evidence_ids=evidence,
+                    ))
+                    continue
                 unresolved.append(phase_error)
                 receipt(rule, doc, key, [fact], status="insufficient_data", formula="text = table", reason=phase_error)
                 continue
             issues.extend(compare(rule, doc, text, begin + offset, match.end(),
                  _wan(match.group('amount'), match.group('unit')), fact, key,
-                 f'三公经费合计{stage}', title))
+                 f'三公经费合计{stage}', title, unresolved=unresolved))
     return finish(rule, issues, unresolved)
 
 
@@ -329,12 +391,44 @@ def check_fiscal_grant_total(rule, doc):
     return finish(rule, issues, unresolved)
 
 
+def _income_sections(doc):
+    return sections(doc, lambda title: '收入决算情况说明' in title
+                    and not any(word in title for word in ('财政拨款', '政府性基金', '国有资本')))
+
+
+def _income_total_with_trailing_dot(doc, text, begin, end):
+    """只恢复本节唯一合计声明中两位小数后的多余句点，不修补小数位。"""
+    if text.compact.count('本年收入合计', begin, end) != 1:
+        return None
+    pattern = (r'本年收入合计(?:为|是)?(?P<amount>(?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2})\.'
+               rf'(?P<unit>{_UNIT})(?=[，,。；;]|$)')
+    matches = list(re.compile(pattern).finditer(text.compact, begin, end))
+    if len(matches) != 1:
+        return None
+    match = matches[0]
+    if (context_guard(doc, text.compact, match.start(), match.end())
+            or _inside_full_quotation(text.compact, match.start(), match.end())):
+        return None
+    return match
+
+
+def recovered_income_total(doc):
+    text, ranges = _income_sections(doc)
+    if not ranges:
+        return None
+    _title, begin, end = ranges[0]
+    match = _income_total_with_trailing_dot(doc, text, begin, end)
+    if match is None:
+        return None
+    refs = text.refs(match.start(), match.end(), '本年收入合计原文')
+    return (_wan(match['amount'], match['unit']), refs) if refs else None
+
+
 def check_income_structure(rule, doc):
     facts, reason = table_facts(doc, 'FIN_02_income')
     if reason:
         return finish(rule, [], [reason])
-    text, ranges = sections(doc, lambda title: '收入决算情况说明' in title
-            and not any(word in title for word in ('财政拨款', '政府性基金', '国有资本')))
+    text, ranges = _income_sections(doc)
     if not ranges:
         return finish(rule, [], ['未找到收入决算情况说明原文范围'])
     title, begin, end = ranges[0]
@@ -362,9 +456,36 @@ def check_income_structure(rule, doc):
             receipt(rule, doc, key, [], status='insufficient_data', formula='text = table', reason=error)
             continue
         issues.extend(compare(rule, doc, text, match.start(), match.end(),
-                       _wan(match.group('amount'), match.group('unit')), fact, key, label, title))
+                       _wan(match.group('amount'), match.group('unit')), fact, key, label, title,
+                       unresolved=unresolved))
+    if '财政拨款收入' not in seen:
+        typo_pat = re.compile(rf"(?<!财)政拨款收入(?:为|共计|合计为|是)?(?P<amount>{_NUMBER})(?P<unit>{_UNIT})")
+        for match in typo_pat.finditer(text.compact, begin, end):
+            if context_guard(doc, text.compact, match.start(), match.end()):
+                continue
+            seen.add('财政拨款收入')
+            fact, error = select(doc, facts, 'fiscal_allocation', code='total', allow_native_blank=True)
+            key = f'income:text:fiscal_allocation:{match.start()}'
+            if error:
+                unresolved.append(error)
+                receipt(rule, doc, key, [], status='insufficient_data', formula='text = table', reason=error)
+                continue
+            issues.extend(compare(rule, doc, text, match.start(), match.end(),
+                           _wan(match.group('amount'), match.group('unit')), fact, key, '财政拨款收入', title,
+                           unresolved=unresolved))
     if '本年收入合计' not in seen:
-        unresolved.append('收入决算说明未识别到本年度收入合计金额')
+        match = _income_total_with_trailing_dot(doc, text, begin, end)
+        if match is None:
+            unresolved.append('收入决算说明未识别到本年度收入合计金额')
+        else:
+            fact, error = select(doc, facts, 'total_actual', code='total')
+            if error:
+                unresolved.append(error)
+            else:
+                refs = text.refs(match.start(), match.end(), '本年收入合计原文')
+                issues.extend(compare(rule, doc, text, match.start(), match.end(),
+                               _wan(match['amount'], match['unit']), fact, f'income:text:total_actual:{match.start()}',
+                               '本年收入合计', title, disclosure_sources=refs))
     return finish(rule, issues, unresolved)
 
 
@@ -381,7 +502,7 @@ def check_three_public_details(rule, doc, *, require_vehicle_details=True, check
     if not ranges:
         return finish(rule, [], ['未定位到三公经费决算说明原文'])
     title, begin, end = ranges[0]
-    absence_span = _three_public_absence_span(doc, text, begin, end)
+    absence_span = _three_public_absence_span(doc, text, title, begin, end)
     pattern = re.compile(
         rf'(?:支出)?(?:决算|预算)?(?:数)?(?:为|是)?'
         rf'(?:(?P<amount>{_NUMBER})(?P<unit>{_UNIT})|(?P<zero>0+(?:\.0+)?)(?=[。；;，,、]|$))'

@@ -152,7 +152,7 @@ def _cell(template, samples, row, kind, *, raw=None):
         row_span=1,
         col_span=1,
         # 新尾行原来根本没有网格单元格，上一行只提供列结构，不能冒充其原文。
-        grid_raw_text=None if kind == "open_grid_tail" else template.raw_text or None,
+        grid_raw_text=None if kind in {"open_grid_tail", "merged_ledger_tail"} else template.raw_text or None,
         native_text_sources=proofs,
         native_blank_verified=False,
         origin_fragment_uid=None,
@@ -265,15 +265,31 @@ def _cross_grid_decimal_tails(page, table, mappings, bands, *, continuation=Fals
             s[0] not in index_owner for r in affected for s in _samples(page, valid[r][0].bbox)
         ):
             continue
+        tail_indices = {
+            row: {sample[0] for sample in _lines(valid[row][1])[1]}
+            for row in crossed
+        }
         for row in affected:
             cell, group, text = valid[row]
-            proofs = _proofs(group, cell.page_number, "cross_grid_decimal_tail")
+            glyph_box = _union(group)
+            original = _samples(page, cell.bbox)
+            foreign = [s[0] for s in original if index_owner[s[0]] != row]
+            # 本行金额完整印在原格，且额外字符全部是上一行落入本格的尾位时，
+            # 可独立认证本行。上一行的跨线金额依然保留来源冲突。
+            clean_row = (
+                row not in crossed and foreign
+                and set(foreign) <= tail_indices.get(row - 1, set())
+                and all(cell.bbox[i] <= glyph_box[i] and glyph_box[i + 2] <= cell.bbox[i + 2]
+                        for i in (0, 1))
+                and normalize_text(_text(original)) == normalize_text(cell.raw_text)
+            )
+            kind = "native_neighbor_tail_removed" if clean_row else "cross_grid_decimal_tail"
+            proofs = _proofs(group, cell.page_number, kind)
             for proof in proofs:
                 proof["source_grid_bbox"] = list(cell.bbox)
                 proof["source_grid_fragment_uid"] = cell.origin_fragment_uid or table.fragment_uid
                 proof["source_grid_row"] = cell.origin_row_idx if cell.origin_row_idx is not None else row
                 proof["source_grid_col"] = cell.origin_col_idx if cell.origin_col_idx is not None else col
-            glyph_box = _union(group)
             updates[row, col] = replace(
                 cell, raw_text=text, normalized_text=normalize_text(text), numeric_value=float(_number(text)),
                 normalized_value_wan=None, grid_raw_text=cell.raw_text,
@@ -585,6 +601,54 @@ def _open_bilateral_tail(page, table, mappings, bands):
     )
 
 
+def _merged_grant_tail(page, table, mappings):
+    """财政拨款总表下沿整行合框时，按前行实测列线分开连续支出科目。"""
+    amounts = {3, 4, 5, 6}
+    if (table.table_code != "FIN_04_fiscal_grant_total" or len(table.rows) < 3
+            or {m["source_col_idx"] for m in mappings} != {1, *amounts}
+            or len(table.rows[-1]) != 7 or any(table.rows[-1][1:])):
+        return table
+    index = len(table.rows) - 1
+    merged = next((c for c in table.cells if c.row_idx == index and c.col_idx == 0
+                   and c.col_span == 7 and c.bbox), None)
+    bands = _bands(table)
+    if merged is None or not {2, *amounts} <= bands.keys():
+        return table
+    ordinal_names = "一 二 三 四 五 六 七 八 九 十 十一 十二 十三 十四 十五 十六 十七 十八 十九 二十 二十一 二十二 二十三 二十四".split()
+
+    def order(label):
+        prefix, sep, rest = normalize_text(label or "").partition("、")
+        if not sep or prefix not in ordinal_names or not rest.endswith("支出"):
+            return None
+        return ordinal_names.index(prefix)
+
+    previous = order(table.rows[-2][2])
+    samples = _samples(page, merged.bbox)
+    lines = _lines(samples)
+    if previous is None or not 2 <= len(lines) <= 3 or normalize_text(_text(samples)) != normalize_text(merged.raw_text):
+        return table
+    rows, cells = [], []
+    for offset, line in enumerate(lines):
+        columns = defaultdict(list)
+        for sample in line:
+            box = sample[2]
+            matches = [col for col in (2, 3, 4, 5, 6) if bands[col][0] - .1 <= box[0] < box[2] <= bands[col][1] + .1]
+            if len(matches) != 1:
+                return table
+            columns[matches[0]].append(sample)
+        row = ["", "", *(_text(columns[col]) for col in (2, 3, 4, 5, 6))]
+        if order(row[2]) != previous + offset + 1 or any(_number(row[col]) is None for col in amounts):
+            return table
+        for col in range(2, 7):
+            fixed = _cell(replace(merged, col_idx=col), columns[col], index + offset, "merged_ledger_tail")
+            if fixed is None:
+                return table
+            cells.append(fixed)
+        rows.append(row)
+    return replace(table, rows=[*table.rows[:index], *rows],
+                   cells=[*(c for c in table.cells if c.row_idx < index), *cells])
+
+
 def repair_native_structure(page, table, *, reference=None):
     """仅对可由原字符与已知列车道唯一重建的原生表生效，疑义保持原状。"""
     rule = NINE_TABLE_RULES.get(table.table_code)
@@ -602,6 +666,7 @@ def repair_native_structure(page, table, *, reference=None):
         return table
     original = table
     table = _split_merged_rows(page, table, mappings)
+    table = _merged_grant_tail(page, table, mappings)
     bands = _bands(table)
     updates = _wrapped_amounts(page, table, mappings)
     updates.update(_missing_money_cells(page, table, mappings, bands))

@@ -336,10 +336,16 @@ class PDFParser:
                 page, page_number, continuation=previous[-1] if previous else None)
             if previous and current and page_number > 1:
                 candidates = [t for t in current if t.extraction_method in {'lines', 'lines_strict'}]
-                if candidates and self._is_continuation_table(previous[-1], candidates[0]) and self._native_continuation_columns_match(previous[-1], candidates[0]):
+                if candidates and self._native_continuation_columns_match(previous[-1], candidates[0]):
+                    prior, candidate = previous[-1], candidates[0]
+                    name_col = self._basic_name_tail_column(prior, candidate, require_proof=False)
                     from src.services.native_dimension_recovery import repair_native_cross_page_name
-                    fragments = repair_native_cross_page_name(pdf.pages[page_number - 2], page,
-                                                              previous[-1], candidates[0], fragments)
+                    if name_col is not None or self._is_continuation_table(prior, candidate) \
+                            or self._functional_name_tail_row(prior, candidate, require_proof=False):
+                        fragments = repair_native_cross_page_name(
+                            pdf.pages[page_number - 2], page, prior, candidate, fragments,
+                            economic_name_column=name_col,
+                        )
             fragments.extend(current)
 
         merged = self._coalesce_tables(fragments)
@@ -2004,7 +2010,7 @@ class PDFParser:
         return has_top and abs(top_sum - stated) <= 0.02
 
     def _continuation_row_sequence_evidence(
-        self, previous: ParsedTable, current: ParsedTable
+        self, previous: ParsedTable, current: ParsedTable, *, skip_rows: int = 0
     ) -> bool:
         """连续科目行证据：前页末行与后页首行是同一类/款下递增的科目编码。
 
@@ -2018,7 +2024,7 @@ class PDFParser:
             [],
         )
         first = next(
-            (row for row in current.rows if any(str(cell or "").strip() for cell in row)),
+            (row for row in current.rows[skip_rows:] if any(str(cell or "").strip() for cell in row)),
             [],
         )
         if not last or not first:
@@ -2063,6 +2069,80 @@ class PDFParser:
             )
         ):
             return False
+        return True
+
+    def _functional_name_tail_row(
+        self, previous: ParsedTable, current: ParsedTable, *, require_proof: bool = True
+    ) -> bool:
+        """只有同网格、同款递增的续页才允许检验页首孤立的科目名称尾行。"""
+        if (
+            previous.table_code not in {"FIN_02_income", "FIN_05_general_public_expenditure"}
+            or not current.table_code.startswith("UNKNOWN_")
+            or any(t.extraction_method not in {"lines", "lines_strict"} for t in (previous, current))
+            or current.page_number != self._last_page_number(previous) + 1
+            or not previous.rows
+            or len(current.rows) < 2
+            or len(current.rows[0]) != len(previous.rows[-1])
+            or len(current.rows[0]) < 3
+            or self._unit_hints_conflict(previous, current)
+            or self._fragment_titles_conflict(previous, current)
+            or self._starts_new_table(previous, current)
+        ):
+            return False
+        tail_row = [normalize_text(str(value or "")) for value in current.rows[0]]
+        tail = tail_row[1]
+        if (
+            not re.fullmatch(r"[\u4e00-\u9fff]{2,12}", tail)
+            or tail_row[0] or any(tail_row[2:])
+            or not self._continuation_row_sequence_evidence(previous, current, skip_rows=1)
+        ):
+            return False
+        if not require_proof:
+            return True  # 此分支只供原字符核验使用，不能据此合表。
+        return any(
+            cell.row_idx == len(previous.rows) - 1
+            and cell.col_idx == 1
+            and any(
+                source.get("physical_page") == current.page_number
+                and normalize_text(str(source.get("text") or "")) == tail
+                for source in cell.native_text_sources
+            )
+            for cell in previous.cells
+        )
+
+    def _native_zero_subject_tail(self, previous: ParsedTable, current: ParsedTable) -> bool:
+        """表首合计已闭合时，只接与页末原格同列的全零下级科目。"""
+        if (previous.table_code not in self._FUNCTIONAL_CONTINUATION_CODES
+                or not self._native_continuation_columns_match(previous, current)
+                or not self._continuation_row_sequence_evidence(previous, current)):
+            return False
+
+        from src.services.fiscal_column_identity import canonical_column_mappings
+
+        columns = sorted(m["source_col_idx"] for m in canonical_column_mappings(
+            previous, NINE_TABLE_RULES[previous.table_code]
+        ))
+        rows = [row for row in current.rows if any(str(value or "").strip() for value in row)]
+        prior = next(row for row in reversed(previous.rows) if any(str(value or "").strip() for value in row))
+        split = self._has_split_code_headers(previous)
+        parent, column = self._row_full_subject_code(prior, split_code_cols=split)
+        if parent is None or len(parent) not in {3, 5} or not columns or not rows:
+            return False
+        read_rows = [prior, *rows]
+        if not all(all(c < len(row) and self._parse_numeric(str(row[c] or "")) == 0 for c in columns)
+                   for row in read_rows):
+            return False
+        previous_codes = {self._row_full_subject_code(row, split_code_cols=split)[0] for row in previous.rows}
+        ancestry = {parent}
+        for row in rows:
+            code, code_col = self._row_full_subject_code(row, split_code_cols=split)
+            if (not code or code_col != column or len(code) not in {5, 7} or not code.startswith(parent)
+                    or code in ancestry or code in previous_codes or code[:-2] not in ancestry):
+                return False
+            label = self._continuation_subject_label(row, code_col, split)
+            if not label or self._looks_like_nonfiscal_quantity_label(label):
+                return False
+            ancestry.add(code)
         return True
 
     def _continuation_first_row_is_subject(self, previous: ParsedTable, current: ParsedTable) -> bool:
@@ -2282,7 +2362,8 @@ class PDFParser:
             # 合计已被本页科目行闭合的情形），该表已经结束；后页无表头片段是另一张表。
             if final_nonempty_row and self._row_is_total_close(final_nonempty_row):
                 return False
-            if self._table_top_total_already_balanced(previous):
+            if (self._table_top_total_already_balanced(previous)
+                    and not self._native_zero_subject_tail(previous, current)):
                 return False
             repeated_header = self._headers_look_repeated(previous, current)
             functional_with_codes = (
@@ -2304,7 +2385,10 @@ class PDFParser:
                 )
                 if is_headerless_data:
                     if functional_with_codes:
-                        if not self._continuation_first_row_is_subject(previous, current):
+                        if not (
+                            self._continuation_first_row_is_subject(previous, current)
+                            or self._functional_name_tail_row(previous, current)
+                        ):
                             return False
                         if not self._headerless_functional_continuation_is_valid(
                             previous, current, next_table=next_table
@@ -2318,7 +2402,10 @@ class PDFParser:
                         )
                         first_text = normalize_text(str((first_nonempty_row or [""])[0] or ""))
                         if not has_econ_code and not first_text.startswith(("注", "人员经费合计", "公用经费合计")):
-                            return False
+                            from src.services.fiscal_column_identity import canonical_column_mappings
+                            mappings = canonical_column_mappings(previous, NINE_TABLE_RULES[previous_code])
+                            if not self._native_coded_basic_continuation(previous, current, mappings):
+                                return False
                 return True
             if current.extraction_method == "native_footer":
                 return False  # Exact native footer proof must not fall back to ratio heuristics.
@@ -2363,6 +2450,38 @@ class PDFParser:
             return False  # 表上方没有标题时，_extract_title 回退为首行表头文字
         headers = self._collect_headers(current.rows, current.header_row_count)
         return bool(headers) and not any(self._looks_numeric(header) for header in headers)
+
+    def _basic_name_tail_column(self, previous, current, *, require_proof=True):
+        """双栏经济分类续页首行只含残字时，先确认科目与跨页字符来源。"""
+        if (previous.table_code != "FIN_06_basic_expenditure"
+                or current.page_number != self._last_page_number(previous) + 1
+                or not current.table_code.startswith("UNKNOWN_")
+                or len(current.rows) < 2 or not previous.rows
+                or len(previous.rows[-1]) != 6 or len(current.rows[0]) != 6):
+            return None
+        from src.services.fiscal_table_rules import ECONOMIC_CODES
+
+        first = [normalize_text(str(value or "")) for value in current.rows[0]]
+        occupied = [column for column, value in enumerate(first) if value]
+        if occupied not in ([1], [4]):
+            return None
+        column = occupied[0]
+        code = str(previous.rows[-1][column - 1] or "").strip()
+        prior_name = normalize_text(str(previous.rows[-1][column] or ""))
+        expected = ECONOMIC_CODES.get(code)
+        tail = first[column]
+        if (not expected or not prior_name or not re.fullmatch(r"[\u4e00-\u9fff]{1,12}", tail)
+                or normalize_text(expected) != (prior_name if require_proof else prior_name + tail)):
+            return None
+        if require_proof and not any(
+            cell.row_idx == len(previous.rows) - 1 and cell.col_idx == column
+            and any(source.get("physical_page") == current.page_number
+                    and normalize_text(str(source.get("text") or "")) == tail
+                    for source in cell.native_text_sources)
+            for cell in previous.cells
+        ):
+            return None
+        return column
 
     def _native_coded_basic_continuation(self, previous: ParsedTable, current: ParsedTable, mappings) -> bool:
         """原生列边界、逐字编码及同类编码顺序共同证明无表头的经济分类续页。"""
@@ -2413,11 +2532,12 @@ class PDFParser:
                         and p['bbox'][2] <= cell.bbox[2] + .5
                         and cell.bbox[1] - .5 <= p['bbox'][1]
                         and p['bbox'][3] <= cell.bbox[3] + .5 for p in cell.native_text_sources))
+        first_data_row = int(self._basic_name_tail_column(previous, current) is not None)
         seen = 0
         first_seen = False
         for columns, name_col in ((layout[0], layout[1]), (layout[2], layout[3])):
             prior = [value for row in previous.rows if (value := code(row, columns))]
-            for row_index, row in enumerate(current.rows):
+            for row_index, row in enumerate(current.rows[first_data_row:], start=first_data_row):
                 if normalize_text(str(row[columns[0]] or '')) in {'人员经费合计', '公用经费合计'}:
                     continue
                 value = code(row, columns)
@@ -2436,7 +2556,7 @@ class PDFParser:
                                for col in columns if str(row[col] or '').strip())):
                     return False
                 seen += 1
-                first_seen |= row_index == 0
+                first_seen |= row_index == first_data_row
                 prior.append(value)
         return seen > 0 and first_seen
 
@@ -2585,7 +2705,12 @@ class PDFParser:
             result = []
             for column in sorted(money_columns):
                 boxes = [cell.bbox for cell in table.cells if cell.col_idx == column
-                         and cell.bbox and cell.bbox[2] > cell.bbox[0]]
+                         and cell.bbox and cell.bbox[2] > cell.bbox[0]
+                         # 补读出来的金额外框是字框，不是原表竖线的位置。
+                         and not (previous.table_code == "FIN_04_fiscal_grant_total" and any(
+                             part.get("recovery_kind") in {"open_grid_tail", "merged_ledger_tail"}
+                             for part in cell.native_text_sources
+                         ))]
                 if not boxes:
                     return None
                 box = min(boxes, key=lambda bbox: bbox[2] - bbox[0])
@@ -3062,6 +3187,10 @@ class PDFParser:
     def _append_table(self, previous: ParsedTable, current: ParsedTable) -> ParsedTable:
         skip_rows = self._repeated_header_rows(previous, current)
         native_columns_bound = self._native_continuation_columns_match(previous, current)
+        if native_columns_bound and (self._functional_name_tail_row(previous, current)
+                                     or self._basic_name_tail_column(previous, current) is not None):
+            # 名称尾部已经作为跨页文字证据接回前一行，金额及其原格 ID 保持原样。
+            skip_rows = max(skip_rows, 1)
         base_row_count = len(previous.rows)
         appended_rows = previous.rows + current.rows[skip_rows:]
         appended_cells: List[ParsedCell] = []

@@ -13,6 +13,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Dict, Any, List, Optional
 
 import pdfplumber
@@ -537,27 +538,28 @@ def _resolve_cascaded_quality_blockers(
     obligation_coverage: Optional[Dict[str, Any]],
     structured_ingest: Optional[Dict[str, Any]],
     result_row: Optional[Dict[str, Any]],
-) -> tuple[Optional[List[Any]], set[str], set[str], set[str]]:
-    """计算去除同源问题覆盖/连带后的有效阻塞义务、名称差异/表格读取连带集及原始阻塞集。"""
+) -> tuple[Optional[List[Any]], set[str], set[str], set[str], set[str], set[str]]:
+    """计算有效阻塞，以及可以由已交付根问题解释的义务。"""
     if (
         not isinstance(result_row, dict)
         or not isinstance(obligation_coverage, dict)
         or not isinstance(obligation_coverage.get("instances"), list)
     ):
-        return None, set(), set(), set(), set()
+        return None, set(), set(), set(), set(), set()
 
     from src.engine.check_obligations import UNRESOLVED_OBLIGATION_STATUSES
     from src.services.material_detail_query_service import build_coverage
     from src.services.obligation_finding_coverage import (
         TABLE_READING_CASCADE_CODES,
         _broken_table_roots,
+        _three_public_budget_phase_cascade_roots,
     )
     from src.services.review_lifecycle_service import blocking_coverage_obligations
     from src.services.review_problem_set import collect_review_problems
 
     coverage = build_coverage(obligation_coverage)
     if not coverage.available:
-        return None, set(), set(), set(), set()
+        return None, set(), set(), set(), set(), set()
 
     problems = collect_review_problems(
         job_uuid=str(result_row.get("job_id") or "__quality_gate__"),
@@ -619,12 +621,19 @@ def _resolve_cascaded_quality_blockers(
     broken_table_codes = set(
         _broken_table_roots(result_row, structured_ingest, visible_ids)
     )
+    cascaded_budget_phase_ids = {
+        item.obligation_id
+        for item in raw_blocking
+        if item.obligation_id not in remaining_ids
+        and _three_public_budget_phase_cascade_roots(item, result_row, visible_ids)
+    }
     return (
         remaining_blocking,
         cascaded_name_mismatch_ids,
         cascaded_table_reading_ids,
         raw_blocking_ids,
         broken_table_codes,
+        cascaded_budget_phase_ids,
     )
 
 
@@ -634,6 +643,7 @@ def _is_cascaded_quality_rule(
     cascaded_table_reading_ids: set[str],
     raw_blocking_ids: set[str],
     broken_table_codes: set[str] = frozenset(),
+    cascaded_budget_phase_ids: set[str] = frozenset(),
 ) -> bool:
     """该条 insufficient_data 规则仅因已上浮的同源名称差异或坏表读取/错列阻塞且无其他缺口。"""
     if (
@@ -641,6 +651,7 @@ def _is_cascaded_quality_rule(
             not cascaded_name_mismatch_ids
             and not cascaded_table_reading_ids
             and not broken_table_codes
+            and not cascaded_budget_phase_ids
         )
         or not isinstance(item, dict)
     ):
@@ -692,12 +703,64 @@ def _is_cascaded_quality_rule(
         and all(oid in cascaded_name_mismatch_ids for oid in linked_obs)
     ):
         return True
+    if codes == {"scope_unconfirmed"} and all(oid in cascaded_budget_phase_ids for oid in linked_obs):
+        blockers = [blocker for diagnostic in diags for blocker in diagnostic.get("blocked_by") or ()]
+        return (
+            bool(blockers)
+            and all(isinstance(blocker, dict) and blocker.get("dimension") == "budget_stage"
+                    for blocker in blockers)
+            and not any(diagnostic.get("missing_operands") or diagnostic.get("candidates") for diagnostic in diags)
+        )
     return (
         bool(cascaded_table_reading_ids)
         and bool(codes)
         and codes <= TABLE_READING_CASCADE_CODES
         and all(oid in cascaded_table_reading_ids for oid in linked_obs)
     )
+
+
+def _invalid_amount_rule_covered_by_reading_gate(
+    rule: Dict[str, Any], result_row: Optional[Dict[str, Any]], structured_ingest: Optional[Dict[str, Any]]
+) -> bool:
+    """金额格已经在读取门禁中阻断时，按原格去掉 V33-120 的重复提示。"""
+    if rule.get("rule_id") != "V33-120" or not result_row or not structured_ingest:
+        return False
+    from src.services.obligation_finding_coverage import _extract_cell_ids, _invalid_table_number_cascade_roots
+
+    reading = (structured_ingest.get("reading_import") or {}).get("reading_quality") or {}
+    pending_cells = {
+        str(cell["source_cell_id"])
+        for cell in reading.get("unbound_money_cells") or ()
+        if isinstance(cell, dict) and cell.get("source_cell_id") and cell.get("reason") == "fact_unbound"
+    }
+    diagnostics = rule.get("diagnostics") or []
+    if not pending_cells or not diagnostics or set(rule.get("reason_codes") or ()) - {"cell_unbound"}:
+        return False
+    if not _extract_cell_ids(str(rule.get("detail") or "")) <= pending_cells:
+        return False
+    for diagnostic in diagnostics:
+        if not isinstance(diagnostic, dict) or diagnostic.get("candidates"):
+            return False
+        if set(diagnostic.get("reason_codes") or ()) != {"cell_unbound"}:
+            return False
+        blockers = diagnostic.get("blocked_by") or []
+        if not blockers:
+            return False
+        for blocker in blockers:
+            if not isinstance(blocker, dict) or blocker.get("dimension") != "cell":
+                return False
+            cells = _extract_cell_ids(str(blocker.get("ref") or ""))
+            if not cells or not cells <= pending_cells:
+                return False
+        for operand in diagnostic.get("missing_operands") or ():
+            if not isinstance(operand, dict) or operand.get("source") != "table":
+                return False
+            cells = _extract_cell_ids(str(operand.get("source_cell_id") or operand.get("row_key") or ""))
+            if not cells or not cells <= pending_cells:
+                return False
+        if not _invalid_table_number_cascade_roots(SimpleNamespace(**diagnostic), result_row, None, structured_ingest):
+            return False
+    return True
 
 
 def _evaluate_quality_gate(
@@ -761,6 +824,14 @@ def _evaluate_quality_gate(
     low_text_pages = low_text_pages if isinstance(low_text_pages, list) else []
 
     review_reasons: List[Dict[str, Any]] = []
+    ocr_pending = page_assessment.get("ocr_recovery_pending")
+    if isinstance(ocr_pending, dict):
+        review_reasons.append({
+            "code": "ocr_recovery_incomplete",
+            "message": "已检查具备证据的内容，扫描或读取缺口所在页仍需补识别后复核。",
+            "pages": ocr_pending.get("pages") or [],
+            "ocr_status": ocr_pending.get("status"),
+        })
 
     reading = ((structured_ingest or {}).get("reading_import") or {}).get("reading_quality")
     if not isinstance(reading, dict):
@@ -998,6 +1069,7 @@ def _evaluate_quality_gate(
         cascaded_table_reading_ids,
         raw_blocking_ids,
         broken_table_codes,
+        cascaded_budget_phase_ids,
     ) = _resolve_cascaded_quality_blockers(
         obligation_coverage=obligation_coverage,
         structured_ingest=structured_ingest,
@@ -1019,6 +1091,7 @@ def _evaluate_quality_gate(
             if isinstance(item, dict)
             and str(item.get("status") or "") == STATUS_INSUFFICIENT_DATA
         ]
+        reading_blocks = any(reason["code"] == "table_reading_incomplete" for reason in review_reasons)
         insufficient_unresolved = [
             item
             for item in raw_insufficient_unresolved
@@ -1028,7 +1101,9 @@ def _evaluate_quality_gate(
                 cascaded_table_reading_ids,
                 raw_blocking_ids,
                 broken_table_codes,
+                cascaded_budget_phase_ids,
             )
+            and not (reading_blocks and _invalid_amount_rule_covered_by_reading_gate(item, result_row, structured_ingest))
         ]
         cascaded_rule_count = len(raw_insufficient_unresolved) - len(
             insufficient_unresolved
@@ -1054,7 +1129,7 @@ def _evaluate_quality_gate(
             rule_hints: List[str] = []
             for item in insufficient_unresolved[:3]:
                 rid = str(item.get("rule_id") or "").strip()
-                detail = str(item.get("detail") or "").strip().splitlines()[0][:80]
+                detail = str(item.get("detail") or "").strip().partition("\n")[0][:80]
                 if rid and detail:
                     rule_hints.append(f"{rid}（{detail}）")
                 elif rid:
@@ -1706,6 +1781,7 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
         )
 
         pdf_path = _find_first_pdf(job_dir)
+        declared_report_kind = report_kind
         if not report_kind or report_kind == "unknown":
             report_kind = runtime.normalize_report_kind(
                 str(doc_type) if doc_type is not None else None,
@@ -1837,12 +1913,20 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             progress_callback=_ocr_progress, checkpoint_path=job_dir / "ocr_checkpoint.json",
         )
         if ocr_summary and ocr_summary.get('status') in {'pending','service_unavailable'}:
-            # 软预算只让出执行槽位；未调度区域留在检查点，由持久队列续跑。
-            _safe_write(job_dir, {'job_id':job_dir.name, 'status':'queued',
-                'stage':'扫描页等待续跑', 'ocr_pending':ocr_summary,
-                'retry_not_before':time.time()+(30 if ocr_summary.get('status')=='service_unavailable'else 5), 'quality_status':'incomplete',
-                'analysis_conclusion':'insufficient_evidence', 'ts':time.time()})
-            return
+            if not page_assessment.get("text_page_count"):
+                # 全扫描件没有可提前验证的原生页，仍由持久队列续跑。
+                _safe_write(job_dir, {'job_id':job_dir.name, 'status':'queued',
+                    'stage':'扫描页等待续跑', 'ocr_pending':ocr_summary,
+                    'retry_not_before':time.time()+(30 if ocr_summary.get('status')=='service_unavailable'else 5),
+                    'quality_status':'incomplete', 'analysis_conclusion':'insufficient_evidence', 'ts':time.time()})
+                return
+            # 混合材料先交付本轮可读内容的检查，OCR 检查点留给后续补读。
+            page_assessment["ocr_recovery_pending"] = {
+                "status": ocr_summary["status"],
+                "pages": sorted(set(ocr_summary.get("pending_pages") or [])
+                                | set(ocr_summary.get("failed_pages") or []))
+                         or list(ocr_summary.get("requested_pages") or []),
+            }
         if parse_artifact_obj is not None and parse_artifact_obj.reading_assessment and ocr_summary:
             parse_artifact_obj.reading_assessment["recovery"] = {
                 key: ocr_summary.get(key) for key in ("enabled", "status", "requested_pages", "failed_pages")
@@ -1859,8 +1943,22 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
         profile_page_texts, writing_source_spans = qualified_identity_view(page_texts, parse_artifact_obj)
         from src.services.document_scope import load_for_analysis, apply_profile
         scope_confirmation = await load_for_analysis(job_dir.name, parse_artifact_obj.source_file_hash) if parse_artifact_obj else None
-        operand_profile = resolve_document_profile(filename=pdf_path.name,page_texts=profile_page_texts,
-            explicit_report_kind=report_kind if any(text.strip() for text in page_texts) else None)
+        from src.services.document_profile_resolver import native_report_table_titles
+
+        profile_inputs: Dict[str, Any] = {
+            "filename": pdf_path.name,
+            "doc_type": str(doc_type) if doc_type is not None else None,
+            "page_texts": profile_page_texts,
+        }
+        operand_profile = resolve_document_profile(
+            **profile_inputs,
+            explicit_report_kind=declared_report_kind if any(text.strip() for text in page_texts) else None,
+        )
+        if operand_profile.kind == "unknown" and not operand_profile.conflicts:
+            titles = native_report_table_titles(parse_artifact_obj, page_texts)
+            if titles:
+                profile_inputs["table_titles"] = titles
+                operand_profile = resolve_document_profile(**profile_inputs)
         apply_profile(operand_profile, scope_confirmation)
         identity_conflicts = {item.get("field") for item in operand_profile.conflicts}
         if not organization_name and "organization_name" not in identity_conflicts:
@@ -1870,8 +1968,7 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                 organization_name = qualified_ocr_cover_owner(parse_artifact_obj)
         if not (fiscal_year or report_year) and not {"fiscal_year","report_year"} & identity_conflicts:
             report_year = operand_profile.year
-        if operand_profile.kind in {"budget","final"}:
-            report_kind = operand_profile.kind
+        report_kind = operand_profile.kind
         # 检查主体与归档关联分开：关联到市/区级上级节点、封面是其下属部门时，
         # 规则以封面单位为本单位；organization_name 仍是归档关联，入库不变。
         from src.services.check_subject import resolve_check_subject
@@ -2152,13 +2249,10 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
         # 报告画像：后续规则执行、AI、入库与导出统一消费这一个画像。
         # 此前文种在 8 处各判一次且兜底口径互相矛盾，同一 PDF 在不同环节
         # 可能被换成不同文种的检查配置，而结果里看不到任何异常。
-        # 这里把已识别的文种作为显式候选传入（来源优先级最高），
-        # 与画像判定不一致时由画像的 conflicts 留痕，不做静默覆盖。
+        # 只将上传或历史任务声明传为显式来源。文件名推断和正文证据保留各自来源。
         document_profile = resolve_document_profile(
-            explicit_report_kind=report_kind,
-            doc_type=str(doc_type) if doc_type is not None else None,
-            filename=pdf_path.name,
-            page_texts=profile_page_texts,
+            **profile_inputs,
+            explicit_report_kind=declared_report_kind,
             page_assessment=page_assessment,
         )
         apply_profile(document_profile, scope_confirmation)
@@ -2175,8 +2269,7 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                 archive_scope=selected_org_basis["level"], archive_basis=selected_org_basis,
                 cover_name=cover_org_name,
                 excluded_pages=(), source_spans=writing_source_spans, frozen_bindings=frozen_template_bindings)
-        if document_profile.kind in {"budget", "final"}:
-            report_kind = document_profile.kind
+        report_kind = document_profile.kind
 
         # 构建 Document
         _safe_write(
@@ -2559,9 +2652,6 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                         )
                     elif applied_ids and fact_overlay_report.get("status") == "not_requested":
                         fact_overlay_report["status"] = "applied"
-                # MR-3（2026-09-27）：文档级可读性闸门——扫描件/低覆盖材料的
-                # error 级假阳性整体转人工，防止"扫描件静默漏检却报高危矛盾"
-                apply_readability_gate(payload_issues, page_assessment)
             except RuleExecutionTimeout as exc:
                 provider_stats.append(
                     {
@@ -2869,6 +2959,10 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
             verify_bound_rule_locations,
             result, source_pdf_path=str(pdf_path),
         )
+        # 先认证原件，再判定阅读缺口是否影响问题成立。分桶与正式清单使用同一结果。
+        apply_readability_gate(result, page_assessment, fact_receipts=fact_receipts)
+        if "readability_gate" in result:
+            result["meta"]["readability_gate"] = result.pop("readability_gate")
         # AI quotes have no trusted native coordinates when emitted by the
         # model. Bind only a unique literal quote found on its claimed page,
         # then run the same PDF content/geometry gate used for rule evidence.

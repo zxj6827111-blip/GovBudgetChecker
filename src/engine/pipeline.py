@@ -34,6 +34,7 @@ from .rules_v33 import (
     order_and_number_issues,
 )
 from .rule_registry import select_rules, select_specific_rules
+from .rule_deadline import RuleItemTimeout, rule_item_deadline
 from .rules_v33 import (
     build_document as _build_document,
 )
@@ -64,6 +65,9 @@ def _resolve_report_kind(doc: Any, report_kind: Optional[str] = None) -> str:
     把整串当文件名。
     """
     explicit = str(report_kind or "").strip().lower()
+    profile_kind = getattr(getattr(doc, "document_profile", None), "kind", None)
+    if profile_kind in {"unknown", "non_budget"} or (profile_kind in {"budget", "final"} and explicit in {"", "auto", "unknown"}):
+        return profile_kind
     if explicit in {"budget", "final"}:
         return explicit
     return resolve_report_kind_from_path(
@@ -73,7 +77,7 @@ def _resolve_report_kind(doc: Any, report_kind: Optional[str] = None) -> str:
 
 
 def _rule_set_for_kind(kind: str) -> List[Any]:
-    """按文种选择专项规则集。识别不了文种就不选专项规则，只跑通用规则。"""
+    """按文种选择专项规则；未知文种保留不依赖文种的原格数值检查。"""
     if kind == "budget" and ALL_BUDGET_RULES is not _INITIAL_BUDGET_RULES:
         return ALL_BUDGET_RULES
     if kind == "final" and FINAL_ALL_RULES is not _INITIAL_FINAL_RULES:
@@ -164,12 +168,18 @@ def run_rules_with_outcomes(
             doc.current_rule_code = code
             rule = rule_obj() if isinstance(rule_obj, type) else rule_obj
             from .rule_identity import rule_identity_requirements
-            with rule_identity_requirements(doc, code):
+            with rule_item_deadline(doc), rule_identity_requirements(doc, code):
                 if hasattr(rule, "apply_with_ai") and use_ai_assist:
                     produced = rule.apply_with_ai(doc, use_ai_assist)
                 else:
                     produced = rule.apply(doc)
-            produced_list = list(produced or [])
+                produced_list = list(produced or [])
+        except RuleItemTimeout as error:
+            outcomes.append(RuleOutcome(
+                rule_id=str(code), status=STATUS_EXECUTION_ERROR, detail=str(error),
+                unresolved_reasons=[str(error)], reason_codes=["execution_error"],
+            ))
+            continue
         except RuleOutcomeSignal as signal:
             # 非 fail 结局（insufficient_data / not_applicable 等）：
             # 若有已确认的 partial_issues，保留为正式 finding（合入原始 Issue 列表）
@@ -177,9 +187,7 @@ def run_rules_with_outcomes(
             if partial_list:
                 issues.extend(partial_list)
             detail_str = str(signal.detail or signal)
-            # 表格准入延期在这里做二次分类：rule_identity.py 保持冻结原样
-            # （160 验收包按整文件哈希冻结），材料格式缺陷与技术映射失败
-            # 在此分开，并把单元格级结构化事实登记到同一文档。
+            # 区分材料格式缺陷与技术映射失败，并登记单元格级结构化事实。
             from .table_admission_policy import reclassify_admission_deferral
 
             rewritten = reclassify_admission_deferral(doc, str(code), detail_str)
@@ -613,27 +621,10 @@ _READABILITY_COVERAGE_THRESHOLD = 0.8
 def apply_readability_gate(
     payload: Dict[str, Any],
     page_assessment: Optional[Dict[str, Any]] = None,
+    *,
+    fact_receipts=(),
 ) -> Dict[str, Any]:
-    """MR-3（2026-09-27「查得准」A 档）：扫描件/低覆盖材料的误报闸门。
-
-    要拦的形态是**部分扫描**：材料仍有文本层（文种识别成功、规则真的跑起来），
-    但表页被拍成图片——规则基于残缺数据报出 error 级假阳性（缺表/缺章节/勾稽
-    不平），属于"解析不可信"而非材料错误。实测口径见
-    ``tests/fixtures/scan_sim_mixed_page_data.json``（派生自实际样张：前 8 页保留
-    文本、其余栅格化）：**闸门前 9 条 error → 闸门后 0 条 + 1 条转人工**。
-
-    ⚠️ 口径澄清（2026-09-28 实测）：**整份**无文本层时不是这个形态——文种识别会
-    失败，引擎只跑通用规则（8 条），本就不产生 error 级假阳性（实测 0 条）。
-    所以本闸门不是"无文本层"路径的兜底，而是"有文本但覆盖不足"路径的兜底；
-    整份扫描件由文种识别失败 + 质量门负责。两种形态都有测试覆盖。
-
-    本闸门在 page_coverage < 0.8 或存在扫描页时，把 error 级 finding 全量降级为
-    一条 manual_review（"材料可读性不足，转人工判读"），原始 finding 压入
-    ``readability_gate.suppressed`` 供调试，不进主列表。
-
-    page_assessment 未提供或可读性正常时为 no-op，历史调用方行为不变。
-    warn/info 不动：它们本来就不进 fail 口径，且降低可见噪声不是本闸门目标。
-    """
+    """部分资料未读时，保留证据完整的局部结论，其他错误级结论逐项待核。"""
     if not isinstance(page_assessment, dict):
         return payload
     try:
@@ -641,53 +632,117 @@ def apply_readability_gate(
         scanned = int(page_assessment.get("scanned_page_count") or 0)
     except (TypeError, ValueError):
         return payload
-    if coverage >= _READABILITY_COVERAGE_THRESHOLD and scanned == 0:
+    recovery = page_assessment.get("ocr_recovery_pending") or {}
+    if coverage >= _READABILITY_COVERAGE_THRESHOLD and scanned == 0 and not recovery:
         return payload
 
     issues = payload.get("issues")
-    if not isinstance(issues, dict):
-        return payload
-    error_items = issues.get("error") or []
-    if not error_items:
+    legacy = isinstance(issues, dict)
+    findings = payload.get("rule_findings")
+    if legacy:
+        findings = issues.get("all")
+        if not isinstance(findings, list):
+            findings = issues.get("error")
+    if not isinstance(findings, list):
         return payload
 
-    issues["error"] = []
-    gate = payload.setdefault(
-        "readability_gate",
-        {
-            "page_coverage": coverage,
-            "scanned_page_count": scanned,
-            "suppressed": [],
-        },
-    )
-    gate["suppressed"].extend(error_items)
-    suppressed_ids = {item.get("id") for item in error_items if isinstance(item, dict)}
+    unread_pages = set(page_assessment.get("low_text_pages") or ())
+    unread_pages.update(page_assessment.get("scanned_pages") or ())
+    reading_gaps = (page_assessment.get("table_reading") or {}).get("gaps") or []
+    for page in recovery.get("pages") or ():
+        if not any(gap.get("page") == page for gap in reading_gaps):
+            unread_pages.add(page)
 
-    manual_item: Dict[str, Any] = {
-        "id": "READABILITY-GATE-1",
-        "source": "rule",
-        "rule": "READABILITY-GATE",
-        "rule_id": "READABILITY-GATE",
-        # 与 DOC-TYPE-UNKNOWN 同口径：manual_review 归一进 warn 分桶
-        "severity": "manual_review",
-        "title": "材料可读性不足，检查结果要求人工判读",
-        "message": (
-            f"材料文本覆盖率 {coverage:.0%}（扫描页 {scanned} 页）低于可信阈值，"
-            f"规则基于残缺文本产生的 {len(error_items)} 条错误级结论已整体转人工复核，"
-            "不作为材料问题呈现。建议补充可读文本层后重新检查。"
-        ),
-        "evidence": [],
-        "location": {"page": 1, "pos": 0},
-        "bbox": None,
-        "suggestion": "人工核对原件；如需系统复审请提供带文本层的 PDF。",
-        "tags": ["READABILITY-GATE"],
-        "metrics": {"suppressed_error_count": len(error_items)},
-        "created_at": int(time.time()),
-        "rule_version": DEFAULT_RULE_SET_VERSION,
-        "model_version": None,
-        "prompt_version": None,
-        "engine_version": ENGINE_VERSION,
-        "suppressed_issue_ids": sorted(x for x in suppressed_ids if x),
+    from src.services.table_reading_assessment import intersects, valid_box
+
+    failed_receipts = {}
+    for receipt in fact_receipts:
+        if (receipt.get("status") == "fail" and receipt.get("fact_migration_status") == "complete"
+                and receipt.get("evaluation_basis") == "fiscal_fact"):
+            for issue_id in receipt.get("issue_refs") or ():
+                failed_receipts.setdefault(issue_id, []).append(receipt)
+
+    def ref_unaffected(ref):
+        page = ref.get("page") or ref.get("physical_page")
+        if type(page) is not int or page <= 0 or page in unread_pages:
+            return False
+        box = valid_box(ref.get("bbox"))
+        return not any(
+            gap.get("page") == page and (
+                not box or not (gap_box := valid_box(gap.get("bbox"))) or intersects(box, gap_box)
+            )
+            for gap in reading_gaps
+        )
+
+    def finding_has_local_proof(finding: Dict[str, Any]) -> bool:
+        evidence = finding.get("evidence") or []
+        if not evidence or not all(
+            isinstance(ref, dict) and ref.get("source_method") == "native_text"
+            and ref.get("source_identity_status") == "verified"
+            and ref.get("verification_status") == "verified"
+            and ref.get("location_level") in {"exact_span", "exact_cell"}
+            and ref_unaffected(ref)
+            for ref in evidence
+        ):
+            return False
+        rule_id = finding.get("rule_id") or finding.get("rule")
+        if rule_id == "V33-004":
+            return True  # 表内百分比越界只依赖这一格。
+
+        # 勾稽结论还须确认本次执行用到的每个金额原格和认证空白格。
+        location = finding.get("location") or {}
+        receipts = failed_receipts.get(finding.get("id"), ())
+        if finding.get("source_binding_status") != "bound" or not receipts:
+            return False
+        blank_refs = location.get("native_blank_sources") or []
+        if any(not ref_unaffected(ref) for ref in blank_refs):
+            return False
+        fact_ids = {ref.get("fact_uid") for ref in evidence if ref.get("location_level") == "exact_cell"}
+        blank_ids = {ref.get("source_cell_id") for ref in blank_refs}
+        tables = {location.get("table_code"), *(ref.get("table_code") for ref in evidence)}
+        tables.discard(None)
+        used_cells = blank_ids | {ref.get("source_cell_id") for ref in evidence}
+        # 能定位到单格的缺口只影响用到该格的关系；整表缺口仍须保守处理。
+        if not tables or any(
+            gap.get("table_code") in tables
+            and (not gap.get("source_cell_id") or gap["source_cell_id"] in used_cells)
+            for gap in reading_gaps
+        ):
+            return False
+        return all(
+            receipt.get("rule_id") == rule_id
+            and bool(operands := set(receipt.get("operand_fact_ids") or []))
+            and set(receipt.get("required_fact_ids") or []) <= operands <= fact_ids
+            and all(observation.get("source_cell_id") in blank_ids
+                    for observation in receipt.get("cell_observations") or ())
+            for receipt in receipts
+        )
+
+    downgraded = [
+        finding for finding in findings
+        if isinstance(finding, dict)
+        and str(finding.get("severity") or "").lower() in {"error", "high", "critical"}
+        and not finding_has_local_proof(finding)
+    ]
+    if not downgraded:
+        return payload
+
+    payload["readability_gate"] = {
+        "page_coverage": coverage,
+        "scanned_page_count": scanned,
+        "suppressed": [dict(finding) for finding in downgraded],
     }
-    issues.setdefault("warn", []).append(manual_item)
+    for finding in downgraded:
+        finding["original_severity"] = finding["severity"]
+        finding["severity"] = "manual_review"
+        finding["why_not"] = "材料有未完成读取的内容，需核对原件后确认此项。"
+        finding["tags"] = [*(finding.get("tags") or []), "READABILITY-GATE"]
+    if legacy:
+        downgraded_ids = {finding.get("id") for finding in downgraded if finding.get("id")}
+        downgraded_objects = {id(finding) for finding in downgraded}
+        issues["error"] = [
+            item for item in (issues.get("error") or [])
+            if id(item) not in downgraded_objects and item.get("id") not in downgraded_ids
+        ]
+        issues.setdefault("warn", []).extend(downgraded)
     return payload

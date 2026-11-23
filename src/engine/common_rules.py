@@ -84,7 +84,7 @@ def _infer_report_kind(doc: Document) -> str:
     本函数的唯一调用方按 ``budget`` / 其它 二分支选择锚点集合。
     """
     attached = str(getattr(doc, "report_kind", "") or "").strip().lower()
-    if attached in {"budget", "final"}:
+    if attached in {"budget", "final", "unknown", "non_budget"}:
         return attached
     return resolve_report_kind_from_path(
         str(getattr(doc, "path", "") or ""),
@@ -546,6 +546,8 @@ class CMM001_ThreePublicNarrativeConsistency(Rule):
         # + 谓词链/词形容忍（Decimal）× 表七严格网格；预算材料与无表七
         # 材料保持旧路径（预算三份样张当前 pass，行为零变更）。
         kind = _infer_report_kind(doc)
+        if getattr(doc, "report_kind", None) == "unknown" and kind == "unknown":
+            raise RuleDeferred(self.code, detail="文种待确认，三公经费的预算或决算表文口径尚未确定")
         t7_rows = None
         if kind != "budget":
             for anchor in self._T7_ANCHORS:
@@ -1422,6 +1424,8 @@ class CMM003_TocCountConsistency(Rule):
             return []
 
         report_kind = _infer_report_kind(doc)
+        if getattr(doc, "report_kind", None) == "unknown" and report_kind == "unknown":
+            raise RuleDeferred(self.code, detail="文种待确认，暂无法选择正文表目录的核对口径")
         if report_kind == "budget":
             anchors = find_budget_anchors(doc)
         else:
@@ -1524,7 +1528,10 @@ class CMM004_CodeMirrorConsistency(Rule):
     desc = "\u6536\u5165/\u652f\u51fa\u603b\u8868\u7c7b\u6b3e\u9879\u7f16\u7801\u4e0e\u91d1\u989d\u955c\u50cf\u4e00\u81f4\u6027"
 
     def apply(self, doc: Document) -> List[Issue]:
-        if _infer_report_kind(doc) == "final":
+        kind = _infer_report_kind(doc)
+        if getattr(doc, "report_kind", None) == "unknown" and kind == "unknown":
+            raise RuleDeferred(self.code, detail="文种待确认，暂无法确定收支同科目是否需要镜像比对")
+        if kind == "final":
             # 2026-11-19 决议：决算同科目收入与支出可因结转结余合理不等。
             # 跨 9 份真实材料实证：9/9 均存在科目级收支不同（约 46% 共同科目），
             # 逐科目提示属常态噪音，不再报出；真实数据错位（如明细行左错一列）
@@ -2139,11 +2146,20 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
             if not candidates:
                 continue  # 无可验证的本期金额 → fail-closed 不比
             if not self._candidates_agree(candidates):
-                unresolved.append(
-                    f"指标「{canon}」在本节存在多个不一致的本期金额披露，"
-                    "无法确定比较基期（parse_ambiguity）"
+                # 同一大节内包含“（一）总体情况说明”与“（二）具体情况说明”等小节时，
+                # 若具体情况小节出现单位笔误或舍入差异（另由文内重复/单位规则报出），
+                # 先限定在当前同比句所在小节内取值；同小节内本身冲突仍维持 parse_ambiguity。
+                sub_candidates = self._subsection_candidates(
+                    merged, sections, section_start, match.start(), candidates
                 )
-                continue
+                if sub_candidates and self._candidates_agree(sub_candidates):
+                    candidates = sub_candidates
+                else:
+                    unresolved.append(
+                        f"指标「{canon}」在本节存在多个不一致的本期金额披露，"
+                        "无法确定比较基期（parse_ambiguity）"
+                    )
+                    continue
             current = candidates[0]
             delta_text = _cmm007_clean_amount(match.group("delta"))
             delta_unit = _txt_fund_norm(match.group("dunit"))
@@ -2386,6 +2402,35 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
             for item in candidates
         }
         return len(values) == 1
+
+    def _subsection_candidates(
+        self,
+        merged: str,
+        sections: List[Tuple[str, int, int]],
+        section_start: int,
+        pos: int,
+        candidates: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """将同大节的候选金额收窄到当前同比句所在的“（一）/（二）”小节区间。"""
+        sec_end = len(merged)
+        for _title, start, end in sections:
+            if start == section_start:
+                sec_end = end
+                break
+        sub_re = re.compile(r"(?:^|\n)\s*[（(][一二三四五六七八九十\d]{1,3}[）)]")
+        bounds = [m.start() for m in sub_re.finditer(merged, section_start, sec_end)]
+        if not bounds:
+            return []
+        sub_start = section_start
+        sub_end = sec_end
+        for b in bounds:
+            if b <= pos:
+                sub_start = b
+            else:
+                sub_end = b
+                break
+        scoped = [c for c in candidates if sub_start <= int(c["start"]) < sub_end]
+        return scoped if 0 < len(scoped) < len(candidates) else []
 
     def _inherit_same_clause(
         self,

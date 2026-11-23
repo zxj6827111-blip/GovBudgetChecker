@@ -853,7 +853,6 @@ _READING_ITEM_TYPES = frozenset(
     {
         "table_mapping_incomplete",
         "source_cell_unbound",
-        "invalid_number_format",
         "low_confidence_table",
         "table_reading_gap",
     }
@@ -1053,6 +1052,282 @@ def _subjects_conflict(left: Set[str], right: Set[str]) -> bool:
     )
 
 
+_ECON_MISMATCH_SUBJECT_RE = re.compile(r"基本支出表[「“](?P<subject>[^」”]+)[」”]身份不一致：")
+
+
+def _econ_code_name_mismatch_cascade_roots(
+    item: Any,
+    result_row: Any,
+    visible: Optional[Set[str]],
+) -> List[str]:
+    """OBL-CROSS-SAN-GONG-ECON 仅因基本支出表同行编码与名称冲突（如 31007 公务用车购置）
+    中断、且每项冲突均已被正式 V33-CROSS-SAN-GONG-ECON finding 报出时挂入其下方。"""
+    if str(getattr(item, "obligation_id", "") or "") != "OBL-CROSS-SAN-GONG-ECON":
+        return []
+    detail = str(getattr(item, "detail", None) or "").split("结构：", 1)[0].strip()
+    if not detail:
+        return []
+    clauses = [c.strip() for c in re.split(r"[；;]", detail) if c.strip()]
+    if not clauses or not all(_ECON_MISMATCH_SUBJECT_RE.search(c) for c in clauses):
+        return []
+    subjects = [
+        _ECON_MISMATCH_SUBJECT_RE.search(c).group("subject")  # type: ignore[union-attr]
+        for c in clauses
+    ]
+    roots: List[str] = []
+    matched_subjects: Set[str] = set()
+    for finding in _current_rule_findings(result_row):
+        if not isinstance(finding, dict) or not is_formal_finding(finding):
+            continue
+        issue_id = str(finding.get("id") or "").strip()
+        if not issue_id or (visible is not None and issue_id not in visible):
+            continue
+        loc = _json_dict(finding.get("location"))
+        if str(loc.get("defect_type") or "") != "economic_code_name_mismatch":
+            continue
+        f_subj = str(loc.get("subject") or "")
+        for subj in subjects:
+            if subj and (subj == f_subj or subj in str(finding.get("message") or "")):
+                matched_subjects.add(subj)
+                roots.append(issue_id)
+    if set(subjects) != matched_subjects:
+        return []
+    return list(dict.fromkeys(roots))
+
+
+_INVALID_NUM_ALLOWED_CODES = frozenset({"cell_unbound", "operand_missing"})
+_CELL_ID_RE = re.compile(r"(?<![0-9A-Za-z_-])([0-9A-Za-z_-]{3,}:r\d+c\d+)(?![0-9A-Za-z_-])")
+_ROW_CODE_HEAD_RE = re.compile(r"^\s*(\d{3,9})(?:\s|$)")
+_COLUMN_MEASURE_ALIASES = {
+    "基本支出": "basic_actual",
+    "basic_actual": "basic_actual",
+    "项目支出": "project_actual",
+    "project_actual": "project_actual",
+    "合计": "total_actual",
+    "支出合计": "total_actual",
+    "本年支出合计": "total_actual",
+    "total_actual": "total_actual",
+    "上缴上级支出": "to_superior_actual",
+    "to_superior_actual": "to_superior_actual",
+    "经营支出": "operational_actual",
+    "operational_actual": "operational_actual",
+    "对附属单位补助支出": "subsidiary_actual",
+    "subsidiary_actual": "subsidiary_actual",
+}
+
+
+def _normalize_measure_column(value: Any) -> str:
+    raw = re.sub(r"\s+", "", str(value or ""))
+    if not raw:
+        return ""
+    if raw in _COLUMN_MEASURE_ALIASES:
+        return _COLUMN_MEASURE_ALIASES[raw]
+    lower = raw.lower()
+    return _COLUMN_MEASURE_ALIASES.get(lower, lower)
+
+
+def _extract_cell_ids(text: str) -> Set[str]:
+    return {m.group(1) for m in _CELL_ID_RE.finditer(str(text or ""))}
+
+
+def _invalid_table_number_cascade_roots(
+    item: Any,
+    result_row: Any,
+    visible: Optional[Set[str]],
+    structured_ingest: Any = None,
+) -> List[str]:
+    """原件表内金额格式非法（如 2.359.46）已被 CMM-010 正式报出时，
+    仅当所有被阻断的 cell_id/blocked_by/missing_operands 均能严格证明
+    来自已报出的非法金额格（原格 ID，或同表同页同行同列）时，才承接连带阻断义务。"""
+    codes = {
+        str(code).strip()
+        for code in (getattr(item, "reason_codes", None) or [])
+        if str(code).strip()
+    }
+    if not codes or not (codes <= _INVALID_NUM_ALLOWED_CODES):
+        return []
+    for blocker in getattr(item, "blocked_by", None) or ():
+        if isinstance(blocker, Mapping):
+            rc = str(blocker.get("reason_code") or "").strip()
+            if rc and rc not in _INVALID_NUM_ALLOWED_CODES:
+                return []
+    for op in getattr(item, "missing_operands", None) or ():
+        if isinstance(op, Mapping):
+            op_codes = {
+                str(c).strip() for c in (op.get("reason_codes") or ()) if str(c).strip()
+            }
+            if op_codes and not (op_codes <= _INVALID_NUM_ALLOWED_CODES):
+                return []
+
+    all_roots: List[Dict[str, Any]] = []
+    by_cell_id: Dict[str, List[Dict[str, Any]]] = {}
+    for finding in _current_rule_findings(result_row):
+        if not isinstance(finding, dict) or not is_formal_finding(finding):
+            continue
+        issue_id = str(finding.get("id") or "").strip()
+        if not issue_id or (visible is not None and issue_id not in visible):
+            continue
+        loc = _json_dict(finding.get("location"))
+        if str(loc.get("defect_type") or "") != "invalid_table_number_format":
+            continue
+        f_cid = str(loc.get("source_cell_id") or "").strip()
+        f_tables = _table_codes_in(str(loc.get("table_code") or loc.get("table") or ""))
+        f_pages = _finding_pages(loc)
+        raw_page = _identity_int(finding.get("page"))
+        if raw_page:
+            f_pages.add(raw_page)
+        row_code = str(loc.get("row_code") or "").strip()
+        if not row_code:
+            row_m = _ROW_CODE_HEAD_RE.match(str(loc.get("row") or ""))
+            if row_m:
+                row_code = row_m.group(1)
+        entry = {
+            "issue_id": issue_id,
+            "cell_id": f_cid,
+            "table_codes": f_tables,
+            "pages": f_pages,
+            "row_code": row_code,
+            "column": _normalize_measure_column(
+                loc.get("column") or loc.get("indicator") or loc.get("field")
+            ),
+        }
+        all_roots.append(entry)
+        if f_cid:
+            by_cell_id.setdefault(f_cid, []).append(entry)
+    # 入库侧的格式问题也是原格级证据，不能进入按整表关闭的读取归并。
+    structured = _json_dict(structured_ingest) or _json_dict(_json_dict(result_row).get("structured_ingest"))
+    for finding in structured.get("review_items") or ():
+        if not isinstance(finding, Mapping) or finding.get("type") != "invalid_number_format":
+            continue
+        issue_id = str(finding.get("id") or "").strip()
+        if not issue_id or (visible is not None and issue_id not in visible):
+            continue
+        f_tables = _table_codes_in(str(finding.get("table_code") or ""))
+        for cell in finding.get("cells") or ():
+            if not isinstance(cell, Mapping):
+                continue
+            cid = str(cell.get("source_cell_id") or "").strip()
+            page = _identity_int(cell.get("page"))
+            if cid and page and f_tables and cid not in by_cell_id:
+                entry = {
+                    "issue_id": issue_id, "cell_id": cid, "table_codes": f_tables,
+                    "pages": {page}, "row_code": "", "column": "",
+                }
+                all_roots.append(entry)
+                by_cell_id.setdefault(cid, []).append(entry)
+    if not all_roots:
+        return []
+
+    detail = str(getattr(item, "detail", None) or "")
+    required_cells: Set[str] = _extract_cell_ids(detail)
+    for blocker in getattr(item, "blocked_by", None) or ():
+        if isinstance(blocker, Mapping):
+            required_cells.update(_extract_cell_ids(str(blocker.get("ref") or "")))
+    for op in getattr(item, "missing_operands", None) or ():
+        if isinstance(op, Mapping):
+            for key in ("source_cell_id", "cell_id", "row_key"):
+                required_cells.update(_extract_cell_ids(str(op.get(key) or "")))
+
+    matched_ids: List[str] = []
+    matched_tables: Set[str] = set()
+    matched_pages: Set[int] = set()
+    proven_any = False
+
+    def _record_root(entry: Dict[str, Any]) -> None:
+        matched_ids.append(str(entry["issue_id"]))
+        matched_tables.update(entry["table_codes"])
+        matched_pages.update(entry["pages"])
+
+    if required_cells:
+        for cid in sorted(required_cells):
+            hits = by_cell_id.get(cid)
+            if not hits:
+                return []
+            for entry in hits:
+                _record_root(entry)
+        proven_any = True
+
+    for blocker in getattr(item, "blocked_by", None) or ():
+        if not isinstance(blocker, Mapping):
+            return []
+        ref = str(blocker.get("ref") or "").strip()
+        b_cells = _extract_cell_ids(ref)
+        if not b_cells:
+            return []
+        b_tables = _table_codes_in(ref)
+        b_pages = {int(m.group(1)) for m in re.finditer(r"第(\d+)页", ref)}
+        for cid in sorted(b_cells):
+            matching = [
+                entry for entry in by_cell_id.get(cid, ())
+                if (not b_tables or (b_tables <= entry["table_codes"]))
+                and (not b_pages or (b_pages <= entry["pages"]))
+            ]
+            if not matching:
+                return []
+            for entry in matching:
+                _record_root(entry)
+        proven_any = True
+
+    for op in getattr(item, "missing_operands", None) or ():
+        if not isinstance(op, Mapping):
+            return []
+        op_tables = _table_codes_in(str(op.get("table_code") or op.get("location") or ""))
+        op_page = _identity_int(op.get("page"))
+        if op.get("source") == "text":
+            return []
+        op_cells: Set[str] = set()
+        for key in ("source_cell_id", "cell_id", "row_key"):
+            op_cells.update(_extract_cell_ids(str(op.get(key) or "")))
+        op_row_key = str(op.get("row_key") or "").strip()
+        op_col = _normalize_measure_column(
+            op.get("column") or op.get("indicator") or op.get("field")
+        )
+        if op_cells:
+            for cid in sorted(op_cells):
+                matching = [
+                    entry for entry in by_cell_id.get(cid, ())
+                    if (not op_tables or (op_tables <= entry["table_codes"]))
+                    and (op_page is None or op_page in entry["pages"])
+                    and (
+                        not op_col
+                        or op_col in {"金额", "amount"}
+                        or not entry["column"]
+                        or entry["column"] == op_col
+                    )
+                ]
+                if not matching:
+                    return []
+                for entry in matching:
+                    _record_root(entry)
+            proven_any = True
+        else:
+            if not (op_tables and op_page and op_row_key and op_col not in {"", "金额", "amount"}):
+                return []
+            matching = [
+                entry for entry in all_roots
+                if (op_tables <= entry["table_codes"])
+                and op_page in entry["pages"]
+                and entry["row_code"] == op_row_key
+                and entry["column"] == op_col
+            ]
+            if not matching:
+                return []
+            for entry in matching:
+                _record_root(entry)
+            proven_any = True
+
+    if not proven_any:
+        return []
+
+    detail_tables = _table_codes_in(detail.split("结构：", 1)[0])
+    if detail_tables and not (detail_tables <= matched_tables):
+        return []
+    item_pages = _obligation_pages(item)
+    if item_pages and not (item_pages <= matched_pages):
+        return []
+    return list(dict.fromkeys(matched_ids))
+
+
 def _v33251_defect_cascade_roots(
     item: Any,
     result_row: Any,
@@ -1072,6 +1347,18 @@ def _v33251_defect_cascade_roots(
     }
     if not kinds:
         return []
+    kind_pages: Dict[str, Set[int]] = {"budget": set(), "final": set()}
+    detail_body = str(getattr(item, "detail", None) or "").split("结构：", 1)[0]
+    for clause in re.split(r"[；;]", detail_body):
+        if not clause.strip():
+            continue
+        clause_pages = {int(m.group(1)) for m in re.finditer(r"第(\d+)页", clause)}
+        if not clause_pages:
+            continue
+        if "年初预算" in clause or "V33-251:budget" in clause:
+            kind_pages["budget"].update(clause_pages)
+        if "支出决算" in clause or "V33-251:final" in clause:
+            kind_pages["final"].update(clause_pages)
     pages: Set[int] = set()
     for operand in getattr(item, "missing_operands", None) or []:
         if isinstance(operand, Mapping):
@@ -1083,6 +1370,8 @@ def _v33251_defect_cascade_roots(
     checklist = {"budget": "C-11", "final": "C-12"}
     obligation_subjects = _obligation_subject_tokens(item)
     roots: List[str] = []
+    covered_kinds: Set[str] = set()
+    matched_pages_by_kind: Dict[str, Set[int]] = {"budget": set(), "final": set()}
     for finding in _current_rule_findings(result_row):
         if not isinstance(finding, dict) or not is_formal_finding(finding):
             continue
@@ -1099,16 +1388,29 @@ def _v33251_defect_cascade_roots(
         if _subjects_conflict(obligation_subjects, _finding_subject_tokens(finding)):
             continue
         item_code = str(location.get("checklist_item") or "")
-        if not any(checklist[kind] == item_code for kind in kinds):
+        matched_kind = next(
+            (kind for kind in kinds if checklist[kind] == item_code),
+            None,
+        )
+        if matched_kind is None:
             continue
         finding_pages = _finding_pages(location)
-        if pages:
-            if not finding_pages or not (pages & finding_pages):
+        target_pages = kind_pages.get(matched_kind) or pages
+        if target_pages:
+            if not finding_pages or not (target_pages & finding_pages):
                 continue
         elif len(roots) >= 1:
             # 无页码证据时只接受唯一根问题，不按“同阶段”批量吞并。
             continue
+        covered_kinds.add(matched_kind)
+        matched_pages_by_kind[matched_kind].update(finding_pages)
         roots.append(issue_id)
+    if covered_kinds != kinds:
+        return []
+    for kind in kinds:
+        target_pages = kind_pages.get(kind) or pages
+        if target_pages and not (target_pages <= matched_pages_by_kind[kind]):
+            return []
     return list(dict.fromkeys(roots))
 
 
@@ -1180,6 +1482,10 @@ def _unit_defect_cascade_roots(
     或 blocked_by 指向同一单位缺陷规则。不能仅凭页码把其他金额问题当根因。
     """
     detail = str(getattr(item, "detail", None) or "")
+    detail_body = detail.split("结构：", 1)[0].strip()
+    detail_clauses = [c.strip() for c in re.split(r"[；;]", detail_body) if c.strip()]
+    if detail_clauses and not all(_UNIT_DEFECT_TEXT_RE.search(clause) for clause in detail_clauses):
+        return []
     blocked_refs = " ".join(
         str((blocker or {}).get("ref") or "")
         for blocker in (getattr(item, "blocked_by", None) or [])
@@ -1197,6 +1503,7 @@ def _unit_defect_cascade_roots(
     for match in re.finditer(r"第(\d+)页", detail):
         pages.add(int(match.group(1)))
     roots: List[str] = []
+    matched_pages: Set[int] = set()
     for finding in _current_rule_findings(result_row):
         if not isinstance(finding, dict) or not is_formal_finding(finding):
             continue
@@ -1224,7 +1531,10 @@ def _unit_defect_cascade_roots(
             # blocked_by 明确指向某单位规则时，根问题必须包含同族规则身份。
             if pages and not (pages & finding_pages):
                 continue
+        matched_pages.update(finding_pages)
         roots.append(issue_id)
+    if pages and not (pages <= matched_pages):
+        return []
     return list(dict.fromkeys(roots))
 
 
@@ -1272,8 +1582,148 @@ def _independent_source_pages(item: Any) -> Set[int]:
     return pages
 
 
+_THREE_PUBLIC_PHASE_ALLOWED_CODES = frozenset({"operand_missing", "scope_unconfirmed"})
+_THREE_PUBLIC_PHASE_OBLIGATION_IDS = frozenset({
+    "OBL-TREND-COMPLETION-RATE",
+    "OBL-TXT-T7",
+    "OBL-SG-TABLE-TEXT",
+})
+_THREE_PUBLIC_TABLE_CODE = "FIN_07"
+_BUDGET_STAGES = frozenset({"预算", "预算数", "年初预算", "全年预算", "调整预算", "调整后预算"})
+_THREE_PUBLIC_SUBJECT_TOKENS = (
+    "三公",
+    "因公出国",
+    "公务用车",
+    "公务接待",
+    "合计",
+    "overseas",
+    "vehicle",
+    "reception",
+    "total",
+)
+
+
+def _three_public_budget_phase_cascade_roots(
+    item: Any,
+    result_row: Any,
+    visible: Optional[Set[str]],
+) -> List[str]:
+    """三公表表头仅印“预算数”导致的预算阶段歧义：若已正式交付
+    three_public_budget_phase_discrepancy 表文差异问题，且本义务的所有阻塞子句
+    与 missing_operands/blocked_by 均严格仅限“表头仅披露预算数”所致的预算阶段歧义
+    且全部落在根问题已覆盖的页码与三公科目内，才挂入该根问题下方。"""
+    if str(getattr(item, "obligation_id", "") or "") not in _THREE_PUBLIC_PHASE_OBLIGATION_IDS:
+        return []
+    codes = {
+        str(code).strip()
+        for code in (getattr(item, "reason_codes", None) or [])
+        if str(code).strip()
+    }
+    if not codes or not (codes <= _THREE_PUBLIC_PHASE_ALLOWED_CODES):
+        return []
+    if getattr(item, "candidates", None):
+        return []
+    from src.engine.fact_context import _canonical_budget_stage
+
+    required_basis: Set[tuple[str, str]] = set()
+    for blocker in getattr(item, "blocked_by", None) or ():
+        if not isinstance(blocker, Mapping):
+            return []
+        b_rc = str(blocker.get("reason_code") or "").strip()
+        if b_rc and b_rc not in _THREE_PUBLIC_PHASE_ALLOWED_CODES:
+            return []
+        b_dim = str(blocker.get("dimension") or "").strip()
+        if b_dim and b_dim != "budget_stage":
+            return []
+        ref = str(blocker.get("ref") or "")
+        tables = _table_codes_in(ref)
+        if tables and tables != {_THREE_PUBLIC_TABLE_CODE}:
+            return []
+        if tables:
+            table_ref, separator, stage = ref.rpartition(":")
+            table_code, _, instance_uid = table_ref.partition(":")
+            if not separator or _table_codes_in(table_code) != {_THREE_PUBLIC_TABLE_CODE}:
+                return []
+            if not instance_uid or stage not in _BUDGET_STAGES:
+                return []
+            required_basis.add((instance_uid, _canonical_budget_stage(stage)))
+    detail = str(getattr(item, "detail", None) or "").split("结构：", 1)[0].strip()
+    if not detail:
+        return []
+    clauses = [c.strip() for c in re.split(r"[；;]", detail) if c.strip()]
+    if not clauses or not all(
+        "表头仅披露“预算数”" in clause and "显式预算阶段证据" in clause
+        for clause in clauses
+    ):
+        return []
+    roots: List[str] = []
+    root_pages: Set[int] = set()
+    root_basis: Set[tuple[str, str]] = set()
+    for finding in _current_rule_findings(result_row):
+        if not isinstance(finding, dict) or not is_formal_finding(finding):
+            continue
+        issue_id = str(finding.get("id") or "").strip()
+        if not issue_id or (visible is not None and issue_id not in visible):
+            continue
+        loc = _json_dict(finding.get("location"))
+        if (loc.get("defect_type") == "three_public_budget_phase_discrepancy"
+                and _table_codes_in(str(loc.get("table_code") or loc.get("table") or ""))
+                == {_THREE_PUBLIC_TABLE_CODE}):
+            roots.append(issue_id)
+            root_basis.add((
+                str(loc.get("table_instance_uid") or ""),
+                _canonical_budget_stage(loc.get("budget_stage") or loc.get("stage")),
+            ))
+            root_pages.update(_finding_pages(loc))
+            raw_page = _identity_int(finding.get("page"))
+            if raw_page:
+                root_pages.add(raw_page)
+    if not roots or not required_basis <= root_basis:
+        return []
+    item_pages = _obligation_pages(item)
+    if item_pages and (not root_pages or not (item_pages <= root_pages)):
+        return []
+    for op in getattr(item, "missing_operands", None) or ():
+        if not isinstance(op, Mapping):
+            return []
+        op_codes = {str(c).strip() for c in (op.get("reason_codes") or ()) if str(c).strip()}
+        if op_codes and not (op_codes <= _THREE_PUBLIC_PHASE_ALLOWED_CODES):
+            return []
+        op_tables = _table_codes_in(str(op.get("table_code") or op.get("location") or ""))
+        if (op_tables and op_tables != {_THREE_PUBLIC_TABLE_CODE}) or (
+            op.get("source") == "table" and op_tables != {_THREE_PUBLIC_TABLE_CODE}
+        ):
+            return []
+        stage = str(op.get("stage") or "").strip()
+        if stage and (
+            stage not in _BUDGET_STAGES or not any(basis[1] == _canonical_budget_stage(stage) for basis in root_basis)
+        ):
+            return []
+        op_page = op.get("page")
+        if isinstance(op_page, int) and not isinstance(op_page, bool) and op_page > 0:
+            if op_page not in root_pages:
+                return []
+        op_role = str(op.get("role") or "").strip()
+        op_col = str(op.get("column") or "").strip()
+        if (
+            ("分子" in op_role)
+            or ("决算" in op_role and "预算" not in op_role)
+            or ("决算" in op_col and "预算" not in op_col)
+            or _normalize_measure_column(op_col).endswith("_actual")
+            or (not stage and "预算" not in op_role and "预算" not in op_col)
+        ):
+            return []
+        op_row_key = str(op.get("row_key") or "").strip()
+        if op_row_key:
+            lowered_row = op_row_key.lower()
+            if not any(tok in lowered_row for tok in _THREE_PUBLIC_SUBJECT_TOKENS):
+                return []
+    return list(dict.fromkeys(roots))
+
+
 def _guarded_roots(item: Any, roots: Sequence[str], result_row: Any, structured_ingest: Any = None,
-                   *, allow_reading_codes: bool = False) -> List[str]:
+                   *, allow_reading_codes: bool = False,
+                   allowed_reading_codes: Optional[Set[str]] = None) -> List[str]:
     """根问题必须覆盖义务中的独立原因与来源范围，否则保留未完成义务。
 
     一个根问题不能解释另一张表的读取失败、执行异常或不同页的独立缺数；
@@ -1289,8 +1739,14 @@ def _guarded_roots(item: Any, roots: Sequence[str], result_row: Any, structured_
         for code in (getattr(item, "reason_codes", None) or [])
         if str(code).strip()
     }
-    if not allow_reading_codes and (codes & _INDEPENDENT_REASON_CODES):
-        return []
+    if not allow_reading_codes:
+        disallowed = (
+            _INDEPENDENT_REASON_CODES - set(allowed_reading_codes)
+            if allowed_reading_codes
+            else _INDEPENDENT_REASON_CODES
+        )
+        if codes & disallowed:
+            return []
     findings = {
         str(finding.get("id") or ""): finding
         for finding in _current_rule_findings(result_row)
@@ -1301,6 +1757,9 @@ def _guarded_roots(item: Any, roots: Sequence[str], result_row: Any, structured_
         finding = findings.get(root)
         if finding:
             root_pages.update(_finding_pages(_json_dict(finding.get("location"))))
+            raw_f_page = _identity_int(finding.get("page"))
+            if raw_f_page:
+                root_pages.add(raw_f_page)
     structured = _json_dict(structured_ingest)
     for entry in structured.get("review_items") or []:
         if not isinstance(entry, Mapping) or str(entry.get("id") or "") not in root_ids:
@@ -1348,6 +1807,18 @@ def cascade_root_issue_ids(
     )
     if reading_root is not None:
         return _guarded_roots(item, [reading_root], result_row, structured_ingest, allow_reading_codes=True)
+    invalid_num_roots = _invalid_table_number_cascade_roots(item, result_row, visible, structured_ingest)
+    if invalid_num_roots:
+        return _guarded_roots(
+            item, invalid_num_roots, result_row, structured_ingest,
+            allowed_reading_codes={"cell_unbound"},
+        )
+    econ_mismatch_roots = _econ_code_name_mismatch_cascade_roots(item, result_row, visible)
+    if econ_mismatch_roots:
+        return _guarded_roots(item, econ_mismatch_roots, result_row, structured_ingest, allow_reading_codes=True)
+    phase_roots = _three_public_budget_phase_cascade_roots(item, result_row, visible)
+    if phase_roots:
+        return _guarded_roots(item, phase_roots, result_row, structured_ingest)
     v33251_roots = _v33251_defect_cascade_roots(item, result_row, visible)
     if v33251_roots:
         # 与其他分支同一约束流程：独立原因/来源范围守卫不再被分支提前返回绕过。
@@ -1405,6 +1876,9 @@ def cascade_partial_associations(
     ):
         if root:
             candidates.append(str(root))
+    candidates.extend(_invalid_table_number_cascade_roots(item, result_row, visible, structured_ingest))
+    candidates.extend(_econ_code_name_mismatch_cascade_roots(item, result_row, visible))
+    candidates.extend(_three_public_budget_phase_cascade_roots(item, result_row, visible))
     candidates.extend(_v33251_defect_cascade_roots(item, result_row, visible))
     candidates.extend(_subject_name_cascade_roots(item, result_row, visible))
     candidates.extend(_unit_defect_cascade_roots(item, result_row, visible))

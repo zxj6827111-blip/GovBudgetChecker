@@ -201,7 +201,8 @@ def test_income_rule_wires_root_cause_and_material_view_reason(monkeypatch):
     code_rows['total'] = 0
     table = SimpleNamespace(title='收入决算表', cells=[])
     view = (SimpleNamespace(), table, mappings, {}, code_rows, facts)
-    monkeypatch.setattr(income_module, '_table_view', lambda doc, code: (view, None))
+    monkeypatch.setattr(income_module, '_table_view',
+                        lambda doc, code, *, include_income_sources=False: (view, None))
     monkeypatch.setattr(income_module, '_column_mappings_for_instance',
                         lambda instance, table: mappings)
     # 末尾的 check_native_detail_tables 走它自己模块内的视图入口，需同步打桩。

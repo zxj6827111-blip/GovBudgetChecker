@@ -15,6 +15,7 @@ from .fact_context import (
 )
 from .native_table_arithmetic import cluster_rounding, finish, receipt
 from .native_three_public_ratios import operand_ref
+from src.services.cell_number_text import invalid_number_text
 from src.services.fiscal_row_roles import is_index_header
 from .native_empty_operands import NativeBlankTerm, blank_term, blank_observations, blank_operand_refs, money_facts
 from src.services.fiscal_code_hierarchy import hierarchy_paths, leaf_codes
@@ -93,6 +94,10 @@ def _unrepresented_source_codes(artifact, table, row_codes, measure_start):
             ranges.setdefault(cell.page_number, []).append((cell.bbox[0], cell.bbox[2]))
             code_cells.setdefault(cell.page_number, []).append(cell)
     missing = []
+    sorted_cells_by_page = {
+        page: sorted(cells, key=lambda c: (c.bbox[1], c.bbox[0]))
+        for page, cells in code_cells.items()
+    }
     for block in artifact.text_blocks:
         code = re.sub(r'\s+', '', block.text or '')
         if (not block.bbox or block.page_number not in ranges
@@ -100,11 +105,41 @@ def _unrepresented_source_codes(artifact, table, row_codes, measure_start):
             continue
         center = (block.bbox[0] + block.bbox[2]) / 2
         middle = (block.bbox[1] + block.bbox[3]) / 2
+        page_cells = sorted_cells_by_page[block.page_number]
         # 7 位编码在窄格内折成两行（“20701”/“00”），每行是一个文字块；块是某个
         # 已入表编码格的其中一行时，它就是那个完整编码，不是被截掉的科目。
         if any(c.bbox[0] - 1 <= center <= c.bbox[2] + 1 and c.bbox[1] - 1 <= middle <= c.bbox[3] + 1
                and code in c.raw_text.split() and re.sub(r'\s+', '', c.raw_text) in row_codes
-               for c in code_cells[block.page_number]):
+               for c in page_cells):
+            continue
+        # 窄列折行跨行粘连（如上行 “208050\n2” 的末位 “2” 与下行 “2080505” 的首段 “208050”
+        # 被 PDF 文本块拼成 “2208050”）：若该块严格落在已入表编码格列内且等于上下相邻两个
+        # 已入表编码拼接串的子串，则属文本流粘连伪影而非漏解析科目。
+        wrap_glued = False
+        for idx, curr in enumerate(page_cells):
+            curr_code = re.sub(r'\s+', '', curr.raw_text or '')
+            if (curr_code not in row_codes
+                    or not (curr.bbox[0] - 1 <= center <= curr.bbox[2] + 1)
+                    or not (curr.bbox[1] - 1 <= middle <= curr.bbox[3] + 1)):
+                continue
+            for neighbor_idx in (idx - 1, idx + 1):
+                if not (0 <= neighbor_idx < len(page_cells)):
+                    continue
+                nb = page_cells[neighbor_idx]
+                nb_code = re.sub(r'\s+', '', nb.raw_text or '')
+                if nb_code not in row_codes:
+                    continue
+                if neighbor_idx < idx:
+                    if abs(curr.bbox[1] - nb.bbox[3]) <= 2.5 and code in (nb_code + curr_code):
+                        wrap_glued = True
+                        break
+                else:
+                    if abs(nb.bbox[1] - curr.bbox[3]) <= 2.5 and code in (curr_code + nb_code):
+                        wrap_glued = True
+                        break
+            if wrap_glued:
+                break
+        if wrap_glued:
             continue
         if any(left <= center <= right for left, right in ranges[block.page_number]):
             missing.append(f'第{block.page_number}页原文科目{code}未进入完整逻辑表')
@@ -125,7 +160,7 @@ def _table_blocker(title, reason_code, ref):
     return blocker(dimension='instance_uid', ref=f'{title}:{ref}', reason_code=reason_code)
 
 
-def _table_view(doc, table_code, *, include_income_sources=False):
+def _table_view(doc, table_code, *, include_income_sources=False, extra_measures=()):
     artifact, context = getattr(doc, 'parse_artifact', None), getattr(doc, 'fact_context', None)
     title = DETAIL_TABLES[table_code]
     if context is None or artifact is None:
@@ -161,6 +196,7 @@ def _table_view(doc, table_code, *, include_income_sources=False):
     if table_code == 'FIN_02_income' and include_income_sources:
         roles.update({'fiscal_allocation', 'superior_subsidy_income', 'business_income',
                       'operational_income', 'subsidiary_income', 'other_income'})
+    roles.update(extra_measures)
     mappings = [m for m in mappings if m.get('canonical_measure') in roles]
     if not mappings or not any(m['canonical_measure'] == 'total_actual' for m in mappings):
         reason = f'{title}本年合计金额列身份未绑定'
@@ -180,7 +216,9 @@ def _table_view(doc, table_code, *, include_income_sources=False):
         if code is None:
             # Repeated actual headers have no numeric amount cells; unknown
             # amount rows cannot be omitted from a complete sum.
-            if any(c is not None and c.numeric_value is not None and not c.is_header for c in measure_cells):
+            if any(c is not None and not c.is_header
+                   and (c.numeric_value is not None or invalid_number_text(c.raw_text))
+                   for c in measure_cells):
                 issue_text = f'{title}第{row_idx + 1}行金额科目编码未唯一识别'
                 issues.append(issue_text)
                 from .diagnostic_fields import blocker
@@ -324,6 +362,10 @@ def _select(doc, view, code, indicator):
         return None, reason
     fact = candidates[0]
     reason = operand_rejection_reason(fact, doc.fact_context.org_name)
+    if reason and fact.extra_dims.get('table_reading_cell_id'):
+        from .native_table_arithmetic import record_operand_rejection
+
+        record_operand_rejection(doc, fact, reason, indicator=indicator, stage='决算')
     if (fact.unit not in _UNITS or doc.fact_context.fiscal_year is None
             or fact.fiscal_year != doc.fact_context.fiscal_year
             or _canonical_budget_stage(fact.budget_stage) != '决算'
@@ -475,7 +517,7 @@ def _verified_native_chain(doc, view, facts):
                                      doc.fact_context.file_hash)) == len(facts)
 
 
-def _native_mirror_covered_roots(doc, view, roots, paths):
+def _native_mirror_covered_roots(doc, view, roots, paths, excluded_tables):
     """只用同原件另一完整原生表的精确名称链确认错前缀，不猜编码/金额。
 
     混层披露本身合法，不能按编码长度删掉无上级明细。只有另一表实际印有
@@ -498,6 +540,7 @@ def _native_mirror_covered_roots(doc, view, roots, paths):
             continue
         candidates = [fact for fact in context.facts
                       if fact.table_code in DETAIL_TABLES and fact.table_code != table.table_code
+                      and fact.table_code not in excluded_tables
                       and fact.indicator == 'total_actual' and fact.subject_code
                       and re.fullmatch(r'\d{7}', fact.subject_code)
                       and fact.subject_code != code and fact.subject_code[3:] == code[3:]
@@ -546,7 +589,8 @@ def _native_mirror_covered_roots(doc, view, roots, paths):
     return proofs
 
 
-def check_native_detail_tables(rule, doc, *, table_codes=None, include_income_sources=False):
+def check_native_detail_tables(rule, doc, *, table_codes=None, include_income_sources=False,
+                               excluded_mirror_tables=frozenset(), require_grid_coverage_for=frozenset()):
     """V33-120 的原生入口；legacy Document 的原规则实现仍保留。
 
     每一金额列按完整行集合检查直接父子和总计；总计只累计根科目一次，
@@ -562,6 +606,13 @@ def check_native_detail_tables(rule, doc, *, table_codes=None, include_income_so
     for table_code in targets:
         title = DETAIL_TABLES[table_code]
         view, error = _table_view(doc, table_code, include_income_sources=include_income_sources)
+        if view and table_code in require_grid_coverage_for:
+            from .native_table_arithmetic import _native_grid_coverage_error
+
+            error = _native_grid_coverage_error(doc.parse_artifact, view[0], view[1])
+            if any(len({m[key] for m in view[2]}) != len(view[2])
+                   for key in ('canonical_measure', 'source_col_idx')):
+                error = error or f'{title}金额列身份不唯一'
         if error:
             unresolved.append(error)
             receipt(rule, doc, f'{table_code}:complete_table', [], status='insufficient_data',
@@ -613,7 +664,7 @@ def check_native_detail_tables(rule, doc, *, table_codes=None, include_income_so
             continue
         roots = [code for code in codes if not any(paths[code].startswith(paths[p]) and code != p for p in codes)]
         # 不限制原件的披露深度；只排除有同原件精确完整镜像链证明的错前缀项。
-        mirror_proofs = _native_mirror_covered_roots(doc, view, roots, paths)
+        mirror_proofs = _native_mirror_covered_roots(doc, view, roots, paths, excluded_mirror_tables)
         orphans = sorted(mirror_proofs)
         if orphans and rule.code == 'V33-005':
             orphan_facts, source_refs = [], []

@@ -21,6 +21,66 @@ _NAMES = {'income': ('本年收入合计',), 'expense': ('本年支出合计',),
           'closing': ('年末财政拨款结转和结余', '年末结转和结余'), 'total': ('总计',)}
 
 
+def check_detail_total_pair(rule, doc, table_code, indicator, name, *,
+                            summary_table='FIN_01_income_expenditure_total', detail_indicator='total_actual'):
+    """只核对总表金额格与明细表合计行原格，明细其它格缺口不参与此关系。"""
+    from .native_hierarchy_checks import DETAIL_TABLES, _select, _table_view
+
+    summary, summary_error = table_facts(doc, summary_table)
+    summary_fact = None
+    if not summary_error:
+        summary_fact, summary_error = _pick(doc, summary, indicator, (name,), allow_native_blank=True)
+    view, detail_error = _table_view(doc, table_code, extra_measures=(detail_indicator,))
+    detail_fact = None
+    if not detail_error:
+        if sum(m['canonical_measure'] == detail_indicator for m in view[2]) == 1:
+            detail_fact, detail_error = _select(doc, view, 'total', detail_indicator)
+        else:
+            detail_error = '明细表合计行所需金额列身份未唯一绑定'
+    if summary_fact is not None and detail_fact is not None:
+        scopes = summary_fact.fund_scope, detail_fact.fund_scope
+        # 表二整表为全口径，财政拨款收入列的业务角色独立对应表四的财政拨款收入总额。
+        scope_ok = scopes[0] == scopes[1] or (
+            summary_table == T4 and detail_indicator == 'fiscal_allocation'
+            and scopes == ('fiscal_appropriation', 'all_funds'))
+        if not scope_ok or summary_fact.org_scope != detail_fact.org_scope:
+            detail_error = '总表与明细表合计行的汇总口径不一致'
+    summary_title = '财政拨款收入支出决算总表' if summary_table == T4 else '收入支出决算总表'
+    detail_name = '财政拨款收入合计' if detail_indicator == 'fiscal_allocation' else '合计'
+    label = f'{summary_title}{name}与{DETAIL_TABLES[table_code]}{detail_name}'
+    issues, unresolved = [], []
+    _relation(rule, doc, f'{table_code}:summary_total', label,
+              [('总表', summary_fact, summary_error), ('明细表合计行', detail_fact, detail_error)],
+              [1], issues, unresolved)
+    return finish(rule, issues, unresolved)
+
+
+def scoped_expense_summary_rows(doc):
+    """供旧说明三规则读取经原格确认的合计行，逐字段保留未知值。"""
+    from .native_hierarchy_checks import _select, _table_view
+    from .rule_outcome import RuleDeferred
+
+    view, error = _table_view(doc, 'FIN_03_expenditure')
+    if error:
+        raise RuleDeferred('V33-220', error)
+    unit = view[1].unit_hint
+    factor = {'元': Decimal('0.0001'), '万元': Decimal('1'), '亿元': Decimal('10000')}.get(unit)
+    if factor is None:
+        raise RuleDeferred('V33-220', '支出决算表合计行金额单位未确认')
+    labels = ['项目']
+    values = ['合计']
+    for indicator, label in (('total_actual', '本年支出合计'),
+                             ('basic_actual', '基本支出'), ('project_actual', '项目支出')):
+        labels.append(label)
+        fact = None
+        if sum(m['canonical_measure'] == indicator for m in view[2]) == 1:
+            fact, _ = _select(doc, view, 'total', indicator)
+        # 认证空白交给调用方的原有证据路径处理。
+        values.append(str(fact.normalized_value / factor) if fact is not None
+                      and not isinstance(fact, NativeBlankTerm) and fact.unit == unit else '')
+    return [labels, values], unit
+
+
 def _pick(doc, facts, indicator, names, *, allow_native_blank=False):
     candidates = [f for f in facts if f.indicator == indicator
                   and re.sub(r'\s+', '', f.subject_name or '') in names]

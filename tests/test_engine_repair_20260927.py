@@ -23,7 +23,7 @@
 - V33-120 舍入聚类：宜川 23 条 info → 1 条（count 标注、明细保留）
 - V33-244 补0建议聚类：宜川 2 条 info → 1 条（count=2、逐格明细）；
   石泉同款 2→1（其公务接待表文不符 error 为真发现，不参与合并）
-- MR-3 扫描闸门：error 级整体转人工；可读性正常时严格 no-op
+- MR-3 扫描闸门：证据受限的错误逐项转人工；可读性正常时严格 no-op
 
 夹具哈希沿用 WP4-H 的换行归一口径（autocrlf 双锁免疫，PR #40 教训）。
 """
@@ -564,12 +564,66 @@ def test_scan_gate_converts_errors_to_manual_review():
     assessment = {"page_coverage": 0.0, "scanned_page_count": 10}
     out = apply_readability_gate(payload, assessment)
     assert out["issues"]["error"] == []
-    assert len(out["issues"]["warn"]) == 1
-    manual = out["issues"]["warn"][0]
-    assert manual["rule"] == "READABILITY-GATE"
-    assert manual["severity"] == "manual_review"
+    assert [item["rule"] for item in out["issues"]["warn"]] == ["V33-002", "V33-101"]
+    assert all(item["severity"] == "manual_review" for item in out["issues"]["warn"])
     assert len(out["readability_gate"]["suppressed"]) == 2
     assert out["readability_gate"]["suppressed"][0]["rule"] == "V33-002"
+
+
+@pytest.mark.parametrize("dual", [False, True])
+def test_scan_gate_keeps_verified_percent_after_unread_page(dual):
+    evidence = {
+        "page": 3, "source_method": "native_text", "source_identity_status": "verified",
+        "verification_status": "verified", "location_level": "exact_cell",
+    }
+    later = {**_gated_error("V33-004", "121%"), "id": "later", "evidence": [evidence]}
+    unread = {**_gated_error("V33-004", "111%"), "id": "unread",
+              "evidence": [{**evidence, "page": 2}]}
+    missing = {**_gated_error("V33-002", "缺表"), "evidence": [evidence]}
+    findings = [later, unread, missing]
+    if dual:
+        payload = {"rule_findings": findings}
+    else:
+        payload = {"issues": {"all": findings, "error": list(findings), "warn": []}}
+    apply_readability_gate(payload, {
+        "page_coverage": .9, "scanned_page_count": 1, "scanned_pages": [2],
+    })
+    assert [item["severity"] for item in findings] == ["error", "manual_review", "manual_review"]
+    if not dual:
+        assert payload["issues"]["error"] == [later]
+        assert payload["issues"]["warn"] == [unread, missing]
+
+
+@pytest.mark.parametrize("gap_code,gap_cell,expected", [
+    ("FIN_09_state_capital", None, "error"),
+    ("FIN_04_fiscal_grant_total", "another-cell", "error"),
+    ("FIN_04_fiscal_grant_total", "empty", "manual_review"),
+    ("FIN_04_fiscal_grant_total", None, "manual_review"),
+])
+def test_scan_gate_checks_receipt_and_underlying_table_scope(gap_code, gap_cell, expected):
+    table_code = "FIN_04_fiscal_grant_total"
+    finding = {
+        **_gated_error("V33-242", "财政拨款总计不平"),
+        "source_binding_status": "bound",
+        "location": {"table_code": table_code, "native_blank_sources": [
+            {"physical_page": 3, "source_cell_id": "empty"},
+        ]},
+        "evidence": [{
+            "page": 3, "source_method": "native_text", "source_identity_status": "verified",
+            "verification_status": "verified", "location_level": "exact_cell", "fact_uid": "total",
+        }],
+    }
+    receipt = {
+        "rule_id": "V33-242", "status": "fail", "fact_migration_status": "complete",
+        "evaluation_basis": "fiscal_fact", "issue_refs": [finding["id"]],
+        "required_fact_ids": ["total"], "operand_fact_ids": ["total"],
+        "cell_observations": [{"source_cell_id": "empty"}],
+    }
+    apply_readability_gate({"rule_findings": [finding]}, {
+        "page_coverage": .9, "scanned_page_count": 1, "scanned_pages": [2],
+        "table_reading": {"gaps": [{"page": 2, "table_code": gap_code, "source_cell_id": gap_cell}]},
+    }, fact_receipts=[receipt])
+    assert finding["severity"] == expected
 
 
 def test_scan_gate_noop_for_readable_docs():
@@ -624,7 +678,7 @@ def _scan_assessment(page_texts: List[str], page_tables: List[Any]) -> Dict[str,
 
 
 def test_scan_sim_mixed_end_to_end_gate_zeroes_errors():
-    """MR-3 端到端（真实版式派生夹具）：error 级 9 → 0，只留一条转人工评语。
+    """MR-3（真实版式派生夹具）：证据不足的错误转待复核。
 
     夹具 `fixtures/scan_sim_mixed_page_data.json` 派生自 corpus/DOC-B1-001/sample.pdf：
     前 8 页保留文本层、第 9 页起全部栅格化（无文本、无表格）。这条与前面两条合成
@@ -669,7 +723,7 @@ def test_scan_sim_mixed_end_to_end_gate_zeroes_errors():
 
     gated = apply_readability_gate(payload, assessment)
     assert gated["issues"]["error"] == []
-    gate_items = [i for i in gated["issues"]["warn"] if i["rule"] == "READABILITY-GATE"]
-    assert len(gate_items) == 1
+    gate_items = [i for i in gated["issues"]["warn"] if "READABILITY-GATE" in i.get("tags", [])]
+    assert len(gate_items) == len(errors)
     assert gate_items[0]["severity"] == "manual_review"
     assert len(gated["readability_gate"]["suppressed"]) == len(errors)

@@ -112,6 +112,8 @@ def operand_rejection_reason(fact: FiscalFact, organization: Optional[str] = Non
     if fact.extra_dims.get("org_scope_pending") and "org_scope" in (ACTIVE_IDENTITY.get() if required_dimensions is None else required_dimensions):
         return "材料汇总口径待确认；本规则依赖该维度"
     if fact.extra_dims.get("table_reading_status") == "incomplete":
+        if fact.extra_dims.get("table_reading_cell_id"):
+            return "来源金额格的原字符存在重叠或可见性冲突，金额需复核"
         return "来源表仍有未完成读取的区域，不能据此确认勾稽结论"
     owner_reason = _owner_rejection_reason(fact, organization)
     if owner_reason:

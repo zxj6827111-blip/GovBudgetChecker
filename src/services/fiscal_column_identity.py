@@ -311,6 +311,13 @@ def canonical_column_mappings(fragment, rule):
                 # An explicit business header beats a shared stage wrapper.
                 # e.g. 合计/基本支出/项目支出 all sit under 支出决算数.
                 score = (1 if generic_stage else 3) if alias in path else (0 if generic_stage else 2)
+                if (rule.code == "FIN_05_general_public_expenditure" and measure == "total_actual"
+                        and alias == "合计" and any(
+                            col < len(row) and normalize_text(str(row[col] or "")) == alias
+                            for row in fragment.rows[:fragment.header_row_count]
+                        )):
+                    # 左列印出的“合计”优先于右列为补父表头而继承的同名文字。
+                    score = 4
                 scores.append(score)
             if scores:
                 candidates.append((max(scores), col))

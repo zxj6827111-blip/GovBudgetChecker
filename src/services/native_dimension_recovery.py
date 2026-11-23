@@ -294,23 +294,26 @@ def repair_native_code_baselines(page, table):
     return replace(table, rows=rows, cells=[updates.get((c.row_idx, c.col_idx), c) for c in table.cells])
 
 
-def repair_native_cross_page_name(previous_page, page, previous, current, physical):
+def repair_native_cross_page_name(previous_page, page, previous, current, physical, *, economic_name_column=None):
     """同网格续页顶端的孤立名称尾部，只能接回上一页最后一个名称格。"""
-    if (previous.table_code != 'FIN_05_general_public_expenditure'
+    allowed = {'FIN_06_basic_expenditure'} if economic_name_column is not None else {
+        'FIN_02_income', 'FIN_05_general_public_expenditure'}
+    if (previous.table_code not in allowed
             or previous.extraction_method not in {'lines', 'lines_strict'}
             or not previous.cells
+            or not previous.rows or not current.rows
             or current.page_number - max(c.page_number for c in previous.cells) != 1
             or current.extraction_method not in {'lines', 'lines_strict'}
             or not current.table_code.startswith('UNKNOWN_')
-            or {len(row) for row in previous.rows} != {5}
-            or {len(row) for row in current.rows} != {5}):
+            or len({len(row) for row in [*previous.rows, *current.rows]}) != 1):
         return physical
     last = len(previous.rows) - 1
-    names = [c for c in previous.cells if c.row_idx == last and c.col_idx == 1 and c.bbox]
-    if len(names) != 1 or not re.fullmatch(r'\d{3}(?:\d{2}){0,2}', str(previous.rows[last][0] or '')):
+    name_col = economic_name_column if economic_name_column is not None else 1
+    names = [c for c in previous.cells if c.row_idx == last and c.col_idx == name_col and c.bbox]
+    if len(names) != 1 or not re.fullmatch(r'\d{3}(?:\d{2}){0,2}', str(previous.rows[last][name_col - 1] or '')):
         return physical
     name = names[0]
-    current_names = [c for c in current.cells if c.col_idx == 1 and c.bbox]
+    current_names = [c for c in current.cells if c.col_idx == name_col and c.bbox]
     if not current_names or any(abs(min(current_names, key=lambda c: c.bbox[2] - c.bbox[0]).bbox[i]
                                    - name.bbox[i]) > 1 for i in (0, 2)):
         return physical
@@ -320,8 +323,8 @@ def repair_native_cross_page_name(previous_page, page, previous, current, physic
         return physical
     top, bottom = current.bbox[1] - height, current.bbox[1]
     first = [str(value or '').strip() for value in current.rows[0]]
-    if first[1] and not any(value for col, value in enumerate(first) if col != 1):
-        orphan = [c for c in current.cells if c.row_idx == 0 and c.col_idx == 1 and c.bbox]
+    if first[name_col] and not any(value for col, value in enumerate(first) if col != name_col):
+        orphan = [c for c in current.cells if c.row_idx == 0 and c.col_idx == name_col and c.bbox]
         if len(orphan) != 1:
             return physical
         top, bottom = orphan[0].bbox[1], orphan[0].bbox[3]
@@ -334,7 +337,8 @@ def repair_native_cross_page_name(previous_page, page, previous, current, physic
             or max(s[2][1] for s in samples) - min(s[2][1] for s in samples) > 3):
         return physical
     tail = ''.join(s[1]['text'] for s in samples)
-    if not re.fullmatch(r'[\u4e00-\u9fff]{2,12}', tail) or any(t in tail for t in ('表', '单位', '科目', '说明')):
+    minimum = 1 if economic_name_column is not None else 2
+    if not re.fullmatch(rf'[\u4e00-\u9fff]{{{minimum},12}}', tail) or any(t in tail for t in ('表', '单位', '科目', '说明')):
         return physical
     source_uid = name.origin_fragment_uid or previous.fragment_uid
     source_row = name.origin_row_idx if name.origin_row_idx is not None else name.row_idx

@@ -410,9 +410,16 @@ class FiscalFactMaterializer:
             }
         if total_markers and not code:
             # 人员经费合计 / 公用经费合计 等合法结构合计：保留原名称与既有总计角色。
+            # 窄格折行时上一行末 1~2 字偶有溢入合计格首行（如“出\n公用经费合计”），
+            # 仅当换行后整行恰为标准结构合计名且前缀 <=2 个汉字时归一为标准名。
+            marker_raw = str(total_markers[0] or "").strip()
+            spilled = re.fullmatch(
+                r"[\u4e00-\u9fff]{1,2}\n\s*(人员经费合计|公用经费合计)",
+                marker_raw,
+            )
             return {
                 "classification_code": "total",
-                "classification_name": total_markers[0],
+                "classification_name": spilled.group(1) if spilled else total_markers[0],
                 "classification_status": "structural_total",
             }
         if code:
@@ -625,6 +632,26 @@ class FiscalFactMaterializer:
             for lf in legacy_facts
             if re.fullmatch(r"\d{5}", str(lf.classification_code or "") or "")
         }
+        # FIN_06 经济分类表内已打印的 3 位类编码与 5 位款编码集合，用于对单行编码
+        # 位数异常（如 6 位“302041 水费”）或漏码标准“其他…”行（如“其他资本性支出”→31099）
+        # 解耦锚定，避免单行排版/录码笔误阻塞整张基本支出表的跨表与汇总核对；
+        # 原件编码缺陷本身由 V33-243 正式报出。
+        printed_econ_classes = {
+            str(lf.classification_code or "")
+            for lf in legacy_facts
+            if re.fullmatch(r"3\d{2}", str(lf.classification_code or "") or "")
+        }
+        printed_econ_codes = {
+            str(lf.classification_code or "")
+            for lf in legacy_facts
+            if re.fullmatch(r"3\d{4}", str(lf.classification_code or "") or "")
+        }
+        _ECON_UNIQUE_OTHER_CODES = {
+            "其他工资福利支出": "30199",
+            "其他商品和服务支出": "30299",
+            "其他对个人和家庭的补助": "30399",
+            "其他资本性支出": "31099",
+        }
         for legacy in legacy_facts:
             column_fund_scope,fund_identity_conflict=measure_fund_scope(table.table_code,table.title,
                 (legacy.extra_dims or{}).get('source_header'))
@@ -641,6 +668,13 @@ class FiscalFactMaterializer:
                 and str(legacy.classification_code)[:5] in printed_kuan_codes
                 and bool(legacy.classification_name)
             )
+            econ_code_prefix_anchored = (
+                table.table_code == "FIN_06_basic_expenditure"
+                and classification_status == "code_format_unverified"
+                and bool(re.fullmatch(r"3\d{5}", str(legacy.classification_code or "") or ""))
+                and str(legacy.classification_code)[:3] in printed_econ_classes
+                and bool(legacy.classification_name)
+            )
             identity_conflict = classification_status == 'code_total_conflict'
             raw_conflict = (legacy.extra_dims or {}).get('classification_conflict') or {}
             classification_conflict: Dict[str, Any] = (
@@ -648,6 +682,17 @@ class FiscalFactMaterializer:
             )
             missing_subject_code = (bool(code_columns.intersection(source_label_cols))
                                     and not legacy.classification_code)
+            norm_econ_name = re.sub(r"\s+", "", str(legacy.classification_name or ""))
+            expected_missing_econ_code = (
+                _ECON_UNIQUE_OTHER_CODES.get(norm_econ_name)
+                if table.table_code == "FIN_06_basic_expenditure" and missing_subject_code
+                else None
+            )
+            econ_missing_code_anchored = bool(
+                expected_missing_econ_code
+                and expected_missing_econ_code[:3] in printed_econ_classes
+                and expected_missing_econ_code not in printed_econ_codes
+            )
             measure_cell = None
             if legacy.source_col_idx is not None:
                 measure_cell = cells_by_position.get((legacy.row_order, legacy.source_col_idx))
@@ -782,8 +827,9 @@ class FiscalFactMaterializer:
                         "ambiguous" if native_conflict or fund_identity_conflict or identity_conflict else "low_confidence"
                         if table.confidence < 0.8 or (legacy.parse_confidence < 0.8 and not native_evidence_qualified)
                         or not column_identity_safe
-                        or missing_subject_code
-                        or (classification_status == 'code_format_unverified' and not code_prefix_anchored)
+                        or (missing_subject_code and not econ_missing_code_anchored)
+                        or (classification_status == 'code_format_unverified'
+                            and not (code_prefix_anchored or econ_code_prefix_anchored))
                         or not amount_usable
                         or (is_ocr_source and not ocr_qualified)
                         else "unverified"
@@ -801,7 +847,8 @@ class FiscalFactMaterializer:
                         "column_identity_status": "bound" if column_identity_safe else "cross_page_width_drift",
                         "row_identity_status": (
                             "code_total_conflict" if identity_conflict
-                            else "missing_subject_code" if missing_subject_code else "bound"
+                            else "missing_subject_code" if (missing_subject_code and not econ_missing_code_anchored)
+                            else "bound"
                         ),
                         "classification_status": classification_status or None,
                         **({
@@ -811,6 +858,24 @@ class FiscalFactMaterializer:
                                 "basis": "printed_kuan_prefix_plus_name_in_same_table",
                             },
                         } if code_prefix_anchored else {}),
+                        **({
+                            "econ_code_anomaly": {
+                                "kind": "code_length_anomaly",
+                                "raw_code": str(legacy.classification_code),
+                                "parent_class": str(legacy.classification_code)[:3],
+                                "subject_name": norm_econ_name,
+                                "basis": "printed_econ_class_prefix_plus_name_in_same_table",
+                            },
+                        } if econ_code_prefix_anchored else {}),
+                        **({
+                            "econ_code_anomaly": {
+                                "kind": "missing_subject_code",
+                                "expected_code": expected_missing_econ_code,
+                                "parent_class": expected_missing_econ_code[:3],
+                                "subject_name": norm_econ_name,
+                                "basis": "unique_standard_other_econ_name_under_printed_class",
+                            },
+                        } if econ_missing_code_anchored else {}),
                         **({"row_identity_conflict": {
                             "status": "code_total_conflict",
                             "reason": "编码与合计标记同时出现在同一行的标签列，来源证据未消除冲突",

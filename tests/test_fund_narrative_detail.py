@@ -47,7 +47,7 @@ from src.engine.check_obligations import (  # noqa: E402
 )
 from src.engine.pipeline import build_document, run_rules_with_outcomes  # noqa: E402
 from src.engine.rule_outcome import STATUS_FAIL, RuleDeferred  # noqa: E402
-from src.engine.rules_v33 import R33TxtFundDetail  # noqa: E402
+from src.engine.rules_v33 import R33TxtFundDetail, _txt_fund_bind_statements  # noqa: E402
 
 RULE_ID = "V33-TXT-FUND-DETAIL"
 OBLIGATION_ID = "OBL-TXT-FUND-DETAIL"
@@ -133,6 +133,19 @@ def _truth_mutate_narrative(data: Dict[str, Any], old: str, new: str) -> None:
     page = data["page_texts"][PAGE_FUND_NARRATIVE - 1]
     assert old in page, f"P37 未找到待变异原文: {old!r}"
     data["page_texts"][PAGE_FUND_NARRATIVE - 1] = page.replace(old, new)
+
+
+def test_dash_item_decimal_on_next_line_does_not_start_a_new_item():
+    body = ("支出具体情况如下：\n1、城乡社区支出-国有土地使用权出让收入安排的支出-土\n"
+            "地出让业务支出。主要用于：信息化运维项目。年初预算为\n"
+            "106.19 万元，支出决算为 106.19 万元。决算数与预算数持平。")
+    bindings, blocked = _txt_fund_bind_statements(body, 2025)
+    assert not blocked and len(bindings) == 1
+    assert bindings[0]["amount"] == Decimal("106.19")
+
+    different_item = body.replace("，支出决算为 106.19 万元。", "。\n2.另一项。支出决算为 106.19 万元。")
+    bindings, blocked = _txt_fund_bind_statements(different_item, 2025)
+    assert not bindings and blocked
 
 
 # ---------------------------------------------------------------------------

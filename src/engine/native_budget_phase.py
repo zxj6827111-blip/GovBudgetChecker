@@ -6,6 +6,8 @@ from decimal import Decimal
 
 from .rule_policy import amount_difference_exceeds_policy
 
+GENERIC_BUDGET_PHASE_GAP = '表头仅披露“预算数”，未取得与原文一致的显式预算阶段证据，请复核年初/全年/调整后预算口径'
+
 
 def phase_reason(doc, fact, stage, indicator):
     if stage == '决算' or fact is None:
@@ -48,4 +50,4 @@ def phase_reason(doc, fact, stage, indicator):
             and '预算数' in str(totals[0].extra_dims.get('source_header') or '')
             and not amount_difference_exceeds_policy(next(iter(total_amounts)) - totals[0].normalized_value)):
         return None
-    return '表头仅披露“预算数”，未取得与原文一致的显式预算阶段证据，请复核年初/全年/调整后预算口径'
+    return GENERIC_BUDGET_PHASE_GAP

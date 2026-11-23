@@ -361,10 +361,11 @@ class EngineRuleRunner:
         """恢复后的重跑必须经过与首次执行相同的规则身份约束。"""
 
         def _rerun() -> Any:
+            from src.engine.rule_deadline import rule_item_deadline
             from src.engine.rule_identity import rule_identity_requirements
 
-            with rule_identity_requirements(document, str(rule_id)):
-                return rule_obj.apply(document)
+            with rule_item_deadline(document), rule_identity_requirements(document, str(rule_id)):
+                return list(rule_obj.apply(document) or [])
 
         return _rerun
 
@@ -464,6 +465,12 @@ class EngineRuleRunner:
         解析器内部只取基名，并处理了 Windows 路径在 Linux 上取基名的问题。
         """
         meta = job_context.meta or {}
+        snapshot = meta.get("document_profile")
+        if isinstance(snapshot, dict):
+            field = snapshot.get("report_kind")
+            snapshot_kind = field.get("value") if isinstance(field, dict) else None
+            if snapshot_kind in {"unknown", "non_budget", "budget", "final"}:
+                return snapshot_kind
         explicit = str(meta.get("report_kind") or "").strip().lower()
         page_texts: List[str] = []
         if document is not None and document.page_texts:
@@ -527,6 +534,8 @@ class EngineRuleRunner:
             f"report_kind={report_kind}"
         )
 
+        from src.engine.rule_deadline import RuleItemTimeout, rule_item_deadline
+
         all_findings = []
         self._stats = {
             "total_rules": len(selected_rules),
@@ -549,8 +558,8 @@ class EngineRuleRunner:
                     # 鐩存帴璋冪敤瑙勫垯瀵硅薄鐨刟pply鏂规硶
                     document.current_rule_code = rule_id
                     from src.engine.rule_identity import rule_identity_requirements
-                    with rule_identity_requirements(document, rule_id):
-                        issues = rule_obj.apply(document)
+                    with rule_item_deadline(document), rule_identity_requirements(document, rule_id):
+                        issues = list(rule_obj.apply(document) or [])
 
                     int((time.time() - start_time) * 1000)
                     from src.engine.rules_v33 import apply_delivery_suppressions
@@ -597,6 +606,13 @@ class EngineRuleRunner:
 
                     logger.debug(f"Rule {rule_id} found {len(findings)} issues")
 
+                except RuleItemTimeout as error:
+                    self._stats["failed_rules"] += 1
+                    self._outcomes.append(RuleOutcome(
+                        rule_id=str(rule_id), status=STATUS_EXECUTION_ERROR, detail=str(error),
+                        unresolved_reasons=[str(error)], reason_codes=["execution_error"],
+                    ))
+                    continue
                 except RuleOutcomeSignal as signal:
                     # 有界恢复：只对取数/绑定类原因尝试一次既有恢复策略，
                     # 成功后重跑本条规则；材料缺陷与执行异常不在此重试。
@@ -694,8 +710,7 @@ class EngineRuleRunner:
                     self._stats["total_findings"] += len(findings)
 
                     detail_str = str(signal.detail or signal)
-                    # 表格准入延期在此做二次分类：rule_identity.py 保持冻结原样，
-                    # 材料格式缺陷/空表与技术映射失败在这里分开并登记结构化事实。
+                    # 区分原件金额/空表与技术映射缺口，并登记结构化事实。
                     from src.engine.table_admission_policy import reclassify_admission_deferral
 
                     rewritten = reclassify_admission_deferral(document, str(rule_id), detail_str)

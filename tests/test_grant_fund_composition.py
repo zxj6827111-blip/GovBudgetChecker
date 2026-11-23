@@ -171,10 +171,12 @@ def test_fund_zero_check_relaxes_total_table_blanks_only_when_both_empty(monkeyp
         captured['strict'] = strict_unknown_values
         return [['已验证原格']]
 
+    def fake_check_funds(_rule, _doc, *, excluded_table_codes):
+        captured['excluded_table_codes'] = excluded_table_codes
+        return []
+
     monkeypatch.setattr(rules_v33, '_get_table_rows', fake_get_rows)
-    monkeypatch.setattr(
-        native_table_arithmetic, 'check_fund_zero_disclosures', lambda _rule, _doc: []
-    )
+    monkeypatch.setattr(native_table_arithmetic, 'check_fund_zero_disclosures', fake_check_funds)
     doc = SimpleNamespace(parse_artifact=object())
 
     monkeypatch.setattr(
@@ -182,6 +184,12 @@ def test_fund_zero_check_relaxes_total_table_blanks_only_when_both_empty(monkeyp
     )
     assert rules_v33.R33122_EmptyTableCheck().apply(doc) == []
     assert captured['strict'] is False
+    assert not captured['excluded_table_codes']
+
+    excluded = {'FIN_08_gov_fund'}
+    assert rules_v33.R33122_EmptyTableCheck().apply(doc, excluded_table_codes=excluded) == []
+    assert captured['strict'] is True
+    assert captured['excluded_table_codes'] == excluded
 
     monkeypatch.setattr(
         native_table_arithmetic, 'both_fund_tables_disclosed_empty', lambda _doc: False

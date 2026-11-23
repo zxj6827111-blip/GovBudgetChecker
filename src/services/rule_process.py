@@ -30,6 +30,7 @@ def _rule_worker(
     use_ai_assist: bool,
     report_kind: str,
     rules: Optional[List[Any]] = None,
+    timeout_seconds: float = 60.0,
 ) -> None:
     try:
         # Test-only hook: deterministically block the worker so timeout
@@ -44,12 +45,12 @@ def _rule_worker(
 
         from src.engine.pipeline import build_issues_payload
 
-        payload = build_issues_payload(
-            doc,
-            use_ai_assist,
-            report_kind=report_kind,
-            rules=rules,
-        )
+        from src.engine.rule_deadline import rule_worker_budget
+
+        with rule_worker_budget(timeout_seconds):
+            payload = build_issues_payload(
+                doc, use_ai_assist, report_kind=report_kind, rules=rules,
+            )
         connection.send(("ok", payload))
     except BaseException as exc:
         connection.send(("error", f"{type(exc).__name__}: {exc}"))
@@ -66,20 +67,23 @@ def _run_rules_sync(
     cancel_event: Optional[threading.Event] = None,
 ) -> Dict[str, Any]:
     return _evaluate_in_process(
-        _rule_worker, (doc, use_ai_assist, report_kind, rules), timeout_seconds,
+        _rule_worker, (doc, use_ai_assist, report_kind, rules, timeout_seconds), timeout_seconds,
         cancel_event, name="govbudget-rule-evaluator",
     )
 
 
 def _engine_rule_worker(connection: Connection, runner: Any, job_context: Any,
-                        rules: List[Any], config: Any, generation: Any) -> None:
+                        rules: List[Any], config: Any, generation: Any,
+                        timeout_seconds: float = 60.0) -> None:
     try:
         # spawn 不继承 ContextVar；传递代际以避免已取消的旧任务更新新任务进度。
         from src.services.check_progress import _generation
+        from src.engine.rule_deadline import rule_worker_budget
 
         token = _generation.set(generation)
         try:
-            findings = asyncio.run(runner.run_rules(job_context, rules, config))
+            with rule_worker_budget(timeout_seconds):
+                findings = asyncio.run(runner.run_rules(job_context, rules, config))
             connection.send(("ok", {"findings": findings, "stats": runner.get_stats(),
                                     "outcomes": runner._outcomes}))
         finally:
@@ -168,7 +172,7 @@ def _run_engine_rules_sync(runner: Any, job_context: Any, rules: List[Any], conf
                            timeout_seconds: float, generation: Any,
                            cancel_event: threading.Event) -> Dict[str, Any]:
     return _evaluate_in_process(
-        _engine_rule_worker, (runner, job_context, rules, config, generation),
+        _engine_rule_worker, (runner, job_context, rules, config, generation, timeout_seconds),
         timeout_seconds, cancel_event, name="govbudget-engine-rule-evaluator",
     )
 

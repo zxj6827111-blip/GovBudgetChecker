@@ -130,6 +130,36 @@ def _current_cell_catalog(artifact):
     return cells, conflicting
 
 
+def _uses_number_cell_source(finding, location):
+    return (location.get("defect_type") == "invalid_table_number_format"
+            or ((finding.get("rule_id") or finding.get("rule")) == "V33-004"
+                and bool(location.get("source_cell_id"))))
+
+
+def _number_cell_evidence(location, artifact, file_hash, catalog):
+    """直接核对物理格与原文，重复数字也只绑定本格。"""
+    cell_id = location.get("source_cell_id")
+    cells, conflicts = catalog
+    cell = cells.get(cell_id)
+    page = location.get("page")
+    if (
+        artifact.source_file_hash != file_hash or not cell or cell_id in conflicts
+        or cell.page_number != page or not _bbox(cell.bbox)
+        or cell.extraction_method not in {"lines", "lines_strict", "text"}
+        or cell.raw_text.strip() != location.get("raw_value")
+    ):
+        return None
+    quote = cell.raw_text
+    return {
+        "page": page, "physical_page": page, "quote": quote, "text": quote,
+        "table_code": location.get("table_code"), "table": location.get("table_code"),
+        "source_cell_id": cell_id, "file_hash": file_hash, "bbox": list(cell.bbox),
+        "source_method": "native_text", "source_identity_status": "verified",
+        "location_level": "exact_cell", "verification_status": "verified",
+        "evidence_id": hashlib.sha1("|".join((file_hash, str(page), cell_id, quote)).encode()).hexdigest()[:16],
+    }
+
+
 def _current_cell_evidence(facts, artifact, pages, file_hash, *, cell_catalog=None):
     """Authenticate every original cell, including cells on continuation pages.
 
@@ -351,6 +381,7 @@ def bind_rule_sources(result, *, page_texts, source_file_hash, artifact=None, fa
     unverified. This verifies source identity, never business correctness.
     """
     bound = 0
+    cell_catalog = None
     if not re.fullmatch(r"[0-9a-f]{64}", source_file_hash or ""):
         return {"bound_rule_findings": 0}
     for finding in iter_findings(result):
@@ -368,7 +399,19 @@ def bind_rule_sources(result, *, page_texts, source_file_hash, artifact=None, fa
         bound_refs = []
         literal_refs = []
         blank_calculation_refs = []
-        if has_operands:
+        if _uses_number_cell_source(finding, location):
+            if artifact is not None and cell_catalog is None:
+                cell_catalog = _current_cell_catalog(artifact)
+            cell_ref = (
+                _number_cell_evidence(location, artifact, source_file_hash, cell_catalog)
+                if cell_catalog is not None else None
+            )
+            if cell_ref is None:
+                finding["source_binding_status"] = "unresolved"
+                finding["severity"] = "manual_review"
+                continue
+            evidence = [cell_ref]
+        elif has_operands:
             matching_context = (artifact is not None and fact_context is not None
                                 and artifact.source_file_hash == fact_context.file_hash == source_file_hash
                                 and artifact.parse_run_uid == fact_context.parse_run_uid)
@@ -798,6 +841,11 @@ def _verify_bound_locations(result, *, source_pdf_path, allowed_sources, result_
             located = locator.locate(item)
             for key in ('evidence', 'location', 'page_number', 'bbox', 'location_level', 'verification_status'):
                 finding[key] = getattr(located, key)
+            if (_uses_number_cell_source(finding, located.location)
+                    and located.location_level != "exact_cell"):
+                # 单靠全页搜到相同数字不能认证这一个物理格。
+                finding["severity"] = "manual_review"
+                finding["source_binding_status"] = "unresolved"
             checked += 1
     finally:
         locator.close()

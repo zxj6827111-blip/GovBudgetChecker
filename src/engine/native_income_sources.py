@@ -1,6 +1,6 @@
 """收入表横向关系从有效事实取数，认证空白仅作为本关系的观察项。"""
-from .native_hierarchy_checks import _table_view, _compare, _cell_id, check_native_detail_tables
-from .native_table_arithmetic import select, receipt, finish, cluster_rounding
+from .native_hierarchy_checks import _table_view, _compare, _cell_id, _select, check_native_detail_tables
+from .native_table_arithmetic import _native_grid_coverage_error, select, receipt, finish, cluster_rounding
 from .fact_context import _column_mappings_for_instance
 from .rule_outcome import RuleDeferred
 
@@ -40,15 +40,20 @@ def missing_header_findings(rule, doc):
     return issues
 
 
-def check_income_sources(rule, doc):
+def check_income_sources(rule, doc, *, require_grid_coverage=False):
     header_issues = missing_header_findings(rule, doc)
-    view, error = _table_view(doc, CODE)
+    view, error = _table_view(doc, CODE, include_income_sources=require_grid_coverage)
     if error:
         return finish(rule, header_issues, [error])
-    instance, table, _, _, rows, facts = view
+    instance, table, _, cells, rows, facts = view
+    if require_grid_coverage:
+        coverage_error = _native_grid_coverage_error(doc.parse_artifact, instance, table)
+        if coverage_error:
+            return finish(rule, header_issues, [coverage_error])
     mappings = _column_mappings_for_instance(instance, table)
     roles = [m['canonical_measure'] for m in mappings]
-    if any(roles.count(role) != 1 for role in ('total_actual', *SOURCES)):
+    if any(roles.count(role) != 1 for role in ('total_actual', *SOURCES)) or (
+            require_grid_coverage and len({m['source_col_idx'] for m in mappings}) != len(mappings)):
         return finish(rule, header_issues, ['收入表来源列未绑定至唯一已确认模板'])
     from .native_column_shift import (
         INCOME_LABELS, column_shift_hint, column_shift_issue, detect_column_shift,
@@ -61,7 +66,7 @@ def check_income_sources(rule, doc):
                                                              mapping['canonical_measure']))
         for mapping in sorted(mappings, key=lambda item: int(item['source_col_idx']))
     ]
-    shift = detect_column_shift(columns, facts, org_name=doc.fact_context.org_name)
+    shift = None if require_grid_coverage else detect_column_shift(columns, facts, org_name=doc.fact_context.org_name)
     shift_note = ('经列合计比对，本表明细行疑似整体错位一列（各列明细之和逐列等于合计行相邻列），'
                   '请优先核对原件列位。' if shift else '')
     issues, unresolved = [], []
@@ -69,13 +74,15 @@ def check_income_sources(rule, doc):
         terms, errors, unknown_cells = [], [], []
         for role in ('total_actual', *SOURCES):
             mapping = next(item for item in mappings if item['canonical_measure'] == role)
-            cell = next((c for c in table.cells if c.row_idx == rows[code]
-                         and c.col_idx == mapping['source_col_idx']), None)
+            cell = cells.get((rows[code], int(mapping['source_col_idx'])))
             # 2026-11-16：整行金额格均为原件认证空白的科目（如 2013499），
             # 合计列同样按 U-5 约定取 0；不能只允许来源列取零而让合计列
             # 永远“取数不足”。空白项仍须逐格通过 blank_term 的原页复验。
-            term, error = select(doc, facts, role, code=code, allow_native_blank=True,
-                                 source_cell=cell)
+            if require_grid_coverage:
+                term, error = _select(doc, (instance, table, mappings, cells, rows, facts), code, role)
+            else:
+                term, error = select(doc, facts, role, code=code, allow_native_blank=True,
+                                     source_cell=cell)
             if error:
                 errors.append(error)
                 unknown_cells.append({'indicator': role, 'column_name': mapping.get('source_col_name'),
@@ -98,7 +105,7 @@ def check_income_sources(rule, doc):
             known_mismatch = parent is not None and known and classify_amount_diff(
                 parent.normalized_value, sum(term.normalized_value for term in known), len(known)
             )[0] == 'mismatch'
-            if known_mismatch:
+            if known_mismatch and not require_grid_coverage:
                 from .native_table_arithmetic import journal
                 from .native_three_public_ratios import operand_ref
                 ids, evidence_ids = journal(rule, doc, terms)

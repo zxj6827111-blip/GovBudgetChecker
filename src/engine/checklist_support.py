@@ -31,7 +31,7 @@ _TOC_LEADER_RE = re.compile(r"(?:\.{4,}|…{2,}|·{4,}|-{6,}|_{6,})")
 
 def report_kind(doc: Any) -> str:
     kind = str(getattr(doc, "report_kind", "") or "").strip().lower()
-    if kind in {"budget", "final"}:
+    if kind in {"budget", "final", "unknown", "non_budget"}:
         return kind
     from src.services.document_profile_resolver import resolve_report_kind_from_path
 
