@@ -15,8 +15,11 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 
+from src.engine.fact_context import FactContext
 from src.engine.pipeline import build_document
 from src.engine.rule_outcome import RuleDeferred, RuleNotApplicable
 from src.engine.rules_v33 import (
@@ -36,6 +39,7 @@ from src.engine.rules_v33 import (
     R33246_DomesticReceptionDisclosure,
 )
 from src.services.fiscal_table_rules import detect_table_code
+from src.schemas.parse_artifact import FiscalFact
 
 
 def make_doc(page_texts, page_tables):
@@ -79,6 +83,29 @@ def test_cmm004_same_domain_mismatch_hits():
     doc.report_kind = "budget"
     issues = CMM004_CodeMirrorConsistency().apply(doc)
     assert any("201" in str(i.message) or "203" in str(i.message) for i in issues)
+
+
+def test_cmm004_records_both_consumed_facts_without_using_uncertain_peer():
+    doc = make_doc([
+        "部门收入预算总表\n201 一般公共服务支出 100.00\n203 海关事务支出 50.00",
+        "部门支出预算总表\n201 一般公共服务支出 90.00\n203 海关事务支出 40.00",
+    ], [[], []])
+    doc.report_kind = "budget"
+    doc.fact_context = FactContext([
+        FiscalFact(f"{side}:{code}", "total_actual", raw, "万元", Decimal(raw),
+                   fiscal_year=2025, period="本年", fund_scope="all_funds", budget_stage="年初预算",
+                   subject_code=code, table_code=table, recognition_status=status)
+        for side, code, raw, status, table in (
+            ("income", "201", "100", "unverified", "FIN_02_income"),
+            ("expense", "201", "90", "unverified", "FIN_03_expenditure"),
+            ("income", "203", "50", "unverified", "FIN_02_income"),
+            ("expense", "203", "40", "low_confidence", "FIN_03_expenditure"),
+        )
+    ], fiscal_year=2025)
+    located, uncertain = CMM004_CodeMirrorConsistency().apply(doc)
+    assert [ref["fact_uid"] for ref in located.location["operand_refs"]] == ["income:201", "expense:201"]
+    assert "operand_refs" not in uncertain.location
+    assert [item["fact_uids"] for item in doc.structured_consumption] == [["income:201"], ["expense:201"]]
 
 
 def test_cmm004_domain_mismatch_is_not_applicable():

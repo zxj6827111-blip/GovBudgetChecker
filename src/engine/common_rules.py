@@ -21,6 +21,7 @@ from .rules_v33 import (
     _TXT_FUND_UNIT_TO_WAN,
     _nar_repeat_section_of,
     _nar_repeat_sections,
+    _record_v33_consumption,
     _resolve_fiscal_year,
     _span_page_fragments,
     _txt_fund_display,
@@ -1593,7 +1594,7 @@ class CMM004_CodeMirrorConsistency(Rule):
             location = {**base_location, "row": code}
             message = f"类款项编码 {code} 金额不一致"
             context = getattr(doc, "fact_context", None)
-            if context is not None and context.fiscal_year is not None:
+            if getattr(context, "fiscal_year", None) is not None:
                 from .fact_context import resolve_operand
                 from .native_three_public_ratios import operand_ref
 
@@ -1608,6 +1609,8 @@ class CMM004_CodeMirrorConsistency(Rule):
                     difference = abs(left.value - right.value)
                     if not amount_difference_exceeds_policy(difference):
                         continue
+                    _record_v33_consumption(doc, self.code, left.fact.table_code, left.fact)
+                    _record_v33_consumption(doc, self.code, right.fact.table_code, right.fact)
                     location["operand_refs"] = [operand_ref(left.fact, "收入预算合计"),
                                                 operand_ref(right.fact, "支出预算合计")]
                     location["fact_context_version_token"] = context.version_token
