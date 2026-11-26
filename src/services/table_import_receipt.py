@@ -287,6 +287,8 @@ def build_table_import_receipt(artifact, facts, *, org_name=None):
                                  "fact_count": len(matches), "fact_uids": [f.fact_uid for f in matches],
                                  "column_identity_bound": column_safe,
                                  "rule_rejection": rejection, "reason": reason})
+            if reason == "rule_admission_blocked" and matches[0].extra_dims.get("table_reading_cell_id") == cid:
+                observations[-1]["localized_reading_conflict"] = True
             if reason:
                 unresolved.append(observations[-1])
         positions = {(c.row_idx, c.col_idx) for c in table.cells}

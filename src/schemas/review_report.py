@@ -666,9 +666,7 @@ def build_review_report(
                     for item in confirmed_issues
                     if item.get("id")
                 }
-                for item in _mapping_list(structured_ingest.get("review_items")):
-                    if item.get("id"):
-                        visible_ids.add(str(item["id"]))
+                # 结构化诊断只提供定位。没有可处理的正式问题时，检查仍需人工核对。
                 effective_blocking = {
                     item.obligation_id
                     for item in blocking_coverage_obligations(

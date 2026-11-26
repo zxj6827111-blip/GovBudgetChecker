@@ -118,16 +118,17 @@ def test_one_missing_item_keeps_other_confirmed_issue():
 # ---------------------------------------------------------------------------
 
 
-def test_budget_side_missing_mirror_defers():
+def test_budget_side_missing_mirror_reports_proven_gap():
     body = (
         "1、教育支出（类）普通教育（款）小学教育（项）。年初预算60.00万元，支出决算为50.00万元。\n"
         "2、住房保障支出（类）住房改革支出（款）住房公积金（项）。支出决算为40.00万元。\n"
     )
-    _issues, doc, signal = _run(body)
-    assert signal is not None and signal.status == "insufficient_data"
-    assert "item_disclosure_missing" in getattr(signal, "reason_codes", [])
-    receipt = _receipt(doc, "budget")
-    assert receipt is not None and receipt["status"] == "insufficient_data"
+    doc, (issues, outcomes) = _outcomes(body)
+    assert outcomes[0].status == "fail"
+    issue = next(issue for issue in issues if issue.location.get("unaccounted_budget_gap_wan") == "40.00")
+    assert "住房公积金" in issue.location["not_included_items"][0]["item_head"]
+    assert _receipt(doc, "budget")["status"] == "fail"
+    assert _receipt(doc, "final")["status"] == "pass"
 
 
 def test_all_item_budget_amounts_missing_defers():

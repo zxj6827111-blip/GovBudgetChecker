@@ -7,12 +7,47 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from src.engine.table_admission_policy import (
     build_message,
     classify_blocked_tables,
     register_material_format_gap,
 )
 from src.engine.diagnostic_fields import lookup_failure, finalize
+
+
+@pytest.mark.parametrize("rule_name", ["V33-004", "V33-109", "V33-114"])
+def test_blocked_table_does_not_hide_findings_on_an_independent_page(rule_name):
+    from src.engine.fact_context import FactContext
+    from src.engine.pipeline import build_document, build_issues_payload
+    from src.engine.rules_v33 import (
+        R33004_CellNumberValidity, R33109_EmptyTables_Statement, R33114_EmptyTableStatementCheck,
+    )
+    from src.schemas.parse_artifact import LogicalTableInstance, ParseArtifact
+
+    fund_title = "政府性基金预算财政拨款收入支出决算表"
+    capital_title = "国有资本经营预算财政拨款收入支出决算表"
+    doc = build_document("sample.pdf", [fund_title, "续表 130%", capital_title + "\n117%"],
+                         [[[["科目", "决算数"]]], [[["科目", "130%"]]], [[["科目", "117%"]]]], 1000)
+    code = "FIN_08_gov_fund"
+    doc.parse_artifact = ParseArtifact(source_file_hash="a" * 64, parse_run_uid="run",
+        logical_tables=[LogicalTableInstance("blocked", code, fund_title, [], 1, 2)])
+    doc.fact_context = FactContext(facts=[], file_hash="a" * 64, parse_run_uid="run", report_kind="final")
+    cache_key = (doc.parse_artifact.source_file_hash, doc.parse_artifact.parse_run_uid,
+                 doc.fact_context.version_token)
+    doc._table_admission_receipt = (cache_key, {"mapping_incomplete_tables": [{
+        "table_code": code, "fragment_uid": "blocked", "page": 1,
+        "reasons": {"amount_column_unmapped": 1},
+    }]})
+    if rule_name != "V33-004":
+        doc.page_tables[-1] = [[["科目", "决算数"]]]
+    rule = {cls.code: cls for cls in (R33004_CellNumberValidity, R33109_EmptyTables_Statement,
+                                     R33114_EmptyTableStatementCheck)}[rule_name]
+    payload = build_issues_payload(doc, report_kind="final", rules=[rule])
+    assert [item["location"]["page"] for item in payload["issues"]["all"]] == [3]
+    [unresolved] = payload["rule_execution_summary"]["unresolved_rules"]
+    assert unresolved["status"] == "insufficient_data" and code in unresolved["detail"]
 
 
 def _receipt(cells, table_reasons, arithmetic=None):

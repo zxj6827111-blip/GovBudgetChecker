@@ -115,7 +115,13 @@ def test_stage_exception_does_not_cross_items():
         "1、教育支出（类）普通教育（款）小学教育（项）。年初无预算，支出决算为50.00万元。\n"
         "2、住房保障支出（类）住房改革支出（款）住房公积金（项）。支出决算为40.00万元。\n"
     )
-    _assert_defers(body, code="item_disclosure_missing")
+    doc, (issues, outcomes) = _outcomes(body)
+    assert outcomes[0].status == "fail"
+    gap = next(issue for issue in issues if issue.location.get("unaccounted_budget_gap_wan") == "100.00")
+    missing = gap.location["not_included_items"]
+    assert len(missing) == 1 and "住房公积金" in missing[0]["item_head"]
+    assert _receipt(doc, "budget")["status"] == "fail"
+    assert _receipt(doc, "final")["status"] == "pass"
 
 
 # ---------------------------------------------------------------------------

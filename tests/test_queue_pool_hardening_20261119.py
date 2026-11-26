@@ -191,3 +191,11 @@ async def test_resolve_latest_structured_ingest_job_parses_each_status_once(tmp_
     assert second == first
     # job-b 只在第一次被完整解析；job-a 走调用方传入的 payload，本就不读盘。
     assert parsed.count("job-b") == 1, "未变化的任务不应重复解析 status.json"
+
+    runtime._JOB_INGEST_SCOPE_CACHE.clear()
+    parsed.clear()
+    restarted = runtime.resolve_latest_structured_ingest_job(
+        "job-a", filename="job-a.pdf", current_status_payload=dict(current_payload), **kwargs
+    )
+    assert restarted == first
+    assert parsed == [], "重启后用文件签名匹配的轻量索引判断版本"

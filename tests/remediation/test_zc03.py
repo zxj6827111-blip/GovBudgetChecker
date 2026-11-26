@@ -34,7 +34,10 @@ def test_canonical_registry_routes_every_production_family() -> None:
     assert len(all_rule_ids()) == 117
     assert len(select_rules("budget")) == 54
     assert len(select_rules("final")) == 90
-    assert len(select_rules("unknown")) == 27
+    assert len(select_rules("unknown")) == 28
+    unknown_codes = {rule.code for rule in select_rules("unknown")}
+    assert "V33-004" in unknown_codes
+    assert "V33-002" not in unknown_codes
     # AC-01：已迁移规则以统一事实为输入（fact_inputs 非空、migration=complete），
     # 其余规则仍是 legacy_document/pending——目录必须如实区分两种口径。
     migrated = {

@@ -7,7 +7,7 @@ from pathlib import Path
 import pdfplumber
 import pytest
 
-from src.engine.native_final_disclosure import _hierarchy_fact
+from src.engine.native_final_disclosure import _ITEM, _hierarchy_fact
 from src.engine.rules_v33 import _tolerant_functional_item_codes, R33222_Narrative5_T5, R33227_Narrative5_T5_NameConsistency
 from src.services.fiscal_subject_names import subject_name_candidates, subject_variant_key
 from tests.remediation.test_native_parent_name_order import document
@@ -73,6 +73,23 @@ def test_variant_binds_only_with_original_parent_and_code_chain(original, narrat
     assert error is None and fact.subject_code == '2120101'
     assert any(source.get('basis') == 'unique_native_code_parent_and_name_variant' for source in sources)
     assert doc.fact_context.to_dict() == before
+
+
+@pytest.mark.parametrize('leaf_code,has_competing_mention,expected', [
+    ('2130110', False, '2130110'),
+    ('2130112', False, None),
+    ('2130110', True, None),
+])
+def test_short_variant_requires_printed_code_and_unclaimed_leaf(leaf_code, has_competing_mention, expected):
+    doc, facts = document(entries=[
+        ('213', '农林水支出'), ('21301', '农业农村'), (leaf_code, '执法监管'),
+    ])
+    text = '农林水支出(类)农业农村(款)执法监督(项)。'
+    if has_competing_mention:
+        text += '农林水支出(类)农业农村(款)执法监管(项)。'
+    items = list(_ITEM.finditer(text))
+    fact, _ = _hierarchy_fact(doc, facts, items[0], siblings=items)
+    assert (fact.subject_code if fact is not None else None) == expected
 
 
 @pytest.mark.parametrize('defect', ['unparsed_candidate', 'same_variant', 'wrong_parent', 'foreign_year',

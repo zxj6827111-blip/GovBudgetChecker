@@ -118,6 +118,22 @@ class EvidenceRef:
 # ---------------------------------------------------------------------------
 
 
+#: 金额单元格中表示“无数据/无发生额”的横线类占位符集合。
+DASH_PLACEHOLDER_TEXTS = frozenset(
+    {"-", "--", "---", "—", "——", "–", "––", "－", "－－", "―", "──", "−"}
+)
+
+
+def _strip_nul_obj(value: Any) -> Any:
+    if isinstance(value, str):
+        return value.replace("\x00", "") if "\x00" in value else value
+    if isinstance(value, list):
+        return [_strip_nul_obj(item) for item in value]
+    if isinstance(value, dict):
+        return {k: _strip_nul_obj(v) for k, v in value.items()}
+    return value
+
+
 class CellPresence:
     """单元格取值语义：空白/零/破折号/无此项/未识别分别处理。"""
 
@@ -131,7 +147,7 @@ class CellPresence:
     @classmethod
     def detect(cls, raw_text: Optional[str]) -> str:
         text = str(raw_text or "").strip()
-        if not text or text in {"—", "–", "-", "──", "--", "―"}:
+        if not text or text in DASH_PLACEHOLDER_TEXTS:
             return cls.BLANK if not text else cls.DASH
         compact = text.replace(",", "").replace("，", "")
         if compact in {"0", "0.0", "0.00", "0.000", "0.0000"}:
@@ -179,6 +195,18 @@ class ParsedCell:
     label_recovery: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if self.raw_text and "\x00" in self.raw_text:
+            self.raw_text = self.raw_text.replace("\x00", "")
+        if self.normalized_text and "\x00" in self.normalized_text:
+            self.normalized_text = self.normalized_text.replace("\x00", "")
+        if self.grid_raw_text and "\x00" in self.grid_raw_text:
+            self.grid_raw_text = self.grid_raw_text.replace("\x00", "")
+        if self.native_text_sources:
+            self.native_text_sources = _strip_nul_obj(self.native_text_sources)
+        if self.label_recovery:
+            self.label_recovery = _strip_nul_obj(self.label_recovery)
+        if self.ocr_provenance:
+            self.ocr_provenance = _strip_nul_obj(self.ocr_provenance)
         self.presence = CellPresence.detect(self.raw_text)
         # ZC-01（SYS-15）：单位换算在解析时完成一次——numeric_value 是页面字面值，
         # normalized_value_wan 是万元口径归一值；无单位信息时不猜口径（保持 None）。
@@ -256,6 +284,15 @@ class ParsedTable:
     #: 几何候选变体（如 snap6）；不新增 extraction_method 取值。
     geometry_profile: Optional[str] = None
 
+    def __post_init__(self) -> None:
+        if self.title and "\x00" in self.title:
+            self.title = self.title.replace("\x00", "")
+        if self.rows:
+            self.rows = [
+                [None if cell is None else (cell.replace("\x00", "") if "\x00" in cell else cell) for cell in row]
+                for row in self.rows
+            ]
+
     def to_dict(self) -> Dict[str, Any]:
         data = dataclasses.asdict(self)
         if data.get("geometry_profile") is None:
@@ -299,6 +336,10 @@ class ParsedTextBlock:
     # 输入；保留字体名与字号供审计。历史解析产物缺这两个字段仍可正常读回。
     font_name: Optional[str] = None
     font_size: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        if self.text and "\x00" in self.text:
+            self.text = self.text.replace("\x00", "")
 
     def to_dict(self) -> Dict[str, Any]:
         data = dataclasses.asdict(self)

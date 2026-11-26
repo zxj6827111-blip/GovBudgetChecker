@@ -34,7 +34,8 @@ from .rule_outcome import RuleNotApplicable, RuleDeferred
 from .rules_v33 import Document, Issue, Rule
 from src.services.material_writing import identity_document, prepare_identity_document, budget_resolution_enabled
 
-_NAME = rf"[{CJK}（）()]{{4,40}}?"
+_ORG_CHARS = rf"{CJK}A-Za-z0-9（）()、—―\-·"
+_NAME = rf"[{_ORG_CHARS}]{{4,60}}?"
 _NAME_CONTEXTS: Sequence[re.Pattern[str]] = (
     re.compile(rf"编制(?:部门|单位)[:：](?P<n>{_NAME})(?=单位[:：]|金额单位|$)"),
     re.compile(rf"^(?:第[一二三四]部分)?(?P<n>{_NAME})(?:主要职能|机构设置|基本概况|概况|项目经费情况说明)$"),
@@ -48,11 +49,21 @@ _EMPTY_COMPILER_RE = re.compile(r"编制(?:部门|单位)\s*[:：]\s*(?=单位\s
 # 部分标题中的同一名称常在 PDF 内折行；保留原始字符位置，不借封面/文件名补字。
 # 括号别称的跨行范围仍保守留待核实，不把未闭合的名称残片当独立依据。
 _WRAPPED_PART_NAME_RE = re.compile(
-    rf"(?m)^[ \t]*第[一二三四]部分\s*(?P<n>(?:[{CJK}][ \t\r\n]*){{4,80}}?)"
-    rf"(?=概况|20\d{{2}}年度?(?:部门|单位)?(?:决算|预算))")
+    rf"(?m)^[ \t]*第[一二三四]部分\s*(?P<n>(?:[{_ORG_CHARS}][ \t\r\n]*){{4,100}}?)"
+    rf"(?=概\s*况|20\d{{2}}\s*年\s*度?\s*(?:部\s*门|单\s*位)?\s*(?:决\s*算|预\s*算))")
 _FINANCIAL_OWNER_RE = re.compile(
-    rf"(?m)^[ \t]*(?P<n>{_NAME})[ \t]*20\d{{2}}\s*年\s*度?\s*"
-    rf"(?:财政拨款\s*)?收入支出\s*总计")
+    rf"(?m)^[ \t]*(?P<n>{_NAME})\s*20\d{{2}}\s*年\s*度?\s*"
+    rf"(?:财政拨款\s*)?(?:收入支出\s*(?:总计|总决算)|收支\s*(?:总计|总决算)|收入\s*总计)")
+
+
+def _norm_identity_name(name: str) -> str:
+    return (
+        str(name or "")
+        .replace("(", "（")
+        .replace(")", "）")
+        .replace("―", "—")
+        .replace("--", "——")
+    )
 
 
 def _is_subsequence(short: str, long: str) -> bool:
@@ -103,7 +114,7 @@ def name_mentions(doc: Document) -> List[Tuple[str, int, str, int, int]]:
                     mentions.append((name, page, text, line_start + s, line_start + e))
         for match in _WRAPPED_PART_NAME_RE.finditer(text):
             raw_name = match.group('n')
-            if '\n' not in raw_name:
+            if '\n' not in raw_name and not re.search(r'\s+', text[match.end('n'):match.end('n') + 4]):
                 continue
             name = _TRAILING_SCOPE_RE.sub('', compact(raw_name))
             if not _ORG_START_RE.match(name):
@@ -147,15 +158,20 @@ def _brackets_balanced(name: str) -> bool:
 def _independent_body_name(doc: Document) -> Optional[str]:
     """封面名称的正文独立依据：只取封面以外、括号完整的主体名称。
 
-    “本级”是范围标注而非名称；折行残片或两个不同名称出现次数相同时不作依据，
+    “本级”是范围标注而非名称；纯括号别名续行残片（以左括号开头）和无行政前缀的
+    折行尾段不与完整名称争夺依据；两个不同完整名称出现次数相同时不作依据，
     不按插入顺序硬选一个名称去核对封面。
     """
     counts: Counter = Counter()
-    for name, page, *_ in name_mentions(doc):
-        name = re.sub(r"本级$", "", name)
-        if page > 1 and len(name) >= 4 and _brackets_balanced(name):
+    org_counts: Counter = Counter()
+    for raw_name, page, *_ in name_mentions(doc):
+        name = _norm_identity_name(re.sub(r"本级$", "", raw_name))
+        if page > 1 and len(name) >= 4 and not name.startswith(("（", "(")) and _brackets_balanced(name):
             counts[name] += 1
-    ranked = counts.most_common(2)
+            if _ORG_START_RE.match(name):
+                org_counts[name] += 1
+    pool = org_counts if org_counts else counts
+    ranked = pool.most_common(2)
     if not ranked or ranked[0][1] < 2 or (len(ranked) > 1 and ranked[1][1] == ranked[0][1]):
         return None
     return ranked[0][0]
@@ -511,6 +527,18 @@ class CMM019_CoverElements(Rule):
         if kind not in {"budget", "final"}:
             raise RuleNotApplicable(self.code, detail="文种未识别，封面文种标识无法核验")
         cover = str(texts[0])
+        if "(cid:" in cover and not re.search(rf"[{CJK}]", re.sub(r"\(cid:\d+\)", "", cover)):
+            from .diagnostic_fields import blocker, record_gap
+
+            reason = "封面文本层存在未映射字形编码，封面要素需人工核对原件"
+            record_gap(
+                doc,
+                reason,
+                reason_codes=["cell_low_confidence"],
+                blocked_by=[blocker(dimension="organization", ref="第1页封面文本层字形编码异常", reason_code="cell_low_confidence")],
+                preferred_action="human_confirm",
+            )
+            raise RuleDeferred(self.code, detail=reason, unresolved_reasons=[reason])
         flat = compact(cover)
         first_line = next((ln for ln in cover.split("\n") if ln.strip()), "")
         anchor = (0, len(first_line))
@@ -538,8 +566,10 @@ class CMM019_CoverElements(Rule):
             canonical = _independent_body_name(doc)
             if not canonical:
                 incomplete.append("封面单位名称缺少正文独立依据")
-        if canonical and canonical not in flat:
-            variant = next((n for n, *_ in name_mentions(doc) if n in flat and _variant_kind(n, canonical)), None)
+        flat_norm = _norm_identity_name(flat)
+        canonical_norm = _norm_identity_name(canonical) if canonical else canonical
+        if canonical_norm and canonical_norm not in flat_norm:
+            variant = next((n for n, *_ in name_mentions(doc) if _norm_identity_name(n) in flat_norm and _variant_kind(_norm_identity_name(n), canonical_norm)), None)
             if variant:
                 pos = cover.find(variant[:2])
                 _emit(f"封面单位名称“{variant}”与规范全称“{canonical}”不一致。", max(pos, 0), max(pos, 0) + len(variant))

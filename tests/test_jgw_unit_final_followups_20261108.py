@@ -63,6 +63,12 @@ def test_head_unit_marker_uses_cover_name_as_current_subject(linked):
 def test_head_unit_alias_keeps_department_and_other_subjects_apart(changes):
     subject = head_unit(**changes)
     assert subject['source'] != 'verified_cover_alias'
+    if (subject.get('conflict') or {}).get('code') == 'archive_organization_mismatch':
+        # 2026-11-24 起：归档槽位与封面主体不一致时，内部表文/金额核对按原件封面主体执行，
+        # 并以 archive_organization_mismatch 显式提示；绝不再把归档部门名当作"本级"别名。
+        assert subject['source'] == 'cover'
+        assert subject['name'] == DEPT
+        return
     assert subject['name'] != DEPT or changes.get('organization_name') == DEPT
 
 

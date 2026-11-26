@@ -45,7 +45,8 @@ class PDFBBoxLocator:
 
     @staticmethod
     def _native_text(value: Any) -> str:
-        return "".join(unicodedata.normalize("NFKC", str(value or "")).split())
+        text = str(value or "").replace("\x00", "")
+        return "".join(unicodedata.normalize("NFKC", text).split())
 
     @staticmethod
     def _region_text(value: Any) -> str:
@@ -56,7 +57,7 @@ class PDFBBoxLocator:
         数值身份（千分位/分栏产物），区域命中判定允许它；其余字符（数字、
         小数点、单位）仍逐字比对。
         """
-        text = unicodedata.normalize("NFKC", str(value or ""))
+        text = unicodedata.normalize("NFKC", str(value or "").replace("\x00", ""))
         text = "".join(text.split())
         # 千分位/分栏逗号在两套抽取里可能落在不同位置（含数字与汉字之间、
         # 单位两字之间："万\n, ,\n元"）。区域命中只做标点无关比对：数字与
@@ -110,36 +111,43 @@ class PDFBBoxLocator:
                 # ``extract_visible_text_from_page``（过滤不可见字符）。几何门
                 # 若用原始 extract_text() 的 offset，同一引文在两套文本里
                 # 位置不同，会把真实原文误判成"无法定位"（研究院 P17 实例）。
-                def _extract_text_aligned(target: Any) -> str:
-                    try:
-                        return target.extract_text(y_tolerance=4.5) or ""
-                    except TypeError:
-                        return target.extract_text() or ""
+                from src.services.pdf_page_extract import (
+                    extract_aligned_page_text_and_chars,
+                    is_visible_char,
+                    page_text_y_tolerance,
+                )
 
                 def _extract_lines_aligned(target: Any) -> List[Dict[str, Any]]:
+                    y_tol = page_text_y_tolerance(target)
                     try:
-                        return target.extract_text_lines(y_tolerance=4.5, return_chars=True)
+                        return target.extract_text_lines(y_tolerance=y_tol, return_chars=True)
                     except TypeError:
                         return target.extract_text_lines(return_chars=True)
 
-                text, source_page = _extract_text_aligned(original), original
+                source_page = original
                 try:
-                    from src.services.pdf_page_extract import is_visible_char
-
                     page_height = float(original.height)
                     visible_page = original.filter(
                         lambda obj, h=page_height: is_visible_char(obj, h))
-                    visible_text = _extract_text_aligned(visible_page)
+                    visible_text, visible_chars = extract_aligned_page_text_and_chars(visible_page)
                     if visible_text.strip():
-                        text, source_page = visible_text, visible_page
+                        text, reordered_chars, source_page = visible_text, visible_chars, visible_page
+                    else:
+                        text, reordered_chars = extract_aligned_page_text_and_chars(original)
                 except Exception:  # noqa: BLE001 - 过滤失败时沿用原始文本
-                    pass
+                    text, reordered_chars = extract_aligned_page_text_and_chars(original)
                 normalized_chars, positions = [], []
-                for line in _extract_lines_aligned(source_page):
-                    for char in line["chars"]:
+                if reordered_chars is not None:
+                    for char in reordered_chars:
                         for normalized in self._native_text(char.get("text")):
                             normalized_chars.append(normalized)
                             positions.append(char)
+                else:
+                    for line in _extract_lines_aligned(source_page):
+                        for char in line["chars"]:
+                            for normalized in self._native_text(char.get("text")):
+                                normalized_chars.append(normalized)
+                                positions.append(char)
                 self._native_pages[page] = (text, "".join(normalized_chars), positions)
             text, characters, positions = self._native_pages[page]
             quote = str(evidence.get("quote") or "")

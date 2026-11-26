@@ -477,7 +477,7 @@ def test_review_report_and_quality_gate_human_readable_chinese():
 # ---------------------------------------------------------------------------
 
 
-def test_v33_251_unusable_amount_includes_page_location():
+def test_v33_251_reordered_unit_and_unusable_amount_include_page_location():
     p20 = (
         "（三）一般公共预算财政拨款支出决算具体情况\n"
         "一般公共预算财政拨款支出年初预算为100.00万元，支出决算为100.00万元。其中：\n"
@@ -490,6 +490,11 @@ def test_v33_251_unusable_amount_includes_page_location():
     )
     doc = build_document("/tmp/v33-251-loc.pdf", [p20, p21], [[], []], 1000)
     doc.report_kind = "final"
+    issues = R33251_FunctionalDetailCompleteness().apply(doc)
+    assert any("金额语序有误" in issue.message and issue.location.get("page") == 2 for issue in issues)
+    assert any("15.96" in issue.message for issue in issues)
+    doc = build_document("/tmp/v33-251-loc.pdf", [p20, p21.replace("65.96", "65.9.6")], [[], []], 1000)
+    doc.report_kind = "final"
     signal = None
     try:
         R33251_FunctionalDetailCompleteness().apply(doc)
@@ -497,7 +502,7 @@ def test_v33_251_unusable_amount_includes_page_location():
         signal = exc
     assert signal is not None and signal.status == "insufficient_data"
     assert "第2页" in signal.detail
-    assert "65.96" in signal.detail
+    assert "65.9.6" in signal.detail
 
 
 # ---------------------------------------------------------------------------

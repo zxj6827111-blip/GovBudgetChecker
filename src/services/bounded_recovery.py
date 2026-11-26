@@ -207,41 +207,41 @@ class RecoveryCoordinator:
         })
 
 
+def _resolve_empty_shadow_tables(document: Any) -> bool:
+    artifact = getattr(document, "parse_artifact", None)
+    if artifact is None:
+        return False
+    from src.services.source_reconstruction import resolve_empty_table_shadows
+
+    by_page: Dict[int, List[Any]] = {}
+    for table in getattr(artifact, "table_fragments", []) or []:
+        by_page.setdefault(int(getattr(table, "page_number", 0) or 0), []).append(table)
+    changed = False
+    for page, tables in by_page.items():
+        page_text = ""
+        texts = getattr(document, "page_texts", []) or []
+        if 1 <= page <= len(texts):
+            page_text = str(texts[page - 1] or "")
+        selected, decisions = resolve_empty_table_shadows(tables, page_text)
+        if decisions and len(selected) != len(tables):
+            kept = {getattr(table, "fragment_uid", None) for table in selected}
+            artifact.table_fragments = [
+                table for table in artifact.table_fragments
+                if getattr(table, "page_number", 0) != page
+                or getattr(table, "fragment_uid", None) in kept
+            ]
+            changed = True
+    return changed
+
+
 def default_strategies() -> List[RecoveryStrategy]:
     """默认只登记不改变原件内容的既有原生恢复。"""
-
-    def resolve_empty_shadow_tables(document: Any) -> bool:
-        artifact = getattr(document, "parse_artifact", None)
-        if artifact is None:
-            return False
-        from src.services.source_reconstruction import resolve_empty_table_shadows
-
-        by_page: Dict[int, List[Any]] = {}
-        for table in getattr(artifact, "table_fragments", []) or []:
-            by_page.setdefault(int(getattr(table, "page_number", 0) or 0), []).append(table)
-        changed = False
-        for page, tables in by_page.items():
-            page_text = ""
-            texts = getattr(document, "page_texts", []) or []
-            if 1 <= page <= len(texts):
-                page_text = str(texts[page - 1] or "")
-            selected, decisions = resolve_empty_table_shadows(tables, page_text)
-            if decisions and len(selected) != len(tables):
-                kept = {getattr(table, "fragment_uid", None) for table in selected}
-                artifact.table_fragments = [
-                    table for table in artifact.table_fragments
-                    if getattr(table, "page_number", 0) != page
-                    or getattr(table, "fragment_uid", None) in kept
-                ]
-                changed = True
-        return changed
-
     fingerprint = hashlib.sha256(b"empty_table_shadow_resolution_v1").hexdigest()[:16]
     return [
         RecoveryStrategy(
             name="empty_table_shadow_resolution",
             fingerprint=fingerprint,
-            run=resolve_empty_shadow_tables,
+            run=_resolve_empty_shadow_tables,
         )
     ]
 

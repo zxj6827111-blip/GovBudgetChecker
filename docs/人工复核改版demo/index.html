@@ -1,0 +1,1065 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>人工复核改版演示原型</title>
+<style>
+  :root {
+    --primary-50:#f2fbf9; --primary-100:#dff2ee; --primary-200:#b3ded4; --primary-500:#0c8c7f; --primary-600:#087f75; --primary-700:#0a6b62;
+    --success-50:#eaf7ef; --success-600:#1f7f52; --success-700:#19764b;
+    --danger-50:#fdf2f1; --danger-100:#fdecea; --danger-600:#b5332d; --danger-700:#962a25;
+    --warning-50:#fffaf0; --warning-100:#fff3d9; --warning-700:#a65f00; --warning-800:#834b00;
+    --info-50:#eef6fb; --info-100:#dcecf6; --info-700:#1769aa;
+    --border:#e2e8f0; --surface-50:#f8fafc; --surface-100:#f1f5f9;
+    --slate-400:#94a3b8; --slate-500:#64748b; --slate-600:#475569; --slate-700:#334155; --slate-800:#1e293b; --slate-900:#0f172a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; }
+  body { font-family: "PingFang SC","Microsoft YaHei","Noto Sans CJK SC",system-ui,sans-serif; color:var(--slate-800); background:#eef2f5; font-size:14px; }
+  button { font-family: inherit; cursor: pointer; }
+  #app { height:100%; display:flex; flex-direction:column; }
+  .demo-banner { flex-shrink:0; background:#0f423e; color:#dff2ee; font-size:12px; padding:4px 12px; display:flex; gap:16px; align-items:center; }
+  .demo-banner b { color:#fff; }
+  .demo-banner .sp { margin-left:auto; opacity:.8; }
+  .demo-banner button { background:transparent; border:1px solid #3fa294; color:#dff2ee; border-radius:4px; padding:1px 8px; font-size:12px; }
+
+  /* ---------- 通用 ---------- */
+  .btn { border:1px solid var(--border); background:#fff; color:var(--slate-700); border-radius:6px; padding:6px 12px; font-size:13px; display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+  .btn:hover { background:var(--surface-100); }
+  .btn.primary { background:var(--primary-600); border-color:var(--primary-600); color:#fff; }
+  .btn.primary:hover { background:var(--primary-700); }
+  .btn.danger { background:var(--danger-600); border-color:var(--danger-600); color:#fff; }
+  .btn.ghost { border-color:transparent; background:transparent; }
+  .btn.lg { padding:9px 16px; font-size:14px; font-weight:600; }
+  .btn:disabled { opacity:.45; cursor:not-allowed; }
+  .kbd { display:inline-block; min-width:18px; padding:0 4px; border:1px solid currentColor; border-radius:4px; font-size:11px; line-height:16px; text-align:center; opacity:.75; font-family: ui-monospace, monospace; }
+  .pill { display:inline-flex; align-items:center; gap:4px; border-radius:999px; padding:1px 8px; font-size:12px; font-weight:600; white-space:nowrap; }
+  .muted { color:var(--slate-500); }
+  .tabnum { font-variant-numeric: tabular-nums; }
+
+  /* ---------- 清单页 ---------- */
+  .page { flex:1; overflow:auto; padding:20px 28px; }
+  .page h1 { font-size:20px; margin:0 0 4px; }
+  .tabs { display:flex; gap:4px; border-bottom:1px solid var(--border); margin:16px 0; }
+  .tabs button { border:none; background:none; padding:10px 14px; font-size:14px; color:var(--slate-500); border-bottom:2px solid transparent; }
+  .tabs button.on { color:var(--primary-700); border-bottom-color:var(--primary-600); font-weight:600; }
+  .tabs .cnt { margin-left:4px; background:var(--warning-100); color:var(--warning-800); border-radius:4px; padding:0 6px; font-size:12px; }
+  .toolbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:12px; }
+  .chip { border:1px solid var(--border); background:#fff; border-radius:6px; padding:6px 12px; font-size:13px; color:var(--slate-600); }
+  .chip.on { background:var(--primary-700); border-color:var(--primary-700); color:#fff; }
+  .continue { display:flex; align-items:center; gap:16px; background:#fff; border:1px solid var(--primary-200); border-left:4px solid var(--primary-600); border-radius:8px; padding:12px 16px; margin-bottom:14px; }
+  table.list { width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+  table.list th { text-align:left; font-weight:500; font-size:12px; color:var(--slate-500); background:var(--surface-50); padding:10px 14px; border-bottom:1px solid var(--border); }
+  table.list td { padding:12px 14px; border-bottom:1px solid var(--border); vertical-align:middle; }
+  table.list tr.row { cursor:pointer; }
+  table.list tr.row:hover td { background:var(--primary-50); }
+  table.list tr.row.sel td { background:var(--primary-50); }
+  .org { font-weight:600; color:var(--slate-900); }
+  .dist { display:flex; gap:4px; flex-wrap:wrap; }
+  .progress { width:120px; height:6px; background:var(--surface-100); border-radius:3px; overflow:hidden; }
+  .progress > i { display:block; height:100%; background:var(--primary-500); }
+  .drawer { position:fixed; top:0; right:0; bottom:0; width:400px; background:#fff; box-shadow:-8px 0 24px rgba(15,23,42,.12); z-index:30; display:flex; flex-direction:column; }
+  .drawer header { padding:16px 18px; border-bottom:1px solid var(--border); }
+  .drawer .body { flex:1; overflow:auto; padding:12px 18px; }
+  .drawer footer { padding:12px 18px; border-top:1px solid var(--border); display:flex; gap:8px; justify-content:flex-end; }
+  .pv-item { display:flex; gap:8px; align-items:flex-start; padding:8px 0; border-bottom:1px dashed var(--border); font-size:13px; }
+
+  /* ---------- 批量页 ---------- */
+  .rule-row { background:#fff; border:1px solid var(--border); border-radius:8px; margin-bottom:10px; }
+  .rule-head { display:grid; grid-template-columns: 1fr 110px 110px 260px 120px; align-items:center; gap:12px; padding:12px 16px; cursor:pointer; }
+  .rule-head:hover { background:var(--surface-50); }
+  .rule-items { border-top:1px solid var(--border); padding:6px 16px 12px; }
+  .rule-item { display:grid; grid-template-columns: 24px 220px 60px 1fr 110px; gap:10px; align-items:center; padding:8px 0; border-bottom:1px dashed var(--border); font-size:13px; }
+  .quote { background:var(--surface-100); border-radius:4px; padding:2px 6px; font-family:"Songti SC","SimSun",serif; }
+  .hl { background:#ffe1a3; padding:0 2px; border-radius:2px; }
+  .batchbar { position:sticky; bottom:0; background:#fff; border:1px solid var(--border); border-radius:8px; padding:10px 16px; display:flex; gap:10px; align-items:center; box-shadow:0 -4px 12px rgba(15,23,42,.06); }
+
+  /* ---------- 工作台 ---------- */
+  .wb { flex:1; min-height:0; display:flex; flex-direction:column; background:#fff; }
+  .wb-top { flex-shrink:0; height:48px; display:flex; align-items:center; gap:12px; padding:0 12px; border-bottom:1px solid var(--border); }
+  .wb-top .title { font-weight:600; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+  .seqnav { display:flex; align-items:center; gap:2px; background:var(--surface-100); border-radius:6px; padding:2px; font-size:12px; white-space:nowrap; }
+  .seqnav button { border:none; background:transparent; padding:3px 8px; border-radius:4px; color:var(--slate-600); }
+  .seqnav button:hover:not(:disabled) { background:#fff; }
+  .seqnav button:disabled { opacity:.35; cursor:not-allowed; }
+  .topprog { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--slate-600); white-space:nowrap; }
+  .topprog .bar { width:110px; height:8px; background:var(--surface-100); border-radius:4px; overflow:hidden; }
+  .topprog .bar i { display:block; height:100%; background:var(--primary-500); transition:width .3s; }
+  .complete-ready { animation: glow 1.6s ease-in-out infinite; }
+  @keyframes glow { 0%,100% { box-shadow:0 0 0 0 rgba(12,140,127,.45);} 50% { box-shadow:0 0 0 6px rgba(12,140,127,0);} }
+
+  .wb-body { flex:1; min-height:0; display:grid; }
+  /* 左：问题清单 */
+  .rail { border-right:1px solid var(--border); display:flex; flex-direction:column; min-height:0; background:var(--surface-50); }
+  .rail-head { flex-shrink:0; display:flex; align-items:center; gap:6px; padding:8px 10px; border-bottom:1px solid var(--border); font-size:13px; }
+  .rail-list { flex:1; overflow:auto; padding:4px 0 12px; }
+  .grp { position:sticky; top:0; z-index:1; display:flex; align-items:center; gap:6px; padding:6px 10px; font-size:12px; font-weight:600; background:var(--surface-50); }
+  .grp .bar { width:3px; height:12px; border-radius:2px; }
+  .it { display:grid; grid-template-columns: 24px 1fr auto; gap:8px; padding:7px 10px 7px 12px; cursor:pointer; border-left:3px solid transparent; font-size:13px; line-height:1.35; }
+  .it:hover { background:#fff; }
+  .it.on { background:#fff; border-left-color:var(--primary-600); box-shadow: inset 0 0 0 1px var(--primary-200); }
+  .it.done .t { color:var(--slate-400); }
+  .num { width:22px; height:22px; border-radius:50%; display:grid; place-items:center; font-size:11px; font-weight:700; color:#fff; flex-shrink:0; }
+  .it .t { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; color:var(--slate-800); }
+  .it .meta { font-size:11px; color:var(--slate-500); text-align:right; white-space:nowrap; }
+  .st-ok { color:var(--success-700); font-weight:700; }
+  .st-ig { color:var(--slate-400); font-weight:700; }
+  .rail.collapsed .it { grid-template-columns: 1fr; justify-items:center; padding:6px 0; }
+  .rail.collapsed .it .t, .rail.collapsed .it .meta, .rail.collapsed .grp span.lbl { display:none; }
+  .rail.collapsed .grp { justify-content:center; padding:6px 0; }
+  .rail.collapsed .rail-head { justify-content:center; padding:8px 0; }
+
+  /* 中：原文 */
+  .pdf { display:flex; flex-direction:column; min-height:0; min-width:0; background:#e5e9ee; }
+  .pdf-tool { flex-shrink:0; display:flex; align-items:center; gap:8px; padding:6px 10px; background:#fff; border-bottom:1px solid var(--border); font-size:12px; }
+  .pagechips { display:flex; gap:4px; overflow-x:auto; min-width:0; flex:1; }
+  .pagechip { border:1px solid var(--border); background:#fff; border-radius:4px; padding:2px 6px; font-size:11px; display:inline-flex; align-items:center; gap:3px; white-space:nowrap; }
+  .pagechip.on { border-color:var(--primary-600); color:var(--primary-700); background:var(--primary-50); font-weight:600; }
+  .pagechip i { width:6px; height:6px; border-radius:50%; display:inline-block; }
+  .pdf-scroll { flex:1; overflow:auto; padding:18px; }
+  .paper { position:relative; background:#fff; margin:0 auto; width:100%; max-width:640px; min-height:820px; padding:48px 52px; box-shadow:0 2px 10px rgba(15,23,42,.15); font-family:"Songti SC","SimSun","Noto Serif CJK SC",serif; font-size:13.5px; line-height:2; color:#111; }
+  .paper h3 { font-size:15px; margin:0 0 10px; text-align:left; }
+  .paper h4 { font-size:14px; text-align:center; margin:4px 0 10px; }
+  .paper p { margin:0 0 6px; text-indent:2em; }
+  .paper table { width:100%; border-collapse:collapse; font-size:12.5px; line-height:1.6; margin:6px 0; }
+  .paper th, .paper td { border:1px solid #333; padding:3px 6px; }
+  .paper td.r { text-align:right; font-variant-numeric: tabular-nums; }
+  .paper .pno { position:absolute; bottom:18px; left:0; right:0; text-align:center; font-size:12px; color:#666; }
+  .paper .blank { color:#bbb; text-align:center; padding-top:220px; text-indent:0; }
+  .paper .blur { filter: blur(1.1px); }
+  .paper .unit { text-align:right; font-size:12px; text-indent:0; }
+  .mk { position:absolute; border:2px solid; border-radius:3px; pointer-events:auto; cursor:pointer; transition: box-shadow .2s; }
+  .mk .badge { position:absolute; top:-11px; left:-11px; width:20px; height:20px; border-radius:50%; color:#fff; font:700 11px/20px system-ui; text-align:center; font-family: system-ui; }
+  .mk.cur { border-width:3px; animation: pulse 1.4s ease-in-out 2; }
+  .mk.dim { opacity:.55; border-style:dashed; }
+  .mk.ev { border-style:dotted; border-color:var(--info-700) !important; background:rgba(23,105,170,.06); }
+  .mk.ev .badge { background:var(--info-700) !important; border-radius:4px; }
+  .mk.flash { animation: flash 1s ease-in-out 2; }
+  @keyframes pulse { 0%,100% { box-shadow:0 0 0 0 rgba(181,51,45,.0);} 50% { box-shadow:0 0 0 6px rgba(181,51,45,.25);} }
+  @keyframes flash { 0%,100% { background:rgba(23,105,170,.06);} 50% { background:rgba(23,105,170,.3);} }
+
+  /* 右：详情 */
+  .detail { display:flex; flex-direction:column; min-height:0; border-left:1px solid var(--border); }
+  .d-scroll { flex:1; overflow:auto; padding:16px 18px 20px; }
+  .d-card { border-left:4px solid; padding-left:12px; }
+  .d-meta { display:flex; flex-wrap:wrap; gap:6px; align-items:center; font-size:12px; color:var(--slate-500); margin-bottom:8px; }
+  .d-title { font-size:18px; line-height:1.4; font-weight:700; color:var(--slate-900); margin:0 0 8px; }
+  .d-brief { font-size:14px; line-height:1.75; color:var(--slate-700); margin:0 0 14px; }
+  .cmp { display:grid; grid-template-columns: repeat(3, 1fr); background:var(--surface-50); border:1px solid var(--border); border-radius:8px; margin-bottom:16px; }
+  .cmp > div { padding:10px 12px; }
+  .cmp > div + div { border-left:1px solid var(--border); }
+  .cmp .l { font-size:12px; color:var(--slate-500); }
+  .cmp .v { font-size:20px; font-weight:700; font-variant-numeric: tabular-nums; margin-top:2px; }
+  .cmp .u { font-size:11px; color:var(--slate-400); }
+  .sec-t { font-size:12px; font-weight:700; color:var(--slate-500); margin:0 0 6px; letter-spacing:.5px; }
+  .ev-btn { width:100%; display:grid; grid-template-columns: 22px 1fr; gap:8px; text-align:left; border:1px solid var(--border); background:#fff; border-radius:6px; padding:8px 10px; margin-bottom:6px; font-size:13px; }
+  .ev-btn:hover { border-color:var(--info-700); background:var(--info-50); }
+  .ev-btn .tag { width:20px; height:20px; border-radius:4px; background:var(--info-700); color:#fff; display:grid; place-items:center; font-size:11px; font-weight:700; }
+  .ev-btn .q { font-family:"Songti SC","SimSun",serif; color:var(--slate-800); }
+  .ev-btn .loc { font-size:11px; color:var(--slate-500); }
+  .sugg { background:var(--primary-50); border-radius:8px; padding:10px 12px; margin:14px 0; font-size:13.5px; line-height:1.7; }
+  .sugg b { color:var(--primary-700); font-size:12px; display:block; margin-bottom:2px; }
+  details.fold { border-top:1px solid var(--border); padding:8px 0; font-size:13px; }
+  details.fold summary { cursor:pointer; color:var(--slate-600); font-weight:600; font-size:13px; }
+  details.fold table { width:100%; border-collapse:collapse; margin-top:8px; font-size:12.5px; }
+  details.fold td, details.fold th { border-bottom:1px solid var(--border); padding:5px 4px; text-align:left; }
+  details.fold td.r, details.fold th.r { text-align:right; font-variant-numeric: tabular-nums; }
+  .kv { display:grid; grid-template-columns: 72px 1fr; gap:4px 8px; margin-top:8px; font-size:12.5px; color:var(--slate-600); }
+  .record { margin-top:12px; border-radius:8px; padding:10px 12px; font-size:13px; line-height:1.7; }
+  .record.ok { background:var(--success-50); color:var(--success-700); }
+  .record.ig { background:var(--surface-100); color:var(--slate-600); }
+  .allclear { margin:0 0 14px; background:var(--success-50); border:1px solid #bfe6cf; color:var(--success-700); border-radius:8px; padding:10px 12px; font-size:13px; display:flex; align-items:center; gap:10px; }
+  .actionbar { flex-shrink:0; border-top:1px solid var(--border); padding:10px 14px; display:flex; flex-wrap:wrap; gap:8px; align-items:center; background:#fff; }
+  .actionbar .confirm { background:var(--danger-600); border-color:var(--danger-600); color:#fff; }
+  .actionbar .confirm:hover { background:var(--danger-700); }
+  .actionbar .nav { margin-left:auto; display:flex; gap:4px; }
+
+  /* ---------- 弹窗/提示 ---------- */
+  .mask { position:fixed; inset:0; background:rgba(15,23,42,.45); z-index:50; display:flex; align-items:center; justify-content:center; padding:16px; }
+  .modal { background:#fff; border-radius:10px; width:min(720px, 100%); max-height:calc(100vh - 32px); display:flex; flex-direction:column; box-shadow:0 20px 50px rgba(15,23,42,.3); }
+  .modal header { padding:14px 18px; border-bottom:1px solid var(--border); font-weight:700; font-size:15px; display:flex; align-items:center; }
+  .modal header .x { margin-left:auto; border:none; background:none; font-size:18px; color:var(--slate-500); }
+  .modal .body { padding:14px 18px; overflow:auto; }
+  .modal footer { padding:12px 18px; border-top:1px solid var(--border); display:flex; gap:8px; align-items:center; justify-content:flex-end; }
+  .reasons { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0 10px; }
+  .reasons label { border:1px solid var(--border); border-radius:6px; padding:6px 12px; font-size:13px; cursor:pointer; }
+  .reasons input { display:none; }
+  .reasons label.on { border-color:var(--primary-600); background:var(--primary-50); color:var(--primary-700); font-weight:600; }
+  textarea { width:100%; border:1px solid var(--border); border-radius:6px; padding:8px; font-family:inherit; font-size:13px; min-height:60px; resize:vertical; }
+  .simbox { border:1px solid var(--warning-100); background:var(--warning-50); border-radius:8px; padding:10px 12px; margin-top:12px; }
+  .simbox h5 { margin:0 0 4px; font-size:13px; color:var(--warning-800); }
+  .sim-grp { margin-top:8px; }
+  .sim-grp .gh { font-size:12px; font-weight:700; color:var(--slate-600); display:flex; align-items:center; gap:8px; margin-bottom:2px; }
+  .sim-it { display:grid; grid-template-columns: 22px 1fr 54px; gap:8px; align-items:center; padding:5px 0; font-size:12.5px; border-bottom:1px dashed #f3dca8; }
+  .linkbtn { border:none; background:none; color:var(--primary-700); padding:0; font-size:12px; }
+  .linkbtn:hover { text-decoration:underline; }
+  .toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); background:var(--slate-900); color:#fff; padding:10px 16px; border-radius:8px; font-size:13px; display:flex; gap:14px; align-items:center; z-index:60; box-shadow:0 8px 20px rgba(0,0,0,.25); max-width:80vw; }
+  .toast button { background:none; border:1px solid #64748b; color:#fff; border-radius:4px; padding:2px 10px; font-size:12px; }
+  .help-grid { display:grid; grid-template-columns: 140px 1fr; gap:8px 12px; font-size:13px; }
+  .remain-it { display:flex; gap:8px; align-items:center; padding:6px 0; border-bottom:1px dashed var(--border); font-size:13px; }
+  .sumgrid { display:grid; grid-template-columns: repeat(3,1fr); gap:10px; margin-bottom:12px; }
+  .sumgrid > div { border:1px solid var(--border); border-radius:8px; padding:10px 12px; }
+  .sumgrid .v { font-size:22px; font-weight:700; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+"use strict";
+/* =====================================================================
+ * 人工复核改版演示原型（静态 Demo，不连接系统，数据均为虚构示例）
+ * ===================================================================== */
+
+const SEV = {
+  critical: { label: "严重", color: "#962a25", bg: "#fdecea", dot: "#b5332d" },
+  high:     { label: "较重", color: "#c2410c", bg: "#ffedd5", dot: "#ea580c" },
+  medium:   { label: "一般", color: "#a65f00", bg: "#fff3d9", dot: "#d69e00" },
+  low:      { label: "轻微", color: "#475569", bg: "#f1f5f9", dot: "#94a3b8" },
+  review:   { label: "待核实", color: "#1769aa", bg: "#dcecf6", dot: "#3f93c2" },
+};
+const SEV_ORDER = ["critical", "high", "medium", "low", "review"];
+const REASONS = [
+  { code: "false_positive", label: "规则误报" },
+  { code: "rounding", label: "取整误差" },
+  { code: "scope", label: "口径不同" },
+  { code: "disclosed", label: "已在其他章节披露" },
+  { code: "other", label: "其他" },
+];
+const RULE_META = {
+  "B-08": { name: "科目名称与表格多/少字（如少“支出”）", hist: "近 30 天 46 条中 39 条判为误报" },
+  "D-05": { name: "模板残留（如“增长（下降）”）", hist: "近 30 天 21 条中 2 条判为误报" },
+  "C-001": { name: "三公经费合计 ≠ 三项之和", hist: "近 30 天 9 条中 1 条判为误报" },
+  "C-003": { name: "正文金额与表格不一致", hist: "近 30 天 33 条中 6 条判为误报" },
+  "A-10": { name: "增减变化未写明原因", hist: "近 30 天 28 条中 11 条判为误报" },
+  "A-07": { name: "空表缺少说明", hist: "近 30 天 12 条中 0 条判为误报" },
+  "D-010": { name: "三公经费数量要素缺失", hist: "近 30 天 15 条中 3 条判为误报" },
+  "D-005": { name: "决算表与说明金额不一致", hist: "近 30 天 7 条中 1 条判为误报" },
+  "D-008": { name: "政府性基金表缺空表说明", hist: "近 30 天 6 条中 0 条判为误报" },
+  "D-02": { name: "重复用语", hist: "近 30 天 18 条中 1 条判为误报" },
+  "OCR": { name: "识别不稳定，需人工核对", hist: "—" },
+};
+
+const MATERIALS = [
+  { id: "m1", org: "上海市普陀区教育局", year: 2026, kind: "部门预算", file: "2026年上海市普陀区教育局部门预算.pdf", pages: 24 },
+  { id: "m2", org: "上海市普陀区卫生健康委员会", year: 2026, kind: "部门预算", file: "2026年普陀区卫生健康委员会部门预算.pdf", pages: 22 },
+  { id: "m3", org: "上海市普陀区文化和旅游局", year: 2026, kind: "部门预算", file: "2026年普陀区文化和旅游局部门预算.pdf", pages: 22 },
+  { id: "m4", org: "上海市普陀区民政局", year: 2025, kind: "部门决算", file: "2025年度普陀区民政局部门决算.pdf", pages: 26 },
+  { id: "m5", org: "上海市普陀区科学技术委员会", year: 2026, kind: "部门预算", file: "2026年普陀区科学技术委员会部门预算.pdf", pages: 22 },
+  { id: "m6", org: "上海市普陀区体育局", year: 2026, kind: "部门预算", file: "2026年普陀区体育局部门预算.pdf", pages: 22, completed: true },
+];
+
+/* ---------- 问题数据 ---------- */
+let PROBLEMS = [
+  // ===== m1 教育局（详细示例）=====
+  { id: "m1-1", mid: "m1", sev: "critical", rule: "C-001", source: "本地规则", page: 18, anchor: "m1-p18-total",
+    title: "三公经费合计不等于三项之和",
+    brief: "“三公”经费预算表中合计为 12.80 万元，但因公出国（境）费、公务用车购置及运行费、公务接待费三项相加为 12.30 万元，相差 0.50 万元。",
+    compare: { labels: ["表中合计", "三项相加", "差额"], values: ["12.80", "12.30", "0.50"], unit: "万元" },
+    evidence: [
+      { label: "合计", page: 18, anchor: "m1-p18-total", quote: "合计 12.80" },
+      { label: "公务用车购置及运行费", page: 18, anchor: "m1-p18-car", quote: "8.50" },
+      { label: "公务接待费", page: 18, anchor: "m1-p18-rec", quote: "3.80" },
+    ],
+    calc: [["合计（表内）", "12.80", 18, true], ["因公出国（境）费", "0.00", 18], ["公务用车购置及运行费", "8.50", 18], ["公务接待费", "3.80", 18]],
+    calcSum: "12.30", calcDiff: "0.50",
+    suggestion: "核对三项分项与合计数，修正表格；同时同步修改第 19 页“三公”经费说明中的对应金额。" },
+  { id: "m1-2", mid: "m1", sev: "high", rule: "C-003", source: "本地规则 + 大模型", page: 5, anchor: "m1-p5-amt",
+    title: "正文财政拨款支出金额与总表不一致",
+    brief: "预算编制说明写财政拨款支出预算 52,346.78 万元，财政拨款收支预算总表（第 10 页）支出总计为 52,364.78 万元，相差 18.00 万元，疑似数字顺序写错。",
+    compare: { labels: ["正文写", "表格为", "差额"], values: ["52,346.78", "52,364.78", "18.00"], unit: "万元" },
+    evidence: [
+      { label: "正文", page: 5, anchor: "m1-p5-amt", quote: "财政拨款支出预算52,346.78万元" },
+      { label: "财政拨款收支预算总表 · 支出总计", page: 10, anchor: "m1-p10-total", quote: "支出总计 52,364.78" },
+    ],
+    suggestion: "以财政拨款收支预算总表为准，核对第 5 页正文金额；如为笔误，改为 52,364.78 万元。" },
+  { id: "m1-3", mid: "m1", sev: "medium", rule: "A-10", source: "本地规则", page: 6, anchor: "m1-p6-inc",
+    title: "财政拨款收入增加未写明原因",
+    brief: "第 6 页写“比2025年预算增加1,120.00万元”，本段未写明增加原因。注意：第 7 页对一般公共预算支出写了原因，可判断是否已披露。",
+    evidence: [
+      { label: "第 6 页 增减表述", page: 6, anchor: "m1-p6-inc", quote: "比2025年预算增加1,120.00万元" },
+      { label: "第 7 页 相关原因表述", page: 7, anchor: "m1-p7-reason", quote: "新增学校建设项目经费及教师薪酬调整" },
+    ],
+    suggestion: "在第 6 页补充增加原因，或注明“原因详见一般公共预算支出预算部分”。" },
+  { id: "m1-4", mid: "m1", sev: "medium", rule: "A-07", source: "本地规则", page: 15, anchor: "m1-p15-empty",
+    title: "政府性基金预算支出表缺少空表说明",
+    brief: "第 15 页《部门政府性基金预算支出功能分类预算表》为空表，表下未附“本部门2026年无政府性基金预算财政拨款安排的支出”等说明。",
+    evidence: [{ label: "表下空白处", page: 15, anchor: "m1-p15-empty", quote: "（表下无说明）" }],
+    suggestion: "在表下补充空表说明。" },
+  { id: "m1-5", mid: "m1", sev: "medium", rule: "D-010", source: "本地规则", page: 19, anchor: "m1-p19-car",
+    title: "公务用车购置费大于 0，未写购置数量",
+    brief: "“三公”经费说明写公务用车购置费 3.00 万元，但没有写明计划购置车辆数量。",
+    evidence: [{ label: "三公经费说明", page: 19, anchor: "m1-p19-car", quote: "公务用车购置费3.00万元" }],
+    suggestion: "补充“计划购置公务用车×辆”。" },
+  { id: "m1-6", mid: "m1", sev: "low", rule: "D-05", source: "本地规则", page: 6, anchor: "m1-p6-tpl",
+    title: "模板残留“增长（下降）”",
+    brief: "第 6 页保留了模板提示语“增长（下降）”，应按实际情况保留其一。",
+    evidence: [{ label: "正文", page: 6, anchor: "m1-p6-tpl", quote: "增长（下降）" }],
+    suggestion: "改为“增长”。" },
+  { id: "m1-7", mid: "m1", sev: "low", rule: "D-02", source: "本地规则", page: 7, anchor: "m1-p7-dup",
+    title: "重复用语“主要原因是主要原因是”",
+    brief: "第 7 页出现相邻重复短语。",
+    evidence: [{ label: "正文", page: 7, anchor: "m1-p7-dup", quote: "主要原因是主要原因是" }],
+    suggestion: "删除重复的“主要原因是”。" },
+  { id: "m1-8", mid: "m1", sev: "low", rule: "B-08", source: "本地规则", page: 8, anchor: "m1-p8-name",
+    title: "科目名称与表格不一致（少“支出”二字）",
+    brief: "说明写“学前教育”，一般公共预算支出功能分类预算表中科目为“学前教育支出”。",
+    evidence: [{ label: "财政拨款支出主要内容", page: 8, anchor: "m1-p8-name", quote: "“学前教育”" }],
+    suggestion: "与表格科目名称保持一致，改为“学前教育支出”。" },
+  { id: "m1-9", mid: "m1", sev: "review", rule: "OCR", source: "系统识别", page: 11, anchor: "m1-p11-row",
+    title: "第 11 页表格跨页，合计行识别不稳定",
+    brief: "该表跨两页，第 11 页合计行数值识别置信度低，系统未能自动勾稽，请对照原文核对是否为 52,364.78 万元。",
+    evidence: [{ label: "续表合计行", page: 11, anchor: "m1-p11-row", quote: "合计 52,3?4.78" }],
+    suggestion: "核对该行金额与第 10 页是否一致；如识别有误，可在“读取校正”中更正。" },
+  // 仅供参考
+  { id: "m1-r1", mid: "m1", ref: true, sev: "low", rule: "AI-提示", source: "大模型", page: 20, anchor: "m1-p20-perf",
+    title: "绩效目标仅写项目数和金额，表述较笼统",
+    brief: "大模型提示：可考虑补充主要绩效指标。此条不影响完成复核。",
+    evidence: [{ label: "其他相关情况说明", page: 20, anchor: "m1-p20-perf", quote: "共有12个项目开展绩效目标编报" }],
+    suggestion: "仅供参考。" },
+  { id: "m1-r2", mid: "m1", ref: true, sev: "low", rule: "AI-提示", source: "大模型", page: 20, anchor: "m1-p20-gov",
+    title: "政府采购预算三项之和与总额一致（已自动核对）",
+    brief: "货物、工程、服务三项之和 3,560.00 万元，与总额一致。此条为核对通过的参考信息。",
+    evidence: [{ label: "政府采购", page: 20, anchor: "m1-p20-gov", quote: "政府采购预算3,560.00万元" }],
+    suggestion: "无需处理。" },
+
+  // ===== m2 卫健委 =====
+  G("m2", "high", "C-003", 4, "预算编制说明", "2026年，本部门财政拨款支出预算", "86,120.45万元", "，均为一般公共预算拨款。",
+    "正文财政拨款支出金额与总表不一致", "正文写 86,120.45 万元，总表为 86,210.45 万元，相差 90.00 万元。",
+    { labels: ["正文写", "表格为", "差额"], values: ["86,120.45", "86,210.45", "90.00"], unit: "万元" }),
+  G("m2", "low", "B-08", 7, "财政拨款支出主要内容", "1. ", "“公共卫生”", "（款）21004，32,100.00万元，主要用于疾病预防控制等。",
+    "科目名称与表格不一致（少“支出”二字）", "说明写“公共卫生”，表格科目为“公共卫生支出”。"),
+  G("m2", "low", "B-08", 7, "财政拨款支出主要内容", "2. ", "“计划生育事务”", "（款）21007，5,230.00万元，主要用于计划生育家庭奖励扶助。",
+    "科目名称与表格不一致（多/少字）", "说明写“计划生育事务”，表格科目为“计划生育事务支出”。", null, "b"),
+  G("m2", "medium", "D-010", 16, "“三公”经费预算情况说明", "其中：", "公务用车购置费25.00万元", "，主要用于更新救护保障车辆。",
+    "公务用车购置费大于 0，未写购置数量", "说明写公务用车购置费 25.00 万元，未写购置数量。"),
+  G("m2", "low", "D-05", 5, "财政拨款收入支出预算总体情况", "本部门财政拨款收入预算", "大于（小于）", "上年预算。",
+    "模板残留“大于（小于）”", "第 5 页保留模板提示语“大于（小于）”。"),
+
+  // ===== m3 文旅局 =====
+  G("m3", "critical", "C-001", 17, "部门“三公”经费和机关运行经费预算表", "合计 ", "6.40", "（因公出国0.00 公务用车4.20 公务接待1.80）",
+    "三公经费合计不等于三项之和", "合计 6.40 万元，三项相加 6.00 万元，相差 0.40 万元。",
+    { labels: ["表中合计", "三项相加", "差额"], values: ["6.40", "6.00", "0.40"], unit: "万元" }),
+  G("m3", "low", "B-08", 8, "财政拨款支出主要内容", "1. ", "“文化和旅游”", "（款）20701，8,650.00万元，主要用于公共文化服务。",
+    "科目名称与表格不一致（少“支出”二字）", "说明写“文化和旅游”，表格科目为“文化和旅游支出”。"),
+  G("m3", "low", "D-05", 6, "财政拨款收入支出预算总体情况", "比2025年预算", "增长（下降）", "320.00万元。",
+    "模板残留“增长（下降）”", "第 6 页保留模板提示语“增长（下降）”。"),
+
+  // ===== m4 民政局（决算）=====
+  G("m4", "high", "D-005", 9, "一般公共预算财政拨款支出决算情况说明", "2025年度一般公共预算财政拨款支出", "45,612.30万元", "，占本年支出合计的92.15%。",
+    "一般公共预算财政拨款支出与决算表不一致", "说明写 45,612.30 万元，决算表合计为 45,621.30 万元。",
+    { labels: ["说明写", "表格为", "差额"], values: ["45,612.30", "45,621.30", "9.00"], unit: "万元" }),
+  G("m4", "low", "B-08", 12, "支出决算具体情况", "1. ", "“社会福利”", "（款）20810，年初预算12,300.00万元，支出决算12,286.40万元。",
+    "科目名称与表格不一致（少“支出”二字）", "说明写“社会福利”，表格科目为“社会福利支出”。"),
+  G("m4", "low", "B-08", 12, "支出决算具体情况", "2. ", "“最低生活保障”", "（款）20819，年初预算8,600.00万元，支出决算8,592.10万元。",
+    "科目名称与表格不一致（少“支出”二字）", "说明写“最低生活保障”，表格科目为“最低生活保障支出”。", null, "b"),
+  G("m4", "medium", "D-008", 20, "政府性基金预算财政拨款收入支出决算表", "", "（表下无说明）", "",
+    "政府性基金预算财政拨款决算表缺“本表无数据”说明", "表格无数据，但表下未附“本表无数据”或等效说明。"),
+
+  // ===== m5 科委 =====
+  G("m5", "low", "B-08", 8, "财政拨款支出主要内容", "1. ", "“技术研究与开发”", "（款）20604，6,320.00万元，主要用于科技创新项目。",
+    "科目名称与表格不一致（少“支出”二字）", "说明写“技术研究与开发”，表格科目为“技术研究与开发支出”。"),
+  G("m5", "medium", "A-10", 6, "财政拨款收入支出预算总体情况", "本部门财政拨款收入预算", "比2025年预算减少860.00万元", "。",
+    "财政拨款收入减少未写明原因", "第 6 页写减少 860.00 万元，未写原因。"),
+];
+
+/** 生成其他材料的通用问题。 */
+function G(mid, sev, rule, page, section, pre, quote, post, title, brief, compare, suffix) {
+  const id = `${mid}-${rule}-${page}${suffix || ""}`;
+  return { id, mid, sev, rule, source: "本地规则", page, anchor: `a-${id}`, section, pre, quote, post, title, brief, compare: compare || null,
+    evidence: [{ label: section, page, anchor: `a-${id}`, quote }], suggestion: "按原文核对后修改。" };
+}
+
+PROBLEMS.forEach((p) => { p.status = p.status || null; p.reason = null; p.note = ""; });
+// 已完成材料 m6：没有待处理问题。
+
+/* ---------- 教育局原文页面 ---------- */
+const M1_PAGES = {
+  5: `<h3>二、预算编制说明</h3><p style="text-indent:0">（一）收入预算</p>
+      <p>2026年，本部门收入预算68,512.30万元，其中：一般公共预算资金52,364.78万元，政府性基金0.00万元，事业收入15,147.52万元，其他收入1,000.00万元。</p>
+      <p style="text-indent:0">（二）支出预算</p>
+      <p>2026年，本部门支出预算68,512.30万元，其中：基本支出41,230.15万元，项目支出27,282.15万元。</p>
+      <p style="text-indent:0">（三）财政拨款收支预算</p>
+      <p>2026年，本部门<span id="m1-p5-amt">财政拨款支出预算52,346.78万元</span>，均为一般公共预算拨款。</p>`,
+  6: `<h3>（四）财政拨款收入支出预算总体情况</h3>
+      <p>2026年，本部门财政拨款收入预算52,364.78万元，<span id="m1-p6-inc">比2025年预算增加1,120.00万元</span>。</p>
+      <p>其中，一般公共预算拨款<span id="m1-p6-tpl">增长（下降）</span>1,120.00万元，政府性基金预算拨款与上年持平，国有资本经营预算拨款与上年持平。</p>
+      <p>财政拨款支出预算与收入预算相等。</p>`,
+  7: `<h3>（五）一般公共预算支出预算</h3>
+      <p>2026年，本部门一般公共预算支出52,364.78万元，比2025年预算增加1,120.00万元，<span id="m1-p7-dup">主要原因是主要原因是</span><span id="m1-p7-reason">新增学校建设项目经费及教师薪酬调整</span>。</p>
+      <p>其中：基本支出41,230.15万元，项目支出11,134.63万元。</p>`,
+  8: `<h3>（六）财政拨款支出主要内容</h3>
+      <p>1. <span id="m1-p8-name">“学前教育”</span>（项）2050201，12,345.60万元，主要用于幼儿园日常运转及保教人员经费。</p>
+      <p>2. 小学（项）2050202，18,760.40万元，主要用于小学日常运转及教师薪酬。</p>
+      <p>3. 初中（项）2050203，11,258.78万元，主要用于初中日常运转及教师薪酬。</p>
+      <p>4. 住房公积金（项）2210201，10,000.00万元，主要用于按规定为职工缴纳住房公积金。</p>`,
+  10: `<h4>部门财政拨款收支预算总表</h4><p class="unit">单位：万元</p>
+      <table><tr><th>收入项目</th><th>预算数</th><th>支出项目</th><th>预算数</th></tr>
+      <tr><td>一般公共预算拨款</td><td class="r">52,364.78</td><td>教育支出</td><td class="r">42,364.78</td></tr>
+      <tr><td>政府性基金预算拨款</td><td class="r">0.00</td><td>住房保障支出</td><td class="r">10,000.00</td></tr>
+      <tr><td>国有资本经营预算拨款</td><td class="r">0.00</td><td></td><td></td></tr>
+      <tr><th>收入总计</th><td class="r">52,364.78</td><th>支出总计</th><td class="r"><span id="m1-p10-total">52,364.78</span></td></tr></table>`,
+  11: `<h4>部门财政拨款收支预算总表（续）</h4><p class="unit">单位：万元</p>
+      <table><tr><th>项目</th><th>一般公共预算</th><th>政府性基金</th><th>国有资本经营</th></tr>
+      <tr><td>教育支出</td><td class="r">42,364.78</td><td class="r">0.00</td><td class="r">0.00</td></tr>
+      <tr><td>住房保障支出</td><td class="r">10,000.00</td><td class="r">0.00</td><td class="r">0.00</td></tr>
+      <tr><th>合计</th><td class="r"><span id="m1-p11-row" class="blur">52,3?4.78</span></td><td class="r">0.00</td><td class="r">0.00</td></tr></table>`,
+  15: `<h4>部门政府性基金预算支出功能分类预算表</h4><p class="unit">单位：万元</p>
+      <table><tr><th>功能分类科目编码</th><th>功能分类科目名称</th><th>合计</th><th>基本支出</th><th>项目支出</th></tr>
+      <tr><td>&nbsp;</td><td></td><td></td><td></td><td></td></tr><tr><td>&nbsp;</td><td></td><td></td><td></td><td></td></tr></table>
+      <div id="m1-p15-empty" style="height:44px"></div>`,
+  18: `<h4>部门“三公”经费和机关运行经费预算表</h4><p class="unit">单位：万元</p>
+      <table><tr><th>项目</th><th>预算数</th></tr>
+      <tr><th>“三公”经费合计</th><td class="r"><span id="m1-p18-total">12.80</span></td></tr>
+      <tr><td>1. 因公出国（境）费</td><td class="r">0.00</td></tr>
+      <tr><td>2. 公务用车购置及运行费</td><td class="r"><span id="m1-p18-car">8.50</span></td></tr>
+      <tr><td>&nbsp;&nbsp;其中：公务用车购置费</td><td class="r">3.00</td></tr>
+      <tr><td>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;公务用车运行费</td><td class="r">5.50</td></tr>
+      <tr><td>3. 公务接待费</td><td class="r"><span id="m1-p18-rec">3.80</span></td></tr>
+      <tr><th>机关运行经费</th><td class="r">1,256.30</td></tr></table>`,
+  19: `<h3>（二）“三公”经费预算情况说明</h3>
+      <p>2026年本部门“三公”经费预算12.80万元，其中：因公出国（境）费0.00万元；公务用车购置及运行费8.50万元（其中：<span id="m1-p19-car">公务用车购置费3.00万元</span>，主要用于更新执法执勤车辆；公务用车运行费5.50万元）；公务接待费3.80万元。</p>
+      <p>截至上年末，本部门共有公务用车6辆。</p>`,
+  20: `<h3>（四）其他相关情况说明</h3>
+      <p><span id="m1-p20-gov">2026年本部门政府采购预算3,560.00万元</span>，其中：货物1,200.00万元，工程1,860.00万元，服务500.00万元。</p>
+      <p><span id="m1-p20-perf">本部门2026年共有12个项目开展绩效目标编报，涉及项目经费27,282.15万元</span>。</p>`,
+};
+
+function pageHtml(mid, page) {
+  const m = MATERIALS.find((x) => x.id === mid);
+  let body = "";
+  if (mid === "m1" && M1_PAGES[page]) body = M1_PAGES[page];
+  else {
+    const items = PROBLEMS.filter((p) => p.mid === mid && p.page === page && p.section !== undefined);
+    if (items.length) {
+      body = `<h3>${items[0].section}</h3>` + items.map((p) =>
+        `<p>${p.pre}<span id="${p.anchor}">${p.quote}</span>${p.post}</p>`).join("") +
+        `<p>其余内容略（演示原型仅渲染与问题相关的段落）。</p>`;
+    } else {
+      body = `<p class="blank">第 ${page} 页 · 本页无检查问题<br/>（演示原型未渲染正文）</p>`;
+    }
+  }
+  return `<div class="paper" id="paper">${body}<div class="pno">— ${page} / ${m.pages} —</div></div>`;
+}
+
+/* ---------- 状态 ---------- */
+const state = {
+  view: "list",            // list | batch | work
+  listFilter: "todo",
+  preview: null,
+  seq: [],                 // 连续复核顺序
+  mid: null,
+  selId: null,
+  page: 1,
+  railCollapsed: window.innerWidth < 1300,
+  onlyPending: false,
+  refOpen: false,
+  modal: null,             // {type, ...}
+  toast: null,
+  lastAction: null,
+  expandedRule: "B-08",
+  batchSel: new Set(),
+  flashAnchor: null,
+  scrollToAnchor: true,
+};
+
+const matProblems = (mid) => PROBLEMS.filter((p) => p.mid === mid);
+const required = (mid) => sortProblems(matProblems(mid).filter((p) => !p.ref));
+const references = (mid) => matProblems(mid).filter((p) => p.ref);
+function sortProblems(list) {
+  return list.slice().sort((a, b) => SEV_ORDER.indexOf(a.sev) - SEV_ORDER.indexOf(b.sev) || a.page - b.page);
+}
+const pendingOf = (mid) => required(mid).filter((p) => !p.status);
+function matStatus(m) {
+  if (m.completed) return "completed";
+  const req = required(m.id);
+  if (req.some((p) => p.status)) return "in_progress";
+  return "pending";
+}
+const STATUS_LABEL = { pending: "待复核", in_progress: "复核中", completed: "已完成" };
+function numberOf(p) {
+  if (p.ref) return "R" + (references(p.mid).indexOf(p) + 1);
+  return String(required(p.mid).indexOf(p) + 1);
+}
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function sevPill(sev) { const s = SEV[sev]; return `<span class="pill" style="background:${s.bg};color:${s.color}">${s.label}</span>`; }
+function distHtml(mid) {
+  const counts = {};
+  pendingOf(mid).forEach((p) => { counts[p.sev] = (counts[p.sev] || 0) + 1; });
+  const parts = SEV_ORDER.filter((s) => counts[s]).map((s) =>
+    `<span class="pill" style="background:${SEV[s].bg};color:${SEV[s].color}"><i style="width:7px;height:7px;border-radius:50%;background:${SEV[s].dot};display:inline-block"></i>${SEV[s].label} ${counts[s]}</span>`);
+  return parts.length ? `<div class="dist">${parts.join("")}</div>` : `<span class="muted" style="font-size:12px">无待判定问题</span>`;
+}
+
+/* =====================================================================
+ * 渲染
+ * ===================================================================== */
+function render() {
+  const app = document.getElementById("app");
+  const railScroll = document.querySelector(".rail-list")?.scrollTop ?? 0;
+  const pdfScroll = document.querySelector(".pdf-scroll")?.scrollTop ?? 0;
+  const pageScroll = document.querySelector(".page")?.scrollTop ?? 0;
+  let html = banner();
+  if (state.view === "work") html += workbench();
+  else html += listPage();
+  html += modalHtml() + toastHtml();
+  app.innerHTML = html;
+  const rl = document.querySelector(".rail-list"); if (rl) rl.scrollTop = railScroll;
+  const pg = document.querySelector(".page"); if (pg) pg.scrollTop = pageScroll;
+  if (state.view === "work") {
+    const ps = document.querySelector(".pdf-scroll");
+    if (ps) ps.scrollTop = pdfScroll;
+    requestAnimationFrame(() => { drawMarkers(); });
+    const cur = document.querySelector(".it.on");
+    if (cur && rl) {
+      const r = cur.getBoundingClientRect(), b = rl.getBoundingClientRect();
+      if (r.top < b.top + 30 || r.bottom > b.bottom) rl.scrollTop += r.top - b.top - 80;
+    }
+  }
+}
+
+function banner() {
+  return `<div class="demo-banner"><b>演示原型</b><span>数据均为虚构示例，不连接系统，操作不会保存</span>
+    <span class="sp">当前窗口 ${window.innerWidth}×${window.innerHeight}（14 寸笔记本常见 1280×720 ~ 1536×864）</span>
+    <button onclick="openModal({type:'help'})">快捷键 ?</button></div>`;
+}
+
+/* ---------- 清单页 ---------- */
+function listPage() {
+  const batchRules = ruleGroups().filter((g) => g.items.length >= 2).length;
+  return `<div class="page">
+    <h1>人工复核</h1>
+    <div class="muted">工作人员统一从这里进入。逐份复核：一份材料的问题全部判定后，再进入下一份。</div>
+    <div class="tabs">
+      <button class="${state.view === "list" ? "on" : ""}" onclick="go('list')">按材料复核</button>
+      <button class="${state.view === "batch" ? "on" : ""}" onclick="go('batch')">同类问题批量处理<span class="cnt">${batchRules}</span></button>
+    </div>
+    ${state.view === "list" ? materialList() : batchPage()}
+  </div>${state.preview && state.view === "list" ? previewDrawer() : ""}`;
+}
+
+function filteredMaterials() {
+  return MATERIALS.filter((m) => {
+    const s = matStatus(m);
+    if (state.listFilter === "todo") return s !== "completed";
+    if (state.listFilter === "all") return true;
+    return s === state.listFilter;
+  }).sort((a, b) => {
+    const order = { in_progress: 0, pending: 1, completed: 2 };
+    return order[matStatus(a)] - order[matStatus(b)];
+  });
+}
+
+function materialList() {
+  const list = filteredMaterials();
+  const startable = list.filter((m) => matStatus(m) !== "completed");
+  const inprog = MATERIALS.find((m) => matStatus(m) === "in_progress");
+  const counts = { todo: MATERIALS.filter((m) => matStatus(m) !== "completed").length, in_progress: MATERIALS.filter((m) => matStatus(m) === "in_progress").length,
+    completed: MATERIALS.filter((m) => matStatus(m) === "completed").length, all: MATERIALS.length };
+  return `
+    ${inprog ? `<div class="continue"><div><div class="muted" style="font-size:12px">上次未完成的复核</div>
+      <div style="font-weight:600;margin-top:2px">${inprog.org} · ${inprog.year} 年${inprog.kind}</div>
+      <div class="muted" style="font-size:12px;margin-top:2px">已判定 ${required(inprog.id).length - pendingOf(inprog.id).length} / ${required(inprog.id).length} 条</div></div>
+      <button class="btn primary" style="margin-left:auto" onclick="startSeq('${inprog.id}')">继续复核 →</button></div>` : ""}
+    <div class="toolbar">
+      ${[["todo", "待办"], ["in_progress", "复核中"], ["completed", "已完成"], ["all", "全部"]].map(([k, l]) =>
+        `<button class="chip ${state.listFilter === k ? "on" : ""}" onclick="setFilter('${k}')">${l} ${counts[k]}</button>`).join("")}
+      <input placeholder="搜索单位名称或文件名" style="flex:1;min-width:180px;border:1px solid var(--border);border-radius:6px;padding:7px 10px;font-size:13px" />
+      <select style="border:1px solid var(--border);border-radius:6px;padding:7px 10px;font-size:13px"><option>全部年度</option><option>2026 年</option><option>2025 年</option></select>
+      <select style="border:1px solid var(--border);border-radius:6px;padding:7px 10px;font-size:13px"><option>排序：严重问题多的优先</option><option>最近更新</option></select>
+      <button class="btn primary lg" ${startable.length ? "" : "disabled"} onclick="startSeq()">▶ 开始连续复核（${startable.length} 份）</button>
+    </div>
+    <table class="list"><thead><tr><th>材料</th><th>待判定问题</th><th>进度</th><th>状态</th><th style="width:120px">操作</th></tr></thead><tbody>
+    ${list.map((m) => {
+      const req = required(m.id); const done = req.length - pendingOf(m.id).length; const s = matStatus(m);
+      const pct = m.completed ? 100 : req.length ? Math.round((done / req.length) * 100) : 0;
+      return `<tr class="row ${state.preview === m.id ? "sel" : ""}" onclick="setPreview('${m.id}')">
+        <td><div class="org">${m.org}</div><div class="muted" style="font-size:12px;margin-top:2px">${m.year} 年${m.kind} · ${m.pages} 页</div>
+          <div style="font-size:12px;color:var(--slate-400);margin-top:2px">${m.file}</div></td>
+        <td>${m.completed ? '<span class="muted" style="font-size:12px">—</span>' : distHtml(m.id)}</td>
+        <td><div class="progress"><i style="width:${pct}%"></i></div><div class="muted tabnum" style="font-size:12px;margin-top:4px">${m.completed ? "已完成" : `${done} / ${req.length}`}</div></td>
+        <td><span class="pill" style="background:${s === "completed" ? "var(--success-50)" : s === "in_progress" ? "var(--info-100)" : "var(--warning-100)"};color:${s === "completed" ? "var(--success-700)" : s === "in_progress" ? "var(--info-700)" : "var(--warning-800)"}">${STATUS_LABEL[s]}</span></td>
+        <td onclick="event.stopPropagation()"><button class="btn ${s === "completed" ? "" : "primary"}" onclick="startSeq('${m.id}')">${s === "completed" ? "查看结论" : s === "in_progress" ? "继续复核" : "开始复核"}</button></td></tr>`;
+    }).join("")}
+    </tbody></table>
+    <p class="muted" style="font-size:12px;margin-top:10px">提示：单击行可预览问题概要；“开始连续复核”按当前筛选和排序依次打开材料，完成一份自动提示进入下一份。</p>`;
+}
+
+function previewDrawer() {
+  const m = MATERIALS.find((x) => x.id === state.preview);
+  const req = required(m.id); const pend = pendingOf(m.id);
+  return `<div class="drawer"><header><div style="display:flex;align-items:center"><div class="org">${m.org}</div>
+      <button class="btn ghost" style="margin-left:auto" onclick="setPreview(null)">✕</button></div>
+      <div class="muted" style="font-size:12px;margin-top:4px">${m.year} 年${m.kind} · ${m.pages} 页 · ${STATUS_LABEL[matStatus(m)]}</div>
+      <div style="margin-top:10px">${m.completed ? "" : distHtml(m.id)}</div></header>
+    <div class="body"><div class="sec-t">问题概要（按严重程度）</div>
+      ${req.length ? req.map((p) => `<div class="pv-item"><span class="num" style="background:${SEV[p.sev].dot}">${numberOf(p)}</span>
+        <div style="flex:1"><div ${p.status ? 'style="color:var(--slate-400);text-decoration:line-through"' : ""}>${p.title}</div><div class="muted" style="font-size:12px">第 ${p.page} 页 · ${SEV[p.sev].label}</div></div></div>`).join("")
+      : '<div class="muted">该材料没有待判定问题。</div>'}
+      ${references(m.id).length ? `<div class="muted" style="font-size:12px;margin-top:10px">另有 ${references(m.id).length} 条仅供参考，不影响完成复核。</div>` : ""}
+    </div>
+    <footer><button class="btn" onclick="setPreview(null)">关闭</button><button class="btn primary" onclick="startSeq('${m.id}')">${pend.length ? "进入复核" : "查看结论"} →</button></footer></div>`;
+}
+
+/* ---------- 同类问题批量处理 ---------- */
+function ruleGroups() {
+  const map = new Map();
+  PROBLEMS.filter((p) => !p.ref && !p.status && !MATERIALS.find((m) => m.id === p.mid).completed).forEach((p) => {
+    if (!map.has(p.rule)) map.set(p.rule, { rule: p.rule, sev: p.sev, items: [] });
+    map.get(p.rule).items.push(p);
+  });
+  return Array.from(map.values()).sort((a, b) => b.items.length - a.items.length);
+}
+
+function batchPage() {
+  const groups = ruleGroups();
+  const selCount = state.batchSel.size;
+  return `<div class="muted" style="font-size:13px;margin-bottom:12px">同一条检查规则在多份材料中出现的待判定问题集中在这里，可逐条查看后批量判定。<b>批量忽略须选择理由</b>，每条都会记录操作人和理由，可在对应材料中撤销。</div>
+    <div class="rule-head" style="cursor:default;font-size:12px;color:var(--slate-500);padding:4px 16px"><span>检查规则</span><span>涉及材料</span><span>待判定</span><span>历史判定参考（示例数据）</span><span></span></div>
+    ${groups.map((g) => {
+      const mats = new Set(g.items.map((p) => p.mid)).size; const open = state.expandedRule === g.rule; const meta = RULE_META[g.rule] || { name: g.rule, hist: "—" };
+      return `<div class="rule-row"><div class="rule-head" onclick="toggleRule('${g.rule}')">
+        <div style="display:flex;align-items:center;gap:8px">${sevPill(g.sev)}<b>${meta.name}</b><span class="muted" style="font-size:12px">${g.rule}</span></div>
+        <span class="tabnum">${mats} 份</span><span class="tabnum">${g.items.length} 条</span><span class="muted" style="font-size:12px">${meta.hist}</span>
+        <span style="text-align:right;color:var(--primary-700);font-size:13px">${open ? "收起 ▴" : "展开 ▾"}</span></div>
+        ${open ? `<div class="rule-items">
+          <div style="display:flex;gap:10px;padding:6px 0;font-size:12px"><button class="linkbtn" onclick="batchSelectAll('${g.rule}',true)">全选本类</button><button class="linkbtn" onclick="batchSelectAll('${g.rule}',false)">取消全选</button></div>
+          ${g.items.map((p) => {
+            const m = MATERIALS.find((x) => x.id === p.mid);
+            return `<label class="rule-item"><input type="checkbox" ${state.batchSel.has(p.id) ? "checked" : ""} onchange="toggleBatch('${p.id}')" />
+              <span><b style="font-weight:600">${m.org.replace("上海市普陀区", "")}</b><br/><span class="muted" style="font-size:12px">${m.year} 年${m.kind}</span></span>
+              <span class="muted">第 ${p.page} 页</span>
+              <span>${p.brief}<br/><span class="quote">${quoteCtx(p)}</span></span>
+              <span style="text-align:right"><button class="linkbtn" onclick="event.preventDefault();openInWorkbench('${p.id}')">在工作台查看 →</button></span></label>`;
+          }).join("")}</div>` : ""}</div>`;
+    }).join("")}
+    <div class="batchbar"><span>已选 <b>${selCount}</b> 条</span>
+      <button class="btn" ${selCount ? "" : "disabled"} onclick="state.batchSel.clear();render()">清空</button>
+      <span style="margin-left:auto"></span>
+      <button class="btn" ${selCount ? "" : "disabled"} onclick="batchConfirm()">批量确认是问题</button>
+      <button class="btn primary" ${selCount ? "" : "disabled"} onclick="openModal({type:'ignore',batch:true})">批量判为误报（${selCount}）…</button></div>`;
+}
+function quoteCtx(p) {
+  if (p.pre !== undefined) return `${esc(p.pre.slice(-12))}<span class="hl">${esc(p.quote)}</span>${esc(p.post.slice(0, 14))}…`;
+  return `<span class="hl">${esc(p.evidence[0].quote)}</span>`;
+}
+
+/* ---------- 工作台 ---------- */
+function workbench() {
+  const m = MATERIALS.find((x) => x.id === state.mid);
+  const req = required(m.id); const pend = pendingOf(m.id); const done = req.length - pend.length;
+  const idx = state.seq.indexOf(m.id);
+  const sel = PROBLEMS.find((p) => p.id === state.selId) || null;
+  const railW = state.railCollapsed ? 52 : (window.innerWidth < 1400 ? 220 : 250);
+  const detW = window.innerWidth < 1360 ? 360 : 400;
+  const ready = pend.length === 0 && !m.completed;
+  return `<div class="wb">
+    <div class="wb-top">
+      <button class="btn ghost" onclick="backToList()" title="返回复核清单">← 清单</button>
+      <div class="title" title="${m.file}">${m.org} · ${m.year} 年${m.kind}</div>
+      ${state.seq.length > 1 ? `<div class="seqnav"><button ${idx <= 0 ? "disabled" : ""} onclick="seqMove(-1)" title="上一份 Shift+←">‹</button>
+        <span>连续复核 第 <b>${idx + 1}</b> / ${state.seq.length} 份</span><button ${idx >= state.seq.length - 1 ? "disabled" : ""} onclick="seqMove(1)" title="下一份 Shift+→">›</button></div>` : ""}
+      <div style="margin-left:auto" class="topprog"><span>已判定 <b class="tabnum">${done}</b> / ${req.length}</span><div class="bar"><i style="width:${req.length ? (done / req.length) * 100 : 100}%"></i></div></div>
+      ${m.completed ? `<span class="pill" style="background:var(--success-50);color:var(--success-700)">已完成复核</span>`
+        : `<button class="btn ${ready ? "primary complete-ready" : ""}" onclick="openModal({type:'complete'})">${ready ? "✓ 完成本份复核" : `完成本份（还剩 ${pend.length} 条）`}</button>`}
+      <button class="btn ghost" title="更多：读取校正、元数据、导出报告、重新分析">更多 ▾</button>
+    </div>
+    <div class="wb-body" style="grid-template-columns:${railW}px minmax(0,1fr) ${detW}px">
+      ${rail(m)}${pdfPane(m, sel)}${detailPane(m, sel)}
+    </div></div>`;
+}
+
+function rail(m) {
+  const req = required(m.id);
+  const list = state.onlyPending ? req.filter((p) => !p.status) : req;
+  const refs = references(m.id);
+  const item = (p) => {
+    const st = p.status === "confirmed" ? '<span class="st-ok">✓</span>' : p.status === "ignored" ? '<span class="st-ig">✗</span>' : "";
+    return `<div class="it ${p.id === state.selId ? "on" : ""} ${p.status ? "done" : ""}" onclick="selectProblem('${p.id}')" title="${esc(p.title)}">
+      <span class="num" style="background:${p.status ? "#cbd5e1" : SEV[p.sev].dot}">${numberOf(p)}</span>
+      <span class="t">${p.title}</span><span class="meta">P${p.page}<br/>${st}</span></div>`;
+  };
+  let html = `<aside class="rail ${state.railCollapsed ? "collapsed" : ""}"><div class="rail-head">
+    ${state.railCollapsed ? "" : `<b>问题清单</b><span class="muted">${req.length}</span>
+      <label style="margin-left:auto;font-size:12px;color:var(--slate-600);display:flex;align-items:center;gap:3px"><input type="checkbox" ${state.onlyPending ? "checked" : ""} onchange="state.onlyPending=!state.onlyPending;render()" />只看待判定</label>`}
+    <button class="btn ghost" style="padding:2px 6px" onclick="toggleRail()" title="${state.railCollapsed ? "展开清单" : "收起清单"}">${state.railCollapsed ? "»" : "«"}</button></div><div class="rail-list">`;
+  SEV_ORDER.forEach((s) => {
+    const g = list.filter((p) => p.sev === s);
+    if (!g.length) return;
+    const pendN = g.filter((p) => !p.status).length;
+    html += `<div class="grp" style="color:${SEV[s].color}"><span class="bar" style="background:${SEV[s].dot}"></span><span class="lbl">${SEV[s].label} · ${pendN ? `待判定 ${pendN}` : "已全部判定"}</span></div>`;
+    html += g.map(item).join("");
+  });
+  if (!list.length) html += `<div class="muted" style="padding:16px;font-size:13px;text-align:center">${state.railCollapsed ? "✓" : "全部问题已判定 ✓"}</div>`;
+  if (refs.length) {
+    html += `<div class="grp" style="color:var(--slate-500);cursor:pointer;margin-top:8px;border-top:1px solid var(--border)" onclick="state.refOpen=!state.refOpen;render()">
+      <span class="lbl">${state.refOpen ? "▾" : "▸"} 仅供参考 ${refs.length}（不影响完成）</span>${state.railCollapsed ? "R" : ""}</div>`;
+    if (state.refOpen || state.railCollapsed) html += refs.map((p) => `<div class="it ${p.id === state.selId ? "on" : ""}" onclick="selectProblem('${p.id}')">
+      <span class="num" style="background:#cbd5e1;color:var(--slate-700)">${numberOf(p)}</span><span class="t" style="color:var(--slate-600)">${p.title}</span><span class="meta">P${p.page}</span></div>`).join("");
+  }
+  return html + `</div></aside>`;
+}
+
+function pdfPane(m, sel) {
+  const pages = Array.from(new Set(matProblems(m.id).map((p) => p.page))).sort((a, b) => a - b);
+  const onPage = matProblems(m.id).filter((p) => p.page === state.page && (!p.ref || p.id === state.selId));
+  return `<section class="pdf"><div class="pdf-tool">
+      <button class="btn ghost" style="padding:2px 6px" onclick="setPage(${state.page - 1})" ${state.page <= 1 ? "disabled" : ""}>‹</button>
+      <span class="tabnum">第 <b>${state.page}</b> / ${m.pages} 页</span>
+      <button class="btn ghost" style="padding:2px 6px" onclick="setPage(${state.page + 1})" ${state.page >= m.pages ? "disabled" : ""}>›</button>
+      <span class="muted" style="white-space:nowrap">本页 ${onPage.filter((p) => !p.ref).length} 个问题 · 有问题的页：</span>
+      <div class="pagechips">${pages.map((pg) => {
+        const ps = matProblems(m.id).filter((p) => p.page === pg && !p.ref);
+        const worst = sortProblems(ps)[0]; const allDone = ps.length && ps.every((p) => p.status);
+        return `<button class="pagechip ${pg === state.page ? "on" : ""}" onclick="setPage(${pg})">P${pg}${ps.length ? ps.map(() => `<i style="background:${allDone ? "#cbd5e1" : SEV[worst.sev].dot}"></i>`).join("") : ""}</button>`;
+      }).join("")}</div>
+      <span class="muted" style="white-space:nowrap">适应宽度</span>
+    </div><div class="pdf-scroll" id="pdfScroll">${pageHtml(m.id, state.page)}</div></section>`;
+}
+
+function detailPane(m, sel) {
+  const pend = pendingOf(m.id);
+  if (!sel) {
+    return `<section class="detail"><div class="d-scroll">${pend.length === 0 && !m.completed ? allClear(m) : ""}
+      <div class="muted" style="padding:40px 10px;text-align:center">${m.completed ? "该材料已完成复核。" : "请在左侧选择问题。"}</div></div></section>`;
+  }
+  const s = SEV[sel.sev]; const req = required(m.id); const num = numberOf(sel);
+  const reasonLabel = sel.reason ? (REASONS.find((r) => r.code === sel.reason.code)?.label || "") : "";
+  const isReview = sel.sev === "review";
+  return `<section class="detail"><div class="d-scroll">
+    ${pend.length === 0 && !m.completed ? allClear(m) : ""}
+    <div class="d-card" style="border-color:${sel.ref ? "#cbd5e1" : s.dot}">
+      <div class="d-meta">${sel.ref ? `<span class="pill" style="background:var(--surface-100);color:var(--slate-600)">仅供参考</span>` : sevPill(sel.sev)}
+        <span>${sel.ref ? `参考 ${num}` : `第 ${num} 条 / 共 ${req.length} 条`}</span><span>·</span><span>第 ${sel.page} 页</span>
+        ${sel.status === "confirmed" ? '<span class="pill" style="background:var(--success-50);color:var(--success-700)">已确认是问题</span>' : ""}
+        ${sel.status === "ignored" ? '<span class="pill" style="background:var(--surface-100);color:var(--slate-600)">已判为误报</span>' : ""}
+      </div>
+      <h2 class="d-title">${sel.title}</h2>
+      <p class="d-brief">${sel.brief}</p>
+    </div>
+    ${sel.compare ? `<div class="cmp">${sel.compare.labels.map((l, i) => `<div><div class="l">${l}</div><div class="v" style="color:${i === 2 ? "var(--danger-600)" : "var(--slate-900)"}">${sel.compare.values[i]}</div><div class="u">${sel.compare.unit}</div></div>`).join("")}</div>` : ""}
+    <div class="sec-t">原文证据（点击在左侧原文定位）</div>
+    ${sel.evidence.map((e, i) => `<button class="ev-btn" onclick="locateEvidence('${sel.id}',${i})"><span class="tag">${String.fromCharCode(65 + i)}</span>
+      <span><span class="q">${esc(e.quote)}</span><br/><span class="loc">第 ${e.page} 页 · ${esc(e.label)} ↖</span></span></button>`).join("")}
+    <div class="sugg"><b>修改建议</b>${sel.suggestion}</div>
+    ${sel.calc ? `<details class="fold"><summary>计算明细</summary><table><tr><th>参与项</th><th class="r">金额（万元）</th><th class="r">原文</th></tr>
+      ${sel.calc.map((r) => `<tr><td>${r[3] ? "<b>" + r[0] + "</b>" : r[0]}</td><td class="r">${r[1]}</td><td class="r"><button class="linkbtn" onclick="setPage(${r[2]})">P${r[2]}</button></td></tr>`).join("")}
+      <tr><td>三项相加</td><td class="r"><b>${sel.calcSum}</b></td><td></td></tr></table>
+      <div class="muted" style="font-size:12px;margin-top:6px">表内合计 ${sel.calc[0][1]} − 三项相加 ${sel.calcSum} = 差额 ${sel.calcDiff} 万元（容差 0.01 万元）</div></details>` : ""}
+    <details class="fold"><summary>检查依据</summary><div class="kv">
+      <span>检查规则</span><span>${(RULE_META[sel.rule] || { name: sel.rule }).name}（${sel.rule}）</span>
+      <span>发现方式</span><span>${sel.source}</span>
+      <span>判定口径</span><span>金额统一换算为万元后比较，容差 0.01 万元</span></div></details>
+    ${sel.status === "confirmed" ? `<div class="record ok">✓ 已确认是问题 · 演示用户 · 刚刚${sel.note ? `<br/>备注：${esc(sel.note)}` : ""}</div>` : ""}
+    ${sel.status === "ignored" ? `<div class="record ig">✗ 已判为误报 · 理由：${reasonLabel}${sel.reason.detail ? `（${esc(sel.reason.detail)}）` : ""}${sel.reason.batch ? `<br/>批量处理（同类 ${sel.reason.batch} 条一起判定）` : ""} · 演示用户 · 刚刚</div>` : ""}
+    ${!sel.status && sel.note ? `<div class="record ig">备注：${esc(sel.note)}</div>` : ""}
+  </div>
+  <div class="actionbar">
+    ${sel.ref ? `<span class="muted" style="font-size:13px">仅供参考，无需判定</span>`
+      : m.completed ? `<span class="muted" style="font-size:13px">已完成复核，只读</span>`
+      : sel.status ? `<button class="btn" onclick="restore('${sel.id}')">改回待判定</button><button class="btn" onclick="openModal({type:'note'})">备注 <span class="kbd">N</span></button>`
+      : `<button class="btn lg confirm" onclick="decide('confirmed')">✓ ${isReview ? "核实有问题" : "确认是问题"} <span class="kbd">C</span></button>
+         <button class="btn lg" onclick="openModal({type:'ignore'})">✗ ${isReview ? "核实无误" : "误报，忽略"} <span class="kbd">I</span></button>
+         <button class="btn" onclick="openModal({type:'note'})">备注 <span class="kbd">N</span></button>`}
+    <div class="nav"><button class="btn" onclick="moveSel(-1)" title="上一条 K">‹ <span class="kbd">K</span></button><button class="btn" onclick="moveSel(1)" title="下一条 J"><span class="kbd">J</span> ›</button></div>
+  </div></section>`;
+}
+
+function allClear(m) {
+  const next = nextInSeq();
+  return `<div class="allclear">✓ 本份 ${required(m.id).length} 条问题已全部判定。<button class="btn primary" style="margin-left:auto" onclick="openModal({type:'complete'})">完成${next ? "并进入下一份" : "复核"} →</button></div>`;
+}
+
+/* ---------- 原文标记 ---------- */
+function drawMarkers() {
+  const paper = document.getElementById("paper");
+  if (!paper) return;
+  const m = state.mid;
+  const sel = PROBLEMS.find((p) => p.id === state.selId);
+  const pr = paper.getBoundingClientRect();
+  const box = (el) => { const r = el.getBoundingClientRect(); return { top: r.top - pr.top - 3, left: r.left - pr.left - 4, width: r.width + 8, height: r.height + 6 }; };
+  const marks = [];
+  matProblems(m).filter((p) => p.page === state.page && (!p.ref || p.id === state.selId)).forEach((p) => {
+    const el = paper.querySelector("#" + CSS.escape(p.anchor)); if (!el) return;
+    const b = box(el); const isCur = p.id === state.selId;
+    const color = p.status ? "#94a3b8" : (p.ref ? "#94a3b8" : SEV[p.sev].dot);
+    marks.push(`<div class="mk ${isCur ? "cur" : "dim"}" style="top:${b.top}px;left:${b.left}px;width:${b.width}px;height:${Math.max(b.height, 20)}px;border-color:${color}" onclick="selectProblem('${p.id}')" title="${esc(p.title)}">
+      <span class="badge" style="background:${color}">${numberOf(p)}</span></div>`);
+  });
+  if (sel) sel.evidence.forEach((e, i) => {
+    if (e.page !== state.page || e.anchor === sel.anchor) return;
+    const el = paper.querySelector("#" + CSS.escape(e.anchor)); if (!el) return;
+    const b = box(el);
+    marks.push(`<div class="mk ev ${state.flashAnchor === e.anchor ? "flash" : ""}" style="top:${b.top}px;left:${b.left}px;width:${b.width}px;height:${b.height}px"><span class="badge">${String.fromCharCode(65 + i)}</span></div>`);
+  });
+  paper.insertAdjacentHTML("beforeend", marks.join(""));
+  if (state.scrollToAnchor) {
+    state.scrollToAnchor = false;
+    const target = state.flashAnchor || sel?.anchor;
+    const el = target && paper.querySelector("#" + CSS.escape(target));
+    const sc = document.getElementById("pdfScroll");
+    if (el && sc) { const r = el.getBoundingClientRect(), s = sc.getBoundingClientRect(); sc.scrollTop += r.top - s.top - s.height / 3; }
+    else if (sc) sc.scrollTop = 0;
+  }
+}
+
+/* ---------- 弹窗 ---------- */
+function modalHtml() {
+  const md = state.modal; if (!md) return "";
+  if (md.type === "help") return modalWrap("快捷键", `<div class="help-grid">
+      <span><span class="kbd">J</span> / <span class="kbd">↓</span></span><span>下一条问题</span>
+      <span><span class="kbd">K</span> / <span class="kbd">↑</span></span><span>上一条问题</span>
+      <span><span class="kbd">C</span></span><span>确认是问题（自动跳到下一条待判定）</span>
+      <span><span class="kbd">I</span></span><span>误报，忽略（选择理由，可同时批量处理同类）</span>
+      <span><span class="kbd">N</span></span><span>添加备注</span>
+      <span><span class="kbd">Z</span></span><span>撤销上一步</span>
+      <span><span class="kbd">Shift</span>+<span class="kbd">→</span> / <span class="kbd">←</span></span><span>连续复核中的下一份 / 上一份</span>
+      <span><span class="kbd">[</span></span><span>收起 / 展开问题清单</span>
+      <span><span class="kbd">Esc</span></span><span>关闭弹窗</span></div>`, `<button class="btn primary" onclick="closeModal()">知道了</button>`);
+  if (md.type === "note") {
+    const sel = PROBLEMS.find((p) => p.id === state.selId);
+    return modalWrap("添加备注", `<div class="muted" style="font-size:12px;margin-bottom:6px">${sel ? esc(sel.title) : ""}</div><textarea id="noteText" placeholder="例如：已电话联系单位核实">${sel ? esc(sel.note) : ""}</textarea>`,
+      `<button class="btn" onclick="closeModal()">取消</button><button class="btn primary" onclick="saveNote()">保存</button>`);
+  }
+  if (md.type === "ignore") return ignoreModal(md);
+  if (md.type === "complete") return completeModal();
+  return "";
+}
+function modalWrap(title, body, foot, width) {
+  return `<div class="mask" onclick="if(event.target===this)closeModal()"><div class="modal" style="${width ? `width:min(${width}px,100%)` : ""}"><header>${title}<button class="x" onclick="closeModal()">✕</button></header>
+    <div class="body">${body}</div><footer>${foot}</footer></div></div>`;
+}
+
+function ignoreModal(md) {
+  const reason = md.reason || "false_positive";
+  let targets, similar = [];
+  if (md.batch) {
+    targets = PROBLEMS.filter((p) => state.batchSel.has(p.id));
+  } else {
+    const sel = PROBLEMS.find((p) => p.id === state.selId);
+    targets = [sel];
+    similar = PROBLEMS.filter((p) => p.rule === sel.rule && p.id !== sel.id && !p.status && !p.ref && !MATERIALS.find((m) => m.id === p.mid).completed);
+  }
+  md.simSel = md.simSel || new Set();
+  const same = similar.filter((p) => p.mid === state.mid); const other = similar.filter((p) => p.mid !== state.mid);
+  const simRow = (p) => { const m = MATERIALS.find((x) => x.id === p.mid);
+    return `<label class="sim-it"><input type="checkbox" ${md.simSel.has(p.id) ? "checked" : ""} onchange="toggleSim('${p.id}')" />
+      <span>${p.mid === state.mid ? "" : `<b>${m.org.replace("上海市普陀区", "")}</b> · `}<span class="quote">${quoteCtx(p)}</span></span><span class="muted" style="text-align:right">第 ${p.page} 页</span></label>`; };
+  const total = targets.length + md.simSel.size;
+  const needDetail = reason === "other";
+  const body = `
+    ${md.batch ? `<div style="margin-bottom:8px">将对已选的 <b>${targets.length}</b> 条问题判为误报（涉及 ${new Set(targets.map((p) => p.mid)).size} 份材料）。</div>`
+      : `<div class="muted" style="font-size:12px;margin-bottom:4px">当前问题</div><div style="font-weight:600;margin-bottom:10px">${esc(targets[0].title)}（第 ${targets[0].page} 页）</div>`}
+    <div class="sec-t">忽略理由（必选）</div>
+    <div class="reasons">${REASONS.map((r) => `<label class="${reason === r.code ? "on" : ""}" onclick="setReason('${r.code}')"><input type="radio" name="rs" />${r.label}</label>`).join("")}</div>
+    <textarea id="reasonDetail" placeholder="${needDetail ? "请填写具体理由（必填）" : "补充说明（选填），例如：表格科目全称为“学前教育支出”，说明使用简称属规范写法"}">${esc(md.detail || "")}</textarea>
+    ${!md.batch && similar.length ? `<div class="simbox"><h5>同类问题一并处理？</h5>
+      <div style="font-size:12px;color:var(--slate-600)">同一检查规则（${(RULE_META[targets[0].rule] || { name: targets[0].rule }).name}）还有 <b>${similar.length}</b> 条待判定：本材料 ${same.length} 条，其他材料 ${other.length} 条。勾选的条目将使用相同理由判为误报。</div>
+      ${same.length ? `<div class="sim-grp"><div class="gh">本材料（${same.length}）<button class="linkbtn" onclick="simAll('same')">全选</button></div>${same.map(simRow).join("")}</div>` : ""}
+      ${other.length ? `<div class="sim-grp"><div class="gh">其他材料（${other.length}）<button class="linkbtn" onclick="simAll('other')">全选</button><button class="linkbtn" onclick="simAll('none')">清空</button></div>${other.map(simRow).join("")}</div>` : ""}
+      <div style="font-size:12px;color:var(--warning-800);margin-top:8px">⚠ 批量判定会逐条记录理由和操作人；其他材料的复核人进入时会看到“已由他人批量判为误报”，并可改回待判定。</div></div>` : ""}`;
+  return modalWrap(md.batch ? "批量判为误报" : (targets[0].sev === "review" ? "核实无误" : "误报，忽略"), body,
+    `<span class="muted" style="font-size:12px;margin-right:auto">共 ${total} 条</span><button class="btn" onclick="closeModal()">取消</button>
+     <button class="btn primary" onclick="submitIgnore()">${total > 1 ? `判为误报（${total} 条）` : "判为误报"}</button>`, 760);
+}
+
+function completeModal() {
+  const m = MATERIALS.find((x) => x.id === state.mid);
+  const req = required(m.id); const pend = pendingOf(m.id);
+  const next = nextInSeq();
+  if (pend.length) {
+    return modalWrap("还不能完成本份复核", `<div style="margin-bottom:10px">还有 <b>${pend.length}</b> 条问题未判定，点击可直接跳转：</div>
+      ${pend.map((p) => `<div class="remain-it"><span class="num" style="background:${SEV[p.sev].dot}">${numberOf(p)}</span><span style="flex:1">${p.title}</span><span class="muted">第 ${p.page} 页</span>
+        <button class="linkbtn" onclick="closeModal();selectProblem('${p.id}')">去处理 →</button></div>`).join("")}
+      <div class="muted" style="font-size:12px;margin-top:10px">“仅供参考”的条目不影响完成。</div>`, `<button class="btn primary" onclick="closeModal();selectProblem('${pend[0].id}')">处理第一条</button>`);
+  }
+  const conf = req.filter((p) => p.status === "confirmed"); const ign = req.filter((p) => p.status === "ignored");
+  return modalWrap("完成本份复核", `<div class="sumgrid"><div><div class="muted" style="font-size:12px">确认是问题</div><div class="v" style="color:var(--danger-600)">${conf.length}</div></div>
+      <div><div class="muted" style="font-size:12px">判为误报</div><div class="v">${ign.length}</div></div>
+      <div><div class="muted" style="font-size:12px">仅供参考</div><div class="v" style="color:var(--slate-400)">${references(m.id).length}</div></div></div>
+      ${conf.length ? `<div class="sec-t">将进入整改清单的问题</div>${conf.map((p) => `<div class="remain-it"><span class="num" style="background:${SEV[p.sev].dot}">${numberOf(p)}</span><span style="flex:1">${p.title}</span><span class="muted">第 ${p.page} 页</span></div>`).join("")}` : ""}
+      ${next ? `<div style="margin-top:12px;font-size:13px">下一份：<b>${next.org}</b> · ${next.year} 年${next.kind}（${pendingOf(next.id).length} 条待判定）</div>` : `<div style="margin-top:12px;font-size:13px" class="muted">这是连续复核的最后一份。</div>`}`,
+    `<button class="btn" onclick="closeModal()">留在本份</button><button class="btn primary" onclick="completeCurrent()">${next ? "完成并进入下一份 →" : "完成并返回清单"}</button>`);
+}
+
+function toastHtml() {
+  if (!state.toast) return "";
+  return `<div class="toast"><span>${state.toast.text}</span>${state.lastAction ? `<button onclick="undo()">撤销 Z</button>` : ""}</div>`;
+}
+
+/* =====================================================================
+ * 操作
+ * ===================================================================== */
+function go(view) { state.view = view; state.preview = null; render(); }
+function setFilter(f) { state.listFilter = f; render(); }
+function setPreview(id) { state.preview = id; render(); }
+function toggleRule(r) { state.expandedRule = state.expandedRule === r ? null : r; render(); }
+function toggleBatch(id) { state.batchSel.has(id) ? state.batchSel.delete(id) : state.batchSel.add(id); render(); }
+function batchSelectAll(rule, on) { ruleGroups().find((g) => g.rule === rule).items.forEach((p) => on ? state.batchSel.add(p.id) : state.batchSel.delete(p.id)); render(); }
+function toggleRail() { state.railCollapsed = !state.railCollapsed; render(); }
+
+function startSeq(mid) {
+  const list = filteredMaterials().filter((m) => matStatus(m) !== "completed").map((m) => m.id);
+  if (mid && !list.includes(mid)) { state.seq = [mid]; }
+  else if (mid) { state.seq = [mid, ...list.filter((x) => x !== mid)]; }
+  else state.seq = list;
+  openMaterial(state.seq[0]);
+}
+function openMaterial(mid) {
+  state.view = "work"; state.mid = mid; state.preview = null;
+  const first = pendingOf(mid)[0] || required(mid)[0] || null;
+  state.selId = first ? first.id : null;
+  state.page = first ? first.page : 1;
+  state.scrollToAnchor = true; state.flashAnchor = null; state.lastAction = null; state.toast = null;
+  render();
+}
+function openInWorkbench(pid) {
+  const p = PROBLEMS.find((x) => x.id === pid);
+  state.seq = [p.mid]; openMaterial(p.mid); selectProblem(pid);
+}
+function backToList() { state.view = "list"; render(); }
+function seqMove(d) { const i = state.seq.indexOf(state.mid) + d; if (i >= 0 && i < state.seq.length) openMaterial(state.seq[i]); }
+function nextInSeq() {
+  const i = state.seq.indexOf(state.mid);
+  const rest = state.seq.slice(i + 1).map((id) => MATERIALS.find((m) => m.id === id)).filter((m) => matStatus(m) !== "completed");
+  return rest[0] || null;
+}
+
+function selectProblem(id) {
+  const p = PROBLEMS.find((x) => x.id === id); if (!p) return;
+  state.selId = id; state.page = p.page; state.flashAnchor = null; state.scrollToAnchor = true; render();
+}
+function setPage(pg) {
+  const m = MATERIALS.find((x) => x.id === state.mid);
+  if (pg < 1 || pg > m.pages) return;
+  state.page = pg; state.scrollToAnchor = true; state.flashAnchor = null; render();
+}
+function locateEvidence(pid, i) {
+  const e = PROBLEMS.find((x) => x.id === pid).evidence[i];
+  state.page = e.page; state.flashAnchor = e.anchor; state.scrollToAnchor = true; render();
+}
+function visibleOrder() {
+  const req = required(state.mid);
+  return state.onlyPending ? req.filter((p) => !p.status || p.id === state.selId) : req;
+}
+function moveSel(d) {
+  const list = visibleOrder(); const i = list.findIndex((p) => p.id === state.selId);
+  const n = list[Math.max(0, Math.min(list.length - 1, (i < 0 ? 0 : i + d)))];
+  if (n) selectProblem(n.id);
+}
+function goNextPending(fromId) {
+  const req = required(state.mid); const i = req.findIndex((p) => p.id === fromId);
+  const after = req.slice(i + 1).find((p) => !p.status) || req.find((p) => !p.status);
+  if (after) selectProblem(after.id);
+  else { render(); openModal({ type: "complete" }); }
+}
+
+function decide(status) {
+  const sel = PROBLEMS.find((p) => p.id === state.selId);
+  if (!sel || sel.ref || sel.status) return;
+  state.lastAction = { prev: [[sel.id, sel.status, sel.reason]] };
+  sel.status = status;
+  showToast(`已确认是问题：${sel.title}`);
+  goNextPending(sel.id);
+}
+function restore(id) {
+  const p = PROBLEMS.find((x) => x.id === id);
+  state.lastAction = { prev: [[p.id, p.status, p.reason]] };
+  p.status = null; p.reason = null; showToast("已改回待判定"); render();
+}
+function undo() {
+  if (!state.lastAction) return;
+  state.lastAction.prev.forEach(([id, st, rs]) => { const p = PROBLEMS.find((x) => x.id === id); p.status = st; p.reason = rs; });
+  const first = state.lastAction.prev[0][0];
+  state.lastAction = null; state.toast = { text: "已撤销" };
+  const p = PROBLEMS.find((x) => x.id === first);
+  if (state.view === "work" && p.mid === state.mid) selectProblem(first); else render();
+  setTimeout(() => { state.toast = null; render(); }, 1500);
+}
+let toastTimer = null;
+function showToast(text) {
+  state.toast = { text }; clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { state.toast = null; state.lastAction = null; render(); }, 6000);
+}
+
+function openModal(md) {
+  if (md.type === "ignore" && !md.batch) {
+    const sel = PROBLEMS.find((p) => p.id === state.selId);
+    if (!sel || sel.ref || sel.status) return;
+  }
+  state.modal = md; render();
+  if (md.type === "note") setTimeout(() => document.getElementById("noteText")?.focus(), 0);
+}
+function closeModal() { state.modal = null; render(); }
+function keepDetail() { const t = document.getElementById("reasonDetail"); if (t && state.modal) state.modal.detail = t.value; }
+function setReason(code) { keepDetail(); state.modal.reason = code; render(); }
+function toggleSim(id) { keepDetail(); const s = state.modal.simSel; s.has(id) ? s.delete(id) : s.add(id); render(); }
+function simAll(which) {
+  keepDetail();
+  const sel = PROBLEMS.find((p) => p.id === state.selId);
+  const sim = PROBLEMS.filter((p) => p.rule === sel.rule && p.id !== sel.id && !p.status && !p.ref && !MATERIALS.find((m) => m.id === p.mid).completed);
+  if (which === "none") state.modal.simSel.clear();
+  else sim.filter((p) => which === "same" ? p.mid === state.mid : p.mid !== state.mid).forEach((p) => state.modal.simSel.add(p.id));
+  render();
+}
+function submitIgnore() {
+  keepDetail();
+  const md = state.modal; const code = md.reason || "false_positive"; const detail = (md.detail || "").trim();
+  if (code === "other" && !detail) { alert("选择“其他”时请填写具体理由。"); return; }
+  let ids;
+  if (md.batch) ids = Array.from(state.batchSel);
+  else ids = [state.selId, ...Array.from(md.simSel || [])];
+  const prev = ids.map((id) => { const p = PROBLEMS.find((x) => x.id === id); return [id, p.status, p.reason]; });
+  ids.forEach((id) => { const p = PROBLEMS.find((x) => x.id === id); p.status = "ignored"; p.reason = { code, detail, batch: ids.length > 1 ? ids.length : 0 }; });
+  state.lastAction = { prev }; state.modal = null;
+  const others = ids.filter((id) => PROBLEMS.find((x) => x.id === id).mid !== state.mid).length;
+  showToast(ids.length > 1 ? `已判为误报 ${ids.length} 条${others && !md.batch ? `（含其他材料 ${others} 条）` : ""}` : "已判为误报");
+  if (md.batch) { state.batchSel.clear(); render(); }
+  else goNextPending(ids[0]);
+}
+function batchConfirm() {
+  const ids = Array.from(state.batchSel);
+  state.lastAction = { prev: ids.map((id) => { const p = PROBLEMS.find((x) => x.id === id); return [id, p.status, p.reason]; }) };
+  ids.forEach((id) => { PROBLEMS.find((x) => x.id === id).status = "confirmed"; });
+  state.batchSel.clear(); showToast(`已批量确认 ${ids.length} 条`); render();
+}
+function saveNote() {
+  const sel = PROBLEMS.find((p) => p.id === state.selId);
+  if (sel) sel.note = document.getElementById("noteText").value;
+  state.modal = null; showToast("备注已保存"); render();
+}
+function completeCurrent() {
+  const m = MATERIALS.find((x) => x.id === state.mid);
+  const next = nextInSeq();
+  m.completed = true; state.modal = null; state.lastAction = null;
+  if (next) { openMaterial(next.id); showToast(`已完成：${m.org}，进入下一份`); render(); }
+  else { state.view = "list"; showToast(`已完成：${m.org}`); render(); }
+}
+
+/* ---------- 键盘 ---------- */
+document.addEventListener("keydown", (e) => {
+  const tag = (e.target.tagName || "").toLowerCase();
+  if (e.key === "Escape") { if (state.modal) closeModal(); else if (state.preview) setPreview(null); return; }
+  if (tag === "textarea" || tag === "input" || tag === "select") return;
+  if (e.key === "?") { openModal({ type: "help" }); return; }
+  if (state.modal) return;
+  if (e.key.toLowerCase() === "z" && !e.metaKey && !e.ctrlKey) { undo(); return; }
+  if (state.view !== "work") return;
+  if (e.shiftKey && e.key === "ArrowRight") { seqMove(1); e.preventDefault(); return; }
+  if (e.shiftKey && e.key === "ArrowLeft") { seqMove(-1); e.preventDefault(); return; }
+  const k = e.key.toLowerCase();
+  if (k === "j" || e.key === "ArrowDown") { moveSel(1); e.preventDefault(); }
+  else if (k === "k" || e.key === "ArrowUp") { moveSel(-1); e.preventDefault(); }
+  else if (k === "c") decide("confirmed");
+  else if (k === "i") openModal({ type: "ignore" });
+  else if (k === "n") { const sel = PROBLEMS.find((p) => p.id === state.selId); if (sel && !sel.ref) openModal({ type: "note" }); }
+  else if (e.key === "[") toggleRail();
+});
+let resizeTimer = null;
+window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(render, 120); });
+
+render();
+</script>
+</body>
+</html>

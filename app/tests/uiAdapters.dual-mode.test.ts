@@ -433,6 +433,32 @@ for (const [evidenceStatus, sourceComplete, expected] of [
   assert.equal(diagnostics[2].title, "部分规则未执行");
   assert.equal(diagnostics[2].page, 7);
 
+  const cleanedUnfinished = extractReviewDiagnostics(
+    {
+      job_id: "job-unfinished-clean",
+      review_report: {
+        schema_version: 3,
+        unfinished_checks: [
+          {
+            id: "OBL-STRUCT-NUMBER-VALIDITY",
+            record_type: "unfinished_check",
+            obligation_id: "OBL-STRUCT-NUMBER-VALIDITY",
+            title: "数值单元格可解析性",
+            detail:
+              "来源表映射/读取未完成：第18页FIN_07_three_public {'amount_column_unmapped': 2}；单元格 63d1b6a524010b50:r4c4 没有唯一当前事实；结构：阻断 第18页FIN_07_three_public",
+          },
+        ],
+      },
+    },
+    "unfinished_checks",
+  );
+  assert.equal(cleanedUnfinished.length, 1);
+  assert.equal(cleanedUnfinished[0].page, 18);
+  assert.ok(!cleanedUnfinished[0].message.includes("FIN_07_three_public"));
+  assert.ok(!cleanedUnfinished[0].message.includes("amount_column_unmapped"));
+  assert.ok(cleanedUnfinished[0].message.includes("《财政拨款“三公”经费支出决算表》"));
+  assert.ok(cleanedUnfinished[0].message.includes("第4行第4列单元格"));
+
   // 旧版 v2 review_report 兼容投影：中文标题、中文建议与单元格定位坐标。
   const legacyNotices = toUiProblems({
     job_id: "job-v2-compat",

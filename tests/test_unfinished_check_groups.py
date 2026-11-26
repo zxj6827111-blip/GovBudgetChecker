@@ -172,6 +172,25 @@ def test_p0_cmm022_catches_subject_code_class_prefix_mismatch():
     assert issues[0].location["page"] == 2
 
 
+def test_cmm022_locates_second_printed_subject_under_wrong_class():
+    from src.engine.checklist_content_rules import CMM022_SubjectCodeFormat
+    from src.engine.rules_v33 import build_document
+
+    table = [
+        ["212", "城乡社区支出", "7.00"],
+        ["21201", "城乡社区管理事务", "7.00"],
+        ["220", "自然资源海洋气象等支出", "5.00"],
+        ["21201", "城乡社区管理事务", "7.00"],
+    ]
+    page = "\n".join(" ".join(row) for row in table)
+    doc = build_document("/tmp/cmm022_repeat.pdf", [page], [[table]], 100)
+    issue, = CMM022_SubjectCodeFormat().apply(doc)
+    assert issue.location["pos"] == page.rindex("21201")
+    assert "21201 城乡社区管理事务" in issue.evidence_text
+    assert page.count(issue.evidence_text) == 1
+    assert page.index(issue.evidence_text) > page.index("220")
+
+
 def test_p0_cross_table_lookup_prefers_table_code_over_nonstandard_title():
     from types import SimpleNamespace
     from src.engine.rules_v33 import _FIN_07_TABLE_ALIASES, _cross_table_by_alias

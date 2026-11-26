@@ -49,6 +49,15 @@ def test_section_five_is_read_even_when_the_three_public_title_follows_it():
     assert {row['status'] for row in doc.fact_receipts} == {'pass'}
 
 
+@pytest.mark.parametrize('amount,status', [('544.49', 'pass'), ('545.49', 'fail')])
+def test_quoted_class_amount_checked_independently_of_missing_total(amount, status):
+    doc = document(f'一般公共预算财政拨款支出：“卫生健康支出”科目{amount}万元，主要用于医疗。', MEDICAL)
+    with pytest.raises(RuleDeferred, match='未识别到显式本年支出合计'):
+        check_function_disclosures(DisclosureRule(), doc)
+    class_checks = [r for r in doc.fact_receipts if r['sub_check_id'].startswith('general:text:class:210:')]
+    assert [r['status'] for r in class_checks] == [status]
+
+
 # ---------------------------------------------------------------------------
 # “类-款-项”连接号写法
 # ---------------------------------------------------------------------------

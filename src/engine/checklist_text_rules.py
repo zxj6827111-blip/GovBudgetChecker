@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import re
-from typing import List, Sequence, Tuple
+from typing import Dict, List, Sequence, Tuple
 
 from .checklist_support import (
     CJK,
@@ -426,6 +426,127 @@ class CMM010_AmountFormat(Rule):
                 if not any(match.start() < e and s < match.end() for s, e in taken):
                     start, end = flat_span(positions, match.start(), match.end())
                     decimals.append((page, text, start, end))
+        # 表格单元格内不重复印“万元”，但仍可能出现句点作千分位分隔（如“2.359.46”）或双小数点：
+        # 按原件表格单元格补扫非法金额格式，交付正式格式缺陷并供下游 cell_unbound 连带归并。
+        artifact = getattr(doc, "parse_artifact", None)
+        if artifact is not None:
+            _TABLE_INVALID_NUM_RE = re.compile(
+                r"^-?(?:\d{1,3}(?:\.\d{3})+\.\d{1,2}|\d[\d,]*\.\.\d+)$"
+            )
+            _COL_CELL_REF_RE = re.compile(r"^([^:]+):r\d+c(\d+)$")
+            _HEADER_TO_INDICATOR = {
+                "基本支出": "basic_actual",
+                "项目支出": "project_actual",
+                "本年支出合计": "total_actual",
+                "支出合计": "total_actual",
+                "合计": "total_actual",
+                "上缴上级支出": "to_superior_actual",
+                "经营支出": "operational_actual",
+                "对附属单位补助支出": "subsidiary_actual",
+            }
+            fact_col_indicators: Dict[Tuple[str, str, int], set[str]] = {}
+            fuid_col_indicators: Dict[Tuple[str, int], set[str]] = {}
+            fc_obj = getattr(doc, "fact_context", None)
+            for fact in (getattr(fc_obj, "facts", None) or ()):
+                ftable = str(getattr(fact, "table_code", "") or "")
+                findicator = str(getattr(fact, "indicator", "") or "").strip()
+                if not ftable or not findicator:
+                    continue
+                for ref in (getattr(fact, "extra_dims", None) or {}).get("evidence_refs") or ():
+                    if not isinstance(ref, dict):
+                        continue
+                    ref_cid = str(ref.get("source_cell_id") or "").strip()
+                    m_cid = _COL_CELL_REF_RE.match(ref_cid)
+                    if m_cid:
+                        col_idx = int(m_cid.group(2))
+                        fact_col_indicators.setdefault(
+                            (ftable, m_cid.group(1), col_idx), set()
+                        ).add(findicator)
+                        fuid_col_indicators.setdefault(
+                            (m_cid.group(1), col_idx), set()
+                        ).add(findicator)
+            seen_table_cells: set[Tuple[int, str, str]] = set()
+            all_frags = list(getattr(artifact, "table_fragments", []) or []) + list(
+                getattr(artifact, "physical_fragments", []) or []
+            )
+            for frag in all_frags:
+                tcode = str(getattr(frag, "table_code", "") or "")
+                fuid = str(getattr(frag, "fragment_uid", "") or "")
+                for cell in getattr(frag, "cells", []) or []:
+                    if getattr(cell, "is_header", False):
+                        continue
+                    raw = str(getattr(cell, "raw_text", "") or "").strip()
+                    if not raw or not _TABLE_INVALID_NUM_RE.fullmatch(raw):
+                        continue
+                    c_page = int(getattr(cell, "page_number", 0) or 0)
+                    if c_page <= 0:
+                        continue
+                    orig_fuid = str(getattr(cell, "origin_fragment_uid", None) or fuid)
+                    raw_orig_row = getattr(cell, "origin_row_idx", None)
+                    orig_row = raw_orig_row if raw_orig_row is not None else cell.row_idx
+                    raw_orig_col = getattr(cell, "origin_col_idx", None)
+                    orig_col = raw_orig_col if raw_orig_col is not None else cell.col_idx
+                    cid = f"{orig_fuid}:r{orig_row}c{orig_col}"
+                    dedup_key = (c_page, cid, raw)
+                    if dedup_key in seen_table_cells:
+                        continue
+                    seen_table_cells.add(dedup_key)
+                    col_indicators = fact_col_indicators.get((tcode, orig_fuid, int(orig_col)))
+                    if not col_indicators:
+                        col_indicators = fuid_col_indicators.get((orig_fuid, int(orig_col)))
+                    col_indicator = (
+                        next(iter(col_indicators))
+                        if col_indicators and len(col_indicators) == 1
+                        else ""
+                    )
+                    if not col_indicator:
+                        header_texts = [
+                            re.sub(r"\s+", "", str(getattr(hc, "raw_text", "") or ""))
+                            for hc in (getattr(frag, "cells", []) or [])
+                            if getattr(hc, "is_header", False) and hc.col_idx == cell.col_idx
+                        ]
+                        if not header_texts:
+                            for hdr_row in (getattr(frag, "rows", []) or [])[:3]:
+                                if 0 <= cell.col_idx < len(hdr_row):
+                                    val = re.sub(r"\s+", "", str(hdr_row[cell.col_idx] or ""))
+                                    if val:
+                                        header_texts.append(val)
+                        for ht in reversed(header_texts):
+                            if ht in _HEADER_TO_INDICATOR:
+                                col_indicator = _HEADER_TO_INDICATOR[ht]
+                                break
+                    row_label = ""
+                    row_code = ""
+                    if 0 <= cell.row_idx < len(getattr(frag, "rows", []) or []):
+                        raw_row = frag.rows[cell.row_idx]
+                        first_cell = re.sub(r"\s+", "", str(raw_row[0] or "")) if raw_row else ""
+                        code_m = re.match(r"^(\d{3,9})(?:$|[^\d])", first_cell)
+                        if code_m:
+                            row_code = code_m.group(1)
+                        row_vals = [
+                            re.sub(r"\s+", "", str(v or ""))
+                            for v in raw_row[:2]
+                            if str(v or "").strip()
+                        ]
+                        if row_vals:
+                            row_label = " ".join(row_vals)
+                    if not row_code and row_label:
+                        code_m = re.match(r"^\s*(\d{3,9})(?:\s|$)", row_label)
+                        if code_m:
+                            row_code = code_m.group(1)
+                    row_hint = f"「{row_label}」" if row_label else ""
+                    issues.append(self._issue(
+                        f"表格金额数字格式非法（用句点作千分位分隔或双小数点）：{row_hint}“{raw}”（第{c_page}页），"
+                        "应使用半角逗号作千分位、保留一个小数点（如 2,359.46）。",
+                        {
+                            "page": c_page, "checklist_item": "C-15",
+                            "defect_type": "invalid_table_number_format",
+                            "table_code": tcode or None, "source_cell_id": cid,
+                            "raw_value": raw, "row": row_label or None,
+                            "row_code": row_code or None, "column": col_indicator or None,
+                        },
+                        evidence_text=raw,
+                    ))
         if report_kind(doc) == "budget":
             percents = []
             for page, text in iter_pages(doc):

@@ -44,7 +44,7 @@ class ScopeResolution:
 
 #: 封面名前的附件/序号编号（“附件1”“1”），以及“（本级）/(本级)/本级/本部”标注。
 _COVER_INDEX_RE = re.compile(r"^(?:附件)?[0-9０-９]{1,3}(?=[一-鿿])")
-_LEVEL_ANNOTATION_RE = re.compile(r"(?:（本级）|\(本级\)|本级|本部)+$")
+_LEVEL_ANNOTATION_RE = re.compile(r"(?:（本级）|\(本级\)|（本部）|\(本部\)|本级|本部)+$")
 
 
 def _compact_name(text) -> str:
@@ -72,6 +72,12 @@ def cover_matches_selected_org(cover_name, selected_org_name):
         return True
     # 目录名多“单位”后缀（与 verified_cover_alias 同方向：目录名更长）。
     if org_stripped == cover_stripped + "单位" or org == cover + "单位":
+        return True
+    # 多牌合署括号别名（如“上海市水务局（上海市海洋局）”与“上海市水务局”）及规范行政前缀变体等价；
+    # 下属单位（如“上海市文化和旅游局执法总队”）仍保持 False。
+    from src.services.org_name_identity import compare_org_names
+
+    if compare_org_names(cover_stripped, org_stripped).equivalent:
         return True
     # 其余一律视为不一致：前缀更长的是下属单位，非前缀的是不同名称。
     return False

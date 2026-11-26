@@ -112,6 +112,8 @@ def operand_rejection_reason(fact: FiscalFact, organization: Optional[str] = Non
     if fact.extra_dims.get("org_scope_pending") and "org_scope" in (ACTIVE_IDENTITY.get() if required_dimensions is None else required_dimensions):
         return "材料汇总口径待确认；本规则依赖该维度"
     if fact.extra_dims.get("table_reading_status") == "incomplete":
+        if fact.extra_dims.get("table_reading_cell_id"):
+            return "来源金额格的原字符存在重叠或可见性冲突，金额需复核"
         return "来源表仍有未完成读取的区域，不能据此确认勾稽结论"
     owner_reason = _owner_rejection_reason(fact, organization)
     if owner_reason:
@@ -523,6 +525,49 @@ class FactContext:
 # ---------------------------------------------------------------------------
 
 
+def _is_clerical_table_year_typo(artifact: Any, instance: Any, doc_fiscal_year: Optional[int]) -> bool:
+    """判断核心表表题中的异年是否为孤立笔误（如 2022 决算报告中某张表头误写为 2021 年度）。
+
+    满足以下全部条件时，年份错误已由 V33-001/CMM-012 正式报出，事实层按报告主年度绑定以继续后续勾稽：
+    1. 报告主年度已明确（整数），表题年份也为整数且相差不超过 5 年；
+    2. 当前表属于九张核心表，且在解析产物中仅此唯一物理逻辑实例（无同名竞争表）；
+    3. 同一份报告至少还识别出 2 张其他核心表（排除单表合成负控样例），且其他带年份核心表未形成异年多数。
+    """
+    if artifact is None or instance is None or doc_fiscal_year is None:
+        return False
+    inst_year = getattr(instance, "fiscal_year", None)
+    if inst_year is None:
+        return False
+    try:
+        doc_y = int(doc_fiscal_year)
+        inst_y = int(inst_year)
+    except (TypeError, ValueError):
+        return False
+    if doc_y == inst_y or abs(doc_y - inst_y) > 5:
+        return False
+    from src.services.fiscal_table_rules import NINE_TABLE_RULES
+
+    t_code = str(getattr(instance, "table_code", "") or "")
+    if t_code not in NINE_TABLE_RULES:
+        return False
+    logical = [
+        item for item in (getattr(artifact, "logical_tables", None) or [])
+        if str(getattr(item, "table_code", "") or "") in NINE_TABLE_RULES
+    ]
+    same_code = [item for item in logical if item.table_code == t_code]
+    if len(same_code) != 1:
+        return False
+    others = [item for item in logical if item.table_code != t_code]
+    if len(others) < 2:
+        return False
+    other_matching = sum(1 for item in others if getattr(item, "fiscal_year", None) == doc_y)
+    other_conflicting = sum(
+        1 for item in others
+        if getattr(item, "fiscal_year", None) not in (None, doc_y)
+    )
+    return other_matching >= other_conflicting
+
+
 def build_fact_context_from_artifact(
     artifact: ParseArtifact,
     *,
@@ -566,12 +611,16 @@ def build_fact_context_from_artifact(
             extra_dims={'source_table_title':fragment.title}),org_name)
             and not any(word in fragment.title for word in ('部门预算','部门决算','单位预算','单位决算'))):
             local_scope=None
+        year_typo_override = _is_clerical_table_year_typo(artifact, instance, fiscal_year)
+        effective_table_year = (
+            fiscal_year if year_typo_override else (instance.fiscal_year or fiscal_year)
+        )
         materialized = materializer.build_fiscal_facts_for_table(
             fragment,
             mappings,
             org_name=instance.org_name or org_name,
             org_scope=local_scope,
-            fiscal_year=instance.fiscal_year or fiscal_year,
+            fiscal_year=effective_table_year,
             period="本年",
             budget_stage=budget_stage,
             instance_uid=instance.instance_uid,
@@ -586,6 +635,18 @@ def build_fact_context_from_artifact(
             mapping = mapping_by_measure.get(fact.indicator, {})
             header = str(fact.extra_dims.get("source_header") or mapping.get("source_col_name") or "")
             stage = _stage_for_fact(fact.indicator, header, report_kind or doc_type, budget_stage)
+            if year_typo_override:
+                fact = dataclasses.replace(
+                    fact,
+                    extra_dims={
+                        **fact.extra_dims,
+                        "clerical_table_year_override": {
+                            "printed_table_year": instance.fiscal_year,
+                            "effective_fiscal_year": fiscal_year,
+                            "basis": "unique_core_table_in_confirmed_report_year",
+                        },
+                    },
+                )
             if instance.identity_conflict:
                 fact=dataclasses.replace(fact,recognition_status='ambiguous',extra_dims={**fact.extra_dims,
                     'logical_identity_conflict':list(instance.conflict_reasons)or['logical_table_identity_conflict']})

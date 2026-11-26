@@ -14,6 +14,8 @@ from src.services.table_import_receipt import build_table_import_receipt, source
 
 FIXTURES = Path(__file__).parents[1] / "fixtures/native_tail_v25"
 MANIFEST = json.loads((FIXTURES / "manifest.json").read_text())
+# 原件中这三格为完整单行，格内多余字符来自上一行。
+COMPLETE_NEIGHBOURS = {"2130301", "2130306", "220"}
 
 
 @pytest.fixture(scope="module")
@@ -36,13 +38,22 @@ def test_cross_grid_amount_keeps_independent_source_characters_and_physical_iden
     assert len(matches) == 1
     fact = matches[0]
     assert fact.raw_value == expected["raw_text"]
-    # 内容流只能证明字符存在；可见尾位跨格时必须保留歧义，不能据此放行取数。
-    assert fact.recognition_status == "ambiguous"
-    assert fact.extra_dims["qualification_evidence"]["source_conflict"] is True
-    assert operand_rejection_reason(fact) is not None
     ref = fact.extra_dims["evidence_refs"][0]
     assert ref["physical_page"] == expected["page"]
     proof, = ref["source_provenance"]["native_text_sources"]
+    if identity["subject_code"] in COMPLETE_NEIGHBOURS:
+        assert proof["recovery_kind"] == "native_neighbor_tail_removed"
+        assert fact.extra_dims["qualification_evidence"]["source_conflict"] is False
+        assert operand_rejection_reason(fact) is None
+        for axis in (0, 1):
+            assert proof["source_grid_bbox"][axis] <= proof["bbox"][axis]
+            assert proof["bbox"][axis + 2] <= proof["source_grid_bbox"][axis + 2]
+    else:
+        # 内容流只能证明字符存在。可见尾位跨格仍须保留歧义。
+        assert proof["recovery_kind"] == "cross_grid_decimal_tail"
+        assert fact.recognition_status == "ambiguous"
+        assert fact.extra_dims["qualification_evidence"]["source_conflict"] is True
+        assert operand_rejection_reason(fact) is not None
     independent = expected["source_proof"]
     assert (proof["start_char_index"], proof["end_char_index"], proof["text"]) == (
         independent["start_char_index"], independent["end_char_index"], independent["text"])
@@ -63,7 +74,7 @@ def test_unadjudicated_cross_grid_candidates_keep_both_channels_and_stay_pending
     artifact, context = parsed
     assert len(context.facts) == 156
     pending=[f for f in context.facts if f.recognition_status=='ambiguous']
-    assert len(pending)==11
+    assert len(pending) == 8
     assert all(operand_rejection_reason(f) is not None for f in pending)
     assert all(f.extra_dims['qualification_evidence']['source_conflict'] for f in pending)
     cells = {source: c for c in artifact.resolved_cells for source in c.source_cell_ids}
@@ -72,8 +83,8 @@ def test_unadjudicated_cross_grid_candidates_keep_both_channels_and_stay_pending
         assert cell.resolution_status == 'unresolved'
         assert any(p.get('requires_adjudication') is True for p in cell.provenance)
     receipt = build_table_import_receipt(artifact, context.facts)
-    assert receipt["amount_cell_count"] == 156 and receipt['rule_admitted_count']==145
-    assert receipt["unresolved_money_cell_count"] == 11
+    assert receipt["amount_cell_count"] == 156 and receipt['rule_admitted_count'] == 148
+    assert receipt["unresolved_money_cell_count"] == 8
     assert receipt["original_pdf_full_coverage_verified"] is False
     assert ParseArtifact.from_dict(artifact.to_dict()).to_dict() == artifact.to_dict()
     # 持久化真的经过JSON；嵌套证明也必须稳定，不能只做内存中的from_dict。

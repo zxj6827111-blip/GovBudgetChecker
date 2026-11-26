@@ -167,9 +167,9 @@ def canonical_column_mappings(fragment, rule):
     if not paths:
         return []
     dimension_tokens = {"项目", "科目编码", "功能分类科目编码", "经济分类科目编码", "科目名称", "行次", "栏次", "类", "款", "项"}
-    # 「功能分类科目名称 / 经济分类科目名称」都是名称维度，不能只靠父级「项目」兜底。
+    # 「功能分类科目名称 / 经济分类科目名称 / 科目代码 / 科目编码」都是维度，不能只靠父级「项目」兜底。
     dimensions = ({col for col, path in enumerate(paths)
-                   if any(part in dimension_tokens or part.endswith("科目名称") for part in path)}
+                   if any(part in dimension_tokens or part.endswith(("科目名称", "科目编码", "科目代码")) for part in path)}
                   | code_dimension_columns(fragment, paths))
 
     def labels(col):
@@ -311,6 +311,25 @@ def canonical_column_mappings(fragment, rule):
                 # An explicit business header beats a shared stage wrapper.
                 # e.g. 合计/基本支出/项目支出 all sit under 支出决算数.
                 score = (1 if generic_stage else 3) if alias in path else (0 if generic_stage else 2)
+                business_parts = [part for part in path if part and part not in stages]
+                literally_printed = any(
+                    col < len(row) and normalize_text(str(row[col] or "")) == alias
+                    for row in fragment.rows[:fragment.header_row_count]
+                )
+                if not generic_stage and literally_printed and (
+                    (rule.code == "FIN_05_general_public_expenditure" and measure == "total_actual" and alias == "合计")
+                    or (
+                        business_parts == [alias]
+                        and any(
+                            other_col > col
+                            and alias in paths[other_col]
+                            and [p for p in paths[other_col] if p and p not in stages] != [alias]
+                            for other_col in range(len(paths))
+                        )
+                    )
+                ):
+                    # 左列亲自印出该业务词且自身无其他子表头时，优先于右列因补父表头而横向继承该词的其他子列。
+                    score = 4
                 scores.append(score)
             if scores:
                 candidates.append((max(scores), col))

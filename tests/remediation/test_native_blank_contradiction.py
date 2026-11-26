@@ -91,6 +91,46 @@ def test_same_blank_field_with_same_claim_in_two_places_is_one_item_with_two_ori
     assert len(finding['location']['native_blank_calculation_refs']) == 2
 
 
+@pytest.mark.parametrize('declared_revenue', ['100.00', '101.00'])
+def test_income_blank_deferral_keeps_later_independent_comparison(monkeypatch, declared_revenue):
+    from src.engine import native_table_text
+    from src.engine.pipeline import build_document, build_issues_payload
+    from src.engine.rules_v33 import R33226_Narrative2_T2
+    from tests.remediation.test_native_pdf_core import context_for, grid
+
+    rows = [
+        ['功能分类科目编码', '科目名称', '本年收入合计', '财政拨款收入', '其他收入'],
+        ['合计', '', '100.00', '100.00', ''],
+    ]
+    table = grid(rows, [0, 30, 140, 180, 220, 260], uid='income', page=1,
+                 code='FIN_02_income', confidence=.99, unit='万元')
+    blank_cell = table.cells[-1]
+    blank_cell.native_blank_verified = True
+    base = context_for([table], [table])
+    doc = build_document('/tmp/income.pdf', [
+        '收入决算表\n2025年度\n单位：万元',
+        f'二、收入决算情况说明\n其他收入1.00万元。本年收入合计{declared_revenue}万元。\n三、支出决算情况说明',
+    ], [[rows], []], 1000)
+    doc.parse_artifact, doc.fact_context = base.parse_artifact, base.fact_context
+    # 注入仅能观察原格空白、不能独立作零的操作数，复现比较阶段的延期。
+    term = blank_term(doc, 'FIN_02_income', 'other_income', code='total', calculation=False)
+    assert term is not None and not independent_blank_zero(doc, term)
+    select = native_table_text.select
+
+    def select_with_observation(document, facts, indicator, **kwargs):
+        if indicator == 'other_income':
+            return term, None
+        return select(document, facts, indicator, **kwargs)
+
+    monkeypatch.setattr(native_table_text, 'select', select_with_observation)
+    payload = build_issues_payload(doc, report_kind='final', rules=[R33226_Narrative2_T2])
+    expected = 'pass' if declared_revenue == '100.00' else 'fail'
+    assert [item['status'] for item in payload['fact_receipts']] == ['insufficient_data', expected]
+    assert len(payload['issues']['all']) == (expected == 'fail')
+    [unresolved] = payload['rule_execution_summary']['unresolved_rules']
+    assert unresolved['status'] == 'insufficient_data'
+
+
 def test_zero_denominator_ratio_retains_both_certified_cells_as_current_proof():
     from src.engine.native_three_public_ratios import evaluate
     doc=native_reception(budget='')

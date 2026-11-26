@@ -372,6 +372,35 @@ async def test_unfinished_ocr_is_queued_and_does_not_execute_rules(tmp_path, mon
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("ocr_status", ["pending", "service_unavailable"])
+async def test_mixed_pdf_runs_rules_while_ocr_is_unfinished(tmp_path, monkeypatch, ocr_status):
+    job_dir = _prepare_job(tmp_path, "mixed-ocr-wait", {
+        "status": "queued", "mode": "legacy", "report_kind": "budget",
+        "report_year": 2025, "use_local_rules": True, "use_ai_assist": False,
+    })
+    before = "一般公共预算财政拨款支出预算表" * 10
+    after = "政府采购预算情况说明" * 10
+    _patch_pipeline(monkeypatch, [before, "", after], {
+        "all": [], "error": [], "warn": [], "info": [],
+    })
+    monkeypatch.setattr(pipeline_mod, "maybe_ocr_scanned_pages", AsyncMock(return_value={
+        "status": ocr_status,
+        "requested_pages": [2],
+    }))
+    await pipeline_mod._run_pipeline_inner(job_dir)
+
+    payload = runtime.read_json_file(job_dir / "status.json", default={})
+    pipeline_mod.run_rules_in_process.assert_awaited_once()
+    assert payload["status"] == "review_required"
+    assert payload["analysis_conclusion"] == "incomplete"
+    assert payload["result"]["meta"]["ocr"]["status"] == ocr_status
+    assert payload["review_report"]
+    recovery = next(r for r in payload["review_reasons"] if r["code"] == "ocr_recovery_incomplete")
+    assert recovery["pages"] == [2]
+    assert recovery["ocr_status"] == ocr_status
+
+
+@pytest.mark.asyncio
 async def test_pipeline_clean_document_with_unimplemented_checks_is_not_done(
     tmp_path, monkeypatch
 ):

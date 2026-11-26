@@ -21,7 +21,49 @@ def _indexed_text(text):
     return "".join(chars), positions
 
 
-def _native_span(quote, page, pages, file_hash, *, context=None):
+def _unique_context_around_pos(original: str, haystack: str, offsets: list[int], needle: str, pos: int | None) -> str | None:
+    """当规则给出了页内偏移 pos、而短引文同页出现多次时，在原文中围绕唯一命中的该处位置向外扩展至全页唯一片段。"""
+    if type(pos) is not int or pos < 0 or not needle:
+        return None
+    starts = []
+    at = 0
+    while True:
+        found = haystack.find(needle, at)
+        if found < 0:
+            break
+        starts.append(found)
+        at = found + 1
+    if len(starts) <= 1:
+        return None
+    raw_matches = [
+        (offsets[s], offsets[s + len(needle) - 1] + 1)
+        for s in starts
+        if offsets[s] <= pos < offsets[s + len(needle) - 1] + 1
+    ]
+    chosen = None
+    if len(raw_matches) == 1:
+        chosen = raw_matches[0]
+    else:
+        compact_matches = [
+            (offsets[s], offsets[s + len(needle) - 1] + 1)
+            for s in starts
+            if s <= pos < s + len(needle)
+        ]
+        if len(compact_matches) == 1:
+            chosen = compact_matches[0]
+    if chosen is None:
+        return None
+    eb, ee = chosen
+    for step in (20, 45, 80, 130, 200, 320, 420):
+        nb = max(0, eb - step)
+        ne = min(len(original), ee + step)
+        cand_needle, _ = _indexed_text(original[nb:ne])
+        if cand_needle and haystack.count(cand_needle) == 1:
+            return original[nb:ne]
+    return None
+
+
+def _native_span(quote, page, pages, file_hash, *, context=None, pos=None):
     if type(page) is not int or not 1 <= page <= len(pages) or not quote:
         return None
     original = pages[page - 1]
@@ -30,6 +72,8 @@ def _native_span(quote, page, pages, file_hash, *, context=None):
     if not needle:
         return None
     if haystack.count(needle) != 1:
+        if not context and pos is not None:
+            context = _unique_context_around_pos(original, haystack, offsets, needle, pos)
         if not context:
             return None
         ctx_needle, _ = _indexed_text(context)
@@ -57,8 +101,8 @@ def _literal_ref_sources(ref, pages, file_hash):
     Only a literal that actually crosses pages and includes that declared page
     can be repaired; a wrong single-page reference remains unresolved.
     """
-    quote, page, context = ref.get('span'), ref.get('page'), ref.get('context')
-    direct = _native_span(quote, page, pages, file_hash, context=context)
+    quote, page, context, pos = ref.get('span'), ref.get('page'), ref.get('context'), ref.get('pos')
+    direct = _native_span(quote, page, pages, file_hash, context=context, pos=pos)
     if direct is not None:
         return [direct]
     if not quote or type(page) is not int:
@@ -128,6 +172,36 @@ def _current_cell_catalog(artifact):
                 conflicting.add(key)
             cells[key] = cell
     return cells, conflicting
+
+
+def _uses_number_cell_source(finding, location):
+    return (location.get("defect_type") == "invalid_table_number_format"
+            or ((finding.get("rule_id") or finding.get("rule")) == "V33-004"
+                and bool(location.get("source_cell_id"))))
+
+
+def _number_cell_evidence(location, artifact, file_hash, catalog):
+    """直接核对物理格与原文，重复数字也只绑定本格。"""
+    cell_id = location.get("source_cell_id")
+    cells, conflicts = catalog
+    cell = cells.get(cell_id)
+    page = location.get("page")
+    if (
+        artifact.source_file_hash != file_hash or not cell or cell_id in conflicts
+        or cell.page_number != page or not _bbox(cell.bbox)
+        or cell.extraction_method not in {"lines", "lines_strict", "text"}
+        or cell.raw_text.strip() != location.get("raw_value")
+    ):
+        return None
+    quote = cell.raw_text
+    return {
+        "page": page, "physical_page": page, "quote": quote, "text": quote,
+        "table_code": location.get("table_code"), "table": location.get("table_code"),
+        "source_cell_id": cell_id, "file_hash": file_hash, "bbox": list(cell.bbox),
+        "source_method": "native_text", "source_identity_status": "verified",
+        "location_level": "exact_cell", "verification_status": "verified",
+        "evidence_id": hashlib.sha1("|".join((file_hash, str(page), cell_id, quote)).encode()).hexdigest()[:16],
+    }
 
 
 def _current_cell_evidence(facts, artifact, pages, file_hash, *, cell_catalog=None):
@@ -351,6 +425,7 @@ def bind_rule_sources(result, *, page_texts, source_file_hash, artifact=None, fa
     unverified. This verifies source identity, never business correctness.
     """
     bound = 0
+    cell_catalog = None
     if not re.fullmatch(r"[0-9a-f]{64}", source_file_hash or ""):
         return {"bound_rule_findings": 0}
     for finding in iter_findings(result):
@@ -368,7 +443,19 @@ def bind_rule_sources(result, *, page_texts, source_file_hash, artifact=None, fa
         bound_refs = []
         literal_refs = []
         blank_calculation_refs = []
-        if has_operands:
+        if _uses_number_cell_source(finding, location):
+            if artifact is not None and cell_catalog is None:
+                cell_catalog = _current_cell_catalog(artifact)
+            cell_ref = (
+                _number_cell_evidence(location, artifact, source_file_hash, cell_catalog)
+                if cell_catalog is not None else None
+            )
+            if cell_ref is None:
+                finding["source_binding_status"] = "unresolved"
+                finding["severity"] = "manual_review"
+                continue
+            evidence = [cell_ref]
+        elif has_operands:
             matching_context = (artifact is not None and fact_context is not None
                                 and artifact.source_file_hash == fact_context.file_hash == source_file_hash
                                 and artifact.parse_run_uid == fact_context.parse_run_uid)
@@ -463,7 +550,12 @@ def bind_rule_sources(result, *, page_texts, source_file_hash, artifact=None, fa
                 continue
         elif refs and all(ref.get("span") and type(ref.get("page")) is int for ref in refs):
             for ref in refs:
-                sources = _literal_ref_sources(ref, page_texts, source_file_hash)
+                ref_with_pos = (
+                    {**ref, "pos": location.get("pos")}
+                    if "pos" not in ref and len(refs) == 1 and type(location.get("pos")) is int
+                    else ref
+                )
+                sources = _literal_ref_sources(ref_with_pos, page_texts, source_file_hash)
                 if not sources:
                     evidence.append(None)
                     continue
@@ -478,10 +570,23 @@ def bind_rule_sources(result, *, page_texts, source_file_hash, artifact=None, fa
                         literal_ref['declared_source_cell_id'] = literal_ref.pop('source_cell_id')
                     literal_refs.append(literal_ref)
         elif old:
-            evidence = [_native_span(item.get('quote') or item.get('text') or item.get('text_snippet'),
-                                     item.get('page') or item.get('physical_page') or location.get('page'),
-                                     page_texts, source_file_hash,
-                                     context=item.get('context') or location.get('context')) for item in old]
+            for item in old:
+                sources = _literal_ref_sources(
+                    {
+                        'span': item.get('quote') or item.get('text') or item.get('text_snippet'),
+                        'page': item.get('page') or item.get('physical_page') or location.get('page'),
+                        'context': item.get('context') or location.get('context'),
+                        'pos': item.get('pos') if type(item.get('pos')) is int else (
+                            location.get('pos') if len(old) == 1 and type(location.get('pos')) is int else None
+                        ),
+                    },
+                    page_texts,
+                    source_file_hash,
+                )
+                if not sources:
+                    evidence.append(None)
+                else:
+                    evidence.extend(sources)
         if not has_operands and (not evidence or any(item is None for item in evidence)) and refs:
             spanned_refs = [ref for ref in refs if ref.get("span") and type(ref.get("page")) is int]
             if spanned_refs and len(spanned_refs) < len(refs):
@@ -798,6 +903,11 @@ def _verify_bound_locations(result, *, source_pdf_path, allowed_sources, result_
             located = locator.locate(item)
             for key in ('evidence', 'location', 'page_number', 'bbox', 'location_level', 'verification_status'):
                 finding[key] = getattr(located, key)
+            if (_uses_number_cell_source(finding, located.location)
+                    and located.location_level != "exact_cell"):
+                # 单靠全页搜到相同数字不能认证这一个物理格。
+                finding["severity"] = "manual_review"
+                finding["source_binding_status"] = "unresolved"
             checked += 1
     finally:
         locator.close()

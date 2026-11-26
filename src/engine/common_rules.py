@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple
 
 from .amount_math import (
@@ -21,6 +21,7 @@ from .rules_v33 import (
     _TXT_FUND_UNIT_TO_WAN,
     _nar_repeat_section_of,
     _nar_repeat_sections,
+    _record_v33_consumption,
     _resolve_fiscal_year,
     _span_page_fragments,
     _txt_fund_display,
@@ -84,7 +85,7 @@ def _infer_report_kind(doc: Document) -> str:
     本函数的唯一调用方按 ``budget`` / 其它 二分支选择锚点集合。
     """
     attached = str(getattr(doc, "report_kind", "") or "").strip().lower()
-    if attached in {"budget", "final"}:
+    if attached in {"budget", "final", "unknown", "non_budget"}:
         return attached
     return resolve_report_kind_from_path(
         str(getattr(doc, "path", "") or ""),
@@ -546,6 +547,8 @@ class CMM001_ThreePublicNarrativeConsistency(Rule):
         # + 谓词链/词形容忍（Decimal）× 表七严格网格；预算材料与无表七
         # 材料保持旧路径（预算三份样张当前 pass，行为零变更）。
         kind = _infer_report_kind(doc)
+        if getattr(doc, "report_kind", None) == "unknown" and kind == "unknown":
+            raise RuleDeferred(self.code, detail="文种待确认，三公经费的预算或决算表文口径尚未确定")
         t7_rows = None
         if kind != "budget":
             for anchor in self._T7_ANCHORS:
@@ -1422,6 +1425,8 @@ class CMM003_TocCountConsistency(Rule):
             return []
 
         report_kind = _infer_report_kind(doc)
+        if getattr(doc, "report_kind", None) == "unknown" and report_kind == "unknown":
+            raise RuleDeferred(self.code, detail="文种待确认，暂无法选择正文表目录的核对口径")
         if report_kind == "budget":
             anchors = find_budget_anchors(doc)
         else:
@@ -1524,7 +1529,10 @@ class CMM004_CodeMirrorConsistency(Rule):
     desc = "\u6536\u5165/\u652f\u51fa\u603b\u8868\u7c7b\u6b3e\u9879\u7f16\u7801\u4e0e\u91d1\u989d\u955c\u50cf\u4e00\u81f4\u6027"
 
     def apply(self, doc: Document) -> List[Issue]:
-        if _infer_report_kind(doc) == "final":
+        kind = _infer_report_kind(doc)
+        if getattr(doc, "report_kind", None) == "unknown" and kind == "unknown":
+            raise RuleDeferred(self.code, detail="文种待确认，暂无法确定收支同科目是否需要镜像比对")
+        if kind == "final":
             # 2026-11-19 决议：决算同科目收入与支出可因结转结余合理不等。
             # 跨 9 份真实材料实证：9/9 均存在科目级收支不同（约 46% 共同科目），
             # 逐科目提示属常态噪音，不再报出；真实数据错位（如明细行左错一列）
@@ -1583,10 +1591,34 @@ class CMM004_CodeMirrorConsistency(Rule):
             income_value = income[code]
             expense_value = expense[code]
             diff_value = abs(income_value - expense_value)
+            location = {**base_location, "row": code}
+            message = f"类款项编码 {code} 金额不一致"
+            context = getattr(doc, "fact_context", None)
+            if getattr(context, "fiscal_year", None) is not None:
+                from .fact_context import resolve_operand
+                from .native_three_public_ratios import operand_ref
+
+                # 两侧必须是本年度同口径合计，金额和坐标都交给当前原格证据绑定。
+                left, right = [resolve_operand(
+                    context, "total_actual", table_code=table, subject_code=code,
+                    report_year=context.fiscal_year, budget_stages=("年初预算",),
+                    fund_scope="all_funds", period="本年",
+                ) for table in ("FIN_02_income", "FIN_03_expenditure")]
+                if (left.fact is not None and right.fact is not None
+                        and left.value is not None and right.value is not None):
+                    difference = abs(left.value - right.value)
+                    if not amount_difference_exceeds_policy(difference):
+                        continue
+                    _record_v33_consumption(doc, self.code, left.fact.table_code, left.fact)
+                    _record_v33_consumption(doc, self.code, right.fact.table_code, right.fact)
+                    location["operand_refs"] = [operand_ref(left.fact, "收入预算合计"),
+                                                operand_ref(right.fact, "支出预算合计")]
+                    location["fact_context_version_token"] = context.version_token
+                    message += f"：收入预算 {left.value:.2f} 万元，支出预算 {right.value:.2f} 万元，差额 {difference:.2f} 万元。"
             issues.append(
                 self._issue(
-                    f"\u7c7b\u6b3e\u9879\u7f16\u7801 {code} \u91d1\u989d\u4e0d\u4e00\u81f4",
-                    {**base_location, "row": code},
+                    message,
+                    location,
                     "warn",
                     evidence_text=(
                         f"code={code}; income={income_value}; expense={expense_value}; diff={diff_value}"
@@ -1993,7 +2025,9 @@ _CMM007_EXPLICIT_PRIOR_RE = re.compile(
 
 #: 指标名归一：去时间/比较前缀（本年/比上年…）与口径后缀（支出决算/决算/
 #: 支出/预算）——身份是业务项，口径（预算/决算）是绑定槽位自己的属性。
-_CMM007_IND_PREFIX_RE = re.compile(r"^(?:比\s*)?(?:上\s*年(?:度|同期)?|本\s*年(?:度)?)+")
+_CMM007_IND_PREFIX_RE = re.compile(
+    r"^(?:比\s*)?(?:(?:上|本)\s*年(?:度|同期)?|年\s*度(?=(?:\s*[一-龥（）“”]){2}))+"
+)
 _CMM007_IND_SUFFIX_RE = re.compile(
     r"(?:支\s*出\s*决\s*算\s*数|支\s*出\s*决\s*算|决\s*算\s*数|决\s*算|支\s*出|预\s*算)$"
 )
@@ -2007,6 +2041,17 @@ _CMM007_DOWN_VERBS = ("减少", "下降", "降低")
 
 def _cmm007_clean_amount(text: str) -> str:
     return re.sub(r"[,，\s]", "", text or "")
+
+
+def _cmm007_safe_decimal(raw: Any) -> Optional[Decimal]:
+    cleaned = _cmm007_clean_amount(str(raw or ""))
+    if not cleaned:
+        return None
+    try:
+        value = Decimal(cleaned)
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+    return value if value.is_finite() else None
 
 
 def _cmm007_scale(cleaned: str) -> int:
@@ -2139,11 +2184,20 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
             if not candidates:
                 continue  # 无可验证的本期金额 → fail-closed 不比
             if not self._candidates_agree(candidates):
-                unresolved.append(
-                    f"指标「{canon}」在本节存在多个不一致的本期金额披露，"
-                    "无法确定比较基期（parse_ambiguity）"
+                # 同一大节内包含“（一）总体情况说明”与“（二）具体情况说明”等小节时，
+                # 若具体情况小节出现单位笔误或舍入差异（另由文内重复/单位规则报出），
+                # 先限定在当前同比句所在小节内取值；同小节内本身冲突仍维持 parse_ambiguity。
+                sub_candidates = self._subsection_candidates(
+                    merged, sections, section_start, match.start(), candidates
                 )
-                continue
+                if sub_candidates and self._candidates_agree(sub_candidates):
+                    candidates = sub_candidates
+                else:
+                    unresolved.append(
+                        f"指标「{canon}」在本节存在多个不一致的本期金额披露，"
+                        "无法确定比较基期（parse_ambiguity）"
+                    )
+                    continue
             current = candidates[0]
             delta_text = _cmm007_clean_amount(match.group("delta"))
             delta_unit = _txt_fund_norm(match.group("dunit"))
@@ -2155,8 +2209,15 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
                 )
                 continue
             direction = _cmm007_verb_direction(match.group("verb"))
-            delta_wan = Decimal(delta_text) * delta_factor
-            current_wan = Decimal(current["amount"]) * current_factor
+            delta_num = _cmm007_safe_decimal(delta_text)
+            current_num = _cmm007_safe_decimal(current["amount"])
+            if delta_num is None or current_num is None:
+                unresolved.append(
+                    f"指标「{canon}」同比句金额格式异常，无法解析复算"
+                )
+                continue
+            delta_wan = delta_num * delta_factor
+            current_wan = current_num * current_factor
             sign = 1 if direction == "down" else -1
             derived_prior = current_wan + sign * delta_wan
 
@@ -2170,7 +2231,13 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
                     )
                 else:
                     explicit_prior = prior_candidates[0]
-                    explicit_wan = Decimal(explicit_prior["amount"]) * _TXT_FUND_UNIT_TO_WAN.get(
+                    explicit_num = _cmm007_safe_decimal(explicit_prior["amount"])
+                    if explicit_num is None:
+                        unresolved.append(
+                            f"指标「{canon}」上年基期金额格式异常，无法解析复算"
+                        )
+                        continue
+                    explicit_wan = explicit_num * _TXT_FUND_UNIT_TO_WAN.get(
                         explicit_prior["unit"], Decimal("1")
                     )
                     envelope = compute_dynamic_envelope(
@@ -2207,6 +2274,12 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
                 [(current["scale"], current["unit"]), (_cmm007_scale(delta_text), delta_unit)]
             )
             pct_text = _cmm007_clean_amount(match.group("pct"))
+            pct_num = _cmm007_safe_decimal(pct_text)
+            if pct_num is None:
+                unresolved.append(
+                    f"指标「{canon}」同比句百分比格式异常，无法解析复算"
+                )
+                continue
             pct_verb = _cmm007_verb_direction(match.group("pverb"))
             base_state = _cmm007_base_state(derived_prior, amount_envelope)
 
@@ -2216,7 +2289,7 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
                 numerator_zero = abs(delta_wan) <= compute_dynamic_envelope(
                     [(_cmm007_scale(delta_text), delta_unit)]
                 )
-                if Decimal(pct_text) == 0 and numerator_zero:
+                if pct_num == 0 and numerator_zero:
                     continue
                 issues.append(
                     self._issue(
@@ -2257,7 +2330,7 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
                 continue
 
             recomputed = self._recompute(current_wan, derived_prior)
-            declared = Decimal(pct_text)
+            declared = pct_num
             diff = abs(declared - recomputed)
             if not percentage_difference_exceeds_policy(diff):
                 continue
@@ -2362,6 +2435,8 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
         if len(canon) < 2:
             return None  # 纯口径/时间词或单字尾部均不足以独立确认业务项身份。
         amount = _cmm007_clean_amount(match.group("amt"))
+        if _cmm007_safe_decimal(amount) is None:
+            return None
         unit = _txt_fund_norm(match.group("aunit"))
         if _TXT_FUND_UNIT_TO_WAN.get(unit) is None:
             return None
@@ -2381,11 +2456,42 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
         }
 
     def _candidates_agree(self, candidates: List[Dict[str, Any]]) -> bool:
-        values = {
-            Decimal(item["amount"]) * _TXT_FUND_UNIT_TO_WAN.get(item["unit"], Decimal("1"))
-            for item in candidates
-        }
+        values = set()
+        for item in candidates:
+            num = _cmm007_safe_decimal(item["amount"])
+            if num is None:
+                return False
+            values.add(num * _TXT_FUND_UNIT_TO_WAN.get(item["unit"], Decimal("1")))
         return len(values) == 1
+
+    def _subsection_candidates(
+        self,
+        merged: str,
+        sections: List[Tuple[str, int, int]],
+        section_start: int,
+        pos: int,
+        candidates: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """将同大节的候选金额收窄到当前同比句所在的“（一）/（二）”小节区间。"""
+        sec_end = len(merged)
+        for _title, start, end in sections:
+            if start == section_start:
+                sec_end = end
+                break
+        sub_re = re.compile(r"(?:^|\n)\s*[（(][一二三四五六七八九十\d]{1,3}[）)]")
+        bounds = [m.start() for m in sub_re.finditer(merged, section_start, sec_end)]
+        if not bounds:
+            return []
+        sub_start = section_start
+        sub_end = sec_end
+        for b in bounds:
+            if b <= pos:
+                sub_start = b
+            else:
+                sub_end = b
+                break
+        scoped = [c for c in candidates if sub_start <= int(c["start"]) < sub_end]
+        return scoped if 0 < len(scoped) < len(candidates) else []
 
     def _inherit_same_clause(
         self,
@@ -2524,12 +2630,18 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
                             unique_quote(merged_text[p_start:p_end], local_l, local_r)
                             or frag_span
                         )
-                    refs.append({
+                        ref_pos = local_l
+                    else:
+                        ref_pos = None
+                    ref_item: Dict[str, Any] = {
                         "role": role,
                         "page": frag_page,
                         "span": frag_span,
                         "section": section_title if role == "增减句" else current.get("section"),
-                    })
+                    }
+                    if ref_pos is not None:
+                        ref_item["pos"] = ref_pos
+                    refs.append(ref_item)
             else:
                 refs.append({
                     "role": role,

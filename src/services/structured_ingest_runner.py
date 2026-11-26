@@ -883,7 +883,25 @@ def _reading_review_items(reading_quality: Dict[str, Any]) -> List[Dict[str, Any
     items: List[Dict[str, Any]] = []
     gaps_by_page: Dict[int, List[Dict[str, Any]]] = {}
     image_gaps: List[Dict[str, Any]] = []
+    localized = {(c.get("page"), c.get("source_cell_id")): c
+                 for c in reading_quality.get("unbound_money_cells", [])
+                 if c.get("localized_reading_conflict")}
+    reported_gap_cells = {(g["page"], g["source_cell_id"]) for g in reading_quality.get("gaps", [])
+                          if g.get("source_cell_id")}
     for gap in reading_quality.get("gaps", []):
+        cell = localized.get((gap["page"], gap.get("source_cell_id")))
+        if cell is not None:
+            items.append({
+                "id": gap["id"], "type": "table_reading_gap", "severity": "warn",
+                "table_code": cell["table_code"], "page_number": gap["page"],
+                "page_numbers": [gap["page"]], "reason": gap["reason"], "bbox": cell["bbox"],
+                "cells": [_cell_ref(cell)],
+                "regions": [dict(gap)],
+                "message": (f"第 {gap['page']} 页金额格存在原字符冲突"
+                            f"（文本取到「{gap['raw_text']}」，格内提取为「{cell['raw_text']}」），"
+                            "请核实原件金额。依赖该格的检查待复核"),
+                "recommended_action": "inspect_original_table_reading"})
+            continue
         if gap["reason"] == "image_region_not_structured":
             image_gaps.append(gap)  # 扫描件逐页都是同一原因：整份只挂一条
         else:
@@ -926,6 +944,8 @@ def _reading_review_items(reading_quality: Dict[str, Any]) -> List[Dict[str, Any
             loose.setdefault((cell.get("table_code") or "", cell.get("page")), []).append(cell)
     for table in tables:
         cells = cells_by_table[table["fragment_uid"]]
+        duplicate_reading_cells = [c for c in cells if c.get("localized_reading_conflict")
+                                   and (c.get("page"), c.get("source_cell_id")) in reported_gap_cells]
         # 原件数字格式缺陷（真实反例：第 9 份物理页 9 三个基本支出格印成
         # “2.359.46”，小数点重复）不是列映射失败：数值根本不可解析。必须
         # 保留原文、物理页和 bbox 单独报告，不得静默改成 2359.46 或靠行和凑平。
@@ -934,9 +954,9 @@ def _reading_review_items(reading_quality: Dict[str, Any]) -> List[Dict[str, Any
         invalid = [c for c in cells
                    if _invalid_number_text(c.get("raw_text"))
                    and str(c.get("reason") or "") in _FORMAT_EXPLAINED_REASONS]
-        mapped = [c for c in cells if c not in invalid]
+        mapped = [c for c in cells if c not in invalid and c not in duplicate_reading_cells]
         remaining_reasons: Dict[str, int] = {}
-        if invalid:
+        if invalid or duplicate_reading_cells:
             # 以**仍然留在 mapping 通道的格**为准重算原因，而不是拿上游整表
             # 计数硬减：上游 unresolved_money_cell_count 可能大于本表实际列出的
             # 格数，硬减会造出没有对应格的“幽灵原因”。
@@ -977,7 +997,7 @@ def _reading_review_items(reading_quality: Dict[str, Any]) -> List[Dict[str, Any
             "reason": ",".join(sorted(remaining_reasons or table["reasons"])) or "column_arithmetic_conflict",
             "cells": [_cell_ref(c) for c in mapped],
             "message": (f"第 {page_label} 页《{table['title'] or table['table_code']}》映射不完整："
-                        f"{len(mapped) if invalid else table['unresolved_money_cell_count']} 个金额格"
+                        f"{len(mapped) if invalid or duplicate_reading_cells else table['unresolved_money_cell_count']} 个金额格"
                         f"没有对应到列含义{arithmetic}，相关检查不能视为已完成"),
             "recommended_action": "inspect_table_column_mapping"})
     # 不属于任何映射不完整表的金额（如逻辑视图丢失的原物理格），按表种 + 页汇总。

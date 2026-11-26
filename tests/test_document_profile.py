@@ -208,6 +208,37 @@ def test_kind_conflict_downgrades_status_and_states_why():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    ("titles", "expected"),
+    [
+        (["收入决算表", "支出决算表"], "final"),
+        (["部门收入预算总表", "部门支出预算总表"], "budget"),
+        (["收入决算表", "收入决算表"], "unknown"),
+        (["收入决算表", "支出决算表", "部门收入预算总表"], "unknown"),
+    ],
+)
+def test_missing_cover_uses_consistent_independent_native_table_titles(titles, expected):
+    from src.services.document_profile_resolver import native_report_table_titles
+
+    pages = ["封面未写文种", *titles]
+    artifact = SimpleNamespace(physical_fragments=[
+        SimpleNamespace(page_number=page, title=title, extraction_method="lines", confidence=.99,
+                        table_code="FIN_02_income", header_row_count=1, rows=[["字段"], ["15.00"]])
+        for page, title in enumerate(titles, 2)
+    ])
+    # 目录/其他页的同名中文文字不会替没有原文标题的网格作证。
+    artifact.physical_fragments.append(SimpleNamespace(
+        page_number=1, title="收入决算表", extraction_method="lines", confidence=.99,
+        table_code="FIN_02_income", header_row_count=1, rows=[["字段"], ["15.00"]],
+    ))
+    source_titles = native_report_table_titles(artifact, pages)
+    assert source_titles == list(dict.fromkeys(titles))
+    profile = resolve_document_profile(filename="schedule.pdf", page_texts=pages, table_titles=source_titles)
+    assert profile.kind == expected
+    if expected != "unknown":
+        assert profile.report_kind.source == "table_title"
+
+
 def test_unknown_kind_is_unresolved_and_states_why():
     profile = resolve_document_profile(page_texts=["公开材料说明"])
     assert profile.kind == "unknown"

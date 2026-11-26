@@ -24,6 +24,18 @@ const MEASURE_LABELS: Record<string, string> = {
   expenditure_actual: "支出决算金额",
   total_budget: "预算金额",
   budget_amount: "预算金额",
+  general_public_budget: "一般公共预算",
+  government_fund_budget: "政府性基金预算",
+  state_capital_budget: "国有资本经营预算",
+  fiscal_allocation: "财政拨款收入",
+  superior_subsidy_income: "上级补助收入",
+  business_income: "事业收入",
+  operational_income: "经营收入",
+  subsidiary_income: "附属单位上缴收入",
+  other_income: "其他收入",
+  to_superior_actual: "上缴上级支出",
+  operational_actual: "经营支出",
+  subsidiary_actual: "对附属单位补助支出",
   overseas: "因公出国（境）费",
   vehicle_purchase_operation: "公务用车购置及运行费",
   vehicle_subtotal: "公务用车购置及运行费",
@@ -31,6 +43,57 @@ const MEASURE_LABELS: Record<string, string> = {
   vehicle_operation: "公务用车运行费",
   reception: "公务接待费",
 };
+
+const DIAGNOSTIC_DICT_LABELS: Record<string, string> = {
+  rule_admission_blocked: "处单元格因编码或行结构异常未纳入自动勾稽",
+  amount_column_unmapped: "个金额格未识别到子表头",
+  fact_unbound: "个金额格数值归属待确认",
+  column_identity_unconfirmed: "处列头归属未确认",
+  cell_low_confidence: "个单元格识别置信度低",
+};
+
+const DIAGNOSTIC_SCOPE_PREFIX_LABELS: Record<string, string> = {
+  general_public_budget: "一般公共预算",
+  government_fund_budget: "政府性基金预算",
+  state_capital_budget: "国有资本经营预算",
+  fiscal_allocation: "财政拨款收入",
+  superior_subsidy_income: "上级补助收入",
+  business_income: "事业收入",
+  operational_income: "经营收入",
+  subsidiary_income: "附属单位上缴收入",
+  other_income: "其他收入",
+};
+
+function humanizeDiagnosticMessage(rawText: string): string {
+  const head = rawText.split(/[；;]\s*结构[：:]/u, 1)[0] ?? rawText;
+  return head
+    .replace(/\{[^{}]*'([a-z_]+)'\s*:\s*\d+[^{}]*\}/g, (rawDict) => {
+      const parts: string[] = [];
+      const pairRe = /'([a-z_]+)'\s*:\s*(\d+)/g;
+      let match: RegExpExecArray | null;
+      while ((match = pairRe.exec(rawDict)) !== null) {
+        const label = DIAGNOSTIC_DICT_LABELS[match[1]];
+        if (label) parts.push(`${match[2]} ${label}`);
+      }
+      return parts.length ? `（${parts.join("，")}）` : "";
+    })
+    .replace(/(?:table:)?((?:FIN|BUD)_\d+_[A-Za-z0-9_]+)/g, (_, code: string) => {
+      const name = displayTableName(code);
+      return name && name !== code ? `《${name}》` : "";
+    })
+    .replace(/单元格\s*[0-9a-f]{8,}:r(\d+)c(\d+)/gi, "第$1行第$2列单元格")
+    .replace(/[0-9a-f]{8,}:r(\d+)c(\d+)/gi, "第$1行第$2列单元格")
+    .replace(/([A-Za-z]+_[A-Za-z0-9_]*)\/(?=决算|预算)/g, (_, key: string) =>
+      DIAGNOSTIC_SCOPE_PREFIX_LABELS[key] ?? "",
+    )
+    .replace(/([A-Za-z]+_[A-Za-z0-9_]*)\//g, (_, key: string) =>
+      DIAGNOSTIC_SCOPE_PREFIX_LABELS[key] ?? "",
+    )
+    .replace(/\btotal的/g, "合计行的")
+    .replace(/（ambiguous）/g, "（原件数字重叠或存在歧义）")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
 
 export const REVIEW_REASON_TITLES: Record<string, string> = {
   table_reading_incomplete: "部分表格读取未完成",
@@ -1617,15 +1680,16 @@ export function extractReviewDiagnostics(
       title = title || displayReviewReasonTitle(code);
     }
 
-    const message = String(
+    const rawMessage = String(
       recordType === "unfinished_check"
         ? item.detail ?? item.message ?? item.reason ?? "本次未能自动完成该项核对。"
         : item.message ?? item.detail ?? item.reason ?? "该检查状态需要复核说明。",
     ).trim();
+    const message = humanizeDiagnosticMessage(rawMessage);
 
     const rawSuggestion = item.suggestion ?? item.recommended_action;
     const suggestion = rawSuggestion ? displayRecommendedAction(rawSuggestion) : undefined;
-    const page = resolveDiagnosticPage(item, message);
+    const page = resolveDiagnosticPage(item, rawMessage);
     const evidence: NonNullable<ReviewDiagnosticItem["evidence"]> = [];
     for (const record of [item.cells, item.missing_operands].flatMap((value) =>
       Array.isArray(value) ? value.filter(isRecord) : [])) {
@@ -1636,7 +1700,7 @@ export function extractReviewDiagnostics(
         && bbox.every((value) => typeof value === "number" && Number.isFinite(value))
         && bbox[2] > bbox[0] && bbox[3] > bbox[1] ? bbox : undefined });
     }
-    const pages = [page, ...Array.from(message.matchAll(/第\s*(\d+)\s*页/g), (match) => Number(match[1]))];
+    const pages = [page, ...Array.from(rawMessage.matchAll(/第\s*(\d+)\s*页/g), (match) => Number(match[1]))];
     for (const n of pages) {
       if (n && !evidence.some((ref) => ref.page === n)) evidence.push({ page: n });
     }

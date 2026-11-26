@@ -130,6 +130,21 @@ LEGACY_TABLE_INPUTS = {
 }
 
 
+def effective_legacy_table_inputs(rule_id, context):
+    codes = LEGACY_TABLE_INPUTS.get(rule_id)
+    if rule_id == "V33-005" and getattr(context, "report_kind", None) == "final":
+        # 决算表一/表四/表六/表七由各自专属规则（V33-214/119/117/243/115）校验；
+        # V33-005 仅消费 DETAIL_TABLES，避免表六/表七局部缺口误阻断其余明细表的合计核对。
+        return {
+            "FIN_02_income",
+            "FIN_03_expenditure",
+            "FIN_05_general_public_expenditure",
+            "FIN_08_gov_fund",
+            "FIN_09_state_capital",
+        }
+    return codes
+
+
 def enforce_legacy_table_admission(document, rule_id):
     artifact = getattr(document, "parse_artifact", None)
     if artifact is None or rule_id not in LEGACY_TABLE_INPUTS:
@@ -138,6 +153,8 @@ def enforce_legacy_table_admission(document, rule_id):
 
     context = getattr(document, "fact_context", None)
     if context is None:
+        if rule_id == "V33-004":
+            return  # 只校验不依赖财政表身份的原生数字格。
         raise RuleDeferred(rule_id, "已解析表格没有当前财政事实上下文，不能绕过事实准入检查")
     cache_key = (artifact.source_file_hash, artifact.parse_run_uid, context.version_token)
     cached = getattr(document, "_table_admission_receipt", None)
@@ -149,7 +166,7 @@ def enforce_legacy_table_admission(document, rule_id):
             build_table_import_receipt(artifact, context.facts, org_name=context.org_name),
         )
         document._table_admission_receipt = cached
-    codes = LEGACY_TABLE_INPUTS[rule_id]
+    codes = effective_legacy_table_inputs(rule_id, context)
     blocked = [
         table
         for table in cached[1].get("mapping_incomplete_tables", [])
@@ -157,19 +174,20 @@ def enforce_legacy_table_admission(document, rule_id):
         or (codes is not None and table["table_code"] in codes)
     ]
     if blocked:
-        partial = []
-        if rule_id == "V33-240":
-            from .native_income_sources import missing_header_findings
-            from .rules_v33 import R33240_Table2_IncomeAdvancedCheck
+        from .table_admission_policy import check_unblocked_table_scopes, has_cell_scoped_table
 
-            partial = missing_header_findings(R33240_Table2_IncomeAdvancedCheck(), document)
+        # 表文核对只使用独立确认的合计行事实，缺格由各子检查自行决定。
+        if rule_id in {"V33-103", "V33-104"} and has_cell_scoped_table(document, blocked[0]["table_code"]):
+            return
+        partial, unresolved = check_unblocked_table_scopes(document, rule_id, blocked)
+        detail = "来源表映射/读取未完成：" + "；".join(
+            f"第{table['page']}页{table['table_code']} {table['reasons']}" for table in blocked
+        )
         raise RuleDeferred(
             rule_id,
-            "来源表映射/读取未完成："
-            + "；".join(
-                f"第{table['page']}页{table['table_code']} {table['reasons']}" for table in blocked
-            ),
+            detail,
             partial_issues=partial,
+            unresolved_reasons=[detail, *unresolved],
         )
 
 

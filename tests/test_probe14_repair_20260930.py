@@ -124,6 +124,17 @@ def test_p1_two_sided_value_takes_label_side():
     assert _two_sided_side_value(rows, "本年支出合计", "expense") == 2443579.41
 
 
+@pytest.mark.parametrize("income,expected", [("296,249.28", 296249.28), ("", None)])
+def test_two_sided_total_uses_uneven_merged_header(income, expected):
+    rows = [
+        ["收入", "", "", "支出", ""],
+        ["项目", "", "决算数", "项目", "决算数"],
+        ["本年收入合计", "", income, "本年支出合计", "298,539.04"],
+    ]
+    assert _two_sided_side_value(rows, "本年收入合计", "income") == expected
+    assert _two_sided_side_value(rows, "本年支出合计", "expense") == 298539.04
+
+
 def test_p1_two_sided_value_single_sided_row_unaffected():
     """单侧布局（标签+单值）行为不变：取标签后第一个数值。"""
     rows = [

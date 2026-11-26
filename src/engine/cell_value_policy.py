@@ -21,17 +21,22 @@ import json
 import os
 from pathlib import Path
 
-#: U-5 用户确认约定。范围：全部地区、年度、表种与单元格（“*”）；只认网格认证空白。
+from src.schemas.parse_artifact import DASH_PLACEHOLDER_TEXTS
+
+#: U-5 用户确认约定。范围：全部地区、年度、表种与单元格（“*”）；认证空白与横线默认按 0。
 USER_CONFIRMED_BLANK_ZERO = {
     "id": "U-5-verified-blank-zero-20261108",
     "source_kind": "user_confirmed",
     "approved": True,
-    "confirmation_reference": "用户 2026-11-08 确认：原件中经网格认证的空白金额格表示无发生额（=0），全系统默认",
+    "confirmation_reference": (
+        "用户 2026-11-08 确认：原件中经网格认证的空白金额格表示无发生额（=0）；"
+        "2026-11-24 确认：金额格填写横线 - / -- / — 等默认无数据，按 0 处理，全系统默认"
+    ),
     "region": "",
     "years": "*",
     "table_codes": "*",
     "cell_ranges": "*",
-    "semantics": {"blank": "zero"},
+    "semantics": {"blank": "zero", "dash": "zero"},
 }
 
 _DISABLED_VALUES = {"off", "none", "false", "0", "disabled"}
@@ -99,7 +104,7 @@ def interpret_cell_value(raw, *, native_blank_verified=False, **identity):
         "blank"
         if not text
         else "dash"
-        if text in {"-", "—", "–", "－"}
+        if text in DASH_PLACEHOLDER_TEXTS
         else "not_applicable"
         if text in {"无", "不适用", "/", "未披露"}
         else "unrecognized"

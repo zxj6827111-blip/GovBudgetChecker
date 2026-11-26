@@ -174,8 +174,11 @@ def collect_page_probe(page, page_number: int, text: str, words: list) -> dict:
         box = valid_box([image.get(k) for k in ("x0", "top", "x1", "bottom")])
         if box and (box[2] - box[0]) * (box[3] - box[1]) / area >= 0.08:
             images.append(box)
-    blank = not text.strip() and not any(
-        getattr(page, name, []) for name in ("chars", "images", "lines", "rects", "curves")
+    # 部分导出 PDF 在空白页写入空格字形。空格没有可复核内容，也不需要排队 OCR。
+    blank = (
+        not text.strip()
+        and not any(str(char.get("text") or "").strip() for char in (getattr(page, "chars", []) or []))
+        and not any(getattr(page, name, []) for name in ("images", "lines", "rects", "curves"))
     )
     return {
         "page": page_number,
@@ -251,6 +254,44 @@ def _scan_page_structured(artifact, page, box, usable):
                if block.page_number == page and block.extraction_method == "ocr" and block.bbox
                and _OCR_AMOUNT.search(block.text or "") and not any(contains(b, block.bbox) for b in boxes)]
     return not outside
+
+
+def _scoped_amount_cell(artifact, gap, page, cells, affected):
+    """只把单个已证实的原生金额格冲突认作格内缺口。"""
+    from src.services.cell_identity import source_cell_id
+    from src.services.native_label_visibility import REASON_AMOUNT_ROLE
+
+    if gap["reason"] != "native_amount_not_extracted" or len(affected) != 1:
+        return None
+    box = valid_box(gap["bbox"])
+    overlaps = [(t, c) for t, c in cells if intersects(c.bbox, box)]
+    if len(overlaps) != 1:
+        return None
+    table, cell = overlaps[0]
+    cell_box = valid_box(cell.bbox)
+    grid_value, token_value = number(cell.raw_text), number(gap.get("raw_text"))
+    if (table.table_code not in NINE_TABLE_RULES or table.extraction_method not in {"lines", "lines_strict"}
+            or cell.extraction_method not in {"lines", "lines_strict"}
+            or table.fragment_uid not in affected or not cell_box or cell.is_header
+            or cell.native_blank_verified or (cell.row_span, cell.col_span) != (1, 1)
+            or not (cell_box[0] <= box[0] < box[2] <= cell_box[2]
+                    and cell_box[1] <= box[1] < box[3] <= cell_box[3])
+            or grid_value is None or token_value is None or grid_value == token_value):
+        return None
+    source_id = source_cell_id(table, cell)
+    proof = cell.label_recovery or {}
+    if (proof.get("status") != REASON_AMOUNT_ROLE or proof.get("source_cell_id") != source_id
+            or proof.get("original_text") != cell.raw_text
+            or not proof.get("excluded_characters")):
+        return None
+    source_uid = cell.origin_fragment_uid or table.fragment_uid
+    sources = [c for physical in artifact.physical_fragments
+               if physical.fragment_uid == source_uid and physical.extraction_method in {"lines", "lines_strict"}
+               for c in physical.cells if c.page_number == page and source_cell_id(physical, c) == source_id]
+    if (len(sources) != 1 or valid_box(sources[0].bbox) != cell_box
+            or sources[0].raw_text != cell.raw_text):
+        return None
+    return source_id
 
 
 def assess_table_reading(artifact) -> dict:
@@ -356,12 +397,15 @@ def assess_table_reading(artifact) -> dict:
                     affected = fiscal_tables
             identity = json.dumps([page, gap], sort_keys=True, ensure_ascii=False)
             uid = hashlib.sha1(identity.encode()).hexdigest()[:12]
+            cell = _scoped_amount_cell(artifact, gap, page, cells, affected)
             gaps.append(
                 {
                     "id": f"reading:p{page}:{uid}",
                     "page": page,
                     "affected_fragment_uids": sorted(affected),
                     **gap,
+                    **({"source_cell_id": cell, "table_code": next(
+                        t.table_code for t, _ in cells if t.fragment_uid in affected)} if cell else {}),
                 }
             )
         page_records.append(
@@ -463,7 +507,8 @@ def _gap_blocks_facts(gap: dict) -> bool:
     非零缺口、无字面值的结构性缺口（表题无可信单元格等）仍按原口径阻塞，
     fail-closed 语义不变。
     """
-    if not ZERO_GAP_PASS_ENABLED:
+    if not ZERO_GAP_PASS_ENABLED or gap.get("source_cell_id"):
+        # 已知一个原格有互斥读数时，即使其中一种是零也不能按零参与核对。
         return True
     raw = str(gap.get("raw_text") or "").strip()
     if not raw:
@@ -476,12 +521,17 @@ def constrain_reading_facts(artifact, facts):
     reading = assess_table_reading(artifact)
     blocking_gaps = [gap for gap in reading["gaps"] if _gap_blocks_facts(gap)]
     zero_gaps = [gap for gap in reading["gaps"] if not _gap_blocks_facts(gap)]
-    blocked = {uid for gap in blocking_gaps for uid in gap["affected_fragment_uids"]}
-    blocked.update(
-        instance.instance_uid
-        for instance in getattr(artifact, "logical_tables", [])
-        if blocked.intersection(instance.fragment_uids)
-    )
+    if not blocking_gaps and not zero_gaps:
+        return list(facts)
+    instances_by_fragment = defaultdict(set)
+    for instance in getattr(artifact, "logical_tables", []):
+        for uid in instance.fragment_uids:
+            instances_by_fragment[uid].add(instance.instance_uid)
+    gaps_by_instance = defaultdict(dict)
+    for gap in blocking_gaps:
+        for uid in gap["affected_fragment_uids"]:
+            for instance_uid in {uid, *instances_by_fragment[uid]}:
+                gaps_by_instance[instance_uid][gap["id"]] = gap
     # 零值缺口的表仍需在事实里留痕，便于复核与统计，但不影响可用性。
     zero_affected = {uid for gap in zero_gaps for uid in gap["affected_fragment_uids"]}
     zero_affected.update(
@@ -492,14 +542,23 @@ def constrain_reading_facts(artifact, facts):
     zero_ids = [gap.get("id") for gap in zero_gaps if gap.get("id")]
     constrained = []
     for fact in facts:
-        if fact.instance_uid in blocked:
+        gaps = gaps_by_instance.get(fact.instance_uid, {}).values()
+        refs = (fact.extra_dims or {}).get("evidence_refs") or []
+        source_cells = {(ref.get("physical_page"), ref.get("source_cell_id")) for ref in refs}
+        applicable = [gap for gap in gaps if not gap.get("source_cell_id")
+                      or not source_cells or any(not page or not cell for page, cell in source_cells)
+                      or (gap["page"], gap["source_cell_id"]) in source_cells]
+        if applicable:
             fact = replace(
                 fact,
                 recognition_status="low_confidence",
                 extra_dims={
                     **fact.extra_dims,
                     "table_reading_status": "incomplete",
-                    "table_reading_gaps": [g["id"] for g in blocking_gaps],
+                    "table_reading_gaps": [g["id"] for g in applicable],
+                    **({"table_reading_cell_id": applicable[0]["source_cell_id"]}
+                       if all(g.get("source_cell_id") for g in applicable)
+                       and len(source_cells) == 1 and None not in next(iter(source_cells)) else {}),
                 },
             )
         elif zero_ids and fact.instance_uid in zero_affected:

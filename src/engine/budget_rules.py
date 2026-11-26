@@ -920,6 +920,27 @@ def _first_anchor_page(anchors: Dict[str, List[int]], key: str) -> Optional[int]
     return min(pages)
 
 
+def _one_native_table_across_anchor_pages(doc: Document, key: str, pages: Sequence[int]) -> bool:
+    from .fact_table_projection import TABLE_CODES
+
+    artifact = getattr(doc, "parse_artifact", None)
+    table_code = TABLE_CODES.get(key)
+    if artifact is None or not table_code:
+        return False
+    page_set = set(pages)
+    fragments = [fragment for fragment in artifact.physical_fragments
+                 if fragment.page_number in page_set and fragment.table_code == table_code
+                 and fragment.extraction_method != "page_text_fallback"]
+    # 续页必须有原生物理片段，并且都归属于同一无冲突的逻辑表。
+    if {fragment.page_number for fragment in fragments} != page_set:
+        return False
+    fragment_ids = {fragment.fragment_uid for fragment in fragments}
+    instances = [instance for instance in artifact.logical_tables
+                 if instance.table_code == table_code and fragment_ids.intersection(instance.fragment_uids)]
+    return (len(instances) == 1 and not instances[0].identity_conflict
+            and fragment_ids.issubset(instances[0].fragment_uids))
+
+
 def _is_table_boundary_cell(c: str) -> bool:
     """判断单元格是否为下一个字段/指标的文本边界，防止越界扫描补数。"""
     if not c:
@@ -2503,7 +2524,7 @@ class BUD001_StructureAndAnchors(Rule):
         for spec in BUDGET_TABLE_SPECS:
             key = spec["key"]
             pages = anchors.get(key, [])
-            if len(pages) > 2:
+            if len(pages) > 2 and not _one_native_table_across_anchor_pages(doc, key, pages):
                 table_name = _table_display_name(key)
                 issues.append(
                     self._issue(
@@ -3935,6 +3956,9 @@ class BUD109_FunctionalClassificationNameConsistency(Rule):
                         "source_of_truth": "BUD_T5",
                     }
                 )
+                # 显示说明与表格各自的原文名称；来源绑定器仅接受原页唯一命中。
+                location["table_refs"][0]["span"] = narrative_name
+                location["table_refs"][1]["span"] = table_entry["name"]
                 evidence_text = (
                     f"编码：{row_label}\n"
                     f"表格名称：{table_entry['name']}\n"

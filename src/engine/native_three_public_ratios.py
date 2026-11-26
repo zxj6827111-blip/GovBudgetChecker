@@ -20,8 +20,8 @@ TABLE_CODE = "FIN_07_three_public"
 # 全部为单字符映射，归一后下标与原串一一对应，可安全回映射页码/片段。
 _SUBJECT_OCR_MAP = str.maketrans({"臵": "置", "罝": "置"})
 _SUBJECT = re.compile(
-    r"(?P<vehicle_purchase_operation>公务用车购置及运行(?:维护)?费?)"
-    r"|(?P<vehicle_purchase>公务用车购置费?)"
+    r"(?P<vehicle_purchase_operation>公务用车购[置臵罝]及运行(?:维护)?费?)"
+    r"|(?P<vehicle_purchase>公务用车购[置臵罝]费?)"
     r"|(?P<vehicle_operation>公务用车运行(?:维护)?费?)"
     r"|(?P<overseas>因公出国(?:[（(]境[）)])?费?)"
     r"|(?P<reception>公务接待费?)"
@@ -187,7 +187,16 @@ def evaluate(rule: Any, doc: Any, claim: dict[str, Any], *, indicator: str,
         _record_ratio_gap(doc, dr, indicator="total_actual" if share else indicator,
                           stage=denominator_stage, year=year, claim=claim)
     from .native_budget_phase import phase_reason
-    dr = dr or phase_reason(doc, denominator, denominator_stage, indicator)
+    phase_gap = phase_reason(doc, denominator, denominator_stage, indicator) if not dr else None
+    if phase_gap:
+        from .diagnostic_fields import blocker, record_gap
+
+        detail = f"{LABELS[indicator]}声明「{claim['phrase']}」：{phase_gap}"
+        record_gap(doc, detail, reason_codes=["scope_unconfirmed"], blocked_by=[
+            blocker(dimension="budget_stage", ref=f"{TABLE_CODE}:{denominator.instance_uid}:{denominator_stage}",
+                    reason_code="scope_unconfirmed")
+        ])
+        dr = phase_gap
     if share and nr and not dr and claim['pct'] == 0 and denominator.normalized_value > 0:
         # 分母已有当前金额；分项原格留空还必须有同句“决算0/无支出”证据。
         # 只登记无活动占比的适用性，不把未印出的分项金额物化为零事实。
@@ -240,6 +249,9 @@ def evaluate(rule: Any, doc: Any, claim: dict[str, Any], *, indicator: str,
         _v33_relation_receipt(doc, rule.code, relation, status="insufficient_data",
                               operand_fact_ids=fact_ids, formula=formula, incomplete_reason=reason,
                               cell_observations=blanks)
+        if phase_gap and nr:
+            # 分母阶段待定并不解释独立的决算分子缺数，两种阻断都要交付。
+            return [], [reason, f"{LABELS[indicator]}声明「{claim['phrase']}」的决算分子：{nr}"]
         return [], [reason]
     top, bottom = (numerator.normalized_value if numerator is not None else None), denominator.normalized_value
     zero = bottom == 0

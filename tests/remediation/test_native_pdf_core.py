@@ -413,6 +413,52 @@ def test_rejoin_wrapped_decimals_and_fin04_paired_headers():
     assert mapped["expenditure_actual"] == 3
 
 
+def test_fin05_literal_total_column_is_distinct_from_inherited_header_text():
+    from src.services.fiscal_column_identity import canonical_column_mappings, header_paths
+    from src.services.fiscal_table_rules import NINE_TABLE_RULES
+
+    table = grid([
+        ["项目", "", "合计", "", ""],
+        ["功能分类科目编码", "科目名称", "", "基本支出", "项目支出"],
+        ["205", "教育支出", "300.00", "200.00", "100.00"],
+    ], [0, 30, 125, 180, 235, 290], uid="fin05-merged-total", page=1,
+                 code="FIN_05_general_public_expenditure", headers=2, confidence=.99, unit="万元")
+    assert header_paths(table)[3] == ["合计", "基本支出"]
+    rule = NINE_TABLE_RULES[table.table_code]
+    mapped = {item["canonical_measure"]: item["source_col_idx"] for item in canonical_column_mappings(table, rule)}
+    assert mapped == {"total_actual": 2, "basic_actual": 3, "project_actual": 4}
+
+    table.rows[0][2] = ""
+    assert "total_actual" not in {item["canonical_measure"] for item in canonical_column_mappings(table, rule)}
+
+
+@pytest.mark.parametrize("tail,merged", [
+    ([("22999", "其他支出", "0.00"), ("2299999", "其他支出", "0.00")], True),
+    ([("22999", "其他支出", "1.00")], False),
+    ([("22999", "办公桌（台）", "0.00")], False),
+    ([("22102", "住房改革支出", "0.00")], False),
+])
+def test_cross_page_zero_children_after_closed_top_total(tail, merged):
+    bounds = [0, 30, 150, 200, 240, 280]
+    first = grid([
+        ["科目编码", "科目名称", "本年支出合计", "基本支出", "项目支出"],
+        ["合计", "", "50.00", "50.00", "0.00"],
+        ["208", "社会保障和就业支出", "50.00", "50.00", "0.00"],
+        ["20805", "行政事业单位养老支出", "50.00", "50.00", "0.00"],
+        ["2080501", "行政单位离退休", "50.00", "50.00", "0.00"],
+        ["229", "其他支出", "0.00", "0.00", "0.00"],
+    ], bounds, uid="first", page=1, code="FIN_03_expenditure", confidence=.99, unit="万元")
+    second = grid([[code, name, amount, amount, "0.00"] for code, name, amount in tail],
+                  bounds, uid="zero-tail", page=2, headers=0)
+    parser = PDFParser(None)
+    assert parser._table_top_total_already_balanced(first)
+    assert (len(parser._coalesce_tables([first, second])) == 1) is merged
+    if merged:
+        artifact = context_for(parser._coalesce_tables([first, second]), [first, second])
+        fact = next(f for f in artifact.fact_context.facts if f.subject_code == "2299999" and f.indicator == "total_actual")
+        assert fact.normalized_value == 0 and fact.extra_dims["evidence_refs"][0]["physical_page"] == 2
+
+
 def test_spaced_toc_and_omitted_section4_heading_anchor_correctly():
     from src.engine.diagnostic_fields import diagnostics_for_texts
     from src.engine.pipeline import build_document
@@ -507,15 +553,27 @@ def test_v33227_cross_page_item_wrap_alias_and_omitted_middle_word():
     ref_pages = {ref.get("page") for ref in (codes["2080599"].location or {}).get("table_refs", [])}
     assert ref_pages == {1, 2, 3}
 
-    # 21505 与 2080599 均有历史科目映射；仅 2120399 因中间漏词保持 name_mismatch_confirmed 人工确认。
-    with pytest.raises(RuleDeferred) as deferred:
-        R33222_Narrative5_T5().apply(doc)
-    assert len(deferred.value.unresolved_reasons) == 1
-    assert "2120399" in deferred.value.unresolved_reasons[0]
-    receipts = [r for r in getattr(doc, "fact_receipts", []) if r.get("status") == "insufficient_data"]
+    # 2026-11-22 解耦核对：完整原生网格已认证且 21203 下唯一近名/唯一项 2120399 存在，
+    # V33-227 照常报出 2120399 名称漏词，V33-222 解耦完成金额核对不再卡在待人工复核。
+    v222_issues = R33222_Narrative5_T5().apply(doc)
+    assert not v222_issues
+    receipts = [r for r in getattr(doc, "fact_receipts", []) if r.get("rule_id") == "V33-222"]
+    assert not any(r.get("status") == "insufficient_data" for r in receipts)
     assert any(
-        "2120399" in str(r.get("incomplete_reason") or "")
-        and "name_mismatch_confirmed" in (r.get("reason_codes") or [])
+        r.get("status") == "pass"
+        and any(s.get("subject_code") == "2120399" for s in (r.get("disclosure_sources") or []))
         for r in receipts
     )
+
+    # 金额突变负控：2120399 金额被改大 0.02 万元后，V33-222 必须立即检出金额不一致。
+    doc_mut = build_document("甲局2025年度部门决算.pdf", pages, [[t5.rows], [], []], 0)
+    doc_mut.parse_artifact = base.parse_artifact
+    from copy import deepcopy
+    doc_mut.fact_context = deepcopy(base.fact_context)
+    for f in doc_mut.fact_context.facts:
+        if f.subject_code == "2120399" and f.indicator == "total_actual":
+            f.normalized_value += Decimal("0.02")
+    doc_mut.fact_context.version_token = doc_mut.fact_context.compute_version_token()
+    mut_issues = R33222_Narrative5_T5().apply(doc_mut)
+    assert any("其他城乡社区" in i.message and "50.02" in i.message for i in mut_issues)
 

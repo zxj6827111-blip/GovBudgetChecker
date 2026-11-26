@@ -84,15 +84,16 @@ def test_economic_two_lanes_choose_unique_code_before_amount_column_and_preserve
     assert not any(f.subject_code == '310' for f in doc.fact_context.facts)
 
 
-@pytest.mark.parametrize('problem', ['uncertified', 'dash', 'ocr', 'missing_grid_cell', 'no_bbox',
+@pytest.mark.parametrize('problem', ['uncertified', 'dash_policy_off', 'ocr', 'missing_grid_cell', 'no_bbox',
     'stale_run', 'foreign_owner', 'foreign_year', 'wrong_unit', 'conflicting_fact', 'policy_off',
     'ambiguous_code', 'physical_nonblank'])
 def test_economic_blank_never_hides_missing_ambiguous_or_untrusted_source(problem, monkeypatch):
     doc = economics()
     blank = cell(doc, 4, 5)
     if problem == 'uncertified': blank.native_blank_verified = False
-    elif problem == 'dash':
+    elif problem == 'dash_policy_off':
         blank.raw_text, blank.presence = '—', CellPresence.DASH
+        monkeypatch.setenv('GOVBUDGET_EMPTY_VALUE_CONVENTIONS', 'off')
     elif problem == 'ocr': blank.extraction_method = 'ocr'
     elif problem == 'missing_grid_cell': doc.parse_artifact.table_fragments[0].cells.remove(blank)
     elif problem == 'no_bbox': blank.bbox = None

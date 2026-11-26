@@ -221,11 +221,17 @@ def fact_bound_table_rows(doc, table_name, *, strict_unknown_values=False):
             continue
         if (cell.row_idx, cell.col_idx) in padding_positions:
             continue  # 真实占位零仍在表格中；它没有右侧业务行，不能借左侧标签生成事实。
-        if (cell.presence == CellPresence.DASH and cell.numeric_value is None
-                and cell.raw_text.strip() in {'-', '—', '–', '－'}):
-            # 保留原件破折号的展示角色，不要求它拥有数字事实，也不将其转换成零。
-            # 后续需要金额的关系仍会如实报取数不足。
+        from src.schemas.parse_artifact import DASH_PLACEHOLDER_TEXTS
+        if cell.numeric_value is None and cell.raw_text.strip() in DASH_PLACEHOLDER_TEXTS:
             if strict_unknown_values:
+                from .cell_value_policy import interpret_cell_value
+                zero, _presence, _basis = interpret_cell_value(
+                    cell.raw_text, native_blank_verified=bool(getattr(cell, "native_blank_verified", False)),
+                    region=getattr(context, "org_name", None), year=getattr(context, "fiscal_year", None),
+                    table_code=code, row=cell.row_idx, column=cell.col_idx)
+                if zero is not None:
+                    rows[cell.row_idx][cell.col_idx] = "0"
+                    continue
                 message = f"{table_name} 第{cell.row_idx + 1}行第{cell.col_idx + 1}列为横线，计算含义未确认"
                 _record_projection_gap(doc, message, codes=['cell_blank_semantics_unknown'],
                                        blockers=[_cell_blocker(f'{code}:r{cell.row_idx}c{cell.col_idx}',

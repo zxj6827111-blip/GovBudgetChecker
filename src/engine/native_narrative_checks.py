@@ -41,12 +41,14 @@ _PROC_TOTAL = re.compile(
     rf"(?P<total>{_NUMBER})(?P<unit>{_UNIT})[，,]其中[:：]?"
 )
 _PROC_PART = re.compile(
-    rf"(?:政府采购)?(?P<kind>货物|工程|服务)(?:类)?(?:采购)?(?:支出金额|金额|支出)?"
+    rf"(?:政府采购)?(?P<kind>货物|工程|服务)(?:类)?(?:采购)?(?:支出金额|金额|支出|金)?"
     rf"(?:为|共计|共|合计|[:：])?(?P<amount>{_NUMBER})(?P<unit>{_UNIT})"
 )
 _PROC_ABSENCE = re.compile(
-    r'(?:^|(?<=[，,、；;]))(?:无|没有(?:发生)?|未发生)(?:政府)?'
-    r'(?P<kind>货物|工程|服务)采购(?:支出)?(?=[，,、。；;]|$)'
+    r'(?:^|(?<=[，,、；;：:]))(?:'
+    r'(?:无|没有(?:发生)?|未发生)(?:政府)?(?P<kind>货物|工程|服务)(?:类)?采购(?:支出金额|支出|金额|决算(?:金额)?)?'
+    r'|(?P<kind2>货物|工程|服务)(?:类)?采购(?:支出金额|支出|金额|决算(?:金额)?)?(?:为)?(?:无|没有(?:发生)?|未发生)'
+    r')(?=[，,、。；;]|$)'
 )
 _HEADINGS = re.compile(
     r"(?m)^[ \t]*(?:[一二三四五六七八九十百]+[、．]"
@@ -211,31 +213,83 @@ def _wan(amount, unit):
     return Decimal(amount.replace(',', '')) * _FACTORS[unit]
 
 
+def _is_self_org_shorthand(candidate: str, stem_owner: str) -> bool:
+    """识别正文对封面规范全称的无歧义简称（如“上海市乡村振兴研究中心”写作“乡村振兴中心”），绝不放行上级前缀或异单位。"""
+    if not candidate or not stem_owner or len(stem_owner) < 5:
+        return False
+    # 无句读的章节标题紧邻段首简称时（如“一、收入支出决算总体情况说明乡村振兴中心”），仅在前缀不含其他机构词尾时剥离标题前缀。
+    heading_split = re.match(r'^(.+?(?:情况说明|总体情况|决算说明|决算公开))([一-鿿]{4,})$', candidate)
+    if heading_split and not _ORG.search(heading_split.group(1)):
+        candidate = heading_split.group(2)
+    c_reg = re.sub(r'^上海市?', '', candidate)
+    o_reg = re.sub(r'^上海市?', '', stem_owner)
+    if c_reg == o_reg and len(c_reg) >= 4:
+        return True
+    # 剥离市/区行政前缀后比较业务词干，防止同区不同委办局碰撞；上级机构前缀一律拒绝。
+    dist_re = re.compile(r'^(?:浦东新区|[一-鿿]{2,3}(?:区|县))(?:人民政府)?')
+    c_core = dist_re.sub('', c_reg)
+    o_core = dist_re.sub('', o_reg)
+    if not c_core or not o_core or stem_owner.startswith(candidate) or o_reg.startswith(c_reg) or o_core.startswith(c_core):
+        return False
+    if len(c_core) < 5 or not (1 <= len(o_core) - len(c_core) <= 4):
+        return False
+    if c_core[:3] != o_core[:3] or c_core[-2:] != o_core[-2:]:
+        return False
+    it = iter(o_core)
+    return all(ch in it for ch in c_core)
+
+
 def _foreign_owner(proof, owner):
     # 原文与主体名都按 NFKC 归一后比较：原文的全角括号已是半角，主体名不归一时
     # “上海市水务局（上海市海洋局）”“中国（上海）…”永远认不出自己。画像里主体名的
     # 括号别称可能被略去，再去掉两边的括号段比一次（主体名至少 4 字才这样做）。
     proof = unicodedata.normalize('NFKC', str(proof or ''))
     compact_owner = re.sub(r'\s+', '', unicodedata.normalize('NFKC', str(owner or '')))
+    stem_owner = ''
     if compact_owner:
+        from src.services.org_name_identity import _admin_variants, _split_multi_agency_alias
+
+        stem_owner = re.sub(r'(?:\((?:本级|本部)\)|本级|本部)+$', '', compact_owner)
+        seed_owners = [compact_owner]
+        if len(stem_owner) >= 4:
+            seed_owners.extend((f"{stem_owner}(本级)", f"{stem_owner}(本部)", f"{stem_owner}本级", f"{stem_owner}本部", stem_owner))
+        variants: list[str] = []
+        seen_var: set[str] = set()
+        for seed in seed_owners:
+            candidates = list(_admin_variants(seed))
+            multi = _split_multi_agency_alias(seed)
+            if multi:
+                candidates.extend(_admin_variants(multi[0]))
+                for part in multi[1]:
+                    candidates.extend(_admin_variants(part))
+            for v in candidates:
+                if v and v not in seen_var:
+                    seen_var.add(v)
+                    variants.append(v)
+        variants.sort(key=len, reverse=True)
         # 先连写“正确主体名 + 重复末字”（“上海市生态环境局局”）一并去掉，
         # 避免去除主体名后残留一个“局”被识别为其他单位。
-        tail = compact_owner[-1]
-        proof = re.sub(
-            re.escape(compact_owner) + re.escape(tail) + r"+", compact_owner, proof
-        )
-        proof = proof.replace(compact_owner, '')
-        bare_owner = re.sub(r'\([^()]{1,20}\)', '', compact_owner)
+        for variant in variants:
+            v_tail = variant[-1]
+            proof = re.sub(re.escape(variant) + re.escape(v_tail) + r"+", variant, proof)
+            proof = proof.replace(variant, '')
+        bare_owner = re.sub(r'\([^()]{1,20}\)', '', stem_owner or compact_owner)
         if len(bare_owner) >= 4:
-            proof = re.sub(r'\([^()]{1,20}\)', '', proof).replace(bare_owner, '')
+            proof = re.sub(r'\([^()]{1,20}\)', '', proof)
+            for bv in sorted(_admin_variants(bare_owner), key=len, reverse=True):
+                proof = proof.replace(bv, '')
         # 2026-11-16：单位名称多字（“上海市生态环境局局”）时，去掉正确主体名
-        # 后会残留重复末字。该残留是已由 CMM-017 报告的名称缺陷，不能让正文
-        # 正确金额被当成“其他主体”而阻断取数；只剥离开头的重复末字，不改写
-        # 原文或主体名。
-        if proof.startswith(tail):
-            proof = proof.lstrip(tail)
+        # 后会残留重复末字。只剥离开头的重复末字，不改写原文或主体名。
+        for tail_ch in {compact_owner[-1], *( [stem_owner[-1]] if stem_owner else [] )}:
+            if proof.startswith(tail_ch):
+                proof = proof.lstrip(tail_ch)
     proof = re.sub(r'本部门|本单位|本局|本中心|本办公室', '', proof)
-    return bool(_ORG.search(proof))
+    remaining = list(_ORG.finditer(proof))
+    if not remaining:
+        return False
+    if stem_owner and all(_is_self_org_shorthand(m.group(), stem_owner) for m in remaining):
+        return False
+    return True
 
 
 def _receipt(rule, doc, relation, status, formula, reason=None, disclosure_sources=()):
@@ -323,8 +377,12 @@ def _check_yoy(rule, doc, text, section, start, stop, year, owner, year_refs, is
         prefix = block[proof_start:current.start()]
         reason = _year_and_owner_reason(proof, prefix, year, owner)
         previous_year = year - 1 if year is not None and match['previous_year'] in {'上年', '去年'} else int(match['previous_year']) if match['previous_year'].isdigit() else None
+        year_equals_report_typo = False
         if not reason and previous_year != year - 1:
-            reason = '比较年度并非材料上年，不能作为同比关系'
+            if year is not None and previous_year == year:
+                year_equals_report_typo = True
+            else:
+                reason = '比较年度并非材料上年，不能作为同比关系'
         # A later clause can explicitly qualify the basis as adjusted.
         tail_end = block.find('。', match.end())
         tail = block[match.end():tail_end if tail_end >= 0 else len(block)]
@@ -332,13 +390,51 @@ def _check_yoy(rule, doc, text, section, start, stop, year, owner, year_refs, is
             reason = '同比基数采用调整口径，需人工确认可比基数'
         current_amount, change = _wan(current['current'], current['unit']), _wan(match['change'], match['unit'])
         previous = current_amount + change if match['direction'] == '减少' else current_amount - change
+        declared = Decimal(match['percent'].replace(',', ''))
+        if year_equals_report_typo and not reason:
+            typo_refs = text.refs(start + current.start(), start + match.end(), '同比比较年度误写原文', unique_context=True)
+            typo_quote = '\n'.join(ref['span'] for ref in typo_refs)
+            issues.append(rule._issue(
+                f'同比比较年度笔误（B-05）：本报告为{year}年度决算，原文写作“比{year}年度{match["direction"]}'
+                f'{match["change"]}{match["unit"]}”（应为{year - 1}年度）；已提示笔误并继续复算同比比例。',
+                {
+                    'page': typo_refs[0]['page'], 'pages': sorted({ref['page'] for ref in typo_refs}),
+                    'section': section, 'checklist_item': 'B-05',
+                    'defect_type': 'yoy_previous_year_equals_report_year',
+                    'table_refs': typo_refs,
+                },
+                'warn',
+                evidence_text=typo_quote,
+                check_relation_id=f'{rule.code}:{relation}:year_typo',
+            ))
+        if not reason and current_amount >= 0 and previous == 0 and change > 0:
+            claim_refs = text.refs(start + current.start(), start + match.end(), '本年金额及同比声明', unique_context=True)
+            refs = list(claim_refs)
+            if not re.search(r'20\d{2}(?:年度|年)', prefix):
+                refs += year_refs
+            _receipt(rule, doc, relation, 'fail', formula,
+                     disclosure_sources=[dict(ref, file_hash=getattr(getattr(doc, 'fact_context', None),
+                                                                     'file_hash', None)) for ref in refs])
+            page = refs[0]['page']
+            location = {'page': page, 'pages': sorted({ref['page'] for ref in refs}), 'section': section,
+                        'relation_type': 'narrative_yoy_delta', 'table_refs': refs,
+                        'current_year': year, 'previous_year': previous_year,
+                        'current_amount_wan': str(current_amount), 'change_amount_wan': str(change),
+                        'previous_amount_wan': '0', 'previous_amount_source': '由同条本年金额与增减额推导',
+                        'declared_percent': str(declared), 'formula': formula, 'zero_base': True,
+                        'direction': match['direction'], 'declared_percent_direction': match['percent_direction']}
+            quote = '\n'.join(ref['span'] for ref in claim_refs)
+            issues.append(rule._issue(
+                f'同比零基数百分比无定义：本年{current_amount:.2f}万元，{match["direction"]}{change:.2f}万元，'
+                f'推导上年基数为0.00万元，分母为0时同比百分比无有限定义（原文写“{match["percent_direction"]}{declared}%”）。',
+                location, 'error', evidence_text=quote, check_relation_id=f'{rule.code}:{relation}'))
+            continue
         if not reason and (current_amount < 0 or previous <= 0):
             reason = '推导的上年基数不可作为有效分母'
         if reason:
             _unresolved(rule, doc, text, start + match.start(), relation, formula, reason, unresolved, section=section)
             continue
         computed = change / previous * Decimal('100')
-        declared = Decimal(match['percent'].replace(',', ''))
         difference = abs(computed - declared)
         direction_matches = ((match['direction'] == '减少') == (match['percent_direction'] in {'下降', '减少'}))
         # 百分比容差 0.1；原文只印到整数（“增长47%”）时，按其显示精度四舍五入的
@@ -381,7 +477,7 @@ def _check_procurement(rule, doc, text, section, start, stop, year, owner, year_
         tail = block[total.end():sentence_end]
         parts = list(_PROC_PART.finditer(tail))
         absent = list(_PROC_ABSENCE.finditer(tail))
-        kinds = [part['kind'] for part in parts] + [part['kind'] for part in absent]
+        kinds = [part['kind'] for part in parts] + [part['kind'] or part['kind2'] for part in absent]
         proof_start = max(block.rfind('。', 0, total.start()), block.rfind('；', 0, total.start()),
                           block.rfind(';', 0, total.start())) + 1
         proof = block[proof_start:sentence_end]
@@ -396,6 +492,39 @@ def _check_procurement(rule, doc, text, section, start, stop, year, owner, year_
         partial = (bool(kinds) and len(kinds) == len(set(kinds)) and set(kinds) < {'货物', '工程', '服务'}
                    and not any(kind in tail for kind in {'货物', '工程', '服务'} - set(kinds)))
         if not reason and not complete and not partial:
+            missing_amount_kinds = []
+            for kind in ('货物', '工程', '服务'):
+                if kind in set(kinds):
+                    continue
+                for m_kind in re.finditer(rf'{kind}(?:采购|类|金额|支出)', tail):
+                    prefix = tail[max(0, m_kind.start() - 6):m_kind.start()]
+                    if re.search(r'(?:无|未|没有|不涉及|不含|并非)$', prefix):
+                        continue
+                    missing_amount_kinds.append(kind)
+                    break
+            if missing_amount_kinds:
+                missing_refs = text.refs(start + proof_start, start + sentence_end, '政府采购分项漏填金额', unique_context=True)
+                if not missing_refs:
+                    missing_refs = text.refs(start + total.start(), start + sentence_end, '政府采购分项漏填金额')
+                file_hash = getattr(getattr(doc, 'fact_context', None), 'file_hash', None)
+                missing_refs = [dict(ref, file_hash=file_hash) for ref in missing_refs]
+                missing_labels = '、'.join(f'{k}采购' for k in missing_amount_kinds)
+                miss_loc = {
+                    'page': missing_refs[0]['page'] if missing_refs else None,
+                    'pages': sorted({ref['page'] for ref in missing_refs if ref.get('page')}),
+                    'section': section,
+                    'relation_type': 'procurement_subitem_amount_missing',
+                    'missing_kinds': missing_amount_kinds,
+                    'table_refs': missing_refs,
+                }
+                miss_quote = '\n'.join(ref['span'] for ref in missing_refs if ref.get('span')) or proof
+                issues.append(rule._issue(
+                    f"政府采购支出说明中“{missing_labels}”分项漏写具体金额与单位，请核实原件并补充完整（如无发生额请明确写“无{missing_amount_kinds[0]}采购”或“0.00万元”）。",
+                    miss_loc,
+                    'warn',
+                    evidence_text=miss_quote,
+                    check_relation_id=f'{rule.code}:{relation}:missing_part',
+                ))
             reason = '同一句政府采购汇总未唯一列出货物、工程、服务三项'
         if not reason and ('其中' in tail or re.search(r'另计|另行|分别采用|不含', tail)):
             reason = '采购分项存在嵌套分项或其他统计口径，不能直接求和'
@@ -404,7 +533,7 @@ def _check_procurement(rule, doc, text, section, start, stop, year, owner, year_
             continue
         values = {part['kind']: _wan(part['amount'], part['unit']) for part in parts}
         # “无工程采购”是有原文的无发生额声明，不新增或回写金额事实。
-        values.update({part['kind']: Decimal('0') for part in absent})
+        values.update({(part['kind'] or part['kind2']): Decimal('0') for part in absent})
         declared, computed = _wan(total['total'], total['unit']), sum(values.values(), Decimal('0'))
         difference = declared - computed
         failed = amount_difference_exceeds_policy(difference, rounding_envelope(len(values)))
@@ -430,7 +559,7 @@ def _check_procurement(rule, doc, text, section, start, stop, year, owner, year_
                     'parts_wan': {kind: str(value) for kind, value in values.items()},
                     'computed_sum_wan': str(computed), 'difference_wan': str(difference),
                     'tolerance_wan': str(AMOUNT_TOLERANCE_WAN), 'formula': formula,
-                    'explicit_absence_terms': [part['kind'] for part in absent],
+                    'explicit_absence_terms': [(part['kind'] or part['kind2']) for part in absent],
                     'omitted_terms': omitted}
         quote = '\n'.join(ref['span'] for ref in refs)
         listed = '、'.join(kind for kind in ('货物', '工程', '服务') if kind in values)

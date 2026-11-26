@@ -29,6 +29,14 @@ _LEGACY_SUBJECT_ALIASES = {
     "工业和信息产业监管": "工业和信息产业",
     "文化体育与传媒": "文化旅游体育与传媒",
     "其他文化体育与传媒": "其他文化旅游体育与传媒",
+    "中专教育": "中等职业教育",
+    "医疗卫生与计划生育": "卫生健康",
+    "医疗卫生健康": "卫生健康",
+    "医疗卫生": "卫生健康",
+    "其他医疗卫生与计划生育": "其他卫生健康",
+    "其他医疗卫生健康": "其他卫生健康",
+    "国土海洋气象等": "自然资源海洋气象等",
+    "其他国土海洋气象等": "其他自然资源海洋气象等",
 }
 
 
@@ -52,3 +60,10 @@ def subject_name_candidates(name: str, names: Mapping[str, str]) -> list[str]:
         return exact
     key = subject_variant_key(name)
     return sorted(code for code, value in names.items() if subject_variant_key(value) == key)
+
+
+def scoped_subject_name_variant(code: str, printed: str) -> str | None:
+    """仅允许在印刷编码确认后识别该科目的特定文字差异，避免短名称跨款合并。"""
+    if code == "2130110" and literal_subject_name(printed) == "执法监管":
+        return "执法监督"
+    return None

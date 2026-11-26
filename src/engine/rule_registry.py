@@ -64,7 +64,10 @@ def _registrations() -> List[RuleRegistration]:
             registration = RuleRegistration(
                 rule_id=rule_id,
                 implementation=rule,
-                report_kinds=("final","budget") if rule_id == "CMM-027" else kinds,
+                report_kinds=({
+                    "CMM-027": ("final", "budget"),
+                    "V33-004": ("final", "unknown"),
+                }).get(rule_id, kinds),
                 rule_family=family,
                 evaluation_basis=(
                     EVALUATION_BASIS_FACT if fact_inputs else EVALUATION_BASIS_LEGACY
@@ -82,7 +85,7 @@ def _registrations() -> List[RuleRegistration]:
 
 
 def select_rules(report_kind: str) -> List[Any]:
-    """Return canonical execution order for a known kind, or common rules only."""
+    """未知文种仅调度不要求预算或决算口径的检查。"""
     kind = str(report_kind or "unknown").strip().lower()
     if kind == "non_budget":
         return []
@@ -102,12 +105,14 @@ def restrict_rules_to_profile(rules, profile):
 
 
 def select_specific_rules(report_kind: str) -> List[Any]:
-    """Return only budget/final rules, without the shared common rule family."""
+    """返回共用规则之外的检查，未知文种仍可检查原生格中的直接数值。"""
     kind = str(report_kind or "unknown").strip().lower()
     if kind == "budget":
         return list(budget_rules.ALL_BUDGET_RULES)
     if kind == "final":
         return list(rules_v33.ALL_RULES)
+    if kind == "unknown":
+        return [rule for rule in rules_v33.ALL_RULES if rule.code == "V33-004"]
     return []
 
 
