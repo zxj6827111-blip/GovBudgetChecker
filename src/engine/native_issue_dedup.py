@@ -627,7 +627,11 @@ def _name_key(item, doc, context):
     refs = [ref for ref in location.get('table_refs') or [] if isinstance(ref, dict)
             and ref.get('role') == '说明5']
     if (not refs or any(_literal_ref_position(ref, doc) is None for ref in refs)
-            or not all(f'{actual}({level})' in _compact(ref.get('span') or ref.get('quote')) for ref in refs)):
+            or not all(
+                f'{actual}({level})' in _compact(ref.get('span') or ref.get('quote'))
+                or actual in _compact(ref.get('span') or ref.get('quote'))
+                for ref in refs
+            )):
         return None
     # 多处同一编码、相同错名和正确名只需一次修改事项；所有出现位置仍留在主卡片。
     return ('name_discrepancy', context.file_hash, 'FIN_05_general_public_expenditure', code,
@@ -1036,7 +1040,62 @@ def deduplicate_native_issues(issues, doc=None, *, receipts=None):
         link_merged_issue_receipts(result, receipt_list)
         _annotate_unit_recoveries(result, receipt_list)
     _annotate_manual_text_corrections(result, doc)
+    _annotate_t5_bijection_verifications(result, doc, receipt_list)
     return result
+
+
+def _annotate_t5_bijection_verifications(issues, doc, receipts) -> None:
+    """将 V33-222 同款 1 对 1 双射金额核对结论标注到对应的唯一 V33-227 名称问题上，不新增重复问题。"""
+    verifications = {}
+    doc_store = getattr(doc, '_t5_bijection_verifications', None) if doc is not None else None
+    if isinstance(doc_store, dict):
+        for key, info in doc_store.items():
+            if isinstance(key, tuple) and len(key) == 2 and isinstance(info, dict):
+                verifications[key] = info
+    if not verifications and receipts:
+        for receipt in receipts:
+            if not isinstance(receipt, dict) or receipt.get('rule_id') != 'V33-222':
+                continue
+            for src in receipt.get('disclosure_sources') or []:
+                if not isinstance(src, dict):
+                    continue
+                if src.get('role') not in {'native_near_name_leaf', 'native_unique_remaining_leaf'}:
+                    continue
+                tier = src.get('binding_tier')
+                code = str(src.get('subject_code') or '')
+                actual = _compact(src.get('narrative_name'))
+                if tier and code and actual:
+                    verifications[(code, actual)] = {
+                        'binding_tier': tier,
+                        'has_name_relation': bool(src.get('has_name_relation')),
+                        'kuan_closed': bool(src.get('kuan_closed')),
+                    }
+    if not verifications:
+        return
+    for issue in issues:
+        if _rule(issue) != 'V33-227':
+            continue
+        loc = _location(issue)
+        code = str(loc.get('code') or '')
+        actual = _compact(loc.get('actual_name'))
+        info = verifications.get((code, actual))
+        if not info:
+            continue
+        tier = info.get('binding_tier')
+        if tier not in {'tier1_amount_match', 'tier2a_amount_mismatch'}:
+            continue
+        loc['binding_tier'] = tier
+        loc['has_name_relation'] = bool(info.get('has_name_relation'))
+        loc['kuan_closed'] = bool(info.get('kuan_closed'))
+        _set(issue, 'location', loc)
+        note = (
+            '已按同款唯一对应完成金额核对（金额一致），仅科目名称需修正'
+            if tier == 'tier1_amount_match'
+            else '已按同款唯一对应完成金额核对（表文金额亦不一致），请同步修正科目名称与金额'
+        )
+        msg = str(_get(issue, 'message') or '')
+        if note not in msg:
+            _set(issue, 'message', f"{msg.rstrip('。')}；{note}。")
 
 
 def _annotate_manual_text_corrections(issues, doc) -> None:

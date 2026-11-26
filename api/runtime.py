@@ -127,7 +127,11 @@ _JOB_ACCESS_FIELD_KEYS = (
 # 结构化入库"是否最新版本"判定只关心每个任务的范围字段（组织/年度/文种/文件名）
 # 与版本时间戳，却被完整结果淹在数 MB 的 status.json 里。按文件签名缓存这份
 # 轻量记录，批量重跑时 98% 阶段不再反复全量解析（300+ 任务合计 GB 级）。
-_JOB_INGEST_SCOPE_CACHE: Dict[str, Tuple[Tuple[int, int, int], Optional[Dict[str, Any]]]] = {}
+_JOB_INGEST_SCOPE_CACHE: Dict[str, Tuple[Tuple[int, int, int, int], Optional[Dict[str, Any]]]] = {}
+_INGEST_SCOPE_FIELDS = (
+    "organization_id", "organization_name", "fiscal_year", "report_year",
+    "doc_type", "report_kind", "filename", "version_created_at", "job_created_at",
+)
 STRUCTURED_INGEST_FILENAME = "structured_ingest.json"
 IGNORED_ISSUES_FILENAME = "ignored_issues.json"
 PERSISTENCE_STATE_FILENAME = "persistence.json"
@@ -529,6 +533,59 @@ def list_analysis_revisions(job_dir: Path) -> List[Dict[str, Any]]:
     return revisions
 
 
+def queue_status_signature(stat: os.stat_result) -> Tuple[int, int, int]:
+    return stat.st_ino, stat.st_mtime_ns, stat.st_size
+
+
+def _write_queue_status_index(
+    status_file: Path, signature: Tuple[int, int, int], payload: Dict[str, Any]
+) -> None:
+    # 索引只对这次原子替换生成的文件有效。写入中断或旧版改写时由队列回退。
+    try:
+        write_json_file(
+            status_file.with_name("queue_status.json"),
+            {
+                "signature": signature,
+                "status": str(payload.get("status") or "").lower(),
+                "retry_not_before": payload.get("retry_not_before") or 0,
+                "ingest_scope": {key: payload[key] for key in _INGEST_SCOPE_FIELDS if key in payload},
+            },
+        )
+    except Exception:
+        logger.warning("Failed to write queue status index: %s", status_file, exc_info=True)
+
+
+def _read_job_status_index(
+    status_file: Path, signature: Tuple[int, int, int]
+) -> Optional[Dict[str, Any]]:
+    try:
+        raw = json.loads(status_file.with_name("queue_status.json").read_text(encoding="utf-8"))
+        if isinstance(raw, dict) and raw.get("signature") == list(signature):
+            return raw
+    except (OSError, KeyError, TypeError, ValueError):
+        pass
+    return None
+
+
+def read_queue_status_index(
+    status_file: Path, signature: Tuple[int, int, int]
+) -> Optional[Tuple[str, float]]:
+    raw = _read_job_status_index(status_file, signature)
+    if raw is not None and isinstance(raw.get("status"), str):
+        try:
+            return raw["status"], float(raw["retry_not_before"])
+        except (KeyError, TypeError, ValueError):
+            pass
+    return None
+
+
+def backfill_queue_status_index(
+    status_file: Path, signature: Tuple[int, int, int], payload: Dict[str, Any]
+) -> None:
+    if payload:
+        _write_queue_status_index(status_file, signature, payload)
+
+
 def write_json_file(path: Path, payload: Dict[str, Any]) -> None:
     """Write JSON payload atomically via unique temp file + rename."""
     def decimal_default(value):
@@ -548,6 +605,11 @@ def write_json_file(path: Path, payload: Dict[str, Any]) -> None:
         data = json.dumps(payload, ensure_ascii=False, default=decimal_default).encode("utf-8")
         os.write(tmp_fd, data)
         os.fsync(tmp_fd)
+        signature = (
+            queue_status_signature(os.fstat(tmp_fd))
+            if path.name == "status.json" and path.parent.parent == UPLOAD_ROOT
+            else None
+        )
         os.close(tmp_fd)
         tmp_fd = None
         tmp_path.replace(path)
@@ -560,6 +622,8 @@ def write_json_file(path: Path, payload: Dict[str, Any]) -> None:
         if tmp_path is not None:
             tmp_path.unlink(missing_ok=True)
         raise
+    if signature is not None:
+        _write_queue_status_index(path, signature, payload)
 
 
 def calculate_file_checksum(path: Path, chunk_size: int = 1024 * 1024) -> str:
@@ -1232,8 +1296,8 @@ def build_structured_ingest_scope(
     }
 
 
-def _ingest_scope_cache_signature(job_dir: Path) -> Optional[Tuple[int, int, int]]:
-    """status.json 的 (mtime_ns, size) 加目录 mtime 组合签名。
+def _ingest_scope_cache_signature(job_dir: Path) -> Optional[Tuple[int, int, int, int]]:
+    """status.json 签名加目录 mtime。
 
     目录 mtime 也进签名：version_created_at 缺失时回退用目录 stat 推断，
     任务目录增删文件必须让缓存失配，避免"最新版本"判定读到旧时间戳。
@@ -1244,7 +1308,7 @@ def _ingest_scope_cache_signature(job_dir: Path) -> Optional[Tuple[int, int, int
         dir_mtime_ns = job_dir.stat().st_mtime_ns
     except OSError:
         return None
-    return (status_stat.st_mtime_ns, status_stat.st_size, dir_mtime_ns)
+    return (*queue_status_signature(status_stat), dir_mtime_ns)
 
 
 def _build_ingest_scope_record(
@@ -1272,7 +1336,7 @@ def _build_ingest_scope_record(
 def _remember_ingest_scope_record(
     job_dir: Path,
     record: Optional[Dict[str, Any]],
-    signature: Optional[Tuple[int, int, int]] = None,
+    signature: Optional[Tuple[int, int, int, int]] = None,
 ) -> None:
     # 签名必须在读取内容之前取样：读取中途的并发重写若配到读取之后的新签名，
     # 撕裂读出的"负记录"会被钉在新签名下，直到文件再次变化才失效。
@@ -1281,8 +1345,6 @@ def _remember_ingest_scope_record(
     if signature is None:
         return
     _JOB_INGEST_SCOPE_CACHE[job_dir.name] = (signature, record)
-    if len(_JOB_INGEST_SCOPE_CACHE) > _JOB_SUMMARY_CACHE_MAX_SIZE:
-        _JOB_INGEST_SCOPE_CACHE.pop(next(iter(_JOB_INGEST_SCOPE_CACHE)))
 
 
 def _ingest_scope_record_for(job_dir: Path) -> Optional[Dict[str, Any]]:
@@ -1291,7 +1353,19 @@ def _ingest_scope_record_for(job_dir: Path) -> Optional[Dict[str, Any]]:
     cached = _JOB_INGEST_SCOPE_CACHE.get(job_dir.name)
     if signature is not None and cached is not None and cached[0] == signature:
         return cached[1]
-    status_payload = read_json_file(job_dir / "status.json", default={})
+    if signature is None:
+        return None
+    status_file = job_dir / "status.json"
+    file_signature = signature[0], signature[1], signature[2]
+    index = _read_job_status_index(status_file, file_signature)
+    status_payload = index.get("ingest_scope") if index is not None else None
+    if not isinstance(status_payload, dict) or not status_payload:
+        status_payload = read_json_file(status_file, default={})
+        try:
+            if queue_status_signature(status_file.stat()) == file_signature:
+                backfill_queue_status_index(status_file, file_signature, status_payload)
+        except OSError:
+            pass
     record = _build_ingest_scope_record(job_dir, status_payload)
     _remember_ingest_scope_record(job_dir, record, signature=signature)
     return record
@@ -1337,7 +1411,13 @@ def resolve_latest_structured_ingest_job(
         }
 
     candidates: List[Dict[str, Any]] = []
-    for job_dir in iter_job_dirs():
+    job_dirs = iter_job_dirs()
+    # 扫描本来就要按全量目录比较版本。逐条 FIFO 淘汰会在任务数超过阈值后
+    # 反复淘汰下一条即将读取的历史记录，缓存只应剔除已删除的任务。
+    current_ids = {job_dir.name for job_dir in job_dirs}
+    for cached_id in _JOB_INGEST_SCOPE_CACHE.keys() - current_ids:
+        _JOB_INGEST_SCOPE_CACHE.pop(cached_id, None)
+    for job_dir in job_dirs:
         candidate_job_id = job_dir.name
         if candidate_job_id == job_id and isinstance(current_status_payload, dict):
             record = _build_ingest_scope_record(job_dir, dict(current_status_payload))

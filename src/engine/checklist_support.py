@@ -122,7 +122,7 @@ def _normalize_for_binding(text: str) -> str:
     return "".join(out)
 
 
-def unique_quote(page_text: str, start: int, end: int, *, min_len: int = 10, max_len: int = 160) -> str:
+def unique_quote(page_text: str, start: int, end: int, *, min_len: int = 10, max_len: int = 420) -> str:
     """返回包含 [start, end) 的原文片段，保证去空白、NFKC 后在本页唯一。
 
     证据守卫只认“所称页面唯一命中”的引文；重复出现的短语（如模板句）若只

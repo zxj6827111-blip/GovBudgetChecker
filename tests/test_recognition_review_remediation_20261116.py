@@ -238,15 +238,21 @@ def test_v33_251_shared_item_amounts_are_not_reported_as_missing_final():
         "支出决算为 430.59 万元。\n"
     )
     doc = build_document("sample.pdf", [text], [], 1000)
-    with pytest.raises(RuleDeferred) as caught:
-        R33251_FunctionalDetailCompleteness().apply(doc)
+    try:
+        issues = R33251_FunctionalDetailCompleteness().apply(doc)
+    except RuleDeferred as caught:
+        issues = caught.partial_issues or []
     # 预期只剩预算披露缺口；支出决算不得再被报成未披露。
-    assert "支出决算" not in str(caught.value.detail)
     receipts = {row["sub_check_id"]: row for row in doc.fact_receipts}
     assert receipts["V33-251:final:item_sum"]["status"] == "pass"
-    budget = receipts["V33-251:budget:item_sum"]["status"]
-    assert budget == "insufficient_data"
-    assert "未逐项列示" in receipts["V33-251:budget:item_sum"]["incomplete_reason"]
+    # 2026-11-25 起：组级年初预算合计本身纳入章节加总，预算侧不再以 insufficient_data 阻断，
+    # 改以正式 A-09 warn 提示“未逐项列示年初预算”。
+    assert receipts["V33-251:budget:item_sum"]["status"] == "pass"
+    assert any(
+        (issue.location or {}).get("checklist_item") == "A-09"
+        and "未逐项列示年初预算" in issue.message
+        for issue in issues
+    )
 
 
 # ---------------------------------------------------------------------------

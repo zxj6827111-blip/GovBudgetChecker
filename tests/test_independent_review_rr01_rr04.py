@@ -45,10 +45,13 @@ SHARED_TEXT = (
 
 def _run_shared(text: str):
     doc = build_document("counterexample.pdf", [text], [], 1000)
-    with pytest.raises(RuleDeferred) as caught:
-        R33251_FunctionalDetailCompleteness().apply(doc)
-    receipts = {row["sub_check_id"]: row for row in doc.fact_receipts}
-    messages = [issue.message for issue in caught.value.partial_issues or []]
+    try:
+        issues = R33251_FunctionalDetailCompleteness().apply(doc)
+        receipts = {row["sub_check_id"]: row for row in doc.fact_receipts}
+        messages = [issue.message for issue in issues]
+    except RuleDeferred as caught:
+        receipts = {row["sub_check_id"]: row for row in doc.fact_receipts}
+        messages = [issue.message for issue in caught.partial_issues or []]
     return receipts, messages
 
 

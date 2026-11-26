@@ -35,6 +35,11 @@ def check_detail_total_pair(rule, doc, table_code, indicator, name, *,
     if not detail_error:
         if sum(m['canonical_measure'] == detail_indicator for m in view[2]) == 1:
             detail_fact, detail_error = _select(doc, view, 'total', detail_indicator)
+            if (detail_error or isinstance(detail_fact, NativeBlankTerm)) and view[5]:
+                from .native_table_arithmetic import derive_missing_detail_total_fact
+                derived = derive_missing_detail_total_fact(doc, view[5], detail_indicator, stage='决算')
+                if derived is not None:
+                    detail_fact, detail_error = derived, None
         else:
             detail_error = '明细表合计行所需金额列身份未唯一绑定'
     if summary_fact is not None and detail_fact is not None:
@@ -75,6 +80,11 @@ def scoped_expense_summary_rows(doc):
         fact = None
         if sum(m['canonical_measure'] == indicator for m in view[2]) == 1:
             fact, _ = _select(doc, view, 'total', indicator)
+            if (fact is None or isinstance(fact, NativeBlankTerm)) and view[5]:
+                from .native_table_arithmetic import derive_missing_detail_total_fact
+                derived = derive_missing_detail_total_fact(doc, view[5], indicator, stage='决算')
+                if derived is not None:
+                    fact = derived
         # 认证空白交给调用方的原有证据路径处理。
         values.append(str(fact.normalized_value / factor) if fact is not None
                       and not isinstance(fact, NativeBlankTerm) and fact.unit == unit else '')
@@ -133,16 +143,15 @@ def _relation(rule, doc, key, label, roles, coefficients, issues, unresolved):
     lhs = roles[0][1].normalized_value
     rhs = sum((fact.normalized_value * coefficient for (_, fact, _), coefficient
                in zip(roles[1:], coefficients, strict=True)), Decimal('0'))
-    if isinstance(roles[0][1], NativeBlankTerm) and rhs != 0:
-        reason = f'{label}合计格原件留空而组成项有金额，需核对合计披露'
-        unresolved.append(reason)
-        receipt(rule, doc, key, facts, status='insufficient_data', formula=label, reason=reason)
-        return
     if all(isinstance(f, NativeBlankTerm) for f in facts):
         receipt(rule, doc, key, facts, status='not_applicable', formula=label,
                 reason='原件完整网格各项均为空白，无发生额关系')
         return
-    mismatch = amount_difference_exceeds_policy(lhs - rhs, rounding_envelope(len(roles) - 1))
+    exceeds = amount_difference_exceeds_policy(
+        lhs - rhs, rounding_envelope(len(roles) - 1)
+    )
+    missing_summary_cell = isinstance(roles[0][1], NativeBlankTerm) and exceeds
+    mismatch = exceeds
     ids, evidence = receipt(rule, doc, key, facts, status='fail' if mismatch else 'pass', formula=label)
     if not mismatch:
         return
@@ -154,18 +163,28 @@ def _relation(rule, doc, key, label, roles, coefficients, issues, unresolved):
             if ref.get('physical_page') and ref.get('quote'):
                 refs.append({'page': ref['physical_page'], 'span': ref['quote'], 'role': role,
                              'fact_uid': fact.fact_uid, 'source_cell_id': ref.get('source_cell_id')})
-    pages = sorted({ref['page'] for ref in refs})
-    location = {'page': refs[0]['page'] if refs else None, 'pages': pages,
+    pages = sorted({ref['page'] for ref in refs} | {
+        obs.get('physical_page') for obs in blank_observations(facts) if obs.get('physical_page')
+    })
+    location = {'page': refs[0]['page'] if refs else (pages[0] if pages else None), 'pages': pages,
                 'table_code': facts[0].table_code,
                 'section': '收入支出决算总表' if facts[0].table_code == 'FIN_01_income_expenditure_total' else '财政拨款收入支出决算总表',
                 'relation_type': key, 'fact_source_refs': refs,
                 'operand_refs': [operand_ref(fact, role) for role, fact, _ in roles
                                  if not isinstance(fact, NativeBlankTerm)],
                 'native_blank_sources': blank_observations(facts),
-                'expected': str(rhs), 'actual': str(lhs), 'difference_wan': str(lhs - rhs),
+                'expected': str(rhs), 'actual': '' if missing_summary_cell else str(lhs),
+                'difference_wan': str(lhs - rhs),
+                **({'defect_type': 'missing_summary_cell'} if missing_summary_cell else {}),
                 'fact_context_version_token': doc.fact_context.version_token}
-    issues.append(rule._issue(f'{label}不成立：表内{lhs:.2f}万元，复算{rhs:.2f}万元，差额{lhs-rhs:.2f}万元。',
-                location, 'error', evidence_text='\n'.join(ref['span'] for ref in refs),
+    cell_label = '总计' if roles[0][0] == 'parent' else roles[0][0]
+    msg = (
+        f'{label}不成立：表内{cell_label}单元格漏填留空，按组成项复算应为{rhs:.2f}万元。'
+        if missing_summary_cell
+        else f'{label}不成立：表内{lhs:.2f}万元，复算{rhs:.2f}万元，差额{lhs-rhs:.2f}万元。'
+    )
+    issues.append(rule._issue(msg, location, 'error',
+                evidence_text='\n'.join(ref['span'] for ref in refs),
                 check_relation_id=f'{rule.code}:{key}', fact_ids=ids, evidence_ids=evidence))
 
 
@@ -198,13 +217,69 @@ def check_grant_summary(rule, doc):
     return finish(rule, issues, unresolved)
 
 
+def derive_grant_summary_total_fact(doc, facts, *, side='expenditure'):
+    """当表四（FIN_04）收入总计或支出总计漏填留空时，按已核实的本年收支与结转结余之和生成推导事实供表文核对继续执行。"""
+    if side == 'income':
+        parts = [
+            _pick(doc, facts, 'income_actual', _NAMES['opening'], allow_native_blank=True),
+            _pick(doc, facts, 'income_actual', _NAMES['income'], allow_native_blank=True),
+        ]
+        ind = 'income_actual'
+    else:
+        parts = [
+            _pick(doc, facts, 'expenditure_actual', _NAMES['expense'], allow_native_blank=True),
+            _pick(doc, facts, 'expenditure_actual', _NAMES['closing'], allow_native_blank=True),
+        ]
+        ind = 'expenditure_actual'
+    if any(err or f is None or f.normalized_value is None for f, err in parts):
+        return None
+    operands = [f for f, _ in parts]
+    money = [f for f in operands if not isinstance(f, NativeBlankTerm)]
+    if not money:
+        return None
+    total_val = sum((f.normalized_value for f in operands), Decimal('0'))
+    if total_val == 0:
+        return None
+    template = money[0]
+    refs = [
+        dict(ref)
+        for f in money
+        for ref in (f.extra_dims or {}).get('evidence_refs', [])
+        if isinstance(ref, dict)
+    ]
+    if not refs:
+        return None
+    factor = {'元': Decimal('0.0001'), '万元': Decimal('1'), '亿元': Decimal('10000')}.get(template.unit)
+    raw_str = f'{(total_val / factor):.2f}' if factor else f'{total_val:.2f}'
+    return replace(
+        template,
+        fact_uid=f'{template.instance_uid}:derived_grant_total:{ind}',
+        subject_code='total',
+        subject_name='总计',
+        raw_value=raw_str,
+        normalized_value=total_val,
+        extra_dims={
+            **dict(template.extra_dims or {}),
+            'derived_missing_total': True,
+            'derived_from_fact_uids': [f.fact_uid for f in money],
+            'derived_note': '表四总计格漏填，按本年收支与结转结余实算合计继续核对',
+            'evidence_refs': refs,
+        },
+    )
+
+
 def check_grant_general_vs_function_total(rule, doc):
     facts, reason = table_facts(doc, T4)
     functional, other_reason = table_facts(doc, T5)
     if reason or other_reason:
         return finish(rule, [], [error for error in (reason, other_reason) if error])
-    left, lerror = _pick(doc, facts, 'general_public_budget', _NAMES['expense'])
-    right, rerror = _pick(doc, functional, 'total_actual', ('合计', '总计'))
+    left, lerror = _pick(doc, facts, 'general_public_budget', _NAMES['expense'], allow_native_blank=True)
+    right, rerror = _pick(doc, functional, 'total_actual', ('合计', '总计'), allow_native_blank=True)
+    if (rerror or isinstance(right, NativeBlankTerm)) and functional:
+        from .native_table_arithmetic import derive_missing_detail_total_fact
+        derived = derive_missing_detail_total_fact(doc, functional, 'total_actual', stage='决算')
+        if derived is not None:
+            right, rerror = derived, None
     issues, unresolved = [], []
     _relation(rule, doc, 'grant_general_vs_function_total', '财政拨款总表一般公共预算本年支出=功能分类表合计',
               [('财政拨款总表一般公共预算本年支出', left, lerror),

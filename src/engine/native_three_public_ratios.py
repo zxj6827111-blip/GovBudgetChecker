@@ -20,8 +20,8 @@ TABLE_CODE = "FIN_07_three_public"
 # 全部为单字符映射，归一后下标与原串一一对应，可安全回映射页码/片段。
 _SUBJECT_OCR_MAP = str.maketrans({"臵": "置", "罝": "置"})
 _SUBJECT = re.compile(
-    r"(?P<vehicle_purchase_operation>公务用车购置及运行(?:维护)?费?)"
-    r"|(?P<vehicle_purchase>公务用车购置费?)"
+    r"(?P<vehicle_purchase_operation>公务用车购[置臵罝]及运行(?:维护)?费?)"
+    r"|(?P<vehicle_purchase>公务用车购[置臵罝]费?)"
     r"|(?P<vehicle_operation>公务用车运行(?:维护)?费?)"
     r"|(?P<overseas>因公出国(?:[（(]境[）)])?费?)"
     r"|(?P<reception>公务接待费?)"

@@ -30,9 +30,11 @@ def test_default_convention_treats_only_verified_blank_as_zero(monkeypatch):
     assert (value, presence) == (Decimal("0"), "blank")
     assert basis["id"] == USER_CONFIRMED_BLANK_ZERO["id"]
     assert basis["source_kind"] == "user_confirmed"
-    # 未经网格认证的空白、横线、“无”“/”等仍保持未知。
+    # 未经网格认证的空白、“无”“/”等仍保持未知；横线“-”“--”“—”已按 2026-11-24 用户确认默认按 0 处理。
     assert interpret_cell_value("", native_blank_verified=False, **IDENTITY)[0] is None
-    for raw in ("—", "-", "/", "无", "不适用", "abc"):
+    for raw in ("—", "-", "--"):
+        assert interpret_cell_value(raw, native_blank_verified=False, **IDENTITY)[:2] == (Decimal("0"), "dash")
+    for raw in ("/", "无", "不适用", "abc"):
         assert interpret_cell_value(raw, native_blank_verified=True, **IDENTITY)[0] is None
     # 任意地区、年度、表种都适用（全系统默认）。
     other = {**IDENTITY, "region": "浙江省某局", "year": 2022, "table_code": "FIN_02_income"}

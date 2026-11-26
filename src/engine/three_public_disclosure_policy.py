@@ -13,18 +13,25 @@ from .native_empty_operands import NativeBlankTerm, blank_term, cell_id
 _TABLE = 'FIN_07_three_public'
 _NUMBER = r'(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?'
 _MOVEMENT = re.compile(r'增加|增长|减少|下降')
-_ZERO_DELTA = re.compile(rf'(?:增加|增长|减少|下降)(?P<value>{_NUMBER})(?:亿元|万元|元|%)?(?![\d.])')
+_DIRECTION_TOKEN = r'(?:增加|增长|减少|下降)(?:\((?:增加|增长|减少|下降)\))?'
+_ZERO_DELTA = re.compile(rf'{_DIRECTION_TOKEN}(?P<value>{_NUMBER})(?:亿元|万元|元|%)?(?![\d.])')
 
 
 def movement_is_explicit_zero(clause: str) -> bool:
-    """只认紧随方向词的零增减额；“减少为0/降至0”仍是变动。"""
+    """只认紧随方向词的零增减额（含未清理二选一括号模板如“减少(增加)0万元”）；“减少为0/降至0”仍是变动。"""
     compact = re.sub(r'\s+', '', unicodedata.normalize('NFKC', str(clause or '')))
     moves = list(_MOVEMENT.finditer(compact))
     if not moves:
         return False
+    zero_spans = []
+    for m in _ZERO_DELTA.finditer(compact):
+        if Decimal(m['value'].replace(',', '')) != 0:
+            return False
+        zero_spans.append((m.start(), m.end()))
+    if not zero_spans:
+        return False
     for move in moves:
-        match = _ZERO_DELTA.match(compact, move.start())
-        if match is None or Decimal(match['value'].replace(',', '')) != 0:
+        if not any(lo <= move.start() and move.end() <= hi for lo, hi in zero_spans):
             return False
     # 同一分句还给出正数时，不能让零短语掩盖矛盾；年度本身不是增减额。
     remainder = _ZERO_DELTA.sub('', compact)
@@ -57,8 +64,16 @@ def _positive_reception_claim(scope: str) -> bool:
                 prefix = clause[nearest.end():amount.start()]
             if not local_reception or Decimal(amount['amount'].replace(',', '')) <= 0:
                 continue
-            # “预算为1万元、决算0万元”允许共存；未确认阶段的正数保守拒绝豁免。
-            if ('预算' in prefix and '决算' not in prefix) or re.search(r'上年|去年|上年度', prefix):
+            # “预算为1万元、决算0万元”允许共存；同比变动句的增减额（“减少0.50万元”）
+            # 不是本年发生额，但“减少至0.50万元”仍指向本年金额；未确认阶段正数保守拒绝豁免。
+            if (
+                ('预算' in prefix and '决算' not in prefix)
+                or re.search(r'上年|去年|上年度', prefix)
+                or (
+                    re.search(r'增加|增长|减少|下降|较上年|比20\d{2}', prefix)
+                    and not re.search(r'(?:减少|增加|降低|下降|增长|上升|减|增|降|升)(?:至|到|为)$', prefix)
+                )
+            ):
                 continue
             return True
         if anchors:

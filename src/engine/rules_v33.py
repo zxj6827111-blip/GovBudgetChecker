@@ -252,14 +252,14 @@ _YEAR_RE = re.compile(r"(?<!\d)(20\d{2})(?:(?:\s*年(?:度)?)|(?=\D))")
 def extract_years(s: str) -> List[int]:
     return [int(y) for y in _YEAR_RE.findall(s or "")]
 
-_UNIT_RE = re.compile(r"单位[:：]\s*(万元|元|亿元)")
+_UNIT_RE = re.compile(r"单位[:：]\s*(万元|元|亿元)|^\s*单位\s*(万元|元|亿元)\s*$", re.M)
 def extract_money_unit(s: str) -> Optional[str]:
     m = _UNIT_RE.search(s or "")
-    return m.group(1) if m else None
+    return (m.group(1) or m.group(2)) if m else None
 
 _NUM_RE  = re.compile(r"^-?\s*(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d+)?$")
 _PCT_RE  = re.compile(r"^-?\s*(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d+)?\s*%$")
-_DASHES  = {"-", "—", "–", "— —", "— — —", "— — — —", ""}
+_DASHES  = {"-", "--", "---", "—", "——", "–", "––", "－", "－－", "―", "──", "−", "— —", "— — —", "— — — —", ""}
 
 def parse_number(cell: Any) -> Optional[float]:
     if cell is None:
@@ -1505,8 +1505,166 @@ class R33001_CoverYearUnit(Rule):
         all_units = [u for u in doc.units_per_page if u]
         if not all_units:
             issues.append(self._issue("未识别到金额单位（单位：万元/元/亿元）。", {"page": 1}, severity="warn"))
-        elif len(set(all_units)) > 1:
-            issues.append(self._issue(f"金额单位混用：{sorted(set(all_units))}。", {"page": 1}, severity="warn"))
+        else:
+            if len(set(all_units)) > 1:
+                issues.append(self._issue(f"金额单位混用：{sorted(set(all_units))}。", {"page": 1}, severity="warn"))
+
+            from .checklist_support import unique_quote
+
+            def _page_has_unit(page_num: int) -> bool:
+                if not (1 <= page_num <= len(doc.page_texts)):
+                    return False
+                if 0 <= page_num - 1 < len(doc.units_per_page) and doc.units_per_page[page_num - 1]:
+                    return True
+                return bool(_UNIT_RE.search(doc.page_texts[page_num - 1] or ""))
+
+            def _is_empty_or_toc_table(page_text: str, table_code: str = "") -> bool:
+                if re.search(r"目\s*录|[…\.]{6,}", page_text or ""):
+                    return True
+                fact_ctx = getattr(doc, "fact_context", None)
+                if table_code and fact_ctx is not None and getattr(fact_ctx, "facts", None):
+                    if any(
+                        getattr(f, "table_code", None) == table_code
+                        and getattr(f, "normalized_value", None) is not None
+                        for f in fact_ctx.facts
+                    ):
+                        return False
+                amount_hits = len(re.findall(r"(?<!\d)\d[\d,]*\.\d{2}(?!\d)", page_text or ""))
+                if re.search(r"本表无数据|无此项|空表|无政府性基金|无国有资本经营", page_text or "") and amount_hits < 2:
+                    return True
+                return amount_hits < 2
+
+            def _table_header_ref(page_num: int, title_text: str) -> Optional[Dict[str, Any]]:
+                page_text = doc.page_texts[page_num - 1] or ""
+                candidates: List[str] = [title_text]
+                for item in NINE_TABLES:
+                    item_name = str(item["name"])
+                    item_aliases = [str(alias) for alias in item.get("aliases", [])]
+                    if title_text == item_name or title_text in item_aliases:
+                        candidates.extend([item_name, *item_aliases])
+                for cand in candidates:
+                    if not cand:
+                        continue
+                    pos = page_text.find(cand)
+                    if pos >= 0:
+                        quote = unique_quote(page_text, pos, pos + len(cand)) or cand
+                        return {"role": "缺失单位表格表头", "page": page_num, "span": quote}
+                for line in page_text.splitlines():
+                    stripped = line.strip()
+                    if stripped and (title_text in re.sub(r"\s+", "", stripped) or "表" in stripped):
+                        pos = page_text.find(stripped)
+                        quote = unique_quote(page_text, pos, pos + len(stripped)) if pos >= 0 else stripped
+                        return {"role": "缺失单位表格表头", "page": page_num, "span": quote or stripped}
+                return None
+
+            reported_missing_unit: set[tuple[int, str]] = set()
+            artifact = getattr(doc, "parse_artifact", None)
+            if artifact is not None and getattr(artifact, "logical_tables", None):
+                frag_map = {
+                    tf.fragment_uid: tf
+                    for tf in (getattr(artifact, "table_fragments", None) or [])
+                    if getattr(tf, "fragment_uid", None)
+                }
+                phys_frags = list(getattr(artifact, "physical_fragments", None) or [])
+                for lt in artifact.logical_tables:
+                    t_code = str(getattr(lt, "table_code", "") or "")
+                    if not re.match(r"^(?:FIN|BUD)_0[1-9](?:_|$)", t_code):
+                        continue
+                    frags = [
+                        frag_map[uid]
+                        for uid in (getattr(lt, "fragment_uids", None) or [])
+                        if uid in frag_map
+                    ]
+                    page_candidates = [getattr(f, "page_number", None) for f in frags]
+                    if getattr(lt, "page_start", None) is not None:
+                        p_start = int(lt.page_start)
+                        p_end = int(getattr(lt, "page_end", p_start) or p_start)
+                        page_candidates.extend(range(p_start, p_end + 1))
+                    phys_pages = sorted({
+                        p for p in page_candidates
+                        if isinstance(p, int) and 1 <= p <= len(doc.page_texts)
+                    })
+                    if not phys_pages:
+                        continue
+                    first_page = phys_pages[0]
+                    if _page_has_unit(first_page):
+                        continue
+                    start_phys = [
+                        pf for pf in phys_frags
+                        if getattr(pf, "page_number", None) == first_page
+                        and getattr(pf, "table_code", None) == t_code
+                    ]
+                    start_frags = start_phys or [
+                        f for f in frags if getattr(f, "page_number", None) == first_page
+                    ]
+                    if any(str(getattr(f, "unit_hint", "") or "").strip() for f in start_frags):
+                        continue
+                    page_text = doc.page_texts[first_page - 1] or ""
+                    if _is_empty_or_toc_table(page_text, table_code=t_code):
+                        continue
+                    title_text = str(getattr(lt, "title", "") or t_code).strip()
+                    key = (first_page, title_text)
+                    if key in reported_missing_unit:
+                        continue
+                    reported_missing_unit.add(key)
+                    ref = _table_header_ref(first_page, title_text)
+                    unit_loc: Dict[str, Any] = {
+                        "page": first_page,
+                        "pages": [first_page],
+                        "table": title_text,
+                        "table_code": t_code,
+                        "relation_type": "table_header_missing_unit",
+                    }
+                    if ref is not None:
+                        unit_loc["table_refs"] = [ref]
+                    issues.append(
+                        self._issue(
+                            f"第{first_page}页《{title_text}》表头缺失金额单位标注，应补标“单位：万元”。",
+                            unit_loc,
+                            severity="warn",
+                            evidence_text=ref["span"] if ref else title_text,
+                            check_relation_id=f"{self.code}:missing_table_unit:{t_code}:{first_page}",
+                        )
+                    )
+            else:
+                _ensure_table_anchors(doc)
+                core_names = {normalize_text(item["name"]) for item in NINE_TABLES} | STANDARD_FINAL_ALIAS_NORMS
+                for tbl_name, anchor_pages in (doc.anchors or {}).items():
+                    if not anchor_pages:
+                        continue
+                    norm_tbl = normalize_text(tbl_name)
+                    if norm_tbl not in core_names and not re.search(r"预算.*总?表$", norm_tbl):
+                        continue
+                    first_page = anchor_pages[0]
+                    if not isinstance(first_page, int) or not (1 <= first_page <= len(doc.page_texts)):
+                        continue
+                    if _page_has_unit(first_page):
+                        continue
+                    page_text = doc.page_texts[first_page - 1] or ""
+                    if _is_empty_or_toc_table(page_text):
+                        continue
+                    key = (first_page, tbl_name)
+                    if key in reported_missing_unit:
+                        continue
+                    reported_missing_unit.add(key)
+                    ref = _table_header_ref(first_page, tbl_name)
+                    loc = {
+                        "page": first_page,
+                        "pages": [first_page],
+                        "table": tbl_name,
+                        "relation_type": "table_header_missing_unit",
+                    }
+                    if ref is not None:
+                        loc["table_refs"] = [ref]
+                    issues.append(
+                        self._issue(
+                            f"第{first_page}页《{tbl_name}》表头缺失金额单位标注，应补标“单位：万元”。",
+                            loc,
+                            severity="warn",
+                            evidence_text=ref["span"] if ref else tbl_name,
+                            check_relation_id=f"{self.code}:missing_table_unit:{tbl_name}:{first_page}",
+                        )
+                    )
         return issues
 
 
@@ -1580,29 +1738,31 @@ class R33114_EmptyTableStatementCheck(Rule):
 
                     if tables:
                         for table in tables:
-                            # 检查表格是否为空（只有表头，没有数据）
-                            # 检查表格的行数和列数
                             rows = len(table)
                             if rows == 0:
                                 continue
 
                             cols = max(len(row) for row in table) if table else 0
 
-                            # 检查非空单元格的数量
+                            from src.schemas.parse_artifact import DASH_PLACEHOLDER_TEXTS
                             non_empty_cells = 0
+                            has_data_code = False
                             for row in table:
                                 for cell in row:
-                                    if cell and str(cell).strip():
+                                    s = str(cell or "").strip()
+                                    if s and s not in DASH_PLACEHOLDER_TEXTS:
                                         non_empty_cells += 1
+                                        if re.fullmatch(r"\d{3,7}", s):
+                                            has_data_code = True
 
-                            # 如果非空单元格数量小于等于列数，且表格行数较少，则认为是空表
-                            # 或者如果非空单元格数量小于等于2*列数，且表格行数较少，则认为是空表
-                            # 有非零金额的表不是空表（窄表的单元格数可能很少，如三公表只有一行数）。
                             has_amount = any(
                                 (value := parse_number(cell)) is not None and abs(value) > 1e-9
                                 for row in table for cell in row
                             )
-                            if rows <= 5 and non_empty_cells <= 2 * cols and not has_amount:
+                            if not has_amount and not has_data_code and (
+                                (rows <= 5 and non_empty_cells <= 2 * cols)
+                                or (rows <= 12 and non_empty_cells <= 3 * max(cols, 1))
+                            ):
                                 is_empty_table = True
                                 break
 
@@ -1645,9 +1805,9 @@ class R33114_EmptyTableStatementCheck(Rule):
 
 #: 三张“无数据须附空表说明”的表：表名原文与说明关键词。
 _EMPTY_NOTE_TABLES = (
-    ("三公", r"(?:一般公共预算)?财政拨款[“”\"']?三公[“”\"']?经费支出决算表"),
-    ("政府性基金", r"政府性基金预算财政拨款收入支出决算表"),
-    ("国有资本经营", r"国有资本经营预算财政拨款收入支出决算表"),
+    ("三公", r"(?:一般公共预算)?财政拨款[“”\"']?三公[“”\"']?经费(?:及机关运行经费)?支出决算表"),
+    ("政府性基金", r"政府性基金预算财政拨款(?:收入)?支出决算表"),
+    ("国有资本经营", r"国有资本经营预算(?:财政拨款)?(?:收入)?支出决算表"),
 )
 
 
@@ -1674,8 +1834,16 @@ def _empty_note_page_tables(doc: Document, page: int, table_name: str) -> List[L
     codes = _table_codes_in(table_name)
     artifact = getattr(doc, "parse_artifact", None)
     fragments = getattr(artifact, "table_fragments", []) if artifact is not None else []
-    identified = [table.rows for table in fragments
-                  if table.page_number == page and table.table_code in codes]
+    identified = [
+        table.rows
+        for table in fragments
+        if table.page_number == page
+        and table.extraction_method != "page_text_fallback"
+        and (
+            table.table_code in codes
+            or "_".join(str(table.table_code or "").split("_", 2)[:2]) in codes
+        )
+    ]
     if identified:
         return identified
     tables = doc.page_tables[page - 1] if page <= len(doc.page_tables) else []
@@ -1734,8 +1902,8 @@ def _empty_table_note_present(page_text: str, keywords: Sequence[str]) -> bool:
             # 「注：…（关键词）…无/空表/本表无数据」——同一句之内
             if re.search(rf"注[：:][^。]{{0,30}}{kw}[^。]{{0,50}}(无|空表|不存在|无数据)", sentence, flags=re.S):
                 return True
-            # 「（本年度）没有…（关键词）…故本表无数据」（“说明：”前缀形态）
-            if re.search(rf"(?:本年度|本年)?没有[^。]{{0,60}}{kw}[^。]{{0,40}}故本表无数据", sentence, flags=re.S):
+            # 「（本年度）没有/无…（关键词）…故本表无数据」（“说明：”前缀形态）
+            if re.search(rf"(?:本年度|本年|20\d{{2}}年(?:度)?)?(?:没有|无|未发生|未安排)[^。]{{0,60}}{kw}[^。]{{0,40}}故本表无数据", sentence, flags=re.S):
                 return True
         if names_other_table(sentence):
             continue
@@ -3003,15 +3171,45 @@ def _find_text_page_after(doc: Document, snippet: Optional[str], start_page: int
 #: 类名一律以“支出”结尾，连接号可为 - — － –，可带引号；只按项名唯一定位编码。
 _FUNCTIONAL_NARRATIVE_DASH_RE = re.compile(
     r"(?:^|\n|(?<=[。；;：:、]))\s*(?:\d+\s*[、.．]?\s*)?[“\"]?\s*"
-    r"(?P<class_name>[\u4e00-\u9fff]{1,28}支出)\s*[-—－–]\s*"
-    r"(?P<section_name>[\u4e00-\u9fff（）()]{2,40}?)\s*[-—－–]\s*"
+    r"(?P<class_name>[\u4e00-\u9fff]{1,28}支出)\s*[-—－–]{1,2}\s*"
+    r"(?P<section_name>[\u4e00-\u9fff（）()]{2,40}?)\s*[-—－–]{1,2}\s*"
     r"(?P<item_name>[\u4e00-\u9fff（）()]{2,60}?)\s*[”\"]?\s*(?=[。.]|主要用于)",
 )
+_FUNCTIONAL_BARE_CLASS_RE = re.compile(
+    r"(?:^|\n)\s*\d+\s*[、.．]\s*(?P<class_name>[\u4e00-\u9fff（）()]{2,30}?)\s*[。.]\s*(?:主要用于|年初预算|支出决算)",
+)
+_FUNC_NON_TAG_PAREN = (
+    r"[（(](?!\s*(?:\d{2,3}\s*)?(?:类|款|项)(?:\s*(?:代码\s*)?\d{2,3})?\s*[）)])"
+    r"[^（）()\n]{1,12}[）)]"
+)
 _FUNCTIONAL_NARRATIVE_ENTRY_RE = re.compile(
-    r"(?:^|\n)\s*(?:\d+\s*[、.．]\s*)?"
-    r"(?P<class_name>[^（）()\n]{1,40}?)\s*[（(]\s*(?:(?P<class_code>\d{3})\s*)?类\s*[）)]\s*"
-    r"(?P<section_name>[^（）()\n]{1,60}?)\s*[（(]\s*(?:(?P<section_code>\d{2})\s*)?款\s*[）)]\s*"
-    r"(?P<item_name>[^（）()\n]{1,80}?)\s*[（(]\s*(?:(?P<item_code>\d{2})\s*)?项\s*[）)]",
+    r"(?:^|\n)\s*(?:\d+\s*[、.．]\s*)?[\"“]?"
+    rf"(?P<class_name>(?:[^（）()\n。；：:，,“”\"『』]|{_FUNC_NON_TAG_PAREN}){{1,40}}?)\s*"
+    r"[（(]\s*(?:(?P<class_code>\d{3})\s*)?类(?:\s*(?:代码\s*)?(?P<class_code2>\d{3}))?\s*[）)]\s*[\"”]?"
+    rf"(?P<section_name>(?:[^（）()\n。；：:，,“”\"『』]|{_FUNC_NON_TAG_PAREN}){{1,60}}?)\s*"
+    r"[（(]\s*(?:(?P<section_code>\d{2})\s*)?款(?:\s*(?:代码\s*)?(?P<section_code2>\d{2}))?\s*[）)]\s*[\"”]?"
+    rf"(?P<item_name>(?:[^（）()\n。；：:，,“”\"『』]|{_FUNC_NON_TAG_PAREN}){{1,80}}?)\s*"
+    r"[（(]\s*(?:(?P<item_code>\d{2})\s*)?项(?:\s*(?:代码\s*)?(?P<item_code2>\d{2}))?\s*[）)]",
+    re.M,
+)
+_FUNCTIONAL_TWO_LEVEL_RE = re.compile(
+    r"(?:^|\n)\s*(?:\d+\s*[、.．]\s*)?[\"“]?"
+    rf"(?P<class_name>(?:[^（）()\n。；]|{_FUNC_NON_TAG_PAREN}){{1,40}}?)\s*"
+    r"[（(]\s*(?:(?P<class_code>\d{3})\s*)?类(?:\s*(?:代码\s*)?(?P<class_code2>\d{3}))?\s*[）)]\s*[\"”]?"
+    rf"(?P<section_name>(?:[^（）()\n。；]|{_FUNC_NON_TAG_PAREN}){{1,60}}?)\s*"
+    r"[（(]\s*(?:(?P<section_code>\d{2})\s*)?款(?:\s*(?:代码\s*)?(?P<section_code2>\d{2}))?\s*[）)][\"”]?",
+    re.M,
+)
+_FUNCTIONAL_ONE_LEVEL_RE = re.compile(
+    r"(?:^|\n)\s*(?:\d+\s*[、.．]\s*)?[\"“]?"
+    rf"(?P<class_name>(?:[^（）()\n。；]|{_FUNC_NON_TAG_PAREN}){{1,40}}?)\s*"
+    r"[（(]\s*(?:(?P<class_code>\d{3})\s*)?类(?:\s*(?:代码\s*)?(?P<class_code2>\d{3}))?\s*[）)][\"”]?",
+    re.M,
+)
+_FUNCTIONAL_NESTED_ITEM_RE = re.compile(
+    r"(?:^|[“\"、，,；;：:\s])"
+    rf"(?P<item_name>(?:[^（）()\n。；：:，,、\"“”『』]|{_FUNC_NON_TAG_PAREN}){{1,80}}?)\s*"
+    r"[（(]\s*(?:(?P<item_code>\d{2})\s*)?项(?:\s*(?:代码\s*)?(?P<item_code2>\d{2}))?\s*[）)]",
     re.M,
 )
 
@@ -3256,6 +3454,24 @@ def _tolerant_functional_item_codes(
                and _functional_names_similar(item_name, entry.get("name", ""))]
     if len(by_item) == 1:
         return by_item
+    if len(by_item) > 1:
+        req_key = _narrative_name_key(item_name)
+        scored = sorted(
+            (
+                (
+                    _name_edit_distance(
+                        req_key,
+                        _narrative_name_key(table_entries[code].get("name", "")),
+                        3,
+                    ),
+                    code,
+                )
+                for code in by_item
+            ),
+            key=lambda pair: pair[0],
+        )
+        if len(scored) >= 2 and scored[0][0] <= 1 and scored[0][0] < scored[1][0]:
+            return [scored[0][1]]
 
     # 同款确定性命中时，若说明项名在中间漏字或加字（如“其他城乡社区支出”漏掉“公共设施”），
     # 允许唯一有序子序列定位交由 V33-227 明确报错并高亮，不跨款定位、不豁免严格一致检查。
@@ -3344,23 +3560,17 @@ def _extract_final_functional_narrative_mentions(
                         if max(offset, begin) < min(offset+len(str(text or "")), end) else ""
                         for offset, text in zip(offsets, doc.page_texts, strict=False)]
     unmatched_entries: List[Tuple[re.Match[str], str, int, Optional[List[Dict[str, object]]], str, str, str]] = []
+    matched_kuan_scopes: List[Tuple[str, str, str]] = []
 
-    def _emit_matched(
-        matched_codes: Tuple[str, str, str],
+    def _emit_levels(
+        levels: Sequence[Tuple[str, str, str]],
         match: re.Match[str],
         source_text: str,
         page_num: int,
-        class_name: str,
-        section_name: str,
-        item_name: str,
         cross_page_spans: Optional[List[Dict[str, object]]] = None,
     ) -> None:
         snippet = _snippet(source_text, match.start(), match.end(), max_len=40)
-        for code, raw_name, level in (
-            (matched_codes[0], class_name, "类"),
-            (matched_codes[1], section_name, "款"),
-            (matched_codes[2], item_name, "项"),
-        ):
+        for code, raw_name, level in levels:
             bucket = mentions.setdefault(code, [])
             existing = next(
                 (
@@ -3389,6 +3599,103 @@ def _extract_final_functional_narrative_mentions(
                 entry["cross_page_spans"] = cross_page_spans
             bucket.append(entry)  # type: ignore[arg-type]
 
+    def _emit_matched(
+        matched_codes: Tuple[str, str, str],
+        match: re.Match[str],
+        source_text: str,
+        page_num: int,
+        class_name: str,
+        section_name: str,
+        item_name: str,
+        cross_page_spans: Optional[List[Dict[str, object]]] = None,
+    ) -> None:
+        if len(matched_codes[1]) == 5:
+            matched_kuan_scopes.append((class_name, section_name, matched_codes[1]))
+        _emit_levels(
+            (
+                (matched_codes[0], class_name, "类"),
+                (matched_codes[1], section_name, "款"),
+                (matched_codes[2], item_name, "项"),
+            ),
+            match,
+            source_text,
+            page_num,
+            cross_page_spans=cross_page_spans,
+        )
+
+    def _resolve_three_level_codes(
+        class_name: str,
+        section_name: str,
+        item_name: str,
+        class_code: str,
+        section_code: str,
+        item_code: str,
+    ) -> Optional[Tuple[str, str, str]]:
+        if class_code and section_code and item_code:
+            return (
+                class_code,
+                f"{class_code}{section_code}",
+                f"{class_code}{section_code}{item_code}",
+            )
+        normalized_section = normalize_text(section_name)
+        normalized_item = normalize_text(item_name)
+        item_candidates = by_section_item.get((normalized_section, normalized_item), [])
+        if len(item_candidates) == 1:
+            item_full_code = item_candidates[0]
+            return (
+                item_full_code[:3],
+                item_full_code[:5],
+                item_full_code[:7],
+            )
+        # 同款的确定性名称变体优先于其他款里的全局同名项。
+        # 若类与款均明确命中同一款、而全局项名落在其他类下（如写错项名复制了别类的“其他卫生健康支出”），
+        # 不跨类强绑到别类，留给二遍在当前款内按唯一剩余项定位并准确报出项级错名。
+        tolerant = _tolerant_functional_item_codes(table_entries, section_name, item_name)
+        if len(tolerant) == 1:
+            item_full_code = tolerant[0]
+            from src.services.fiscal_subject_names import subject_name_candidates as _snc
+
+            class_pool = {
+                c: e.get("name", "") for c, e in table_entries.items() if e.get("level") == "类"
+            }
+            kuan_pool = {
+                c: e.get("name", "") for c, e in table_entries.items() if e.get("level") == "款"
+            }
+            class_hits = _snc(class_name, class_pool)
+            kuan_hits = _snc(
+                section_name,
+                {c: n for c, n in kuan_pool.items() if len(class_hits) == 1 and c.startswith(class_hits[0])},
+            ) if len(class_hits) == 1 else []
+            if not (len(class_hits) == 1 and len(kuan_hits) == 1 and not item_full_code.startswith(class_hits[0])):
+                return (
+                    item_full_code[:3],
+                    item_full_code[:5],
+                    item_full_code[:7],
+                )
+        return None
+
+    def _record_three_level(
+        match: re.Match[str],
+        source_text: str,
+        page_num: int,
+        class_name: str,
+        section_name: str,
+        item_name: str,
+        class_code: str,
+        section_code: str,
+        item_code: str,
+        cross_page_spans: Optional[List[Dict[str, object]]] = None,
+    ) -> None:
+        if not class_name or not section_name or not item_name:
+            return
+        matched_codes = _resolve_three_level_codes(
+            class_name, section_name, item_name, class_code, section_code, item_code,
+        )
+        if not matched_codes:
+            unmatched_entries.append((match, source_text, page_num, cross_page_spans, class_name, section_name, item_name))
+            return
+        _emit_matched(matched_codes, match, source_text, page_num, class_name, section_name, item_name, cross_page_spans)
+
     def _record_entry(
         match: re.Match[str],
         source_text: str,
@@ -3396,66 +3703,20 @@ def _extract_final_functional_narrative_mentions(
         cross_page_spans: Optional[List[Dict[str, object]]] = None,
     ) -> None:
         groups = match.groupdict()
-        class_name = str(groups.get("class_name") or "").strip(" 　：:；;，,。.")
-        section_name = str(groups.get("section_name") or "").strip(" 　：:；;，,。.")
-        item_name = str(groups.get("item_name") or "").strip(" 　：:；;，,。.")
-        if not class_name or not section_name or not item_name:
-            return
+        class_name = str(groups.get("class_name") or "").strip(" 　：:；;，,。.“”\"『』")
+        section_name = str(groups.get("section_name") or "").strip(" 　：:；;，,。.“”\"『』")
+        item_name = str(groups.get("item_name") or "").strip(" 　：:；;，,。.“”\"『』")
+        class_code = str(groups.get("class_code") or groups.get("class_code2") or "").strip()
+        section_code = str(groups.get("section_code") or groups.get("section_code2") or "").strip()
+        item_code = str(groups.get("item_code") or groups.get("item_code2") or "").strip()
+        _record_three_level(
+            match, source_text, page_num, class_name, section_name, item_name,
+            class_code, section_code, item_code, cross_page_spans=cross_page_spans,
+        )
 
-        class_code = str(groups.get("class_code") or "").strip()
-        section_code = str(groups.get("section_code") or "").strip()
-        item_code = str(groups.get("item_code") or "").strip()
-
-        matched_codes: Optional[Tuple[str, str, str]] = None
-        if class_code and section_code and item_code:
-            matched_codes = (
-                class_code,
-                f"{class_code}{section_code}",
-                f"{class_code}{section_code}{item_code}",
-            )
-        else:
-            normalized_section = normalize_text(section_name)
-            normalized_item = normalize_text(item_name)
-            item_candidates = by_section_item.get((normalized_section, normalized_item), [])
-            if len(item_candidates) == 1:
-                item_full_code = item_candidates[0]
-                matched_codes = (
-                    item_full_code[:3],
-                    item_full_code[:5],
-                    item_full_code[:7],
-                )
-            else:
-                # 同款的确定性名称变体优先于其他款里的全局同名项。
-                # 若类与款均明确命中同一款、而全局项名落在其他类下（如写错项名复制了别类的“其他卫生健康支出”），
-                # 不跨类强绑到别类，留给二遍在当前款内按唯一剩余项定位并准确报出项级错名。
-                tolerant = _tolerant_functional_item_codes(table_entries, section_name, item_name)
-                if len(tolerant) == 1:
-                    item_full_code = tolerant[0]
-                    from src.services.fiscal_subject_names import subject_name_candidates as _snc
-
-                    class_pool = {
-                        c: e.get("name", "") for c, e in table_entries.items() if e.get("level") == "类"
-                    }
-                    kuan_pool = {
-                        c: e.get("name", "") for c, e in table_entries.items() if e.get("level") == "款"
-                    }
-                    class_hits = _snc(class_name, class_pool)
-                    kuan_hits = _snc(
-                        section_name,
-                        {c: n for c, n in kuan_pool.items() if len(class_hits) == 1 and c.startswith(class_hits[0])},
-                    ) if len(class_hits) == 1 else []
-                    if not (len(class_hits) == 1 and len(kuan_hits) == 1 and not item_full_code.startswith(class_hits[0])):
-                        matched_codes = (
-                            item_full_code[:3],
-                            item_full_code[:5],
-                            item_full_code[:7],
-                        )
-
-        if not matched_codes:
-            unmatched_entries.append((match, source_text, page_num, cross_page_spans, class_name, section_name, item_name))
-            return
-
-        _emit_matched(matched_codes, match, source_text, page_num, class_name, section_name, item_name, cross_page_spans)
+    two_level_candidates: List[Tuple[int, str, re.Match[str], str, str, str, str]] = []
+    one_level_candidates: List[Tuple[int, str, re.Match[str], str, str]] = []
+    bare_class_candidates: List[Tuple[int, str, re.Match[str], str]] = []
 
     for page_num, text in enumerate(scoped_pages, start=1):
         if not text:
@@ -3466,8 +3727,62 @@ def _extract_final_functional_narrative_mentions(
 
         entries = sorted([*_FUNCTIONAL_NARRATIVE_ENTRY_RE.finditer(text),
                           *_FUNCTIONAL_NARRATIVE_DASH_RE.finditer(text)], key=lambda m: m.start())
+        covered_spans = [(m.start(), m.end()) for m in entries]
         for match in entries:
             _record_entry(match, text, page_num)
+
+        two_level_spans: List[Tuple[int, int]] = []
+        for h_match in _FUNCTIONAL_TWO_LEVEL_RE.finditer(text):
+            if any(cs <= h_match.start() and h_match.end() <= ce for cs, ce in covered_spans):
+                continue
+            two_level_spans.append((h_match.start(), h_match.end()))
+            h_groups = h_match.groupdict()
+            h_class_name = str(h_groups.get("class_name") or "").strip(" 　：:；;，,。.“”\"『』")
+            h_section_name = str(h_groups.get("section_name") or "").strip(" 　：:；;，,。.“”\"『』")
+            h_class_code = str(h_groups.get("class_code") or h_groups.get("class_code2") or "").strip()
+            h_section_code = str(h_groups.get("section_code") or h_groups.get("section_code2") or "").strip()
+            if h_class_name and h_section_name:
+                two_level_candidates.append(
+                    (page_num, text, h_match, h_class_name, h_section_name, h_class_code, h_section_code)
+                )
+            next_heading = re.search(r"\n\s*\d+\s*[、.．]", text[h_match.end():])
+            block_end = h_match.end() + next_heading.start() if next_heading else len(text)
+            tail_block = text[h_match.end():block_end]
+            qz_match = re.search(r"其中", tail_block)
+            if qz_match is not None and h_class_name and h_section_name:
+                scan_from = h_match.end() + qz_match.end()
+                for item_match in _FUNCTIONAL_NESTED_ITEM_RE.finditer(text, scan_from, block_end):
+                    if any(cs <= item_match.start() and item_match.end() <= ce for cs, ce in covered_spans):
+                        continue
+                    i_groups = item_match.groupdict()
+                    i_name = str(i_groups.get("item_name") or "").strip(" 　：:；;，,。.“”\"『』")
+                    i_code = str(i_groups.get("item_code") or i_groups.get("item_code2") or "").strip()
+                    _record_three_level(
+                        item_match, text, page_num, h_class_name, h_section_name, i_name,
+                        h_class_code, h_section_code, i_code,
+                    )
+
+        for o_match in _FUNCTIONAL_ONE_LEVEL_RE.finditer(text):
+            if any(
+                cs <= o_match.start() and o_match.end() <= ce
+                for cs, ce in (*covered_spans, *two_level_spans)
+            ):
+                continue
+            o_groups = o_match.groupdict()
+            o_class_name = str(o_groups.get("class_name") or "").strip(" 　：:；;，,。.“”\"『』")
+            o_class_code = str(o_groups.get("class_code") or o_groups.get("class_code2") or "").strip()
+            if o_class_name:
+                one_level_candidates.append((page_num, text, o_match, o_class_name, o_class_code))
+
+        for b_match in _FUNCTIONAL_BARE_CLASS_RE.finditer(text):
+            if any(
+                cs <= b_match.start() and b_match.end() <= ce
+                for cs, ce in (*covered_spans, *two_level_spans)
+            ):
+                continue
+            b_class_name = str(b_match.group("class_name") or "").strip(" 　：:；;，,。.“”\"『』")
+            if b_class_name:
+                bare_class_candidates.append((page_num, text, b_match, b_class_name))
 
     # 逐项说明跨页断词（如上页尾「其他行」+ 下页首「政事业单位离退休支出」）按相邻非空页桥接匹配，
     # 并将两侧各自物理页原文片段记为 cross_page_spans，交由证据链做双页物理框定位。
@@ -3543,21 +3858,106 @@ def _extract_final_functional_narrative_mentions(
             else:
                 still_unmatched.append(rec)
 
-        # 2) 同款 / 同类下 1 对 1 唯一剩余未消耗项
+        # 2) 同款 / 同类下 1 对 1 唯一剩余未消耗项（含同款内互为唯一单字近名迭代消解与项级表兼容）
         if still_unmatched and len(mentions) >= 1:
+            from .native_final_disclosure import (
+                _is_near_subject_name_candidate,
+                _is_within_kuan_single_char_near,
+                _name as _norm_subj_name,
+            )
+
+            leaf_only_table = not kuans_by_code and not classes_by_code
             by_scope: Dict[str, List[Tuple[re.Match[str], str, int, Optional[List[Dict[str, object]]], str, str, str]]] = defaultdict(list)
             for rec in still_unmatched:
                 _m, _st, _pn, _cps, class_name, section_name, _item_name = rec
+                if leaf_only_table:
+                    inferred_kuans = {
+                        k_code
+                        for m_klass, m_sec, k_code in matched_kuan_scopes
+                        if _narrative_name_key(m_klass) == _narrative_name_key(class_name)
+                        and (
+                            _narrative_name_key(m_sec) == _narrative_name_key(section_name)
+                            or _is_near_subject_name_candidate(
+                                _norm_subj_name(m_sec),
+                                _norm_subj_name(section_name),
+                            )
+                        )
+                    }
+                    if len(inferred_kuans) == 1:
+                        by_scope[next(iter(inferred_kuans))].append(rec)
+                    continue
                 klass_hits = subject_name_candidates(class_name, classes_by_code)
                 if len(klass_hits) != 1:
                     continue
                 k_code = klass_hits[0]
                 scoped_kuans = {c: n for c, n in kuans_by_code.items() if c.startswith(k_code)}
                 kuan_hits = subject_name_candidates(section_name, scoped_kuans)
+                if len(kuan_hits) != 1:
+                    near_kuans = [
+                        c for c, n in scoped_kuans.items()
+                        if _is_near_subject_name_candidate(_norm_subj_name(section_name), _norm_subj_name(n))
+                    ]
+                    if len(near_kuans) == 1:
+                        kuan_hits = near_kuans
                 scope_key = kuan_hits[0] if len(kuan_hits) == 1 else k_code
                 by_scope[scope_key].append(rec)
 
             for scope_key, recs in by_scope.items():
+                if len(scope_key) == 5:
+                    remaining_codes = {
+                        c: leaves_by_code[c].get("name", "")
+                        for c in leaves_by_code
+                        if c.startswith(scope_key) and c not in mentions
+                    }
+                    pending_recs = list(recs)
+                    while pending_recs and remaining_codes:
+                        rec_to_codes = {
+                            idx: [
+                                c for c, name in remaining_codes.items()
+                                if _is_within_kuan_single_char_near(
+                                    _norm_subj_name(rec[6]), _norm_subj_name(name)
+                                )
+                            ]
+                            for idx, rec in enumerate(pending_recs)
+                        }
+                        code_to_recs = {
+                            c: [
+                                idx for idx, rec in enumerate(pending_recs)
+                                if _is_within_kuan_single_char_near(
+                                    _norm_subj_name(rec[6]), _norm_subj_name(name)
+                                )
+                            ]
+                            for c, name in remaining_codes.items()
+                        }
+                        peeled = [
+                            (idx, cands[0])
+                            for idx, cands in rec_to_codes.items()
+                            if len(cands) == 1 and len(code_to_recs[cands[0]]) == 1
+                        ]
+                        if not peeled:
+                            break
+                        peeled_idxs = set()
+                        for idx, target_code in peeled:
+                            if target_code not in remaining_codes:
+                                continue
+                            peeled_idxs.add(idx)
+                            match, source_text, page_num, cross_page_spans, class_name, section_name, item_name = pending_recs[idx]
+                            _emit_matched(
+                                (target_code[:3], target_code[:5], target_code[:7]),
+                                match, source_text, page_num, class_name, section_name, item_name, cross_page_spans,
+                            )
+                            remaining_codes.pop(target_code, None)
+                        pending_recs = [rec for idx, rec in enumerate(pending_recs) if idx not in peeled_idxs]
+                    if len(pending_recs) != 1 or len(remaining_codes) != 1:
+                        continue
+                    target_code = next(iter(remaining_codes))
+                    match, source_text, page_num, cross_page_spans, class_name, section_name, item_name = pending_recs[0]
+                    _emit_matched(
+                        (target_code[:3], target_code[:5], target_code[:7]),
+                        match, source_text, page_num, class_name, section_name, item_name, cross_page_spans,
+                    )
+                    continue
+
                 if len(recs) != 1:
                     continue
                 remaining_leaves = [
@@ -3572,6 +3972,51 @@ def _extract_final_functional_narrative_mentions(
                     (target_code[:3], target_code[:5], target_code[:7]),
                     match, source_text, page_num, class_name, section_name, item_name, cross_page_spans,
                 )
+
+    if not mentions and not unmatched_entries:
+        from src.services.fiscal_subject_names import subject_name_candidates as _snc_fb
+
+        classes_pool = {
+            c: e.get("name", "") for c, e in table_entries.items() if e.get("level") == "类"
+        }
+        kuans_pool = {
+            c: e.get("name", "") for c, e in table_entries.items() if e.get("level") == "款"
+        }
+        if two_level_candidates:
+            for page_num, source_text, h_match, class_name, section_name, class_code, section_code in two_level_candidates:
+                if class_code and section_code:
+                    _emit_levels(
+                        ((class_code, class_name, "类"), (f"{class_code}{section_code}", section_name, "款")),
+                        h_match, source_text, page_num,
+                    )
+                    continue
+                c_hits = _snc_fb(class_name, classes_pool)
+                scoped_k = (
+                    {c: n for c, n in kuans_pool.items() if c.startswith(c_hits[0])}
+                    if len(c_hits) == 1
+                    else kuans_pool
+                )
+                s_hits = _snc_fb(section_name, scoped_k)
+                if len(s_hits) == 1:
+                    s_code = s_hits[0]
+                    c_code = c_hits[0] if len(c_hits) == 1 else s_code[:3]
+                    _emit_levels(
+                        ((c_code, class_name, "类"), (s_code, section_name, "款")),
+                        h_match, source_text, page_num,
+                    )
+        elif one_level_candidates:
+            for page_num, source_text, o_match, class_name, class_code in one_level_candidates:
+                c_code = class_code
+                if not c_code:
+                    c_hits = _snc_fb(class_name, classes_pool)
+                    c_code = c_hits[0] if len(c_hits) == 1 else ""
+                if c_code:
+                    _emit_levels(((c_code, class_name, "类"),), o_match, source_text, page_num)
+        elif bare_class_candidates:
+            for page_num, source_text, b_match, class_name in bare_class_candidates:
+                c_hits = _snc_fb(class_name, classes_pool)
+                if len(c_hits) == 1:
+                    _emit_levels(((c_hits[0], class_name, "类"),), b_match, source_text, page_num)
 
     return mentions
 
@@ -3682,10 +4127,10 @@ class R33102_TotalSheet_vs_Text(Rule):
                 clause = text.compact[clause_start:clause_end]
                 if (not _is_assertive_context(text.compact, clause_start, clause, frames)
                         or _inside_quote_span(text.compact, match.start(), match.end())
-                        or _inside_full_quotation(text.compact, match.start(), match.end())):
+                        or _inside_full_quotation(text.compact[begin:end], match.start() - begin, match.end() - begin)):
                     continue
                 if getattr(doc, 'fact_context', None) is not None:
-                    rejection = context_rejection(doc, text.compact, match.start(), match.end())
+                    rejection = context_rejection(doc, text.compact, match.start(), match.end(), section_start=begin)
                     if rejection:
                         identity_rejections.append((match.start(), match.end(), rejection))
                         continue
@@ -4199,6 +4644,25 @@ def _project_zero_omission_closure(sec_text, doc, *, total, basic, proj, tt, tb,
     return claim
 
 
+def _basic_zero_omission_closure(sec_text, doc, *, total, basic, proj, tt, tb, tp):
+    """说明按零值省略基本支出时的可审计闭合判据（与 _project_zero_omission_closure 对称）。"""
+    if tb is not None or basic is None or float(basic) != 0:
+        return None
+    if total is None or proj is None or not tolerant_equal(total, proj):
+        return None
+    if tt is None or not tolerant_equal(float(tt), total):
+        return None
+    if tp is None or not tolerant_equal(float(tp), proj):
+        return None
+    claim = _resolve_indicator_percentage(
+        sec_text, ("项目支出",), ("本年支出合计", "本年支出", "支出合计", "支出总额", "总支出"),
+        **_percentage_document_context(doc, sec_text),
+    )
+    if claim.status == "ambiguous" or claim.value is None or claim.value != Decimal("100"):
+        return None
+    return claim
+
+
 class R33104_Expense_vs_Text(Rule):
     code, severity = "V33-104", "warn"
     desc = "支出决算表 ↔ 支出决算情况说明（含占比）"
@@ -4356,6 +4820,17 @@ class R33104_Expense_vs_Text(Rule):
                         cell_observations=observations,
                         formula=formula,
                     )
+            elif (b is None and nm == "基本支出"
+                  and _basic_zero_omission_closure(
+                      sec_text, doc, total=total, basic=basic, proj=proj, tt=tt, tb=tb, tp=tp
+                  ) is not None):
+                _v33_relation_receipt(
+                    doc, self.code, sub_id,
+                    status="pass",
+                    operand_fact_ids=_v33_fact_identity(fact_ref)[0],
+                    cell_observations=observations,
+                    formula="text.基本支出(零值省略=0：项目支出占100%＋表内0或原件认证空白) == table.FIN_03.basic_actual(=0)",
+                )
             elif (b is None and nm == "项目支出"
                   and _project_zero_omission_closure(
                       sec_text, doc, total=total, basic=basic, proj=proj, tt=tt, tb=tb, tp=tp
@@ -4711,29 +5186,65 @@ class R33107_BasicExpense_Check(Rule):
 
     def apply(self, doc: Document) -> List[Issue]:
         issues: List[Issue] = []
+        sec_text = (
+            _final_section_scope(
+                doc, ("基本支出决算情况说明",),
+                exclude_tokens=("政府性基金", "国有资本"),
+            )
+            or _final_section_scope(
+                doc, ("财政拨款本支出决算情况说明",),
+                exclude_tokens=("政府性基金", "国有资本"),
+            )
+        )
+        if sec_text and re.search(
+            r"(?:无|未发生|没有)\s*(?:一般公共预算)?\s*(?:财政拨款)?\s*基本\s*支出",
+            re.sub(r"\s+", "", sec_text),
+        ):
+            fact_ctx = getattr(doc, "fact_context", None)
+            nonzero_t6 = [
+                f for f in (getattr(fact_ctx, "facts", None) or ())
+                if getattr(f, "table_code", "") == "FIN_06_basic_expenditure"
+                and getattr(f, "normalized_value", None) not in (None, Decimal("0"))
+            ]
+            if not nonzero_t6:
+                _v33_relation_receipt(
+                    doc, self.code, "T6:zero_disclosure",
+                    status="pass",
+                    formula="text.无基本支出声明 == table.FIN_06(无非零发生额)",
+                )
+                return issues
+
         p = _get_first_anchor_page(doc, "一般公共预算财政拨款基本支出决算表")
-        if not p:
+        certified = None
+        if getattr(doc, "parse_artifact", None) is not None:
+            from .native_table_arithmetic import certified_basic_expenditure_summaries
+
+            certified = certified_basic_expenditure_summaries(doc)
+        if not p and certified is None:
             raise RuleDeferred(
                 self.code,
                 detail="未找到一般公共预算财政拨款基本支出决算表锚点页",
                 unresolved_reasons=["未找到一般公共预算财政拨款基本支出决算表锚点页"],
             )
-        # MR-1b：T6 的「人员经费合计/公用经费合计」行实测落在续页
-        #（宜川 p23），改用过滤版锚点界合并
-        t = _get_table_rows(
-            doc, "一般公共预算财政拨款基本支出决算表", anchor_extent=True
-        )
-        if not t:
-            raise RuleDeferred(
-                self.code,
-                detail="一般公共预算财政拨款基本支出决算表所在页未解析到有效表格",
-                unresolved_reasons=["一般公共预算财政拨款基本支出决算表所在页未解析到有效表格"],
+        ren = float(certified["personnel"]) if certified is not None else None
+        gong = float(certified["public"]) if certified is not None else None
+        if ren is None or gong is None:
+            # MR-1b：T6 的「人员经费合计/公用经费合计」行实测落在续页
+            #（宜川 p23），改用过滤版锚点界合并
+            t = _get_table_rows(
+                doc, "一般公共预算财政拨款基本支出决算表", anchor_extent=True
             )
-        # MR-1a：T6 表尾 [人员经费合计,,数,公用经费合计,,数] 是双侧行，
-        # 旧实现 row[0] 命中人员经费后从最右取值，把公用经费的值错配给它；
-        # v2 对双侧行按标签同侧取值
-        ren = _row_value_v2(t, ("人员经费合计", "人员经费"))
-        gong = _row_value_v2(t, ("公用经费合计", "公用经费"))
+            if not t:
+                raise RuleDeferred(
+                    self.code,
+                    detail="一般公共预算财政拨款基本支出决算表所在页未解析到有效表格",
+                    unresolved_reasons=["一般公共预算财政拨款基本支出决算表所在页未解析到有效表格"],
+                )
+            # MR-1a：T6 表尾 [人员经费合计,,数,公用经费合计,,数] 是双侧行，
+            # 旧实现 row[0] 命中人员经费后从最右取值，把公用经费的值错配给它；
+            # v2 对双侧行按标签同侧取值
+            ren = _row_value_v2(t, ("人员经费合计", "人员经费"))
+            gong = _row_value_v2(t, ("公用经费合计", "公用经费"))
         if ren is None or gong is None:
             missing_parts = []
             if ren is None:
@@ -4746,18 +5257,6 @@ class R33107_BasicExpense_Check(Rule):
                 unresolved_reasons=[f"基本支出决算表缺少关键行: {','.join(missing_parts)}"],
             )
         total = ren + gong
-        # MR-1a：全文关键词抓数会命中「本年支出合计」（20,323.21）而非
-        # 基本支出（14,107.46），修复解析后反而制造假不一致；改为章节内取数
-        sec_text = (
-            _final_section_scope(
-                doc, ("基本支出决算情况说明",),
-                exclude_tokens=("政府性基金", "国有资本"),
-            )
-            or _final_section_scope(
-                doc, ("财政拨款本支出决算情况说明",),
-                exclude_tokens=("政府性基金", "国有资本"),
-            )
-        )
         t_total = (
             near_number(sec_text, ["基本支出", "合计"], target_year=None)
             if sec_text
@@ -4766,9 +5265,39 @@ class R33107_BasicExpense_Check(Rule):
         if t_total is not None:
             if not tolerant_equal(total, t_total, terms=2):
                 quote, quote_page = _sentence_with_number(doc, sec_text, t_total)
+                if not quote:
+                    quote, quote_page = _sentence_with_number(doc, sec_text, round(t_total * 10000, 2))
+                if not quote and sec_text:
+                    for raw_line in sec_text.splitlines():
+                        cleaned_line = raw_line.strip()
+                        if "基本支出" in cleaned_line and re.search(r"\d", cleaned_line):
+                            lp = R33245_ThreePublicDirectionContradiction._locate_page(doc, cleaned_line)
+                            quote, quote_page = cleaned_line[:160], lp
+                            break
+                v_page: Optional[int] = None
+                v_span = ""
+                if quote:
+                    cand_quote = quote
+                    if "\n" in cand_quote:
+                        for q_line in cand_quote.splitlines():
+                            q_stripped = q_line.strip()
+                            if q_stripped and re.search(r"\d", q_stripped):
+                                cand_quote = q_stripped
+                                break
+                    cand_page, cand_span = R33245_ThreePublicDirectionContradiction._verbatim_page_span(doc, cand_quote)
+                    pages_list = getattr(doc, "page_texts", []) or []
+                    if (
+                        cand_span
+                        and 1 <= cand_page <= len(pages_list)
+                        and re.sub(r"\s+", "", cand_span) in re.sub(r"\s+", "", str(pages_list[cand_page - 1] or ""))
+                    ):
+                        v_page, v_span = cand_page, cand_span
+                loc_payload: Dict[str, Any] = {"page": v_page or quote_page or p}
+                if v_span and v_page:
+                    loc_payload["table_refs"] = [{"role": "基本支出说明", "page": v_page, "span": v_span}]
                 issues.append(self._issue(
                     f"基本支出合计：表算{total:.2f} ≠ 文本{t_total}",
-                    {"page": quote_page or p}, "warn", evidence_text=quote,
+                    loc_payload, "warn", evidence_text=v_span or quote,
                 ))
         else:
             raise RuleDeferred(
@@ -4869,6 +5398,14 @@ class R33109_EmptyTables_Statement(Rule):
         
         for nm in _unblocked_empty_note_titles(empty_check_tables, excluded_table_codes):
             p = _get_first_anchor_page(doc, nm)
+            if not p:
+                spec = next(((kw, pat) for kw, pat in _EMPTY_NOTE_TABLES if kw in nm), None)
+                if spec is not None:
+                    for idx, raw_page in enumerate(getattr(doc, "page_texts", None) or [], 1):
+                        flat_p = _compact_page(doc, idx)
+                        if re.search(spec[1], flat_p) and "目" not in flat_p[:12]:
+                            p = idx
+                            break
             if not p:
                 continue
             try:
@@ -5172,11 +5709,19 @@ class R33110_BudgetVsFinal_TextConsistency(Rule):
                         clause_positions[claim_start]:
                         clause_positions[direction_clause_idx] + len(clauses[direction_clause_idx])
                     ].strip()
-                    refs = [{"role": "比较表述", "page": page, "span": clip}] + [
-                        {"role": role, "page": _page_of(clause_positions[index]), "span": clauses[index]}
-                        for role, index in [("年初预算", budget_idx), ("支出决算", final_clause_idx)]
+                    clause_pages = {
+                        _page_of(clause_positions[index])
+                        for index in (budget_idx, final_clause_idx, direction_clause_idx)
                         if index >= 0
-                    ]
+                    }
+                    if len(clause_pages) <= 1:
+                        refs = [{"role": "比较表述", "page": page, "span": clip}]
+                    else:
+                        refs = [{"role": "比较表述", "page": page, "span": clip}] + [
+                            {"role": role, "page": _page_of(clause_positions[index]), "span": clauses[index], "context": clip}
+                            for role, index in [("年初预算", budget_idx), ("支出决算", final_clause_idx)]
+                            if index >= 0 and _page_of(clause_positions[index]) != page
+                        ]
                     # 2A：一侧“元”、另一侧“万元”时，按万元名义值重算；
                     # 若原文方向成立，说明差额由单位错解释，下游只记回执。
                     explained = _unit_error_explains_direction(
@@ -5325,90 +5870,65 @@ class R33113_PunctuationCheck(Rule):
 
     def apply(self, doc: Document) -> List[Issue]:
         """检测标点符号问题：重复标点、不同标点在一起、句尾无句号"""
+        from .checklist_support import unique_quote
+
         issues: List[Issue] = []
-        
-        # 定义中文标点符号
-        
-        # 遍历所有页面
+        duplicate_punct_pattern = re.compile(r'([，。！？；：])\1+')
+        mixed_punct_pattern = re.compile(r'([，。！？；：])[ \t]*([，。！？；：])')
+
+        # 遍历所有页面，记录全页字符偏移并挂载可绑定原文切片的 table_refs。
         for page_num, page_text in enumerate(doc.page_texts):
-            lines = page_text.split('\n')
-            
-            for line_num, line in enumerate(lines):
-                # 跳过空行
-                if not line.strip():
-                    continue
-                
-                # 1. 检测重复标点（如，，、。。）
-                # 使用正则表达式匹配重复的标点符号
-                duplicate_punct_pattern = r'([，。！？；：])\1+'
-                for match in re.finditer(duplicate_punct_pattern, line):
-                    punct = match.group(1)
+            if not page_text:
+                continue
+            for match in duplicate_punct_pattern.finditer(page_text):
+                punct = match.group(1)
+                ctx_s = max(0, match.start() - 20)
+                ctx_e = min(len(page_text), match.end() + 20)
+                snippet = page_text[ctx_s:ctx_e]
+                quote_span = unique_quote(page_text, match.start(), match.end()) or snippet.strip()
+                issues.append(self._issue(
+                    f"重复标点：{match.group()}，建议修改为单个{punct}。",
+                    {
+                        "page": page_num + 1,
+                        "pos": match.start(),
+                        "table_refs": [
+                            {
+                                "role": "重复标点原文",
+                                "page": page_num + 1,
+                                "span": quote_span,
+                                "pos": match.start(),
+                            }
+                        ],
+                    },
+                    severity="warn",
+                    evidence_text=snippet,
+                ))
+
+            for match in mixed_punct_pattern.finditer(page_text):
+                punct1 = match.group(1)
+                punct2 = match.group(2)
+                if punct1 != punct2:
                     ctx_s = max(0, match.start() - 20)
-                    ctx_e = min(len(line), match.end() + 20)
+                    ctx_e = min(len(page_text), match.end() + 20)
+                    snippet = page_text[ctx_s:ctx_e]
+                    quote_span = unique_quote(page_text, match.start(), match.end()) or snippet.strip()
                     issues.append(self._issue(
-                        f"重复标点：{match.group()}，建议修改为单个{punct}。",
-                        {"page": page_num + 1, "pos": match.start()},
+                        f"标点混用：{punct1}{punct2}，建议统一使用一个标点。",
+                        {
+                            "page": page_num + 1,
+                            "pos": match.start(),
+                            "table_refs": [
+                                {
+                                    "role": "标点混用原文",
+                                    "page": page_num + 1,
+                                    "span": quote_span,
+                                    "pos": match.start(),
+                                }
+                            ],
+                        },
                         severity="warn",
-                        evidence_text=line[ctx_s:ctx_e]
+                        evidence_text=snippet,
                     ))
-                
-                # 2. 检测不同标点在一起（如，。、；，）
-                # 使用正则表达式匹配连续的不同标点符号
-                mixed_punct_pattern = r'([，。！？；：])\s*([，。！？；：])'
-                for match in re.finditer(mixed_punct_pattern, line):
-                    punct1 = match.group(1)
-                    punct2 = match.group(2)
-                    if punct1 != punct2:
-                        ctx_s = max(0, match.start() - 20)
-                        ctx_e = min(len(line), match.end() + 20)
-                        issues.append(self._issue(
-                            f"标点混用：{punct1}{punct2}，建议统一使用一个标点。",
-                            {"page": page_num + 1, "pos": match.start()},
-                            severity="warn",
-                            evidence_text=line[ctx_s:ctx_e]
-                        ))
-                
-                # 3. 检测句尾无句号（针对完整句子）
-                # 由于PDF文本提取时，句子经常被换行和分页打断，导致大量误报
-                # 因此暂时禁用此检查，只保留重复标点和标点混用检查
-                # 跳过标题行（以数字开头或包含"表"、"说明"等）
-                # if re.match(r'^\d+[、.）]', line) or '表' in line or '说明' in line:
-                #     continue
-                # 
-                # # 跳过以特定模式开头的行（如"主要用于"、"年初预算为"等）
-                # skip_patterns = [
-                #     r'^主要用于',
-                #     r'^年初预算为',
-                #     r'^支出决算为',
-                #     r'^决算数',
-                #     r'^其中',
-                #     r'^包括',
-                #     r'^主要',
-                #     r'^（项）',
-                #     r'^（款）',
-                #     r'^（类）',
-                #     r'^上海市',
-                #     r'^2024',
-                # ]
-                # if any(re.match(pattern, line) for pattern in skip_patterns):
-                #     continue
-                # 
-                # # 检查行尾是否以中文标点结尾
-                # stripped_line = line.strip()
-                # if stripped_line and len(stripped_line) > 10:  # 至少10个字符才检查（避免对短文本误报）
-                #     # 检查是否以句号、问号、感叹号结尾
-                #     if not stripped_line[-1] in '。！？':
-                #         # 检查是否包含中文内容
-                #         if any('\u4e00' <= char <= '\u9fff' for char in stripped_line):
-                #             # 获取上下文
-                #             context_start = max(0, len(stripped_line) - 30)
-                #             context = stripped_line[context_start:]
-                #             
-                #             issues.append(self._issue(
-                #                 f"句尾缺少标点：{context}，建议在句末添加句号。",
-                #                 {"page": page_num + 1, "pos": len(line) - len(stripped_line) + len(stripped_line)},
-                #                 severity="warn"
-                #             ))
 
             # 4. MR-P6（探针漏报补规则）：同字重复词（AGENTS.md R003 类）。
             # 探针 009 p39「主要原因是是」（跨软换行）「原因是是落实」系统
@@ -7391,6 +7911,131 @@ class R33203_InterTable_T5_T6(Rule):
 
     def apply(self, doc: Document) -> List[Issue]:
         issues = []
+        if getattr(doc, "parse_artifact", None) is not None and getattr(doc, "fact_context", None) is not None:
+            from .native_empty_operands import NativeBlankTerm
+            from .native_table_arithmetic import (
+                certified_basic_expenditure_summaries,
+                receipt,
+                select,
+                table_facts,
+            )
+            from .native_three_public_ratios import operand_ref
+
+            t5_facts, t5_err = table_facts(doc, "FIN_05_general_public_expenditure")
+            t5_fact = None
+            if not t5_err:
+                t5_fact, t5_err = select(
+                    doc, t5_facts, "basic_actual", code="total", name="合计", allow_native_blank=True
+                )
+                if t5_fact is None:
+                    t5_fact, t5_err = select(
+                        doc, t5_facts, "basic_actual", name="合计", allow_native_blank=True
+                    )
+            certified = certified_basic_expenditure_summaries(doc)
+            if t5_fact is not None and certified is not None:
+                lhs = t5_fact.normalized_value
+                rhs = certified["total"]
+                if (
+                    lhs != Decimal("0")
+                    and isinstance(certified["personnel_fact"], NativeBlankTerm)
+                    and isinstance(certified["public_fact"], NativeBlankTerm)
+                ):
+                    reason = "基本支出决算表（T6）合计格原件全部留空而支出表（T5）列有基本支出发生额，需人工核对是否脱敏或漏填"
+                    receipt(
+                        self,
+                        doc,
+                        "t5_vs_t6_basic",
+                        [t5_fact, certified["personnel_fact"], certified["public_fact"]],
+                        status="insufficient_data",
+                        formula="FIN_05.basic_actual(total) == FIN_06.人员经费合计 + FIN_06.公用经费合计",
+                        reason=reason,
+                    )
+                    raise RuleDeferred(self.code, detail=reason, unresolved_reasons=[reason])
+                mismatch = amount_difference_exceeds_policy(abs(lhs - rhs), rounding_envelope(2))
+                fact_list = [t5_fact, certified["personnel_fact"], certified["public_fact"]]
+                ids, evidence_ids = receipt(
+                    self,
+                    doc,
+                    "t5_vs_t6_basic",
+                    fact_list,
+                    status="fail" if mismatch else "pass",
+                    formula="FIN_05.basic_actual(total) == FIN_06.人员经费合计 + FIN_06.公用经费合计",
+                    disclosure_sources=certified.get("sources") or (),
+                )
+                if mismatch:
+                    refs = []
+                    if not isinstance(t5_fact, NativeBlankTerm):
+                        for ref in (t5_fact.extra_dims or {}).get("evidence_refs", []):
+                            if ref.get("physical_page") and ref.get("quote"):
+                                refs.append({
+                                    "page": ref["physical_page"],
+                                    "physical_page": ref["physical_page"],
+                                    "span": ref["quote"],
+                                    "role": "表5基本支出合计",
+                                    "source_cell_id": ref.get("source_cell_id"),
+                                    "bbox": ref.get("bbox"),
+                                    "file_hash": ref.get("file_hash"),
+                                })
+                    if certified.get("sources"):
+                        refs.extend(certified["sources"])
+                    else:
+                        for role_label, f_obj in (("表6人员经费合计", certified["personnel_fact"]), ("表6公用经费合计", certified["public_fact"])):
+                            if isinstance(f_obj, NativeBlankTerm):
+                                continue
+                            for ref in (f_obj.extra_dims or {}).get("evidence_refs", []):
+                                if ref.get("physical_page") and ref.get("quote"):
+                                    refs.append({
+                                        "page": ref["physical_page"],
+                                        "physical_page": ref["physical_page"],
+                                        "span": ref["quote"],
+                                        "role": role_label,
+                                        "source_cell_id": ref.get("source_cell_id"),
+                                        "bbox": ref.get("bbox"),
+                                        "file_hash": ref.get("file_hash"),
+                                    })
+                    pages = sorted({r["page"] for r in refs if r.get("page")})
+                    loc = {
+                        "page": pages[0] if pages else None,
+                        "pages": pages,
+                        "table_code": "FIN_05_general_public_expenditure",
+                        "table_refs": refs,
+                        "operand_refs": [
+                            operand_ref(f_obj, r_lbl)
+                            for r_lbl, f_obj in (
+                                ("T5基本支出", t5_fact),
+                                ("T6人员经费合计", certified["personnel_fact"]),
+                                ("T6公用经费合计", certified["public_fact"]),
+                            )
+                            if not isinstance(f_obj, NativeBlankTerm)
+                        ],
+                        "t5": float(lhs),
+                        "t6": float(rhs),
+                        "fact_context_version_token": doc.fact_context.version_token,
+                    }
+                    issues.append(self._issue(
+                        f"T5↔T6基本支出不一致：T5={lhs:.2f}, T6={rhs:.2f}",
+                        loc,
+                        "error",
+                        evidence_text="\n".join(r["span"] for r in refs if r.get("span")) or f"T5={lhs:.2f}, T6={rhs:.2f}",
+                        check_relation_id=f"{self.code}:t5_vs_t6_basic",
+                        fact_ids=ids,
+                        evidence_ids=evidence_ids,
+                    ))
+                return issues
+            # T5 基本支出为 0（或认证空白）且 T6 全表经网格认证为空白时，无发生额一致
+            if t5_fact is not None and t5_fact.normalized_value == Decimal("0"):
+                t6_facts, t6_err = table_facts(doc, "FIN_06_basic_expenditure")
+                if not t6_err and t6_facts and all(isinstance(f, NativeBlankTerm) for f in t6_facts):
+                    receipt(
+                        self,
+                        doc,
+                        "t5_vs_t6_basic",
+                        [t5_fact, *t6_facts],
+                        status="pass",
+                        formula="FIN_05.basic_actual(=0) == FIN_06(全表原件认证空白=0)",
+                    )
+                    return issues
+
         t5_rows = _get_table_rows(doc, "一般公共预算财政拨款支出决算表")
         t6_rows = _get_table_rows(doc, "一般公共预算财政拨款基本支出决算表")
         
@@ -7600,15 +8245,35 @@ class R33214_T1_TotalBalance(Rule):
             if fact is not None
         ]
         if fact_income is not None and fact_expense is not None:
+            _record_v33_consumption(doc, self.code, "FIN_01_income_expenditure_total", fact_income_ref, fact_expense_ref)
             relation_sub_id = "T1:income_expenditure_total:balance"
             relation_id = f"{self.code}:{relation_sub_id}"
             fact_ids, evidence_ids = _v33_fact_identity(
                 fact_income_ref, fact_expense_ref
             )
+            operand_refs = [
+                _v33_operand_ref(fact, role)
+                for fact, role in (
+                    (fact_income_ref, "income_actual"),
+                    (fact_expense_ref, "expenditure_actual"),
+                )
+                if fact is not None and getattr(fact, "fact_uid", None)
+            ]
             if _amount_mismatch(fact_income, fact_expense):
+                primary_page = next((int(r["page"]) for r in operand_refs if r.get("page")), None)
+                t1_loc: Dict[str, Any] = {
+                    "table": "收入支出决算总表",
+                    "income_total": float(fact_income),
+                    "expense_total": float(fact_expense),
+                    "operand_refs": operand_refs,
+                }
+                if primary_page is not None:
+                    t1_loc["page"] = primary_page
+                if fact_ctx is not None:
+                    t1_loc["fact_context_version_token"] = fact_ctx.version_token
                 issues.append(self._issue(
                     f"T1总计不平：收入侧总计({fact_income:.2f}) != 支出侧总计({fact_expense:.2f})",
-                    {"income_total": float(fact_income), "expense_total": float(fact_expense)}, "error",
+                    t1_loc, "error",
                     evidence_text=(
                         f"事实：收入 {fact_income_ref.fact_uid if fact_income_ref is not None else '-'}"
                         f"={fact_income}，支出 {fact_expense_ref.fact_uid if fact_expense_ref is not None else '-'}"
@@ -9433,6 +10098,33 @@ class R33227_Narrative5_T5_NameConsistency(Rule):
                 if not _location_has_bound_ref(location):
                     _attach_name_evidence_refs(doc, location, mention, mention_page,
                                                table_row_page, code, table_entry.get("name") or "")
+                has_spanned_refs = any(
+                    isinstance(r, dict) and str(r.get("span") or "").strip()
+                    for r in (location.get("table_refs") or [])
+                )
+                v_span = ""
+                if not has_spanned_refs:
+                    fallback_refs = []
+                    for raw_s in [mention.get("source_span"), *(mention.get("extra_spans") or [])]:
+                        if not str(raw_s or "").strip():
+                            continue
+                        sv_page, sv_span = R33245_ThreePublicDirectionContradiction._verbatim_page_span(doc, str(raw_s))
+                        if sv_span:
+                            fallback_refs.append({"role": "说明5", "page": sv_page, "span": sv_span})
+                    if not fallback_refs:
+                        sv_page, sv_span = R33245_ThreePublicDirectionContradiction._verbatim_page_span(
+                            doc, str(mention.get("snippet") or "")
+                        )
+                        if sv_span:
+                            fallback_refs.append({"role": "说明5", "page": sv_page, "span": sv_span})
+                    if fallback_refs:
+                        v_span = fallback_refs[0]["span"]
+                        location["page"] = fallback_refs[0]["page"]
+                        location["pages"] = sorted(
+                            {r["page"] for r in fallback_refs}
+                            | ({table_row_page} if isinstance(table_row_page, int) and table_row_page > 0 else set())
+                        )
+                        location["table_refs"] = fallback_refs
 
                 item_nos: List[str] = []
                 for raw_span in [mention.get("source_span"), *(mention.get("extra_spans") or [])]:
@@ -9447,7 +10139,7 @@ class R33227_Narrative5_T5_NameConsistency(Rule):
                 if item_nos:
                     evidence_lines.append(f"涉及条目：第{'、'.join(item_nos)}项")
                 evidence_lines.append(f"说明片段：{mention.get('snippet', '')}")
-                evidence_text = "\n".join(evidence_lines)
+                evidence_text = v_span if v_span else "\n".join(evidence_lines)
                 from src.services.fiscal_subject_names import subject_suffix_key
                 suffix_only = (_functional_name_matches(table_entry["name"], narrative_name)
                                or subject_suffix_key(table_entry["name"]) == subject_suffix_key(narrative_name))
@@ -9987,6 +10679,47 @@ class R33220_Narrative3_T3(Rule):
                 return None
             return dict(term.extra_dims.get("native_blank_observation") or {})
 
+        # 对称零值省略：说明未单列基本支出金额时，若项目支出与表侧一致、表内
+        # 基本支出为 0 或经原件认证空白、且说明显式声明项目支出占支出合计 100%，
+        # 则基本支出按推导 0 参与比对。
+        if nar_basic is None and nar_body:
+            if not (table_project.is_numeric and table_project.decimal_val is not None):
+                if _certified_blank_observation("project_actual") is not None:
+                    table_project = StrictValue(
+                        raw_text="0", status="valid",
+                        decimal_val=Decimal("0"), scale_digits=2, unit=t3_unit,
+                    )
+            project_consistent = False
+            if nar_project is not None and table_project.is_numeric and table_project.decimal_val is not None:
+                diff_p_zero = abs(table_project.decimal_val - (nar_project.decimal_val or Decimal("0")))
+                env_p_zero = (half_unit_for_term(nar_project.scale_digits, nar_project.unit)
+                              + half_unit_for_term(table_project.scale_digits, table_project.unit))
+                project_consistent = not amount_difference_exceeds_policy(diff_p_zero, env_p_zero)
+            total_equals_project = False
+            if idx_total is not None:
+                table_total_p = extract_row_strict(total_row, idx_total, "本年支出合计", default_unit=t3_unit)
+                if (table_total_p.is_numeric and table_total_p.decimal_val is not None
+                        and table_project.is_numeric and table_project.decimal_val is not None):
+                    env_total_p = (half_unit_for_term(table_total_p.scale_digits, table_total_p.unit)
+                                   + half_unit_for_term(table_project.scale_digits, table_project.unit))
+                    total_equals_project = not amount_difference_exceeds_policy(
+                        abs(table_total_p.decimal_val - table_project.decimal_val), env_total_p)
+            basic_is_zero = (
+                (table_basic.is_numeric and table_basic.decimal_val == Decimal("0"))
+                or _certified_blank_observation("basic_actual") is not None
+            )
+            claim_basic_zero = _resolve_indicator_percentage(
+                nar_body, ("项目支出",), ("本年支出合计", "本年支出", "支出合计", "支出总额", "总支出"),
+                **_percentage_document_context(doc, nar_body),
+            )
+            if (project_consistent and total_equals_project and basic_is_zero
+                    and claim_basic_zero.status != "ambiguous"
+                    and claim_basic_zero.value is not None and claim_basic_zero.value == Decimal("100")):
+                nar_basic = StrictValue(
+                    raw_text="0", status="valid",
+                    decimal_val=Decimal("0"), scale_digits=2, unit=t3_unit,
+                )
+
         # 校验基本支出
         if nar_basic is not None:
             blank_obs_basic = None
@@ -10164,16 +10897,19 @@ class R33223_Narrative6_T6(Rule):
             )
         )
         _num_pat = r'((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)'
+        scope6_compact = ""
         if scope6:
-            p_match = re.search(r'人员经费[^\d]{0,8}' + _num_pat + r'\s*万元', scope6)
-            pub_match = re.search(r'公用经费[^\d]{0,8}' + _num_pat + r'\s*万元', scope6)
+            scope6_no_footer = re.sub(r"(?m)^\s*[-—–]?\s*\d{1,3}\s*[-—–]?\s*$", "", scope6)
+            scope6_compact = re.sub(r"\s+", "", scope6_no_footer)
+            p_match = re.search(r'人员经费[^\d]{0,8}' + _num_pat + r'万元', scope6_compact)
+            pub_match = re.search(r'公用经费[^\d]{0,8}' + _num_pat + r'万元', scope6_compact)
             if p_match:
                 nar_personnel = float(p_match.group(1).replace(",", ""))
             if pub_match:
                 nar_public = float(pub_match.group(1).replace(",", ""))
             if nar_personnel is not None or nar_public is not None:
                 for pidx, txt in enumerate(doc.page_texts):
-                    if "人员经费" in txt or "公用经费" in txt:
+                    if "人员经费" in re.sub(r"\s+", "", txt) or "公用经费" in re.sub(r"\s+", "", txt):
                         narrative_page = pidx + 1
                         break
         if nar_personnel is None and nar_public is None and not scope6:
@@ -10200,8 +10936,34 @@ class R33223_Narrative6_T6(Rule):
                         break
 
         if nar_personnel is None and nar_public is None:
-            if scope6 and re.search(r"无\s*(?:一般公共预算)?\s*(?:财政拨款)?\s*基本\s*支出", re.sub(r"\s+", "", scope6)):
-                return issues
+            compact_scope6 = scope6_compact or re.sub(r"\s+", "", scope6 or "")
+            explicit_zero_phrase = bool(
+                compact_scope6
+                and re.search(r"(?:无|未发生|没有)(?:一般公共预算)?(?:财政拨款)?基本支出", compact_scope6)
+            )
+            explicit_zero_amount = bool(
+                compact_scope6
+                and re.search(
+                    r"一般公共预算(?:财政拨款)?基本支出(?:决算)?(?:为|共计|合计)?0(?:\.0+)?万元",
+                    compact_scope6,
+                )
+                and not re.search(
+                    r"基本支出(?:决算)?(?:为|共计|合计)?[1-9]\d*(?:\.\d+)?万元",
+                    compact_scope6,
+                )
+            )
+            if explicit_zero_phrase or explicit_zero_amount:
+                fact_ctx_zero = getattr(doc, "fact_context", None)
+                t6_facts = [
+                    f for f in (getattr(fact_ctx_zero, "facts", None) or ())
+                    if getattr(f, "table_code", "") == "FIN_06_basic_expenditure"
+                ]
+                nonzero_t6 = [
+                    f for f in t6_facts
+                    if getattr(f, "normalized_value", None) not in (None, Decimal("0"))
+                ]
+                if not nonzero_t6 and (explicit_zero_phrase or bool(t6_facts)):
+                    return issues
             raise RuleDeferred(
                 self.code,
                 detail="未提取到基本支出情况说明中的人员经费或公用经费",
@@ -10209,26 +10971,35 @@ class R33223_Narrative6_T6(Rule):
             )
 
         t6_page = _get_first_anchor_page(doc, "一般公共预算财政拨款基本支出决算表")
-        # MR-1b（同 V33-107）：T6 表尾 [人员经费合计,,数,公用经费合计,,数]
-        # 实测落在续页（宜川本级 p23），必须带 anchor_extent 合并续页，
-        # 否则标签行缺席时比较被静默跳过。
-        t6_rows = _get_table_rows(
-            doc, "一般公共预算财政拨款基本支出决算表", anchor_extent=True
-        )
-        if not t6_rows:
-            raise RuleDeferred(
-                self.code,
-                detail="一般公共预算财政拨款基本支出决算表(T6)缺失",
-                unresolved_reasons=["一般公共预算财政拨款基本支出决算表(T6)缺失"],
-            )
+        certified = None
+        if getattr(doc, "parse_artifact", None) is not None:
+            from .native_table_arithmetic import certified_basic_expenditure_summaries
 
-        # D0 RC-2a：表尾是双侧行（[人员经费合计,,2468.48,公用经费合计,,6376.12]），
-        # 旧实现按行内 max(vals) 取值——两个标签都命中同一行、又都取到行内
-        # 最大值 6376.12（公用经费），人员经费被错配。改用 _row_value_v2 的
-        # 双侧行同侧取值（与 V33-107 同一实现），取不到显式合计行时如实
-        # 记取数不足，不再静默跳过该侧比较。
-        t6_personnel = _row_value_v2(t6_rows, ("人员经费合计", "人员经费"))
-        t6_public = _row_value_v2(t6_rows, ("公用经费合计", "公用经费"))
+            certified = certified_basic_expenditure_summaries(doc)
+        if certified is not None:
+            t6_personnel = float(certified["personnel"])
+            t6_public = float(certified["public"])
+        else:
+            # MR-1b（同 V33-107）：T6 表尾 [人员经费合计,,数,公用经费合计,,数]
+            # 实测落在续页（宜川本级 p23），必须带 anchor_extent 合并续页，
+            # 否则标签行缺席时比较被静默跳过。
+            t6_rows = _get_table_rows(
+                doc, "一般公共预算财政拨款基本支出决算表", anchor_extent=True
+            )
+            if not t6_rows:
+                raise RuleDeferred(
+                    self.code,
+                    detail="一般公共预算财政拨款基本支出决算表(T6)缺失",
+                    unresolved_reasons=["一般公共预算财政拨款基本支出决算表(T6)缺失"],
+                )
+
+            # D0 RC-2a：表尾是双侧行（[人员经费合计,,2468.48,公用经费合计,,6376.12]），
+            # 旧实现按行内 max(vals) 取值——两个标签都命中同一行、又都取到行内
+            # 最大值 6376.12（公用经费），人员经费被错配。改用 _row_value_v2 的
+            # 双侧行同侧取值（与 V33-107 同一实现），取不到显式合计行时如实
+            # 记取数不足，不再静默跳过该侧比较。
+            t6_personnel = _row_value_v2(t6_rows, ("人员经费合计", "人员经费"))
+            t6_public = _row_value_v2(t6_rows, ("公用经费合计", "公用经费"))
         missing_parts = []
         if nar_personnel is not None and t6_personnel is None:
             missing_parts.append("人员经费合计")
@@ -11426,19 +12197,63 @@ class R33245_ThreePublicDirectionContradiction(Rule):
                 has_flat = any(d == "flat" for d, _ in hits)
                 has_move = any(d in ("up", "down") for d, _ in hits)
                 if has_flat and has_move:
-                    evidence = "；".join(clause for _, clause in hits)[:200]
-                    # 页码定位用首个命中分句（原文里没有拼接用的分隔符）
-                    locate_text = hits[0][1]
-                    # R7 P1-3：章节身份以独立 section_id 结构化携带（评估器
-                    # 据此拒绝跨章节候选）。evidence_text 只保留原文引文——
-                    # 拼接「【章节:…】」标签会让 evidence_guard 的原文匹配
-                    # 必然失败（D0 RC-1a），标签由消费方按 section_id 重建。
+                    clause_refs = []
+                    seen_clauses = set()
+                    pages_texts = getattr(doc, "page_texts", []) or []
+                    para_c = re.sub(r"\s+", "", para)
+                    para_pages = [
+                        pi + 1
+                        for pi, pt in enumerate(pages_texts)
+                        if para_c and para_c in re.sub(r"\s+", "", str(pt or ""))
+                    ]
+                    for _, cl in hits:
+                        cl_page, cl_span = self._verbatim_page_span(doc, cl)
+                        if not cl_span:
+                            continue
+                        if para_pages and cl_page not in para_pages:
+                            cl_page = para_pages[0]
+                        ctx_window = None
+                        if 1 <= cl_page <= len(pages_texts):
+                            page_c = re.sub(r"\s+", "", str(pages_texts[cl_page - 1] or ""))
+                            span_c = re.sub(r"\s+", "", cl_span)
+                            if span_c and page_c.count(span_c) > 1:
+                                idx = para.find(cl_span)
+                                if idx < 0:
+                                    idx = para.find(cl.strip())
+                                if idx >= 0:
+                                    for radius in (60, 120, 200):
+                                        cand_ctx = para[max(0, idx - radius):min(len(para), idx + len(cl_span) + radius)].strip()
+                                        ctx_c = re.sub(r"\s+", "", cand_ctx)
+                                        if ctx_c and span_c in ctx_c and page_c.count(ctx_c) == 1:
+                                            ctx_window = cand_ctx
+                                            break
+                                if not ctx_window and para_c and span_c in para_c and page_c.count(para_c) == 1:
+                                    ctx_window = para[:240]
+                        key_pair = (cl_page, re.sub(r"\s+", "", ctx_window or cl_span))
+                        if key_pair not in seen_clauses:
+                            seen_clauses.add(key_pair)
+                            ref_item: Dict[str, Any] = {
+                                "role": "三公说明分句",
+                                "page": cl_page,
+                                "span": cl_span,
+                            }
+                            if ctx_window:
+                                ref_item["context"] = ctx_window
+                            clause_refs.append(ref_item)
+                    primary_page = clause_refs[0]["page"] if clause_refs else self._locate_page(doc, hits[0][1])
+                    primary_quote = clause_refs[0]["span"] if clause_refs else hits[0][1][:200]
+                    # R7 P1-3：章节身份以独立 section_id 结构化携带；每条引文保留各自
+                    # 原文分句，不再用“；”拼接出原页不存在的合成字符串。
+                    loc_dict: Dict[str, Any] = {"page": primary_page}
+                    if clause_refs:
+                        loc_dict["pages"] = sorted({r["page"] for r in clause_refs})
+                        loc_dict["table_refs"] = clause_refs
                     issues.append(self._issue(
                         f"三公说明逻辑矛盾：「{subject}」同时出现增减变化与“持平”表述，"
                         "两者不能同时成立，需核实同比口径后修正。",
-                        {"page": self._locate_page(doc, locate_text)},
+                        loc_dict,
                         severity="medium",
-                        evidence_text=evidence,
+                        evidence_text=primary_quote,
                         section_id=section_title,
                     ))
 
@@ -11446,11 +12261,38 @@ class R33245_ThreePublicDirectionContradiction(Rule):
 
     @staticmethod
     def _locate_page(doc: Document, snippet: str) -> int:
-        compact = re.sub(r"\s+", "", snippet)[:24]
+        cleaned = re.sub(r"^\s*[-—–]?\s*\d{1,3}\s*[-—–]\s*", "", str(snippet or ""))
+        compact = re.sub(r"\s+", "", cleaned)[:24]
         for pi, page_text in enumerate(doc.page_texts):
             if compact and compact in re.sub(r"\s+", "", page_text):
                 return pi + 1
+        for part in re.split(r"[。；;\n]", cleaned):
+            part_c = re.sub(r"\s+", "", part)[:24]
+            if len(part_c) >= 6:
+                for pi, page_text in enumerate(doc.page_texts):
+                    if part_c in re.sub(r"\s+", "", page_text):
+                        return pi + 1
         return 1
+
+    @classmethod
+    def _verbatim_page_span(cls, doc: Document, text: str) -> Tuple[int, str]:
+        """提取在单页文本层中真实且尽量唯一命中的原文片段，避免跨页页脚污染。"""
+        cleaned = re.sub(r"^\s*[-—–]?\s*\d{1,3}\s*[-—–]\s*", "", str(text or "")).strip()
+        if not cleaned:
+            return 1, ""
+        pages_compact = [re.sub(r"\s+", "", str(p or "")) for p in (doc.page_texts or [])]
+        candidates = [cleaned[:200], *[s.strip()[:200] for s in re.split(r"[。；;\n]", cleaned) if len(re.sub(r"\s+", "", s)) >= 6]]
+        for cand in candidates:
+            cand_c = re.sub(r"\s+", "", cand)
+            if not cand_c:
+                continue
+            for pi, pc in enumerate(pages_compact):
+                if pc.count(cand_c) == 1:
+                    return pi + 1, cand
+            for pi, pc in enumerate(pages_compact):
+                if cand_c in pc:
+                    return pi + 1, cand
+        return cls._locate_page(doc, cleaned), cleaned[:160]
 
 
 class R33246_DomesticReceptionDisclosure(Rule):
@@ -11574,16 +12416,47 @@ class R33246_DomesticReceptionDisclosure(Rule):
             # 但若整段连接待支出语境都没有则不触发（避免误伤目录/表格页）
             if not any("国内公务接待" in clause or foreign_disclosed for clause in clauses):
                 continue
-            page = R33245_ThreePublicDirectionContradiction._locate_page(doc, para[:40])
+            para_refs: List[Dict[str, Any]] = []
+            merged_all, page_offsets = _txt_fund_merged_pages(doc)
+            cleaned_para = re.sub(r"^\s*[-—–]?\s*\d{1,3}\s*[-—–]?\s*", "", str(para or "")).strip()
+            search_start = max(0, _start)
+            # 先尝试在三公说明章节范围内精准定位段落，支持跨页切片，避免回退封面第 1 页。
+            p_idx = merged_all.find(cleaned_para, search_start, _end) if cleaned_para else -1
+            if p_idx < 0 and cleaned_para:
+                compact_para = re.sub(r"\s+", "", cleaned_para)
+                chars, pos_map = [], []
+                for idx in range(search_start, min(_end, len(merged_all))):
+                    if not merged_all[idx].isspace():
+                        chars.append(merged_all[idx])
+                        pos_map.append(idx)
+                compact_scope_s = "".join(chars)
+                c_pos = compact_scope_s.find(compact_para)
+                if c_pos >= 0 and c_pos + len(compact_para) - 1 < len(pos_map):
+                    abs_l = pos_map[c_pos]
+                    abs_r = pos_map[c_pos + len(compact_para) - 1] + 1
+                    para_refs = _merged_unique_refs(
+                        merged_all, page_offsets, abs_l, abs_r, "公务接待说明", section_title
+                    )
+            elif p_idx >= 0:
+                para_refs = _merged_unique_refs(
+                    merged_all, page_offsets, p_idx, p_idx + len(cleaned_para), "公务接待说明", section_title
+                )
+            if para_refs:
+                page = int(para_refs[0]["page"])
+                snippet = "\n".join(str(r.get("span") or "") for r in para_refs if r.get("span"))
+                table_refs = para_refs
+            else:
+                page, snippet = R33245_ThreePublicDirectionContradiction._verbatim_page_span(doc, para)
+                table_refs = [{"role": "公务接待说明", "page": page, "span": snippet}]
             # R7 P1-3（同 V33-245）：章节身份走 section_id 结构化字段；
             # evidence_text 只保留原文段落，同时挂 table_refs 支持跨页分段切片绑定。
-            snippet = para[:200]
             issues.append(self._issue(
                 "公务接待说明未披露国内公务接待批次、人次，"
                 "应补充「国内公务接待X批次、X人次」（含公务接待费对应口径）。",
                 {
                     "page": page,
-                    "table_refs": [{"role": "公务接待说明", "page": page, "span": snippet}],
+                    "pages": sorted({int(r["page"]) for r in table_refs if isinstance(r.get("page"), int)}),
+                    "table_refs": table_refs,
                 },
                 severity="medium",
                 evidence_text=snippet,
@@ -11638,14 +12511,14 @@ _WP4G_AMOUNT_RE = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(万元|万|元)")
 #: 公务用车购置的**单独披露**词干：主体词后不得紧跟「及」——合并披露
 #: 「公务用车购置及运行维护费」合法（检查表三项口径行判"合格"），
 #: 不能当作购置费已细化（宜川真值正是被合并形态掩盖）。
-_WP4G_PURCHASE_STEM_RE = re.compile(r"公务用车购置(?!及)")
+_WP4G_PURCHASE_STEM_RE = re.compile(r"公务用车购[置臵罝](?!及)")
 
 #: 购置未发生/零值等效语境：允许不带"公务用车购置"完整词干——文旅
 #: （一）同比段写「2025 年未新增公务用车」（该分句同时含合并主体），
 #: 同样构成购置披露。
 _WP4G_PURCHASE_NOT_OCCURRED_RE = re.compile(
-    r"未(?:新增|购置|新购|发生)[^。；，,]{0,6}公务用车"
-    r"|公务用车购置[^。；，,]{0,8}(?:未发生|无)"
+    r"未(?:新增|购[置臵罝]|新购|发生)[^。；，,]{0,6}公务用车"
+    r"|公务用车购[置臵罝][^。；，,]{0,8}(?:未发生|无)"
 )
 
 #: 未发生/零值等效语境（与主体词干同分句在场即算披露）。
@@ -11742,10 +12615,9 @@ class R33SGCompletion(Rule):
                 paras, evidence_stem, fallback_stem
             )
             actual = self._actual_disclosure(item_key, evidence_para)
-            page = R33245_ThreePublicDirectionContradiction._locate_page(
-                doc, evidence_para[:40]
+            page, snippet = R33245_ThreePublicDirectionContradiction._verbatim_page_span(
+                doc, evidence_para
             )
-            snippet = evidence_para[:200]
             issues.append(self._issue(
                 f"三公经费披露完整性：「{label}」在三公经费支出决算情况说明中"
                 f"未细化披露。期望：{_WP4G_EXPECTED_DISCLOSURE[item_key]}"
@@ -12114,6 +12986,9 @@ def _resolve_fiscal_year(doc: Document, pages: Tuple[int, ...]) -> Optional[int]
     年份无法确认（或出现并列最高频的不同年份）时返回 None，调用方按取数不足处理：
     跨表比较的前提是期间一致，期间不确定就不该产出正式结论。
     """
+    ctx_year = getattr(getattr(doc, "fact_context", None), "fiscal_year", None)
+    if isinstance(ctx_year, int) and not isinstance(ctx_year, bool):
+        return ctx_year
     dominant = getattr(doc, "dominant_year", None)
     if isinstance(dominant, int):
         return dominant
@@ -12879,24 +13754,54 @@ class R33CrossSanGongEcon(Rule):
         # 缺陷形态（残联 p14 FIN_06 三个空白决算格实证）。
         issues: List[Issue] = []
         # 编码错配照常报出，金额是否可继续比较由独立锚定结果决定。
+        from .checklist_support import unique_quote as _cross_unique_quote
+
         for conflict in identity_conflicts:
             conflict_code = str(conflict.get("conflict_code") or "")
             expected_code = str(conflict.get("expected_code") or "")
             conflict_name = str(conflict.get("conflict_name") or conflict.get("subject") or "")
             subj_label = str(conflict.get("subject") or "")
             row_label = str(conflict.get("row_label") or "")
+            conflict_page = int(conflict.get("page") or page6 or 0)
+            page_texts_list = getattr(doc, "page_texts", None) or []
+            raw_page_text = (
+                str(page_texts_list[conflict_page - 1] or "")
+                if 1 <= conflict_page <= len(page_texts_list)
+                else ""
+            )
+            page_compact = re.sub(r"\s+", "", raw_page_text)
+            if conflict_code and page_compact and conflict_code not in page_compact:
+                # 原件页文本层并不存在该错误编码，属表格跨行渗透拼字伪影（如 pdfplumber 把上行拼进当前行）：
+                # 不生成不存在的“编码错配”正式问题，避免伪造原文证据；金额侧若未独立证实，保持原 blocked 状态。
+                continue
             evidence = row_label or str(conflict.get("cell_text") or conflict.get("conflict") or "")
+            span_quote = evidence
+            if raw_page_text and conflict_code:
+                code_pos = raw_page_text.find(conflict_code)
+                if code_pos >= 0:
+                    span_quote = _cross_unique_quote(raw_page_text, code_pos, code_pos + len(conflict_code)) or conflict_code
             location = {
                 "table": _FIN_06_TABLE_TITLE,
                 "table_code": "FIN_06_basic_expenditure",
-                "page": conflict.get("page") or page6,
-                "pages": [conflict.get("page") or page6],
+                "page": conflict_page,
+                "pages": [conflict_page],
                 "code": conflict_code or None,
                 "expected_code": expected_code or None,
                 "subject": conflict.get("subject"),
                 "row": row_label or None,
                 "defect_type": "economic_code_name_mismatch",
                 "amount_binding_proven": conflict.get("amount_binding_proven", False),
+                "table_refs": [
+                    {
+                        "role": "基本支出经济分类表编码错配行",
+                        "table": _FIN_06_TABLE_TITLE,
+                        "page": conflict_page,
+                        "row": row_label or None,
+                        "code": conflict_code or None,
+                        "subject": conflict.get("subject"),
+                        "span": span_quote,
+                    }
+                ],
             }
             amount_note = (
                 "已按唯一科目名称及无冲突的金额继续核对，请修正原件编码或名称。"
@@ -14054,6 +14959,9 @@ def _txt_fund_dash_amount(
     return decision.group("amount"), decision.group("unit"), start + decision.end()
 
 
+_LEADING_FUNC_CODE_RE = re.compile(r"^(?:\d{7}|\d{5}|\d{3})(?=[\u4e00-\u9fff])")
+
+
 def _txt_fund_bind_statements(
     body: str, fiscal_year: Optional[int], *, source_body: Optional[str] = None
 ) -> Tuple[List[Dict[str, Any]], List[str]]:
@@ -14074,9 +14982,9 @@ def _txt_fund_bind_statements(
     amounts_by_item: Dict[str, List[str]] = {}
     for index, occurrence in enumerate(occurrences):
         m = occurrence["match"]
-        klass = _txt_fund_norm(m.group("klass"))
-        kuan = _txt_fund_norm(m.group("kuan"))
-        xiang = _txt_fund_norm(m.group("xiang"))
+        klass = _LEADING_FUNC_CODE_RE.sub("", _txt_fund_norm(m.group("klass")))
+        kuan = _LEADING_FUNC_CODE_RE.sub("", _txt_fund_norm(m.group("kuan")))
+        xiang = _LEADING_FUNC_CODE_RE.sub("", _txt_fund_norm(m.group("xiang")))
         label = f"{klass}（类）{kuan}（款）{xiang}（项）"
         if not klass or not kuan or not xiang or klass in _TXT_FUND_DASH_REFUSE:
             continue
@@ -14669,7 +15577,7 @@ _NAR_REPEAT_OBLIGATION_ID = "OBL-NARRATIVE-INDICATOR-REPEAT"
 #: 长标题在窄版面里会软换行（上海 2022：“七、一般公共预算财政拨款“三公”经费支出决算情况说\n明”），
 #: 允许标题内一次换行；换行后只能再接极短的标题尾，不吞正文。
 _NAR_REPEAT_SECTION_RE = re.compile(
-    r"[一二三四五六七八九十]+、[^\n。；]{2,40}?(?:说\n?明|\n[^\n。；，,]{0,8}?说明)")
+    r"[一二三四五六七八九十]+、[^\n。；]{2,40}?(?:说\n?明|\n[^\n。；，,]{0,8}?说明|\n[^\n。；，,0-9]{0,24}?说明)")
 
 #: 类款项条目句：沿用 WP4-B 的三级身份形态，放宽闭引号（石泉样张是
 #: 「（项）"257.14 万元」的引号形态）。名称段允许内部换行（PDF 软换行）。
@@ -15243,6 +16151,13 @@ class R33NarrativeIndicatorRepeat(Rule):
             unresolved.append(f"说明句「{indicator}」金额无法解析为数值")
             return
         scale = len(cleaned.split(".", 1)[1]) if "." in cleaned else 0
+        occ_page = _txt_fund_page_for(offsets, match_offset)
+        span_page = _txt_fund_page_for(offsets, span_start)
+        occ_pos = (
+            span_start - offsets[occ_page - 1]
+            if span_page == occ_page and 0 <= occ_page - 1 < len(offsets) and span_start >= offsets[occ_page - 1]
+            else None
+        )
         occurrences.append(
             {
                 "identity": identity,
@@ -15252,7 +16167,8 @@ class R33NarrativeIndicatorRepeat(Rule):
                 "unit": unit,
                 "scale": scale,
                 "wan": amount * factor,
-                "page": _txt_fund_page_for(offsets, match_offset),
+                "page": occ_page,
+                "pos": occ_pos,
                 "span": merged[span_start:span_end].replace("\n", " ").strip(),
                 "section": section_title,
             }
@@ -15319,12 +16235,14 @@ class R33NarrativeIndicatorRepeat(Rule):
                         "page": first["page"],
                         "section": first["section"],
                         "span": first["span"],
+                        **({"pos": first["pos"]} if first.get("pos") is not None else {}),
                     },
                     {
                         "role": "披露B",
                         "page": second["page"],
                         "section": second["section"],
                         "span": second["span"],
+                        **({"pos": second["pos"]} if second.get("pos") is not None else {}),
                     },
                 ],
             }
@@ -15416,6 +16334,7 @@ _WP4E_ACTUAL_RE = re.compile(
 _WP4E_ENTRY_RE = re.compile(
     r"[^，。；：:、（）()“”]{1,40}?\s*[（(]\s*类\s*[）)][^。；]{0,80}?[（(]\s*款\s*[）)]"
     r"[^。；]{0,80}?[（(]\s*项\s*[）)]"
+    r"|(?:^|\n)\s*\d{1,2}\s*[、.．]\s*[^，。；：:、（）()“”\n]{1,40}?\s*[（(]\s*类\s*[）)][^。；\n]{0,80}?[（(]\s*款\s*[）)]"
     r"|[一二三四五六七八九十]+、[^\n。；]{2,40}说明"
     r"|(?:^|\n)\s*[（(][一二三四五六七八九十\d]{1,3}[）)]\s*[^\n。；，,]{2,40}"
 )
@@ -15445,6 +16364,10 @@ _WP4E_ITEM_HEAD_RE = re.compile(
     r"(?P<klass>[^，。；：:、（）()“”]{1,40}?)\s*[（(]\s*类\s*[）)]"
     r"(?P<kuan>[^，。；：:、（）()“”]{1,60}?)\s*[（(]\s*款\s*[）)]"
     r"(?P<xiang>[^，。；：:、（）()“”]{1,60}?)\s*[（(]\s*项\s*[）)]"
+)
+_WP4E_ITEM_KUAN_HEAD_RE = re.compile(
+    r"[（(]\s*类\s*[）)][^。；\n]{0,80}?[（(]\s*款\s*[）)]\s*"
+    r"(?P<tail>[^，。；：:、（）()\d\n]{2,30})"
 )
 
 
@@ -15918,6 +16841,12 @@ class R33TrendCompletionRate(Rule):
         if item is not None and item.start() < claim["start"]:
             claim["clause_head"] = _txt_fund_norm(item.group("xiang"))
             return claim["clause_head"]
+        kuan_head = _WP4E_ITEM_KUAN_HEAD_RE.search(
+            merged, entry_start, min(entry_start + 200, claim["start"])
+        )
+        if kuan_head is not None and kuan_head.group("tail").strip():
+            claim["clause_head"] = _txt_fund_norm(kuan_head.group("tail"))
+            return claim["clause_head"]
         head = re.sub(r"\s+", "", merged[claim["clause_start"]:claim["start"]])
         cut = _WP4E_HEAD_CUT_RE.search(head)
         if cut is not None:
@@ -16014,6 +16943,66 @@ class R33TrendCompletionRate(Rule):
             )
             return
         if denom is None:
+            if claim["role_key"]:
+                alt_cands = [
+                    budget
+                    for budget in budgets
+                    if budget["start"] < claim["start"]
+                    and budget["section_start"] == claim["section_start"]
+                    and any(
+                        seg_start <= budget["start"] < seg_end
+                        for seg_start, seg_end in claim["segments"]
+                    )
+                    and budget["role_key"]
+                    and budget["role_key"] != claim["role_key"]
+                    and budget["wan"] is not None
+                    and budget["wan"] > 0
+                ]
+                alt_denom, alt_denom_state = self._pick_unique(alt_cands)
+                if alt_denom_state == "ok" and alt_denom is not None:
+                    alt_actual_cands = [
+                        act
+                        for act in actuals
+                        if act["start"] < claim["start"]
+                        and act["section_start"] == claim["section_start"]
+                        and any(
+                            seg_start <= act["start"] < seg_end
+                            for seg_start, seg_end in claim["segments"]
+                        )
+                        and act["wan"] is not None
+                    ]
+                    alt_actual, alt_actual_state = self._pick_unique(alt_actual_cands)
+                    if alt_actual_state == "ok" and alt_actual is not None:
+                        alt_pct = alt_actual["wan"] / alt_denom["wan"] * Decimal("100")
+                        declared_half = _declared_pct_half_step(claim.get("pct_text"))
+                        if self._pct_close(claim["pct"], alt_pct) or (
+                            declared_half is not None
+                            and abs(claim["pct"] - alt_pct) <= declared_half
+                        ):
+                            issues.append(
+                                self._issue(
+                                    f"完成率分母口径表述不一致（{indicator}）：声明「{claim['phrase']}」，"
+                                    f"同句仅披露{alt_denom['role_key']}（{_txt_fund_display(alt_denom['wan'])} 万元），"
+                                    f"按{alt_denom['role_key']}复算完成率为 {_txt_fund_display(alt_pct)}%，与声明数值一致；"
+                                    f"请核对分母表述是否应统一为「{alt_denom['role_key']}」。",
+                                    self._location(
+                                        claim,
+                                        alt_denom,
+                                        alt_actual,
+                                        year,
+                                        claim["role_key"],
+                                        recomputed=_txt_fund_display(alt_pct),
+                                        difference=_txt_fund_display(abs(claim["pct"] - alt_pct)),
+                                        identity_conflict=True,
+                                        alternative=alt_denom,
+                                    ),
+                                    severity="warn",
+                                    evidence_text=self._evidence(
+                                        claim, alt_denom, alt_actual, alt_denom, alt_pct
+                                    ),
+                                )
+                            )
+                            return
             unresolved.append(
                 f"「{indicator}」完成率声明未找到同业务口径的预算分母（insufficient_data）"
             )
@@ -16080,8 +17069,37 @@ class R33TrendCompletionRate(Rule):
             and opening["section_start"] == claim["section_start"]
             and claim["entry_start"] <= opening["start"] < claim["clause_start"]
         ]
+
+        def _is_pure_wan_yuan_opening_typo(opening: Dict[str, Any], target_actual: Dict[str, Any]) -> bool:
+            """条目首句仅漏写/多写「万」（元↔万元 10000× 整数倍且字面数字一致）时，
+            由 R001/CMM-011 报错，不在完成率里当成另一笔金额阻断计算。"""
+            op_wan = opening.get("wan")
+            act_wan = target_actual.get("wan")
+            if op_wan is None or act_wan is None or op_wan == act_wan or act_wan == 0:
+                return False
+            if {opening.get("raw_unit"), target_actual.get("raw_unit")} != {"元", "万元"}:
+                return False
+            if not (op_wan * Decimal("10000") == act_wan or act_wan * Decimal("10000") == op_wan):
+                return False
+            op_num = _wp4e_amount(str(opening.get("amount_text") or ""))
+            act_num = _wp4e_amount(str(target_actual.get("amount_text") or ""))
+            return op_num is not None and act_num is not None and op_num == act_num
+
+        effective_openings = entry_prefix_openings
+        if (
+            actual is not None
+            and actual.get("wan") is not None
+            and all(item["wan"] == actual["wan"] for item in entry_prefix_actuals)
+        ):
+            filtered_openings = [
+                opening
+                for opening in entry_prefix_openings
+                if not _is_pure_wan_yuan_opening_typo(opening, actual)
+            ]
+            if len(filtered_openings) != len(entry_prefix_openings):
+                effective_openings = filtered_openings
         cross_values = {
-            item["wan"] for item in entry_prefix_actuals + entry_prefix_openings
+            item["wan"] for item in entry_prefix_actuals + effective_openings
         }
         if actual is not None:
             cross_values.add(actual["wan"])

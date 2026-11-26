@@ -130,6 +130,21 @@ LEGACY_TABLE_INPUTS = {
 }
 
 
+def effective_legacy_table_inputs(rule_id, context):
+    codes = LEGACY_TABLE_INPUTS.get(rule_id)
+    if rule_id == "V33-005" and getattr(context, "report_kind", None) == "final":
+        # 决算表一/表四/表六/表七由各自专属规则（V33-214/119/117/243/115）校验；
+        # V33-005 仅消费 DETAIL_TABLES，避免表六/表七局部缺口误阻断其余明细表的合计核对。
+        return {
+            "FIN_02_income",
+            "FIN_03_expenditure",
+            "FIN_05_general_public_expenditure",
+            "FIN_08_gov_fund",
+            "FIN_09_state_capital",
+        }
+    return codes
+
+
 def enforce_legacy_table_admission(document, rule_id):
     artifact = getattr(document, "parse_artifact", None)
     if artifact is None or rule_id not in LEGACY_TABLE_INPUTS:
@@ -151,7 +166,7 @@ def enforce_legacy_table_admission(document, rule_id):
             build_table_import_receipt(artifact, context.facts, org_name=context.org_name),
         )
         document._table_admission_receipt = cached
-    codes = LEGACY_TABLE_INPUTS[rule_id]
+    codes = effective_legacy_table_inputs(rule_id, context)
     blocked = [
         table
         for table in cached[1].get("mapping_incomplete_tables", [])

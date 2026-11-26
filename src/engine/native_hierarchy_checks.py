@@ -302,7 +302,11 @@ def _select(doc, view, code, indicator):
     mapping = next(m for m in mappings if m['canonical_measure'] == indicator)
     cell = source_cells.get((code_rows[code], int(mapping['source_col_idx'])))
     candidates = [f for f in facts if f.subject_code == code and f.indicator == indicator]
-    if cell is not None and cell.native_blank_verified:
+    from src.schemas.parse_artifact import DASH_PLACEHOLDER_TEXTS
+    cell_empty_or_dash = cell is not None and (
+        cell.native_blank_verified or str(cell.raw_text or '').strip() in DASH_PLACEHOLDER_TEXTS
+    )
+    if cell_empty_or_dash:
         # 全空表的运行时观察项也要按原格配对，左右合计行都叫 total 时不能按编码挑选。
         from .native_empty_operands import valid_blank_observation
         observed = [f for f in candidates if isinstance(f, NativeBlankTerm)
@@ -310,7 +314,7 @@ def _select(doc, view, code, indicator):
         if len(observed) == 1 and valid_blank_observation(doc.parse_artifact, doc.fact_context,
                 observed[0].extra_dims['native_blank_observation'], getattr(doc, 'page_texts', None)):
             return observed[0], None
-    if not candidates and cell is not None and cell.native_blank_verified:
+    if not candidates and cell_empty_or_dash:
         term = blank_term(doc, table.table_code, indicator, code=code)
         if term is not None:
             return term, None
@@ -425,6 +429,9 @@ def _compare(rule, doc, title, key, code, indicator, parent, children, *, column
                     if r.get('physical_page')})
     if level == 'rounding_hint':
         message = f'{title}科目{code}/{indicator}与其明细之和差额{diff:.2f}万元，可能为取整误差。'
+    elif column_total and isinstance(parent, NativeBlankTerm) and total != 0:
+        message = (f'{title}合计单元格漏填({indicator})：表内合计格留空，'
+                   f'各类明细之和为{total:.2f}万元。')
     elif column_total:
         message = (f'{title}合计行列校验失败({indicator})：合计({parent.normalized_value:.2f}) '
                    f'!= 明细之和({total:.2f})，差额{diff:.2f}万元。')
@@ -455,8 +462,12 @@ def _compare(rule, doc, title, key, code, indicator, parent, children, *, column
             if level == 'mismatch':
                 label = {'total_actual': '本年支出合计', 'basic_actual': '基本支出',
                          'project_actual': '项目支出'}.get(indicator, indicator)
-                message = (f'{title}{label}列合计不一致：表内总计{parent.normalized_value:.2f}万元，'
-                           f'各类科目合计{total:.2f}万元，差额{diff:.2f}万元。')
+                message = (
+                    f'{title}{label}列合计单元格漏填：表内合计格留空，各类科目合计{total:.2f}万元。'
+                    if isinstance(parent, NativeBlankTerm) and total != 0
+                    else f'{title}{label}列合计不一致：表内总计{parent.normalized_value:.2f}万元，'
+                         f'各类科目合计{total:.2f}万元，差额{diff:.2f}万元。'
+                )
     return [rule._issue(message, location, 'warn' if level == 'mismatch' else 'info',
                         evidence_text=message, check_relation_id=f'{rule.code}:{key}',
                         fact_ids=ids, evidence_ids=evidence_ids)], []

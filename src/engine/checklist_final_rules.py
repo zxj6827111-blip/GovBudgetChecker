@@ -901,6 +901,7 @@ def _shared_group_disclosures(
     clauses: Sequence[Dict[str, Any]],
     records: Sequence[Dict[str, Any]],
     space_before: Optional[set[int]] = None,
+    tail_start: int = 0,
 ) -> Dict[str, Any]:
     """识别“多个（项）共享一段‘其中：’分项金额”的组级披露。
 
@@ -930,6 +931,8 @@ def _shared_group_disclosures(
         "untrusted_totals": set(),
         "section_components": [],
         "group_checks": [],
+        "merged_item_groups": [],
+        "merged_covered": {"budget": set(), "final": set()},
     }
     by_item: Dict[int, List[Dict[str, Any]]] = {}
     for clause in clauses:
@@ -944,6 +947,59 @@ def _shared_group_disclosures(
         text = joined[item_start:item_end]
         enum = _GROUP_ENUM_RE.search(text)
         if enum is None:
+            # 同一编号条目内多个（项）紧邻并列、无“其中：”拆分且仅末子句承载合并总额：
+            # 确认前 n-1 个项级子句既无自有金额也无例外声明，末子句无例外声明且对应阶段
+            # 恰好有 1 笔有效无冲突金额 → 登记为合并项组（上层必报 A-09 缺陷，绝不误绿），
+            # 并将已披露阶段的合并总额计入章节加总核对。
+            prev_clauses = group[:-1]
+            last_clause = group[-1]
+            has_prev_record = any(
+                int(c["start"]) <= int(r["pos"]) < int(c["end"])
+                for c in prev_clauses
+                for r in records
+            )
+            has_prev_exception = any(
+                _clause_exceptions(
+                    joined[max(int(c["start"]), tail_start):int(c["end"])],
+                    max(int(c["start"]), tail_start),
+                    c["label"],
+                )
+                for c in prev_clauses
+            )
+            last_start = int(last_clause["start"])
+            last_end = int(last_clause["end"])
+            last_tail_start = max(last_start, tail_start)
+            has_last_exception = bool(
+                _clause_exceptions(
+                    joined[last_tail_start:last_end], last_tail_start, last_clause["label"]
+                )
+            )
+            if not has_prev_record and not has_prev_exception and not has_last_exception:
+                last_records = [
+                    r for r in records
+                    if last_start <= int(r["pos"]) < last_end and not r.get("group_component")
+                ]
+                covered_stages: List[str] = []
+                for stage in ("budget", "final"):
+                    sr = [r for r in last_records if r.get("kind") == stage]
+                    if (
+                        len(sr) == 1
+                        and sr[0].get("value_wan") is not None
+                        and not sr[0].get("not_included_reason")
+                    ):
+                        covered_stages.append(stage)
+                if covered_stages:
+                    merged_subjects = _group_declared_subjects(
+                        joined, item_start, last_end, group
+                    )
+                    result["merged_item_groups"].append({
+                        "item_start": item_start,
+                        "subjects": merged_subjects,
+                        "stages": covered_stages,
+                    })
+                    for stage in covered_stages:
+                        for c in prev_clauses:
+                            result["merged_covered"][stage].add(int(c["start"]))
             continue
         enum_start = item_start + enum.end()
         sentence_end = text.find("。", enum.end())
@@ -1450,7 +1506,7 @@ def _clause_declaration_accounting(
     conflicts = set()
     exceptions: List[Dict[str, Any]] = []
     shared = _shared_group_disclosures(
-        joined, clauses, records, space_before=space_before
+        joined, clauses, records, space_before=space_before, tail_start=tail_start
     )
     record_by_pos = {int(record["pos"]): record for record in records}
     for position in shared["components"]:
@@ -1590,6 +1646,9 @@ def _clause_declaration_accounting(
                     })
                 item["applied"] = True
                 continue
+            if not kind_records and start in shared.get("merged_covered", {}).get(kind, ()):
+                # 多（项）合并列示总额且上层已登记 A-09 合并项告警，合并总额由末子句正常计入章节加总。
+                continue
             if not kind_records and kind == "final" and clause.get("group_component_unbound"):
                 # 共享枚举里没有能对应到本科目的分项：不能按“数量够了”
                 # 认定已披露，保留具体缺口。
@@ -1656,6 +1715,7 @@ def _clause_declaration_accounting(
         "exceptions": exceptions,
         "group_components": shared["components"],
         "group_checks": shared["group_checks"],
+        "merged_item_groups": shared.get("merged_item_groups") or [],
     }
 
 
@@ -2479,6 +2539,29 @@ class R33251_FunctionalDetailCompleteness(Rule):
         accounting = _clause_declaration_accounting(
             joined, clauses, records, tail_start, space_before=space_before
         )
+        # 同一编号下多个（项）合并列示总额、未逐项细化到项：强制报出正式 A-09 缺陷，绝不静默放行。
+        for group in accounting.get("merged_item_groups") or []:
+            m_page, m_text, m_s, m_e = _locate(int(group["item_start"]))
+            subjects = [str(s) for s in (group.get("subjects") or []) if s]
+            stage_labels = "、".join(
+                "年初预算" if stage == "budget" else "支出决算"
+                for stage in (group.get("stages") or [])
+            )
+            subject_preview = "、".join(subjects[:4]) + ("等" if len(subjects) > 4 else "")
+            subject_note = f"「{subject_preview}」" if subject_preview else "同组多个项级科目"
+            issues.append(issue_at(
+                self,
+                f"支出决算具体情况中多个项级科目合并列示{stage_labels}金额，未逐项细化到项："
+                f"{subject_note}（已按合并披露总额计入章节分项加总核算，请逐项拆分开支金额）。",
+                m_page,
+                m_text,
+                m_s,
+                m_e,
+                severity="warn",
+                checklist_item="A-09",
+                section="一般公共预算财政拨款支出决算具体情况",
+                check_relation_id=f"{self.code}:V33-251:merged_items:{group['item_start']}",
+            ))
         # 共享“其中”分项：组内科目绑定与组级算术分别留回执；
         # 组级合计只有在组内分项可核对时才作为章节加总数使用。
         for check in accounting.get("group_checks") or []:
@@ -2957,6 +3040,57 @@ class R33251_FunctionalDetailCompleteness(Rule):
                         calculation_evidence=calc_evidence,
                     )
                     continue
+
+            # 2026-11-25 解耦核对（预算侧共享“其中”组级年初预算合计）：
+            # 同一条目含“其中：”逐项决算分项但年初预算仅披露组级合计时，组级年初预算
+            # 合计本身已作为总额纳入 included；此时强制报出正式 A-09 warn，并放行后续
+            # 章节预算加总比对（闭合则 pass，不闭合则报 C-11 差额），不再卡在 insufficient_data。
+            if (
+                unknown
+                and kind == "budget"
+                and not withheld_items
+                and total is not None
+                and not_included_items
+                and all(
+                    rec.get("not_included_reason") == "item_budget_not_itemized"
+                    for rec in not_included_items
+                )
+            ):
+                first_page, first_text, first_s, first_e = _locate(int(not_included_items[0]["pos"]))
+                extra_pages = sorted({
+                    first_page,
+                    *(
+                        _locate(int(rec["pos"]))[0]
+                        for rec in not_included_items
+                        if rec.get("pos") is not None
+                    ),
+                })
+                issues.append(issue_at(
+                    self,
+                    f"支出决算具体情况中有 {len(not_included_items)} 处项级科目"
+                    "仅披露组级年初预算合计、未逐项列示年初预算；"
+                    "已将组级年初预算合计纳入章节分项加总核算，未将组级预算分摊到各科目，"
+                    "请补充逐项年初预算或说明口径。",
+                    first_page,
+                    first_text,
+                    first_s,
+                    first_e,
+                    severity="warn",
+                    checklist_item="A-09",
+                    pages=extra_pages,
+                    section="一般公共预算财政拨款支出决算具体情况",
+                    check_relation_id=f"{self.code}:V33-251:budget:group_not_itemized",
+                ))
+                not_included_items = []
+                unknown = False
+                calc_evidence = _calculation_evidence(
+                    included, not_included_items, withheld_items, _locate
+                )
+                calc_evidence.update({
+                    "subtotal_wan": _wan_display(subtotal),
+                    "stated_total_wan": _wan_display(stated),
+                    "difference_wan": _wan_display(difference),
+                })
 
             trial = _conditional_trial(
                 included, not_included_items, subtotal, stated, _locate

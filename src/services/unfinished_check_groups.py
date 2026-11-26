@@ -39,9 +39,11 @@ _OBLIGATION_DEFAULT_TABLE: Dict[str, str] = {
     "OBL-INTERNAL-T1-TOTAL": "FIN_01_income_expenditure_total",
     "OBL-CROSS-T1-T2": "FIN_01_income_expenditure_total",
     "OBL-CROSS-T1-T3": "FIN_01_income_expenditure_total",
+    "OBL-TXT-T1": "FIN_01_income_expenditure_total",
     "OBL-INTERNAL-T2-TOTAL": "FIN_02_income",
     "OBL-CROSS-T2-T4": "FIN_02_income",
     "OBL-INTERNAL-T3-TOTAL": "FIN_03_expenditure",
+    "OBL-CROSS-FISCAL-TOTAL": "FIN_04_fiscal_grant_total",
     "OBL-CROSS-T4-T5": "FIN_04_fiscal_grant_total",
     "OBL-CROSS-T4-FUNDS": "FIN_04_fiscal_grant_total",
     "OBL-TXT-T4": "FIN_04_fiscal_grant_total",
@@ -50,19 +52,64 @@ _OBLIGATION_DEFAULT_TABLE: Dict[str, str] = {
     "OBL-INTERNAL-BASIC-EXPENSE": "FIN_06_basic_expenditure",
     "OBL-TXT-T6": "FIN_06_basic_expenditure",
     "OBL-SG-ITEMS": "FIN_07_three_public",
+    "OBL-SG-TOTAL": "FIN_07_three_public",
+    "OBL-SG-COMPLETION": "FIN_07_three_public",
+    "OBL-SG-COUNTS": "FIN_07_three_public",
+    "OBL-TXT-SAN-GONG": "FIN_07_three_public",
     "OBL-CROSS-SAN-GONG-ECON": "FIN_07_three_public",
     "OBL-TXT-FUND-DETAIL": "FIN_08_gov_fund",
 }
 
 _OBLIGATION_SECTION_NEEDLES: Dict[str, Tuple[str, ...]] = {
+    "OBL-TXT-T1": ("收入支出决算总体情况说明", "收支决算总体情况说明", "决算情况说明"),
     "OBL-TXT-FINAL-DETAIL": ("支出决算具体情况", "一般公共预算财政拨款支出决算具体情况"),
     "OBL-TXT-T2": ("收入决算情况说明",),
     "OBL-TXT-T3": ("支出决算情况说明",),
     "OBL-TXT-T4": ("财政拨款收入支出决算总体情况说明",),
     "OBL-TXT-T5": ("一般公共预算财政拨款支出决算情况说明", "支出决算具体情况"),
     "OBL-TXT-T6": ("一般公共预算财政拨款基本支出决算情况说明", "基本支出决算情况说明"),
-    "OBL-TXT-SAN-GONG": ("三公经费支出决算情况说明",),
-    "OBL-NARRATIVE-AMOUNT": ("绩效评级为", "评级为", "预算绩效管理"),
+    "OBL-TXT-SAN-GONG": ("“三公”经费支出决算情况说明", "三公经费支出决算情况说明"),
+    "OBL-SG-COMPLETION": ("“三公”经费支出决算情况说明", "三公经费支出决算情况说明"),
+    "OBL-SG-COUNTS": ("“三公”经费支出决算情况说明", "三公经费支出决算情况说明"),
+    "OBL-NARRATIVE-AMOUNT": ("绩效评级为", "评级为", "预算绩效管理", "决算情况说明", "总体情况说明"),
+}
+
+_PAGE_ONE_OBLIGATIONS = {
+    "OBL-STRUCT-COVER",
+    "OBL-PROFILE-KIND-CONFLICT",
+    "OBL-STRUCT-TERMINOLOGY",
+}
+
+_TOTAL_ROW_KEYS = {"total", "合计", "总计", "本年收入合计", "本年支出合计"}
+
+_MEASURE_HUMAN_LABELS: Dict[str, str] = {
+    "general_public_budget": "一般公共预算",
+    "government_fund_budget": "政府性基金预算",
+    "state_capital_budget": "国有资本经营预算",
+    "fiscal_allocation": "财政拨款收入",
+    "superior_subsidy_income": "上级补助收入",
+    "business_income": "事业收入",
+    "operational_income": "经营收入",
+    "subsidiary_income": "附属单位上缴收入",
+    "other_income": "其他收入",
+    "total_actual": "合计决算",
+    "basic_actual": "基本支出决算",
+    "project_actual": "项目支出决算",
+    "income_actual": "本年收入决算",
+    "expenditure_actual": "本年支出决算",
+    "to_superior_actual": "上缴上级支出",
+    "operational_actual": "经营支出",
+    "subsidiary_actual": "对附属单位补助支出",
+    "total_budget": "年初预算",
+    "budget_amount": "年初预算",
+}
+
+_BLOCK_DICT_LABELS: Dict[str, str] = {
+    "rule_admission_blocked": "处单元格因编码或行结构异常未纳入自动勾稽",
+    "amount_column_unmapped": "个金额格未识别到子表头",
+    "fact_unbound": "个金额格数值归属待确认",
+    "column_identity_unconfirmed": "处列头归属未确认",
+    "cell_low_confidence": "个单元格识别置信度低",
 }
 
 
@@ -341,14 +388,80 @@ def _named_table(text: str, table_names) -> str:
     return next(iter(complete)) if len(complete) == 1 else ""
 
 
-def _humanize_detail(text: str) -> str:
+def _format_block_dict(raw_dict: str) -> str:
+    parts: List[str] = []
+    for reason_key, count in re.findall(r"'([a-z_]+)'\s*:\s*(\d+)", raw_dict):
+        label = _BLOCK_DICT_LABELS.get(reason_key)
+        if label:
+            parts.append(f"{count} {label}")
+    return f"（{'，'.join(parts)}）" if parts else ""
+
+
+def _table_label_for_code(code: str, table_names: Optional[Mapping[str, str]] = None) -> str:
+    if table_names and table_names.get(code):
+        return str(table_names[code])
+    aliases = _TABLE_ALIAS_MAP.get(code)
+    return aliases[0] if aliases else ""
+
+
+def _humanize_role_title(role: str, subject: str = "") -> str:
+    raw = str(role or "").strip()
+    if not raw:
+        return ""
+    m = re.match(r"^([A-Za-z]+_[A-Za-z0-9_]*)/(.*)$", raw)
+    if not m:
+        return raw
+    prefix, rest = m.group(1), m.group(2).strip()
+    col_label = _MEASURE_HUMAN_LABELS.get(prefix, "")
+    rest_clean = rest.replace("操作数", "数值待核对")
+    if col_label.endswith("决算") and rest_clean.startswith("决算"):
+        rest_clean = rest_clean[2:]
+    if col_label.endswith("预算") and rest_clean.startswith("预算"):
+        rest_clean = rest_clean[2:]
+    combined = f"{col_label}{rest_clean}".strip() or "金额数值待核对"
+    if subject in _TOTAL_ROW_KEYS and not combined.startswith("合计"):
+        return f"合计行 · {combined}"
+    return combined
+
+
+def _humanize_detail(text: str, table_names: Optional[Mapping[str, str]] = None) -> str:
     cleaned = str(text or "").split("；结构：", 1)[0].strip()
-    cleaned = re.sub(r"\{[^{}]*\}", "", cleaned)
-    cleaned = re.sub(r"(?:table:)?(?:FIN|BUD)_\d+_[A-Za-z0-9_]+", "", cleaned)
-    cleaned = re.sub(r"[A-Za-z]+_[A-Za-z0-9_]*\/", "", cleaned)
+    cleaned = re.sub(r"\{[^{}]*\}", lambda m: _format_block_dict(m.group(0)), cleaned)
+    cleaned = re.sub(
+        r"(?:table:)?((?:FIN|BUD)_\d+_[A-Za-z0-9_]+)",
+        lambda m: f"《{_table_label_for_code(m.group(1), table_names)}》"
+        if _table_label_for_code(m.group(1), table_names)
+        else "",
+        cleaned,
+    )
+    cleaned = re.sub(r"单元格\s*[0-9a-f]{8,}:r(\d+)c(\d+)", r"第\1行第\2列单元格", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"[0-9a-f]{8,}:r(\d+)c(\d+)", r"第\1行第\2列单元格", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(
+        r"([A-Za-z]+_[A-Za-z0-9_]*)/(?=决算|预算)",
+        lambda m: _MEASURE_HUMAN_LABELS.get(m.group(1), "")
+        if m.group(1) in {
+            "general_public_budget", "government_fund_budget", "state_capital_budget",
+            "fiscal_allocation", "superior_subsidy_income", "business_income",
+            "operational_income", "subsidiary_income", "other_income",
+        }
+        else "",
+        cleaned,
+    )
+    cleaned = re.sub(
+        r"([A-Za-z]+_[A-Za-z0-9_]*)/",
+        lambda m: _MEASURE_HUMAN_LABELS.get(m.group(1), ""),
+        cleaned,
+    )
     cleaned = re.sub(r"/(?:total|basic|project|budget|final)_[a-z_]+", "", cleaned)
+    cleaned = re.sub(r"\btotal的", "合计行的", cleaned)
+    cleaned = cleaned.replace("（ambiguous）", "（原件数字重叠或存在歧义）")
     cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ；;，,：:")
-    return cleaned
+    clauses: List[str] = []
+    for part in re.split(r"[；;]+", cleaned):
+        part_s = part.strip()
+        if part_s and part_s not in clauses:
+            clauses.append(part_s)
+    return "；".join(clauses)
 
 
 def _build_table_index(
@@ -389,10 +502,39 @@ def _build_table_index(
 
 
 def _is_toc_page(text: str, page_number: int) -> bool:
-    if page_number > 5:
+    if page_number > 6:
         return False
     compact = _norm(text)
-    return "目录" in compact[:30] or (compact.count("决算表") >= 5 and compact.count("说明") >= 3)
+    if "目录" in compact[:30] or (compact.count("决算表") >= 5 and compact.count("说明") >= 3):
+        return True
+    if len(re.findall(r"(?:\.{4,}|…{2,}|·{4,}|-{4,})\s*\d{1,3}(?:\s|$)", text)) >= 2:
+        return True
+    if (
+        page_number >= 2
+        and "。" not in text
+        and not re.search(r"\d+\.\d{2}", text)
+        and (
+            compact.count("情况说明") >= 3
+            or len(re.findall(r"(?:^|\n)\s*(?:[一二三四五六七八九十]+、|第[一二三四五六七八九十]+部分)", text)) >= 3
+        )
+    ):
+        return True
+    return False
+
+
+def _find_explicit_page_in_details(details: Sequence[str], page_texts: Sequence[str]) -> int | None:
+    for detail in details:
+        for m in re.finditer(r"第\s*(\d+)\s*页", str(detail or "")):
+            pnum = int(m.group(1))
+            if pnum <= 0:
+                continue
+            if page_texts:
+                if pnum > len(page_texts):
+                    continue
+                if _is_toc_page(str(page_texts[pnum - 1] or ""), pnum):
+                    continue
+            return pnum
+    return None
 
 
 def _find_subject_page(
@@ -464,67 +606,105 @@ def _compose_guidance(
     group_checks: Sequence[Mapping[str, Any]],
     descriptions: Mapping[str, str],
     *,
+    table_names: Optional[Mapping[str, str]] = None,
     covered_by_issue: bool = False,
 ) -> tuple[str, str]:
     title = str(group.get("title") or "")
     table_name = str(group.get("table_name") or "")
     subject = str(group.get("subject") or "")
+    page = group.get("page")
+    page_note = f"第 {page} 页" if page else "对应页"
     details = [descriptions.get(str(check["id"]), "") for check in group_checks]
     joined = "；".join(d for d in details if d)
     covered_hint = "该项已在「必须处理」中生成对应问题，点击下方关联问题去处理即可，无需在此重复补核。"
 
-    if any(check.get("reason") == "amount_column_unmapped" for check in group_checks):
+    if (
+        any(check.get("reason") == "amount_column_unmapped" for check in group_checks)
+        or "amount_column_unmapped" in joined
+        or "子表头" in joined
+    ):
         col_labels = {label for d in details for label in _COLUMN_GROUP.findall(d)}
         col_label = next(iter(col_labels)) if len(col_labels) == 1 else ""
-        cell_match = _AMOUNT_CELL_COUNT.search(joined)
+        cell_match = _AMOUNT_CELL_COUNT.search(joined) or re.search(r"'amount_column_unmapped'\s*:\s*(\d+)", joined)
         cell_note = f"有 {cell_match.group(1)} 个金额格" if cell_match else "部分金额格"
-        prefix = f"原表「{col_label}」列下" if col_label else "原表"
+        prefix = f"原表「{col_label}」列下" if col_label else (f"《{table_name}》" if table_name else "原表")
         plain = f"{prefix}{cell_note}未识别到子列名称，系统无法自动完成该表及相关勾稽核对。"
-        hint = covered_hint if covered_by_issue else "请对照左侧 PDF 原表，确认未印子列名的各列含义，并核对合计与分项、表间及表文金额是否一致。"
+        hint = covered_hint if covered_by_issue else f"请对照左侧{page_note} PDF 原表，确认未印子列名的各列含义，并核对合计与分项、表间及表文金额是否一致。"
         return plain, hint
 
-    if title == "目标表待定位" or any("table_missing" in (check.get("reason_codes") or ()) for check in group_checks):
+    if "金额单位未知" in joined:
+        target = f"《{table_name}》" if table_name else "对应决算表"
+        plain = f"{target}（{page_note}）未标注金额单位（如“单位：万元”），系统按审慎原则未直接猜测换算口径。"
+        hint = covered_hint if covered_by_issue else f"请对照左侧{page_note}原表确认金额单位，并核对正文中对应章节披露金额是否一致。"
+        return plain, hint
+
+    if "经济分类表" in joined and "科目编码无法唯一识别" in joined:
+        target = f"《{table_name}》" if table_name else "《一般公共预算财政拨款基本支出决算表》"
+        plain = f"{target}（{page_note}）部分行的经济分类编码在原件中截断或折行，系统已完成合计行核对，5位款项明细归集及“三公”经济分类对照需人工确认。"
+        hint = covered_hint if covered_by_issue else f"请对照左侧{page_note}原表，核对人员经费、公用经费各款项编码与分项加总，以及“三公”对应经济分类行金额。"
+        return plain, hint
+
+    if title == "目标表待定位" or (
+        any("table_missing" in (check.get("reason_codes") or ()) for check in group_checks)
+        and "rule_admission_blocked" not in joined
+        and "cell_low_confidence" not in joined
+    ):
         target = f"《{table_name}》" if table_name else "目标表格"
-        plain = f"系统未能唯一识别{target}的结构化表格（常见原因：表题写法不规范、缺表或格式异常）。"
-        hint = covered_hint if covered_by_issue else f"请查看左侧原文确认{target}是否存在、数据是否完整，并人工核对相关跨表关系。"
+        plain = f"系统未能唯一识别{target}的可用金额数据（常见原因：表内全部为空白/脱敏、表题写法不规范或缺表）。"
+        hint = covered_hint if covered_by_issue else f"请查看左侧{page_note}原文确认{target}是否存在、数据是否完整，并人工核对相关跨表关系。"
         return plain, hint
 
     if title == "绩效评级类别待确认" or "评级类别" in joined:
         plain = "正文中的绩效自评评级档次未被识别为同一套标准互斥评级，系统未能自动复算各档项目数之和。"
-        hint = covered_hint if covered_by_issue else "请对照左侧绩效说明原文，核对各评级档次项目数加总是否等于绩效自评项目总数。"
+        hint = covered_hint if covered_by_issue else f"请对照左侧{page_note}绩效说明原文，核对各评级档次项目数加总是否等于绩效自评项目总数。"
         return plain, hint
 
     if title == "科目名称对应关系" or ("科目名称差异" in joined and "金额" not in title):
         subject_note = f"（涉及「{subject}」）" if subject else ""
         plain = f"正文说明与对应表格中的科目名称不完全一致{subject_note}，系统未直接按金额自动绑定核对。"
-        hint = covered_hint if covered_by_issue else "请对照左侧正文与对应表格，核对科目名称写法及对应金额是否一致。"
+        hint = covered_hint if covered_by_issue else f"请对照左侧{page_note}正文与对应表格，核对科目名称写法及对应金额是否一致。"
         return plain, hint
 
     if "显式决算金额" in title or "缺少可归一单位" in joined:
         subject_note = f"「{subject}」" if subject else "该条目"
         plain = f"正文{subject_note}的金额缺少规范单位或格式异常，系统未能自动提取并核对。"
-        hint = covered_hint if covered_by_issue else "请对照左侧正文核对该条目的金额数字及单位（万元）是否完整、与表格一致。"
+        hint = covered_hint if covered_by_issue else f"请对照左侧{page_note}正文核对该条目的金额数字及单位（万元）是否完整、与表格一致。"
         return plain, hint
 
     if "存在冲突" in title or "多个不一致披露" in joined or "完成率" in joined:
         subject_note = f"「{subject}」" if subject else "该科目"
         plain = f"正文中{subject_note}出现多处不一致的预算/决算金额披露，系统无法唯一确定计算口径。"
-        hint = covered_hint if covered_by_issue else "请对照左侧原文核对预算数、决算数及预算完成率计算是否正确。"
+        hint = covered_hint if covered_by_issue else f"请对照左侧{page_note}原文核对预算数、决算数及预算完成率计算是否正确。"
         return plain, hint
 
     if title == "科目明细待核对" or "直接层级明细不完整" in joined:
         target = f"《{table_name}》" if table_name else "对应表格"
         plain = f"{target}科目 {subject} 的直接下级明细不完整（常见原因：下级科目编码误写、错位或漏列款/项级行）。"
-        hint = covered_hint if covered_by_issue else f"请对照左侧对应页，逐行核对科目 {subject} 下级科目编码及金额加总是否正确。"
+        hint = covered_hint if covered_by_issue else f"请对照左侧{page_note}，逐行核对科目 {subject} 下级科目编码及金额加总是否正确。"
         return plain, hint
 
-    first_clean = _humanize_detail(details[0]) if details else ""
+    if (
+        "ambiguous" in joined
+        or "rule_admission_blocked" in joined
+        or "没有唯一当前事实" in joined
+        or any("cell_low_confidence" in (check.get("reason_codes") or ()) for check in group_checks)
+    ):
+        target = f"《{table_name}》" if table_name else "原表"
+        plain = f"{target}在{page_note}存在局部单元格数字重叠、右缘尾数裁切或行结构异常，其余清晰科目已自动核对，仅保留受影响检查待确认。"
+        hint = covered_hint if covered_by_issue else f"请对照左侧{page_note}原表查看受影响单元格原始数字，确认本表合计及相关表间/表文金额是否一致。"
+        return plain, hint
+
+    first_clean = _humanize_detail(details[0], table_names) if details else ""
     plain = first_clean or "系统在该位置取数不足，未能自动完成相关检查。"
-    hint = covered_hint if covered_by_issue else "请对照左侧原文核对对应数据及勾稽关系后表态。"
+    if page == 1 and any(cid in _PAGE_ONE_OBLIGATIONS for cid in (group.get("check_ids") or ())):
+        hint = covered_hint if covered_by_issue else "请对照左侧第 1 页封面与归档单位名称、报告文种（部门/单位、预算/决算）核对一致后表态。"
+    else:
+        hint = covered_hint if covered_by_issue else f"请对照左侧{page_note}原文核对对应数据及勾稽关系后表态。"
     return plain, hint
 
 
 _AMOUNT_FOR_LINK = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d{2}")
+_BARE_TABLE_CODE_RE = re.compile(r"^(?:table:)?((?:FIN|BUD)_\d+_[A-Za-z0-9_]+)$")
 
 
 def build_unfinished_check_groups(
@@ -565,8 +745,22 @@ def build_unfinished_check_groups(
             "location_level": "exact" if page and boxes else "table" if page and table_code else "page" if page else "unlocated",
             "evidence": [{"page": page, "bbox": box} for box in boxes] if page else [],
         })
+        if page and group.get("page") is None:
+            group["page"] = page
+            if group["location_level"] == "unlocated":
+                group["location_level"] = "table" if table_code else "page"
+        if page and boxes:
+            existing_boxes = [item.get("bbox") for item in group["evidence"]]
+            for box in boxes:
+                if box and box not in existing_boxes:
+                    group["evidence"].append({"page": page, "bbox": box})
+                    existing_boxes.append(box)
+            if group["evidence"]:
+                group["location_level"] = "exact"
         if table_code and not group_table_codes.get(key):
             group_table_codes[key] = table_code
+        if not group.get("table_name") and (table_name or table_code):
+            group["table_name"] = table_name or table_names.get(table_code, table_code)
         if check["id"] not in group["check_ids"]:
             group["check_ids"].append(check["id"])
         return group
@@ -594,6 +788,48 @@ def build_unfinished_check_groups(
                 title="金额子列未确认" if amount_columns else "")
             if page and code and amount_columns and key not in column_sources[(page, code)]:
                 column_sources[(page, code)].append(key)
+
+    # 识别未被 structured_review 覆盖的表级阻断源（同一页同一张表因缺子列头、编码截断、
+    # 右缘裁切或整表空白导致多项检查受阻时，归并为同一待办，人工只需核对一次）。
+    unstructured_blocked_tables: set[Tuple[Optional[int], str]] = set()
+    bare_blocked_codes: set[str] = set()
+    for check in checks:
+        if check.get("record_type") == "structured_review":
+            continue
+        for blocker in _records(check.get("blocked_by")):
+            ref_str = str(blocker.get("ref") or "").strip()
+            for p_str, b_code in _TABLE_SOURCE.findall(ref_str):
+                p_int = int(p_str)
+                if not column_sources.get((p_int, b_code)):
+                    unstructured_blocked_tables.add((p_int, b_code))
+            bare_m = _BARE_TABLE_CODE_RE.match(ref_str)
+            if bare_m:
+                bare_blocked_codes.add(bare_m.group(1))
+    for b_code in bare_blocked_codes:
+        already_paged = [p for (p, c) in unstructured_blocked_tables if c == b_code and p is not None]
+        if already_paged:
+            continue
+        fallback_page = table_by_code[b_code]["page"] if b_code in table_by_code else None
+        if fallback_page is None or not column_sources.get((fallback_page, b_code)):
+            unstructured_blocked_tables.add((fallback_page, b_code))
+
+    def _unstructured_targets_for(
+        blocked_tables: set[Tuple[int, str]],
+        blockers: Sequence[Mapping[str, Any]],
+    ) -> List[Tuple[Optional[int], str]]:
+        targets: set[Tuple[Optional[int], str]] = set()
+        for p_int, b_code in blocked_tables:
+            if (p_int, b_code) in unstructured_blocked_tables:
+                targets.add((p_int, b_code))
+        for blocker in blockers:
+            bare_m = _BARE_TABLE_CODE_RE.match(str(blocker.get("ref") or "").strip())
+            if bare_m:
+                b_code = bare_m.group(1)
+                code_targets = [(p, c) for (p, c) in unstructured_blocked_tables if c == b_code]
+                targets.update(code_targets)
+        return sorted(targets, key=lambda item: (item[0] is None, item[0] or 0, item[1]))
+
+    blocked_table_keys: set[tuple] = set()
 
     for check in checks:
         if check.get("record_type") == "structured_review":
@@ -631,6 +867,15 @@ def build_unfinished_check_groups(
             for key in sorted(matched):
                 add(key, check)
 
+        unstructured_targets = _unstructured_targets_for(blocked_tables, blockers)
+        if not matched and unstructured_targets and not operands:
+            for t_page, t_code in unstructured_targets:
+                b_key = ("blocked-table", t_page, t_code)
+                blocked_table_keys.add(b_key)
+                add(b_key, check, page=t_page, table_code=t_code)
+                matched.add(b_key)
+                absorbed_operands.add((t_page, t_code))
+
         for op in operands:
             page = _page(op.get("page"))
             code = str(op.get("table_code") or "")
@@ -638,24 +883,72 @@ def build_unfinished_check_groups(
             box = _bbox(op.get("bbox"))
             if (page, code) in absorbed_operands and not box:
                 continue
+            if code:
+                op_blocked = (
+                    [(page, code)]
+                    if (page, code) in unstructured_blocked_tables
+                    else [(p, c) for (p, c) in unstructured_blocked_tables if page is None and c == code]
+                )
+                if op_blocked:
+                    for t_page, t_code in op_blocked:
+                        b_key = ("blocked-table", t_page, t_code)
+                        blocked_table_keys.add(b_key)
+                        add(
+                            b_key,
+                            check,
+                            page=t_page or page,
+                            boxes=[box] if (box and (t_page == page or t_page is None)) else [],
+                            table_code=t_code,
+                        )
+                        matched.add(b_key)
+                    continue
             if not any((page, code, section, subject)):
                 continue
             if box and page:
                 key = ("coordinates", page, tuple(box))
+            elif page and code and not section and subject in _TOTAL_ROW_KEYS:
+                key = ("operand-total", page, code, "total")
             elif page and (code or section) and subject:
                 key = ("operand", page, code, section, subject, column, role)
             else:
                 key = ("check", check["id"], page, code, section, subject, column, role)
-            add(key, check, page=page, boxes=[box] if box else [], table_code=code,
-                section=section, subject=subject, title=role if subject else "")
+            add(
+                key,
+                check,
+                page=page,
+                boxes=[box] if box else [],
+                table_code=code,
+                section=section,
+                subject=subject,
+                title=_humanize_role_title(role, subject) if subject else "",
+            )
             matched.add(key)
+
+        if not matched and unstructured_targets:
+            for t_page, t_code in unstructured_targets:
+                b_key = ("blocked-table", t_page, t_code)
+                blocked_table_keys.add(b_key)
+                add(b_key, check, page=t_page, table_code=t_code)
+                matched.add(b_key)
+
+        if not matched and ("基本支出表" in detail or "经济分类表" in detail):
+            fin06_targets = sorted(
+                ((p, c) for (p, c) in unstructured_blocked_tables if c == "FIN_06_basic_expenditure"),
+                key=lambda item: (item[0] is None, item[0] or 0),
+            )
+            if fin06_targets:
+                for t_page, t_code in fin06_targets:
+                    b_key = ("blocked-table", t_page, t_code)
+                    blocked_table_keys.add(b_key)
+                    add(b_key, check, page=t_page, table_code=t_code)
+                    matched.add(b_key)
 
         if not matched:
             location = check.get("location") or {}
             page = _page(check.get("page_number")) or _page(location.get("page"))
             code = str(check.get("table_code") or location.get("table") or "")
-            if len(blocked_tables) == 1:
-                blocked_page, blocked_code = next(iter(blocked_tables))
+            if blocked_tables:
+                blocked_page, blocked_code = min(blocked_tables)
                 if page in (None, blocked_page) and code in ("", blocked_code):
                     page, code = blocked_page, blocked_code
             subject_match = _SUBJECT_CODE.search(detail)
@@ -676,6 +969,8 @@ def build_unfinished_check_groups(
                 if len(matches) == 1:
                     boxes = [list(matches.pop())]
                 key = ("coordinates", page, tuple(boxes[0])) if boxes else ("quote", page, quote)
+            elif subject_match and (code or named_table):
+                key = ("subject-detail", page, code or named_table, subject_match[1])
             else:
                 key = ("unlocated", check["id"])
             add(key, check, page=page, boxes=boxes, table_code=code, table_name=named_table,
@@ -689,9 +984,35 @@ def build_unfinished_check_groups(
             if len(labels) == 1:
                 group["title"] = f"{next(iter(labels))}子列未确认"
 
+    for key in blocked_table_keys:
+        group = groups.get(key)
+        if not group:
+            continue
+        t_code = group_table_codes.get(key, "")
+        joined_desc = "；".join(descriptions.get(cid, "") for cid in group["check_ids"])
+        labels = {label for cid in group["check_ids"] for label in _COLUMN_GROUP.findall(descriptions.get(cid, ""))}
+        if len(labels) == 1:
+            group["title"] = f"{next(iter(labels))}子列未确认"
+        elif "amount_column_unmapped" in joined_desc:
+            tname = group.get("table_name") or table_names.get(t_code, "")
+            group["title"] = f"《{tname}》金额子列未确认" if tname else "金额子列未确认"
+        elif t_code == "FIN_06_basic_expenditure" and ("科目编码" in joined_desc or "经济分类" in joined_desc):
+            group["title"] = "基本支出经济分类编码待核对"
+        elif (
+            any("table_missing" in (check_by_id.get(cid, {}).get("reason_codes") or ()) for cid in group["check_ids"])
+            and "rule_admission_blocked" not in joined_desc
+            and "cell_low_confidence" not in joined_desc
+            and "没有唯一当前事实" not in joined_desc
+        ):
+            group["title"] = "目标表待定位"
+        elif len(group["check_ids"]) > 1:
+            tname = group.get("table_name") or table_names.get(t_code, "")
+            group["title"] = f"《{tname}》局部数据待核对" if tname else "表格局部数据待核对"
+
     # P1 定位兜底链 + 阻塞/白话说明增强：
     # 1) 已有单元格/操作数坐标（exact）保持不动；
-    # 2) 封面义务 → 第 1 页；table_code/表名/义务默认表/标题别名 → reading_import.tables（有科目号时反查科目行所在页）；
+    # 2) 封面/文种/主体口径义务 → 第 1 页；显式“第N页”文本 → 对应非目录页；
+    #    table_code/表名/义务默认表/标题别名 → reading_import.tables（有科目号时反查科目行所在页）；
     # 3) 科目号 → 正文逐页文本；
     # 4) 正文叙事关键词/章节标题/引文 → 逐页文本；
     # 5) 仍找不到时保留 unlocated，并写明缺口原因。
@@ -722,9 +1043,14 @@ def build_unfinished_check_groups(
         check_details = [descriptions.get(str(check["id"]), "") for check in group_checks]
         check_titles = [str(check.get("title") or "") for check in group_checks]
         if group["page"] is None:
-            if "OBL-STRUCT-COVER" in group["check_ids"] or "封面" in str(group.get("title") or ""):
+            if any(cid in _PAGE_ONE_OBLIGATIONS for cid in group["check_ids"]) or "封面" in str(group.get("title") or ""):
                 group["page"] = 1
                 group["location_level"] = "page"
+            if group["page"] is None:
+                explicit_page = _find_explicit_page_in_details(check_details, page_texts)
+                if explicit_page:
+                    group["page"] = explicit_page
+                    group["location_level"] = "table" if group.get("table_name") else "page"
             resolved_code = (
                 group_table_codes.get(key)
                 or code_by_name.get(_norm(group.get("table_name")))
@@ -785,6 +1111,17 @@ def build_unfinished_check_groups(
                                 break
                         if group["page"] is not None:
                             break
+            if group["page"] is None and table_by_code and any(
+                cid in {"OBL-INTERNAL-TABLE-TOTAL", "OBL-STRUCT-NUMBER-VALIDITY", "OBL-EMPTY-TABLE-DISCLOSURE"}
+                for cid in group["check_ids"]
+            ):
+                first_tbl = min(table_by_code.values(), key=lambda info: info["page"])
+                group["page"] = first_tbl["page"]
+                group["location_level"] = "table"
+                if not group.get("table_name") and first_tbl.get("title"):
+                    group["table_name"] = first_tbl["title"]
+                if first_tbl.get("bbox"):
+                    group["evidence"] = [{"page": first_tbl["page"], "bbox": first_tbl["bbox"]}]
             if group["page"] is None:
                 if group.get("table_name"):
                     group["unlocated_reason"] = f"当前 PDF 中未识别到《{group['table_name']}》的页码位置"
@@ -821,7 +1158,11 @@ def build_unfinished_check_groups(
         else:
             handling_mode = "notice_only"
         plain_reason, action_hint = _compose_guidance(
-            group, group_checks, descriptions, covered_by_issue=(handling_mode == "covered_by_issue"),
+            group,
+            group_checks,
+            descriptions,
+            table_names=table_names,
+            covered_by_issue=(handling_mode == "covered_by_issue"),
         )
         group["blocking_obligation_ids"] = blocking_ids
         group["covered_obligation_ids"] = covered_ids

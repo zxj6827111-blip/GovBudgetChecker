@@ -195,8 +195,84 @@ record_operand_gap = _record_operand_gap
 record_operand_rejection = _record_operand_rejection
 
 
+def derive_missing_detail_total_fact(doc, facts, indicator='total_actual', *, stage='决算'):
+    """当明细表合计格漏填留空而顶层类级分项完整且有非零发生额时，合成带分项原格证据的推导合计事实供下游继续核查。"""
+    import dataclasses
+    from src.services.fiscal_code_hierarchy import hierarchy_paths
+
+    context = getattr(doc, 'fact_context', None)
+    if context is None or not facts:
+        return None
+    table_code = getattr(facts[0], 'table_code', None)
+    if table_code not in {
+        'FIN_02_income',
+        'FIN_03_expenditure',
+        'FIN_05_general_public_expenditure',
+        'FIN_08_gov_fund',
+        'FIN_09_state_capital',
+    }:
+        return None
+    codes = {
+        str(f.subject_code)
+        for f in facts
+        if str(getattr(f, 'subject_code', '') or '').isdigit()
+    }
+    if not codes:
+        return None
+    paths = hierarchy_paths(codes)
+    if not paths or len(paths) != len(codes) or len(set(paths.values())) != len(paths):
+        return None
+    roots = sorted(
+        code for code in codes
+        if not any(paths[code].startswith(paths[p]) and code != p for p in codes)
+    )
+    if not roots:
+        return None
+    children = []
+    for root_code in roots:
+        child, err = select(doc, facts, indicator, code=root_code, stage=stage, allow_native_blank=True)
+        if err or child is None or child.normalized_value is None:
+            return None
+        children.append(child)
+    money_children = [c for c in children if not isinstance(c, NativeBlankTerm)]
+    if not money_children:
+        return None
+    total_val = sum((c.normalized_value for c in children), Decimal('0'))
+    if total_val == 0:
+        return None
+    template = money_children[0]
+    combined_refs = [
+        dict(ref)
+        for c in money_children
+        for ref in (c.extra_dims or {}).get('evidence_refs', [])
+        if isinstance(ref, dict)
+    ]
+    if not combined_refs:
+        return None
+    factor = {'元': Decimal('0.0001'), '万元': Decimal('1'), '亿元': Decimal('10000')}.get(template.unit)
+    raw_str = f'{(total_val / factor):.2f}' if factor else f'{total_val:.2f}'
+    return dataclasses.replace(
+        template,
+        fact_uid=f'{template.instance_uid}:derived_total:{indicator}:{stage}',
+        subject_code='total',
+        subject_name='合计',
+        classification_level=0,
+        parent_subject_code=None,
+        hierarchy_path=[],
+        raw_value=raw_str,
+        normalized_value=total_val,
+        extra_dims={
+            **dict(template.extra_dims or {}),
+            'derived_missing_total': True,
+            'derived_from_fact_uids': [c.fact_uid for c in money_children],
+            'derived_note': '原表合计格漏填，按顶层分项实算合计继续核对',
+            'evidence_refs': combined_refs,
+        },
+    )
+
+
 def select(doc, facts, indicator, *, code=None, name=None, stage='决算', allow_native_blank=False,
-           source_cell=None):
+           source_cell=None, allow_derived_total=False):
     context = doc.fact_context
     normalized_name = re.sub(r'\s+', '', str(name)) if name is not None else None
     candidates = [f for f in facts if f.indicator == indicator
@@ -259,7 +335,15 @@ def select(doc, facts, indicator, *, code=None, name=None, stage='决算', allow
             term = blank_term(doc, facts[0].table_code, indicator, code=code,
                               names=(name,) if name else (), stage=stage)
             if term is not None:
+                if allow_derived_total and (code == 'total' or name in ('合计', '总计')):
+                    derived = derive_missing_detail_total_fact(doc, facts, indicator, stage=stage)
+                    if derived is not None:
+                        return derived, None
                 return term, None
+        if not candidates and allow_derived_total and facts and (code == 'total' or name in ('合计', '总计')):
+            derived = derive_missing_detail_total_fact(doc, facts, indicator, stage=stage)
+            if derived is not None:
+                return derived, None
         reason = f'{code or name or indicator}的{indicator}/{stage}操作数缺失或不唯一'
         _record_operand_gap(doc, facts, candidates, reason, indicator=indicator,
                             code=code, name=name, stage=stage, source_cell=source_cell)
@@ -828,6 +912,54 @@ def relation(rule, doc, key, label, parent, children, *, hints=True, fund_compos
     return [issue], []
 
 
+def _economic_blank_code_omitted_row(doc, table, cells, row_idx, mapping, code_columns, code, name, amount):
+    """经济分类表某一行省略了科目编码、但金额格经原件网格认证为空白（且非合计行）：
+    数值贡献确定为 0，不阻断整表勾稽；若有非空金额或打印了错误/乱码编码则绝不放行。
+    """
+    from .cell_value_policy import interpret_cell_value
+    from .native_empty_operands import cell_id
+
+    if code is not None or not name or any(tok in name for tok in ('合计', '总计', '小计')):
+        return None
+    label_cols = [int(c) for c in (mapping.get('source_label_cols') or [])]
+    if not any(c in code_columns for c in label_cols):
+        return None
+    for c in label_cols:
+        if c not in code_columns:
+            continue
+        code_cell = cells.get((row_idx, c))
+        if code_cell is None or str(code_cell.raw_text or '').strip():
+            return None
+    if (amount is None or str(amount.raw_text or '').strip()
+            or amount.numeric_value is not None
+            or not getattr(amount, 'native_blank_verified', False)
+            or getattr(amount, 'ocr_provenance', None)
+            or getattr(amount, 'extraction_method', None) not in {'lines', 'lines_strict'}
+            or not getattr(amount, 'bbox', None)):
+        return None
+    context, artifact = getattr(doc, 'fact_context', None), getattr(doc, 'parse_artifact', None)
+    if (context is None or artifact is None or context.report_kind != 'final'
+            or context.file_hash != artifact.source_file_hash
+            or context.parse_run_uid != artifact.parse_run_uid):
+        return None
+    sid = cell_id(table, amount)
+    physical = [c for fragment in artifact.physical_fragments for c in fragment.cells
+                if cell_id(fragment, c) == sid]
+    if len(physical) != 1 or not physical[0].native_blank_verified or str(physical[0].raw_text or '').strip():
+        return None
+    amount_col = int(mapping['source_col_idx'])
+    value, _presence, convention = interpret_cell_value(
+        '', native_blank_verified=True,
+        region=context.org_name, year=context.fiscal_year,
+        table_code=table.table_code, row=row_idx, column=amount_col)
+    if value != 0 or not convention:
+        return None
+    return dict(kind='blank_code_omitted_row', table_code=table.table_code, source_cell_id=sid,
+                physical_page=amount.page_number, bbox=list(amount.bbox), raw_text='',
+                subject_name=name, value='0', convention=convention,
+                source_file_hash=context.file_hash, parse_run_uid=context.parse_run_uid)
+
+
 def _native_grid_coverage_error(artifact, instance, table):
     """原物理片段不能因逻辑拼表漏行而从计算分母消失。"""
     from .native_empty_operands import cell_id
@@ -1003,8 +1135,13 @@ def _economic_table_view(doc, facts, *, grid=None, mapping=None, lane_name=""):
                 return row_failure(f'经济分类表第{row_idx + 1}行原格缺列', row_idx, active_mapping)
             labels = [{'raw_text': row[c], 'col_idx': c} for c in label_cols]
             amount = cells.get((row_idx, col))
+            from src.schemas.parse_artifact import DASH_PLACEHOLDER_TEXTS
             has_label = any(str(item['raw_text'] or '').strip() for item in labels)
-            if not has_label and (amount is None or not str(amount.raw_text or '').strip()):
+            if not has_label and (
+                amount is None
+                or not str(amount.raw_text or '').strip()
+                or str(amount.raw_text or '').strip() in DASH_PLACEHOLDER_TEXTS
+            ):
                 continue  # 另一车道有数据时，本车道可能只有排版填充格。
             classification = materializer._extract_classification(labels, code_columns)
             code = classification.get('classification_code') if classification else None
@@ -1024,6 +1161,15 @@ def _economic_table_view(doc, facts, *, grid=None, mapping=None, lane_name=""):
                     observed = getattr(doc, '_economic_zero_layout_observations', [])
                     if zero_tail not in observed:
                         observed.append(zero_tail)
+                    doc._economic_zero_layout_observations = observed
+                    continue
+                blank_omitted = _economic_blank_code_omitted_row(
+                    doc, table, cells, row_idx, active_mapping, code_columns, code, name, amount
+                )
+                if blank_omitted is not None:
+                    observed = getattr(doc, '_economic_zero_layout_observations', [])
+                    if blank_omitted not in observed:
+                        observed.append(blank_omitted)
                     doc._economic_zero_layout_observations = observed
                     continue
                 return row_failure(f'经济分类表第{row_idx + 1}行科目编码无法唯一识别，明细归集未完成',
@@ -1202,8 +1348,8 @@ def _economic_lane_footer(table, mapping):
     return matches[0] if len(matches) == 1 else None
 
 
-def _economic_literal_summary(rule, doc, grid, mapping, name, codes, facts):
-    """印刷类码一致截尾时，以原件类级标题和同栏金额仅复算栏合计。"""
+def _verify_economic_literal_lane(doc, grid, mapping, name, codes, facts):
+    """印刷类码一致截尾时，校验原件类级标题、栏底合计与同栏金额事实，返回 (parent, children, sources)。"""
     from .native_empty_operands import cell_id
     from src.services.rule_source_binding import _current_cell_catalog, _current_cell_evidence
 
@@ -1278,9 +1424,73 @@ def _economic_literal_summary(rule, doc, grid, mapping, name, codes, facts):
             'table_code': table.table_code, 'span': span, 'role': label,
             'source_cell_id': sid, 'bbox': list(amount.bbox), 'file_hash': doc.fact_context.file_hash,
             'value': str(fact.normalized_value), 'value_unit': '万元',
+            'fact': fact,
         })
-
     parent, *children = operands
+    clean_sources = [{k: v for k, v in item.items() if k != 'fact'} for item in sources]
+    return parent, children, clean_sources, sources[0]['fact']
+
+
+def certified_basic_expenditure_summaries(doc):
+    """获取经原件认证的基本支出表「人员经费合计/公用经费合计」数值与证据引用。
+
+    优先走完整经济分类视图，其次走类级标题+栏底合计字面认证（允许 5 位明细码截尾时仍完成总额与表文核对）。
+    任一侧无法唯一认证时返回 None。
+    """
+    if getattr(doc, 'parse_artifact', None) is None or getattr(doc, 'fact_context', None) is None:
+        return None
+    facts, reason = table_facts(doc, 'FIN_06_basic_expenditure')
+    if reason:
+        return None
+    grid, reason = _economic_grid(doc)
+    if grid is None:
+        return None
+    view, _ = _economic_table_view(doc, facts, grid=grid)
+    if view is not None:
+        ren_fact, ren_err = _economic_operand(doc, view, '人员经费合计')
+        pub_fact, pub_err = _economic_operand(doc, view, '公用经费合计')
+        if not ren_err and not pub_err and ren_fact is not None and pub_fact is not None:
+            return {
+                'personnel': ren_fact.normalized_value,
+                'public': pub_fact.normalized_value,
+                'total': ren_fact.normalized_value + pub_fact.normalized_value,
+                'personnel_fact': ren_fact,
+                'public_fact': pub_fact,
+                'sources': [],
+                'mode': 'grid_view',
+            }
+    _, table, mappings, _ = grid
+    footers = [_economic_lane_footer(table, mapping) for mapping in mappings]
+    verified_lanes = {}
+    for mapping, footer in zip(mappings, footers, strict=True):
+        name = footer if footer and footers.count(footer) == 1 else None
+        if not name or name not in _ECONOMIC_SUMMARIES:
+            continue
+        lane_res = _verify_economic_literal_lane(doc, grid, mapping, name, _ECONOMIC_SUMMARIES[name], facts)
+        if lane_res is not None:
+            verified_lanes[name] = lane_res
+    if '人员经费合计' in verified_lanes and '公用经费合计' in verified_lanes:
+        ren_val, _, ren_sources, ren_fact = verified_lanes['人员经费合计']
+        pub_val, _, pub_sources, pub_fact = verified_lanes['公用经费合计']
+        return {
+            'personnel': ren_val,
+            'public': pub_val,
+            'total': ren_val + pub_val,
+            'personnel_fact': ren_fact,
+            'public_fact': pub_fact,
+            'sources': [ren_sources[0], pub_sources[0]],
+            'mode': 'literal_lane',
+        }
+    return None
+
+
+def _economic_literal_summary(rule, doc, grid, mapping, name, codes, facts):
+    """印刷类码一致截尾时，以原件类级标题和同栏金额仅复算栏合计。"""
+    lane_res = _verify_economic_literal_lane(doc, grid, mapping, name, codes, facts)
+    if lane_res is None:
+        return None
+    parent, children, sources, _ = lane_res
+    _, table, _, _ = grid
     subtotal = sum(children, Decimal('0'))
     level, diff = classify_amount_diff(parent, subtotal, len(children))
     key = f'economic:summary:{name}'
@@ -1393,27 +1603,68 @@ def _check_economic_view(rule, doc, view, summaries):
                       if isinstance(obs, dict) and obs.get('subject_code')]
         if duplicates:
             instance, table, _mappings, cells, _rows, _facts = view
-            seen_subjects, page = set(), None
+            seen_subjects, page, dup_refs = set(), None, []
             for obs in duplicates:
                 code = str(obs['subject_code'])
                 if code not in seen_subjects:
                     seen_subjects.add(code)
-                if page is None:
-                    entry = _rows.get(code)
-                    if entry:
-                        cell = cells.get((int(entry[0]), int(entry[2]['source_col_idx'])))
-                        page = int(getattr(cell, 'page_number', None)
-                                   or getattr(cell, 'page', None) or 0) or None
+                c_page = None
+                entry = _rows.get(code)
+                if entry:
+                    r_idx = int(entry[0])
+                    cell = cells.get((r_idx, int(entry[2]['source_col_idx'])))
+                    c_page = int(getattr(cell, 'page_number', None)
+                                 or getattr(cell, 'page', None) or 0) or None
+                if c_page is None:
+                    for cell in table.cells:
+                        if not cell.is_header and re.sub(r'\s+', '', str(cell.raw_text or '')) == code:
+                            c_page = int(getattr(cell, 'page_number', None)
+                                         or getattr(cell, 'page', None) or 0) or None
+                            if c_page is not None:
+                                break
+                if page is None and c_page is not None:
+                    page = c_page
+                if c_page and 1 <= c_page <= len(getattr(doc, 'page_texts', []) or []) and not dup_refs:
+                    subj_name = str(obs.get('subject_name') or '').strip()
+                    first_name_part = subj_name.splitlines()[0].strip() if subj_name else ''
+                    page_txt = str(doc.page_texts[c_page - 1] or '')
+                    compact_page = re.sub(r'\s+', '', page_txt)
+                    matched_span = None
+                    for raw_cand in (f"{code} {subj_name}".strip(), f"{code} {first_name_part}".strip(), code):
+                        if raw_cand and re.sub(r'\s+', '', raw_cand) in compact_page:
+                            matched_span = raw_cand
+                            break
+                    if matched_span:
+                        dup_pos = page_txt.find(matched_span)
+                        if dup_pos < 0:
+                            dup_pos = page_txt.find(code)
+                        ref_item = {
+                            'role': '重复经济分类科目行',
+                            'table': '一般公共预算财政拨款基本支出决算表',
+                            'page': c_page,
+                            'span': matched_span,
+                        }
+                        if dup_pos >= 0:
+                            ref_item['pos'] = dup_pos
+                        dup_refs.append(ref_item)
+            dup_quote = dup_refs[0]['span'] if dup_refs else None
+            dup_loc = {
+                'page': page,
+                'predicate': 'duplicate_subject_row',
+                'subject_codes': sorted(seen_subjects),
+                'duplicate_count': len(duplicates),
+            }
+            if dup_refs:
+                dup_loc['table_refs'] = dup_refs
             issues.append(rule._issue(
                 '经济分类表存在重复科目行：' + '、'.join(
                     f"{code} {next((o['subject_name'] for o in duplicates if str(o['subject_code']) == code), '')}".strip()
                     for code in sorted(seen_subjects)) +
                 '。原件同一科目行重复列示（内容一致，已按同一业务行归集参与计算），'
                 '请核对原件并删除重复行。',
-                {'page': page, 'predicate': 'duplicate_subject_row',
-                 'subject_codes': sorted(seen_subjects),
-                 'duplicate_count': len(duplicates)},
+                dup_loc,
                 severity='low',
+                evidence_text=dup_quote,
             ))
     for name, codes in (summaries.items() if rule.code == 'V33-117' else ()):
         parent, error = _economic_operand(doc, view, name)
@@ -1425,6 +1676,21 @@ def _check_economic_view(rule, doc, view, summaries):
                 children.append(child)
         key = f'economic:summary:{name}'
         if error:
+            # 全表金额格均经原件网格认证为空白（无发生额），且尾页印有开放底边的“人员经费合计/公用经费合计”无金额尾行时，
+            # 按无发生额空表记 not_applicable，不再误报“完整原始行缺失”。
+            all_blank = bool(view[5]) and all(isinstance(f, NativeBlankTerm) for f in view[5])
+            last_page = max((c.page_number for c in view[1].cells if c.page_number), default=0)
+            last_text = re.sub(r'\s+', '', str(doc.page_texts[last_page - 1] or '')) if 1 <= last_page <= len(doc.page_texts) else ''
+            has_blank_open_footer = (
+                all_blank
+                and all(isinstance(c, NativeBlankTerm) for c in children)
+                and len(children) == len(codes)
+                and bool(re.search(r'人员经费合计公用经费合计(?:注[:：]|$)', last_text))
+            )
+            if has_blank_open_footer:
+                receipt(rule, doc, key, children, status='not_applicable',
+                        formula='原件完整网格及表尾合计行均为空白，无发生额关系')
+                continue
             unresolved.append(error)
             receipt(rule, doc, key, [f for f in [parent] + children if f is not None],
                     status='insufficient_data', formula='summary = classes', reason=error)

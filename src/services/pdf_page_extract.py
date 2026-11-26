@@ -204,7 +204,7 @@ def extract_tables_from_page(page: Any) -> List[List[List[str]]]:
     norm_tables: List[List[List[str]]] = []
     for tb in tables:
         norm_tables.append(
-            [[("" if c is None else str(c)).strip() for c in row] for row in (tb or [])]
+            [[("" if c is None else str(c).replace("\x00", "")).strip() for c in row] for row in (tb or [])]
         )
     # ``find_tables`` 使用同一策略时通常与 ``extract_tables`` 一一对应。
     # 若具体 pdfplumber 版本的 fallback 顺序不同，无法可靠对齐就不猜，
@@ -246,22 +246,34 @@ def _rejoin_wrapped_decimals(text: str) -> str:
     return text
 
 
+def page_text_y_tolerance(target: Any) -> float:
+    """无表纯文字说明页放宽至 5.2pt 以合并西文字体基线微偏数字；含表页保持 4.5pt 防止跨行粘连。"""
+    return 4.5 if _find_tables(target, None) else 5.2
+
+
+def extract_aligned_page_text_and_chars(target: Any) -> Tuple[str, Optional[List[Dict[str, Any]]]]:
+    """返回 (已拼接跨行小数的页文本, None)——统一使用 pdfplumber 原生行聚类保持偏移一致。"""
+    raw_text = _extract_page_text_aligned(target).replace("\x00", "")
+    return _rejoin_wrapped_decimals(raw_text), None
+
+
 def _extract_page_text_aligned(target: Any) -> str:
-    """以稍放宽的基线容差抽取同页文本，防止同行的金额/年份因几磅微偏被拆行。"""
+    """以与页面形态匹配的基线容差抽取同页文本，防止同行的金额/年份因几磅微偏被拆行。"""
+    y_tol = page_text_y_tolerance(target)
     try:
-        return target.extract_text(y_tolerance=4.5) or ""
+        return target.extract_text(y_tolerance=y_tol) or ""
     except TypeError:
         return target.extract_text() or ""
 
 
 def extract_visible_text_from_page(page: Any) -> str:
-    raw_text = _extract_page_text_aligned(page)
     try:
         page_height = float(page.height)
         filtered_page = page.filter(lambda obj, h=page_height: is_visible_char(obj, h))
-        filtered_text = _extract_page_text_aligned(filtered_page)
+        filtered_text, _ = extract_aligned_page_text_and_chars(filtered_page)
         if filtered_text.strip():
-            return _rejoin_wrapped_decimals(filtered_text)
+            return filtered_text
     except Exception:
         pass
-    return _rejoin_wrapped_decimals(raw_text)
+    raw_text, _ = extract_aligned_page_text_and_chars(page)
+    return raw_text

@@ -21,6 +21,8 @@ _RADICAL_TRANSLATION = str.maketrans(
     {
         "\u2ed4": "门",
         "\u2ecb": "车",
+        "臵": "置",
+        "罝": "置",
     }
 )
 
@@ -108,10 +110,10 @@ NINE_TABLE_RULES: Dict[str, TableRule] = {
             "total_actual": ("合计", "收入合计", "决算数"),
             "fiscal_allocation": ("财政拨款收入",),
             "superior_subsidy_income": ("上级补助收入",),
-            "business_income": ("事业收入",),
+            "business_income": ("事业收入", "教育收费收入", "教育事业收入", "教育经费"),
             "operational_income": ("经营收入",),
             "other_income": ("其他收入",),
-            "subsidiary_income": ("附属单位上缴收入",),
+            "subsidiary_income": ("附属单位上缴收入", "附属单位缴款收入", "附属单上缴收入"),
         },
         classification_type="income",
     ),
@@ -126,7 +128,7 @@ NINE_TABLE_RULES: Dict[str, TableRule] = {
             "project_actual": ("项目支出",),
             "to_superior_actual": ("上缴上级支出",),
             "operational_actual": ("经营支出",),
-            "subsidiary_actual": ("对附属单位补助支出",),
+            "subsidiary_actual": ("对附属单位补助支出", "对附属单补助支出", "附属单位补助支出", "对附属单位补助"),
         },
         classification_type="expenditure",
     ),

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from time import perf_counter
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -90,7 +91,21 @@ def _organization_binding_conflict(
     if cover_name and cover_name not in _GENERIC_COVER_NAMES and selected_name:
         directory = runtime.require_org_storage().get_all() if runtime.ORG_AVAILABLE else []
         if not compare_org_names(cover_name, selected_name, directory).equivalent and cover_name not in selected_name:
-            if not _cover_benji_matches_selected_unit(cover_name, organization, directory):
+            # 明示单位口径时，允许封面沿用主管部门的规范简称。目录须能证明
+            # 所选记录正是该部门本级，普通下属单位仍按原规则拒绝错绑。
+            parent_id = organization.get("department_id") or organization.get("parent_id")
+            base_name = re.sub(r"(?:\(本级\)|本级)$", "", selected_name)
+            matches_parent_unit = (
+                scope_hint == "unit" and level == "unit" and base_name != selected_name
+                and any(
+                    getattr(parent, "id", None) == parent_id
+                    and getattr(parent, "level", None) == "department"
+                    and compare_org_names(base_name, organization_name(parent), directory).equivalent
+                    and compare_org_names(cover_name, organization_name(parent), directory).equivalent
+                    for parent in directory
+                )
+            )
+            if not matches_parent_unit and not _cover_benji_matches_selected_unit(cover_name, organization, directory):
                 return {
                     "code": "organization_cover_conflict",
                     "cover_org_name": str(preflight.get("cover_org_name") or ""),
@@ -618,6 +633,19 @@ async def _handle_upload(
     enqueue: bool = False,
     analyze_body: Optional[Dict[str, Any]] = None,
 ) -> dict:
+    request_started = stage_started = perf_counter()
+    job_id = None
+
+    def record_stage(stage: str) -> None:
+        nonlocal stage_started
+        now = perf_counter()
+        logger.info(
+            "Upload stage %s completed in %.3fs (total %.3fs)",
+            stage, now - stage_started, now - request_started,
+            extra={"job_id": job_id},
+        )
+        stage_started = now
+
     selected_org = _clean_optional_text(selected_org)
     fiscal_year = _clean_optional_text(fiscal_year)
     doc_type = _clean_optional_text(doc_type)
@@ -627,6 +655,7 @@ async def _handle_upload(
         fiscal_year=fiscal_year,
         doc_type=doc_type,
     )
+    record_stage("preflight")
     fiscal_year, doc_type = _resolve_upload_metadata(
         fiscal_year=fiscal_year,
         doc_type=doc_type,
@@ -657,6 +686,8 @@ async def _handle_upload(
         },
         persist_snapshot=False,
     )
+    job_id = str(uploaded["job_id"])
+    record_stage("storage")
 
     duplicate = await run_in_threadpool(
         runtime.find_duplicate_upload,
@@ -666,6 +697,7 @@ async def _handle_upload(
         doc_type=doc_type,
         exclude_job_id=str(uploaded.get("job_id") or ""),
     )
+    record_stage("duplicate_lookup")
     if duplicate is not None:
         runtime.cleanup_uploaded_job(str(uploaded.get("job_id") or ""))
         duplicate_filename = str(duplicate.get("filename") or "历史文件")
@@ -698,6 +730,7 @@ async def _handle_upload(
     uploaded["organization_id"] = (
         org_binding.get("organization_id") if org_binding else selected_org
     )
+    record_stage("organization_binding")
     uploaded["organization_name"] = (
         org_binding.get("organization_name") if org_binding else org_name
     )
@@ -717,6 +750,7 @@ async def _handle_upload(
             doc_type=doc_type,
             exclude_job_id=str(uploaded.get("job_id") or ""),
         )
+        record_stage("duplicate_lookup_auto")
         if duplicate is not None:
             runtime.cleanup_uploaded_job(str(uploaded.get("job_id") or ""))
             try:
@@ -735,7 +769,6 @@ async def _handle_upload(
     uploaded["report_kind"] = str(preflight.get("report_kind") or "unknown")
     # 登记失败仍保留已收到的原件，在列表中作为待确认记录展示，绝不伪造绑定成功。
     from src.services.material_upload_registration import register_uploaded_material
-    job_id = str(uploaded["job_id"])
     metadata = runtime.read_json_file(runtime.UPLOAD_ROOT / job_id / "status.json", default={})
     try:
         registration = await register_uploaded_material(job_id,
@@ -748,9 +781,11 @@ async def _handle_upload(
         patch["structured_ingest"] = {"status":"registered", **registration}
     runtime.merge_job_status(runtime.UPLOAD_ROOT / job_id, patch)
     uploaded["material_registration"] = registration
+    record_stage("material_registration")
     await persist_analysis_job_snapshot(
         runtime.get_job_status_payload(str(uploaded["job_id"])),
     )
+    record_stage("uploaded_snapshot")
     if uploaded.get("organization_id"):
         clear_department_stats_cache()
     # P0：上传与首次入队合并为一次请求。前端不必等逐文件 `/api/analyze` 返回后才
@@ -776,6 +811,7 @@ async def _handle_upload(
                 "status_code": 500,
                 "detail": str(exc),
             }
+        record_stage("enqueue")
     return uploaded
 
 

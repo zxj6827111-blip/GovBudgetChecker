@@ -16,13 +16,15 @@ def run(pages):
 
 
 def test_wrapped_name_fragment_is_not_an_independent_name():
-    # 2024 真实样本：正文标题把带括号的全称折成两行，只剩“投促中心）”一类残片。
+    # 2024 真实样本：正文标题把带括号的全称折成两行。
+    # 折行尾段“促进中心）”本身不能当独立依据或规范名；但跨行上下文能还原完整全称时，
+    # 应按完整全称核对封面（封面缺全称属真实缺陷），不得把残片当规范名。
     pages = ["上海市甲服务中心\n2024年度单位决算",
              "目录\n第一部分 上海市甲服务中心（上海市乙\n促进中心）概况\n第二部分 上海市甲服务中心（上海市乙\n促进中心）2024年度决算表",
              "第二部分 上海市甲服务中心（上海市乙\n促进中心）2024年度决算表\n本表反映单位本年度收入。"]
     issues, reasons = run(pages)
-    assert not any("促进中心）" in issue.message for issue in issues)
-    assert "封面单位名称缺少正文独立依据" in reasons
+    assert not any("规范全称“促进中心）”" in issue.message for issue in issues)
+    assert any("未出现单位全称“上海市甲服务中心（上海市乙促进中心）”" in issue.message for issue in issues)
 
 
 def test_bare_self_level_suffix_is_not_a_different_name():

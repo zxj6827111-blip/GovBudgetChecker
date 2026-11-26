@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple
 
 from .amount_math import (
@@ -2025,7 +2025,9 @@ _CMM007_EXPLICIT_PRIOR_RE = re.compile(
 
 #: 指标名归一：去时间/比较前缀（本年/比上年…）与口径后缀（支出决算/决算/
 #: 支出/预算）——身份是业务项，口径（预算/决算）是绑定槽位自己的属性。
-_CMM007_IND_PREFIX_RE = re.compile(r"^(?:比\s*)?(?:上\s*年(?:度|同期)?|本\s*年(?:度)?)+")
+_CMM007_IND_PREFIX_RE = re.compile(
+    r"^(?:比\s*)?(?:(?:上|本)\s*年(?:度|同期)?|年\s*度(?=(?:\s*[一-龥（）“”]){2}))+"
+)
 _CMM007_IND_SUFFIX_RE = re.compile(
     r"(?:支\s*出\s*决\s*算\s*数|支\s*出\s*决\s*算|决\s*算\s*数|决\s*算|支\s*出|预\s*算)$"
 )
@@ -2039,6 +2041,17 @@ _CMM007_DOWN_VERBS = ("减少", "下降", "降低")
 
 def _cmm007_clean_amount(text: str) -> str:
     return re.sub(r"[,，\s]", "", text or "")
+
+
+def _cmm007_safe_decimal(raw: Any) -> Optional[Decimal]:
+    cleaned = _cmm007_clean_amount(str(raw or ""))
+    if not cleaned:
+        return None
+    try:
+        value = Decimal(cleaned)
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+    return value if value.is_finite() else None
 
 
 def _cmm007_scale(cleaned: str) -> int:
@@ -2196,8 +2209,15 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
                 )
                 continue
             direction = _cmm007_verb_direction(match.group("verb"))
-            delta_wan = Decimal(delta_text) * delta_factor
-            current_wan = Decimal(current["amount"]) * current_factor
+            delta_num = _cmm007_safe_decimal(delta_text)
+            current_num = _cmm007_safe_decimal(current["amount"])
+            if delta_num is None or current_num is None:
+                unresolved.append(
+                    f"指标「{canon}」同比句金额格式异常，无法解析复算"
+                )
+                continue
+            delta_wan = delta_num * delta_factor
+            current_wan = current_num * current_factor
             sign = 1 if direction == "down" else -1
             derived_prior = current_wan + sign * delta_wan
 
@@ -2211,7 +2231,13 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
                     )
                 else:
                     explicit_prior = prior_candidates[0]
-                    explicit_wan = Decimal(explicit_prior["amount"]) * _TXT_FUND_UNIT_TO_WAN.get(
+                    explicit_num = _cmm007_safe_decimal(explicit_prior["amount"])
+                    if explicit_num is None:
+                        unresolved.append(
+                            f"指标「{canon}」上年基期金额格式异常，无法解析复算"
+                        )
+                        continue
+                    explicit_wan = explicit_num * _TXT_FUND_UNIT_TO_WAN.get(
                         explicit_prior["unit"], Decimal("1")
                     )
                     envelope = compute_dynamic_envelope(
@@ -2248,6 +2274,12 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
                 [(current["scale"], current["unit"]), (_cmm007_scale(delta_text), delta_unit)]
             )
             pct_text = _cmm007_clean_amount(match.group("pct"))
+            pct_num = _cmm007_safe_decimal(pct_text)
+            if pct_num is None:
+                unresolved.append(
+                    f"指标「{canon}」同比句百分比格式异常，无法解析复算"
+                )
+                continue
             pct_verb = _cmm007_verb_direction(match.group("pverb"))
             base_state = _cmm007_base_state(derived_prior, amount_envelope)
 
@@ -2257,7 +2289,7 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
                 numerator_zero = abs(delta_wan) <= compute_dynamic_envelope(
                     [(_cmm007_scale(delta_text), delta_unit)]
                 )
-                if Decimal(pct_text) == 0 and numerator_zero:
+                if pct_num == 0 and numerator_zero:
                     continue
                 issues.append(
                     self._issue(
@@ -2298,7 +2330,7 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
                 continue
 
             recomputed = self._recompute(current_wan, derived_prior)
-            declared = Decimal(pct_text)
+            declared = pct_num
             diff = abs(declared - recomputed)
             if not percentage_difference_exceeds_policy(diff):
                 continue
@@ -2403,6 +2435,8 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
         if len(canon) < 2:
             return None  # 纯口径/时间词或单字尾部均不足以独立确认业务项身份。
         amount = _cmm007_clean_amount(match.group("amt"))
+        if _cmm007_safe_decimal(amount) is None:
+            return None
         unit = _txt_fund_norm(match.group("aunit"))
         if _TXT_FUND_UNIT_TO_WAN.get(unit) is None:
             return None
@@ -2422,10 +2456,12 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
         }
 
     def _candidates_agree(self, candidates: List[Dict[str, Any]]) -> bool:
-        values = {
-            Decimal(item["amount"]) * _TXT_FUND_UNIT_TO_WAN.get(item["unit"], Decimal("1"))
-            for item in candidates
-        }
+        values = set()
+        for item in candidates:
+            num = _cmm007_safe_decimal(item["amount"])
+            if num is None:
+                return False
+            values.add(num * _TXT_FUND_UNIT_TO_WAN.get(item["unit"], Decimal("1")))
         return len(values) == 1
 
     def _subsection_candidates(
@@ -2594,12 +2630,18 @@ class CMM007_ZeroBaseTrendRecompute(Rule):
                             unique_quote(merged_text[p_start:p_end], local_l, local_r)
                             or frag_span
                         )
-                    refs.append({
+                        ref_pos = local_l
+                    else:
+                        ref_pos = None
+                    ref_item: Dict[str, Any] = {
                         "role": role,
                         "page": frag_page,
                         "span": frag_span,
                         "section": section_title if role == "增减句" else current.get("section"),
-                    })
+                    }
+                    if ref_pos is not None:
+                        ref_item["pos"] = ref_pos
+                    refs.append(ref_item)
             else:
                 refs.append({
                     "role": role,

@@ -299,6 +299,14 @@ assert.equal(
   readableObligationReason("人员经费合计的total_actual/决算操作数缺失或不唯一；公用经费合计的total_actual/决算操作数缺失或不唯一"),
   "人员经费合计的决算数值没取到（或取到不止一个）；公用经费合计的决算数值没取到（或取到不止一个）",
 );
+assert.equal(
+  readableObligationReason("来源表映射/读取未完成：第13页FIN_06_basic_expenditure {'rule_admission_blocked': 65}"),
+  "来源表映射/读取未完成：第13页《一般公共预算财政拨款基本支出决算表》 （65 处单元格因编码或行结构异常未纳入自动勾稽）",
+);
+assert.equal(
+  readableObligationReason("单元格 63d1b6a524010b50:r4c4 没有唯一当前事实"),
+  "第4行第4列单元格 没有唯一当前事实",
+);
 assert.equal(readableObligationReason("PDF/表8 未识别到"), "PDF/表8 未识别到");
 assert.equal(readableObligationReason(null), "");
 

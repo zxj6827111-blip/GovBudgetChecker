@@ -2805,9 +2805,8 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
         )
         if (os.getenv("DATABASE_URL") or "").strip():
             current_ingest_status = runtime.read_json_file(job_dir / "status.json", default={})
-            # 冷缓存下本判定要遍历全部任务的 status.json（GB 级），必须放线程里
-            # 执行：同步跑在事件循环上会把后端冻住十几秒，批量重跑时连环触发
-            # 数据库连接池超时与看门狗强杀（2026-11-18 事故根因之一）。
+            # 版本比较优先读取轻量索引；历史索引缺失时的回填仍须在线程中执行。
+            latest_scope_started = time.perf_counter()
             latest_ingest = await asyncio.to_thread(
                 runtime.resolve_latest_structured_ingest_job,
                 job_dir.name,
@@ -2830,6 +2829,8 @@ async def _run_pipeline_body(job_dir: Path, *, candidate_only: bool = False) -> 
                     **runtime.extract_job_status_context(current_ingest_status),
                 },
             )
+            logger.info("Ingest latest-version lookup completed in %.3fs",
+                        time.perf_counter() - latest_scope_started)
             is_authoritative_slot_job = False
             if (
                 not latest_ingest.get("is_latest")

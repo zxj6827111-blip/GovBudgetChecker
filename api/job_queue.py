@@ -57,7 +57,7 @@ class DurableJobQueue:
         )
         self._instance_id = f"{os.getpid()}-{secrets.token_hex(8)}"
         # job_id -> ((mtime_ns, size), status, retry_not_before)：未变化的状态文件不重复解析。
-        self._status_probe_cache: Dict[str, Tuple[Tuple[int, int], str, float]] = {}
+        self._status_probe_cache: Dict[str, Tuple[Tuple[int, int, int], str, float]] = {}
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._workers: list[asyncio.Task[None]] = []
         self._poller: Optional[asyncio.Task[None]] = None
@@ -116,35 +116,41 @@ class DurableJobQueue:
         """Requeue pending jobs after process restart."""
         return await self.discover_pending_jobs(mark_requeued=True)
 
-    def _scan_resumable_jobs(self) -> List[Tuple[Path, float, Optional[Dict[str, Any]]]]:
-        """找出状态可续跑的任务：(目录, retry_not_before, 本轮解析到的状态或 None)。
+    def _scan_resumable_jobs(self) -> List[Tuple[Path, float]]:
+        """找出可续跑的任务目录与最早重试时间。
 
-        轮询每 2 秒一次；此前每轮都完整解析全部 status.json（单个可达数 MB，277 个
-        任务合计约 850MB），且在事件循环里同步执行，所有 API 请求随之卡住数秒。
-        这里只在状态文件变化时重新解析，判定只用 status 与 retry_not_before 两个字段。
+        冷启动用持久化索引读 status 和 retry_not_before，轮询再复用进程内缓存。
+        历史任务首次读取完整状态并回填索引；报告与审查结果仍保存在原状态文件。
         """
-        found: List[Tuple[Path, float, Optional[Dict[str, Any]]]] = []
+        found: List[Tuple[Path, float]] = []
         seen: Set[str] = set()
         for job_dir in runtime.iter_job_dirs():
             seen.add(job_dir.name)
             status_file = job_dir / "status.json"
             try:
-                stat = status_file.stat()
-                signature: Optional[Tuple[int, int]] = (stat.st_mtime_ns, stat.st_size)
+                signature = runtime.queue_status_signature(status_file.stat())
             except OSError:
-                signature = None
+                continue
             cached = self._status_probe_cache.get(job_dir.name)
-            status_data: Optional[Dict[str, Any]] = None
-            if signature is not None and cached is not None and cached[0] == signature:
+            if cached is not None and cached[0] == signature:
                 state, retry_not_before = cached[1], cached[2]
             else:
-                status_data = runtime.read_json_file(status_file, default={})
-                state = str(status_data.get("status") or "").lower()
-                retry_not_before = float(status_data.get("retry_not_before") or 0)
-                if signature is not None:
-                    self._status_probe_cache[job_dir.name] = (signature, state, retry_not_before)
+                indexed = runtime.read_queue_status_index(status_file, signature)
+                if indexed is None:
+                    status_data = runtime.read_json_file(status_file, default={})
+                    try:
+                        if runtime.queue_status_signature(status_file.stat()) != signature:
+                            continue
+                    except OSError:
+                        continue
+                    state = str(status_data.get("status") or "").lower()
+                    retry_not_before = float(status_data.get("retry_not_before") or 0)
+                    runtime.backfill_queue_status_index(status_file, signature, status_data)
+                else:
+                    state, retry_not_before = indexed
+                self._status_probe_cache[job_dir.name] = (signature, state, retry_not_before)
             if state in _RESUMABLE_STATES:
-                found.append((job_dir, retry_not_before, status_data))
+                found.append((job_dir, retry_not_before))
         for job_id in set(self._status_probe_cache) - seen:
             del self._status_probe_cache[job_id]
         return found
@@ -157,14 +163,12 @@ class DurableJobQueue:
         await dispatch_writing_pending()
         resumed = 0
         # 读文件放到线程里，不占用事件循环。
-        for job_dir, retry_not_before, status_data in await asyncio.to_thread(self._scan_resumable_jobs):
+        for job_dir, retry_not_before in await asyncio.to_thread(self._scan_resumable_jobs):
             if retry_not_before > time.time():
                 continue
 
-            if mark_requeued:
-                if status_data is None:
-                    status_data = runtime.read_json_file(job_dir / "status.json", default={})
-                self._mark_requeued(job_dir, status_data)
+            if mark_requeued and not await asyncio.to_thread(self._mark_requeued, job_dir):
+                continue
             await self.enqueue(job_dir.name)
             resumed += 1
 
@@ -197,19 +201,29 @@ class DurableJobQueue:
             },
         )
 
-    def _mark_requeued(self, job_dir: Path, status_data: Dict[str, object]) -> None:
-        payload = dict(status_data)
-        payload.update(
-            {
-                "status": "queued",
-                "message": "analysis task resumed after service restart",
-                "ts": time.time(),
-            }
-        )
+    def _mark_requeued(self, job_dir: Path) -> bool:
+        if not job_dir.is_dir():
+            return False
         try:
-            runtime.write_json_file(job_dir / "status.json", payload)
+            with runtime.job_state_lock(job_dir):
+                status_file = job_dir / "status.json"
+                payload = runtime.read_json_file(status_file, default={})
+                # 扫描之后任务可能已经被其他进程完成或延后，锁内重新确认才允许改写。
+                if str(payload.get("status") or "").lower() not in _RESUMABLE_STATES:
+                    return False
+                now = time.time()
+                if float(payload.get("retry_not_before") or 0) > now:
+                    return False
+                payload.update(
+                    status="queued",
+                    message="analysis task resumed after service restart",
+                    ts=now,
+                )
+                runtime.write_json_file(status_file, payload)
+                return True
         except Exception:
             logger.exception("Failed to rewrite resumed status for %s", job_dir.name)
+            return False
 
     async def _worker_loop(self, worker_idx: int) -> None:
         while True:

@@ -185,6 +185,27 @@ def _three_public_has_nonzero_fact(doc: Any) -> bool:
     return False
 
 
+def _single_page_verbatim_span(doc: Any, candidate: str, locate_page) -> Tuple[int, str]:
+    """剥离跨页页脚残码并定位在单页文本层中真实存在的原文片段。"""
+    cleaned = re.sub(r"^\s*[-—–]?\s*\d{1,3}\s*[-—–]\s*", "", str(candidate or "")).strip()
+    if not cleaned:
+        return 1, ""
+    pages = [str(p or "") for p in (getattr(doc, "page_texts", None) or [])]
+    pages_compact = [_compact_text(p) for p in pages]
+    parts = [cleaned[:200], *[s.strip()[:200] for s in re.split(r"[。；;\n]", cleaned) if len(_compact_text(s)) >= 6]]
+    for part in parts:
+        part_c = _compact_text(part)
+        if not part_c:
+            continue
+        for idx, pc in enumerate(pages_compact, 1):
+            if pc.count(part_c) == 1:
+                return idx, part
+        for idx, pc in enumerate(pages_compact, 1):
+            if part_c in pc:
+                return idx, part
+    return locate_page(doc, cleaned[:40]), cleaned[:160]
+
+
 def _page_of_text(doc: Any, text: str) -> Optional[int]:
     """在原件页文本层里定位一句原文所在页（归一后前缀命中）。"""
     needle = _compact_text(text)
@@ -412,8 +433,7 @@ def count_issues(
             _receipt(sub_check, "pass",
                      formula=f"{label}{stage_label}={amount} > 0 且数量要素已披露")
         evidence = item_paras[0] if item_paras else (paras[0] if paras else scope[:200])
-        snippet = evidence[:200]
-        ev_page = locate_page(doc, evidence[:40])
+        ev_page, snippet = _single_page_verbatim_span(doc, evidence, locate_page)
         for field_key, field_label, pattern in fields:
             if pattern.search(compact):
                 continue
@@ -439,8 +459,7 @@ def count_issues(
              formula="全文（含国有资产占有使用情况）任一处披露车辆保有量")
     if not _VEHICLE_STOCK_RE.search(whole):
         evidence = next((p for p in paras if "公务用车" in p), paras[0] if paras else scope[:200])
-        snippet = evidence[:200]
-        ev_page = locate_page(doc, evidence[:40])
+        ev_page, snippet = _single_page_verbatim_span(doc, evidence, locate_page)
         issues.append(rule._issue(
             "三公经费数量要素未披露：全文未披露公务用车（车辆）保有量。"
             "请在三公经费说明或国有资产占有使用情况中写明车辆保有量（无车辆的写明 0 辆）。",

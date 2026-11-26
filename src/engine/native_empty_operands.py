@@ -4,9 +4,36 @@ from __future__ import annotations
 from decimal import Decimal
 from types import SimpleNamespace
 
-from src.schemas.parse_artifact import CellPresence, FiscalFact
+from src.schemas.parse_artifact import CellPresence, DASH_PLACEHOLDER_TEXTS, FiscalFact
 from src.services.fiscal_fact_materializer import FiscalFactMaterializer, measure_fund_scope
-from .fact_context import _canonical_budget_stage, _column_mappings_for_instance, _fragment_for_instance, _stage_for_fact, _owner_rejection_reason
+from .fact_context import (
+    _canonical_budget_stage,
+    _column_mappings_for_instance,
+    _fragment_for_instance,
+    _is_clerical_table_year_typo,
+    _stage_for_fact,
+    _owner_rejection_reason,
+)
+
+
+def _is_native_dash_cell(cell) -> bool:
+    return bool(
+        cell is not None
+        and not cell.is_header
+        and cell.numeric_value is None
+        and cell.bbox
+        and cell.extraction_method in {'lines', 'lines_strict'}
+        and not getattr(cell, 'ocr_provenance', None)
+        and str(cell.raw_text or '').strip() in DASH_PLACEHOLDER_TEXTS
+    )
+
+
+def _is_native_empty_or_dash_cell(cell) -> bool:
+    if cell is None or cell.is_header or cell.numeric_value is not None:
+        return False
+    if not str(cell.raw_text or '').strip():
+        return bool(cell.native_blank_verified)
+    return _is_native_dash_cell(cell)
 
 
 # 只允许已知决算网格的金额关系使用原件空白；预算材料、OCR和文本拼表不适用。
@@ -51,7 +78,7 @@ def blank_table_terms(doc, table_code):
                 # 全空表兜底必须覆盖每个映射金额格。缺失解析格或数据行误标表头
                 # 不能视为不存在的业务行，否则幸存的合计格会冒充完整零表。
                 return []
-            if cell.raw_text.strip() or cell.numeric_value is not None or not cell.native_blank_verified:
+            if not _is_native_empty_or_dash_cell(cell):
                 return []
             labels = [cells.get((row,c)) for c in sorted(label_cols)]
             if any(c is None for c in labels):
@@ -107,7 +134,8 @@ def blank_term(doc, table_code, indicator, *, code=None, names=(), stage='决算
             or not context.file_hash or not context.parse_run_uid
             or context.file_hash != artifact.source_file_hash
             or context.parse_run_uid != artifact.parse_run_uid
-            or not context.org_name or context.fiscal_year is None or context.report_kind != 'final'):
+            or not context.org_name or context.fiscal_year is None
+            or getattr(context, 'report_kind', 'final') != 'final'):
         return None
     pairs = [(instance, _fragment_for_instance(artifact, instance))
              for instance in getattr(artifact, 'logical_tables', []) if instance.table_code == table_code]
@@ -117,7 +145,8 @@ def blank_term(doc, table_code, indicator, *, code=None, names=(), stage='决算
         return None
     instance, table = pairs[0]
     if (instance.identity_conflict or table.confidence < .8
-            or (instance.fiscal_year is not None and instance.fiscal_year != context.fiscal_year)
+            or (instance.fiscal_year is not None and instance.fiscal_year != context.fiscal_year
+                and not _is_clerical_table_year_typo(artifact, instance, context.fiscal_year))
             or len({len(row) for row in table.rows}) != 1
             or table.unit_hint not in {'元', '万元', '亿元', '千元', '百万元'}
             or _owner_rejection_reason(SimpleNamespace(org_name=instance.org_name,
@@ -163,8 +192,19 @@ def blank_term(doc, table_code, indicator, *, code=None, names=(), stage='决算
         return None
     row_idx, subject, name, cell, mapping = matches[0]
     col = int(mapping['source_col_idx'])
-    if (cell is None or not cell.native_blank_verified or cell.is_header
-            or cell.raw_text.strip() or cell.presence != CellPresence.BLANK or cell.numeric_value is not None
+    is_dash = (
+        cell is not None
+        and _is_native_dash_cell(cell)
+        and cell.presence in {CellPresence.DASH, CellPresence.VALUE}
+    )
+    is_blank = (
+        cell is not None
+        and cell.native_blank_verified
+        and not cell.raw_text.strip()
+        and cell.presence == CellPresence.BLANK
+        and cell.numeric_value is None
+    )
+    if (cell is None or cell.is_header or not (is_blank or is_dash)
             or not cell.bbox or cell.extraction_method not in {'lines', 'lines_strict'}
             or (cell.unit_hint and cell.unit_hint != table.unit_hint)):
         return None
@@ -194,19 +234,26 @@ def blank_term(doc, table_code, indicator, *, code=None, names=(), stage='决算
             doc, table_code=table_code, indicator=indicator, stage=stage)
         if narrative_sources:
             interpreted, convention = Decimal('0'), 'narrative_explicit_zero'
-    if calculation and interpreted is None:
+    if (calculation or is_dash) and interpreted is None:
         return None
     physical = [(fragment, c) for fragment in getattr(artifact, 'physical_fragments', [])
                 for c in fragment.cells if cell_id(fragment, c) == sid]
     if len(physical) != 1:
         return None
     _, original = physical[0]
-    if (not original.native_blank_verified or original.raw_text.strip()
-            or original.bbox != cell.bbox or original.page_number != cell.page_number):
-        return None
+    if is_dash:
+        if (original.raw_text.strip() != cell.raw_text.strip()
+                or original.numeric_value is not None
+                or original.bbox != cell.bbox or original.page_number != cell.page_number):
+            return None
+    else:
+        if (not original.native_blank_verified or original.raw_text.strip()
+                or original.bbox != cell.bbox or original.page_number != cell.page_number):
+            return None
     observation = {'source_cell_id': sid, 'file_hash': context.file_hash,
                    'parse_run_uid': context.parse_run_uid, 'physical_page': cell.page_number,
-                   'bbox': list(cell.bbox), 'presence': 'blank', 'raw_text': '',
+                   'bbox': list(cell.bbox), 'presence': 'dash' if is_dash else 'blank',
+                   'raw_text': cell.raw_text.strip() if is_dash else '',
                    'table_code': table_code, 'instance_uid': instance.instance_uid,
                    'indicator': indicator, 'subject_code': subject, 'subject_name': name,
                    'budget_stage': stage, 'basis': 'verified_native_grid_blank_with_scoped_convention',
@@ -275,13 +322,19 @@ def verified_blank_zero_by_code(doc, table_code, page, code):
                 hits.append((table, cells, cell.row_idx, cell.col_idx + 1, cell.col_idx + 2))
             elif len(code) == 5 and cell_norm == code[:3]:
                 sub_cell = cells.get((cell.row_idx, cell.col_idx + 1))
+                h0 = _col_header(table, cell.col_idx)
+                h1 = _col_header(table, cell.col_idx + 1)
+                split_code_header_ok = (
+                    ('类' in h0 and '款' in h1)
+                    or (('编码' in h0 or '经济分类' in h0)
+                        and (not h1 or '编码' in h1 or '经济分类' in h1 or '款' in h1))
+                )
                 if (
                     sub_cell is not None
                     and sub_cell.page_number == page
                     and not sub_cell.is_header
                     and norm(sub_cell.raw_text) == code[3:]
-                    and '类' in _col_header(table, cell.col_idx)
-                    and '款' in _col_header(table, cell.col_idx + 1)
+                    and split_code_header_ok
                 ):
                     hits.append((table, cells, cell.row_idx, cell.col_idx + 2, cell.col_idx + 3))
     if len(hits) != 1:
@@ -291,24 +344,31 @@ def verified_blank_zero_by_code(doc, table_code, page, code):
     target = cells.get((row_idx, amount_col))
     header = _col_header(table, amount_col)
     if (name_cell is None or not norm(name_cell.raw_text) or target is None or '决算' not in header
-            or target.is_header or target.raw_text.strip() or target.numeric_value is not None
-            or not target.native_blank_verified or not target.bbox
+            or not _is_native_empty_or_dash_cell(target) or not target.bbox
             or target.page_number != page):
         return None
     sid = cell_id(table, target)
     physical = [c for fragment in getattr(artifact, 'physical_fragments', [])
                 for c in fragment.cells if cell_id(fragment, c) == sid]
-    if len(physical) != 1 or not physical[0].native_blank_verified or physical[0].raw_text.strip():
+    is_target_dash = _is_native_dash_cell(target)
+    if len(physical) != 1:
+        return None
+    if is_target_dash:
+        if physical[0].raw_text.strip() != target.raw_text.strip() or physical[0].numeric_value is not None:
+            return None
+    elif not physical[0].native_blank_verified or physical[0].raw_text.strip():
         return None
     from .cell_value_policy import interpret_cell_value
-    interpreted, _presence, convention = interpret_cell_value(
-        '', native_blank_verified=True, region=context.org_name, year=context.fiscal_year,
+    interpreted, det_presence, convention = interpret_cell_value(
+        target.raw_text, native_blank_verified=target.native_blank_verified,
+        region=context.org_name, year=context.fiscal_year,
         table_code=table_code, row=target.row_idx, column=amount_col)
     if interpreted is None or not convention:
         return None
     return {'source_cell_id': sid, 'file_hash': context.file_hash,
             'parse_run_uid': context.parse_run_uid, 'physical_page': target.page_number,
-            'bbox': list(target.bbox), 'presence': 'blank', 'raw_text': '',
+            'bbox': list(target.bbox), 'presence': det_presence,
+            'raw_text': target.raw_text.strip() if is_target_dash else '',
             'table_code': table_code, 'subject_code': code, 'subject_name': norm(name_cell.raw_text),
             'budget_stage': '决算', 'basis': 'verified_native_grid_blank_with_scoped_convention',
             'convention': convention.get('id') if isinstance(convention, dict) else convention,
@@ -316,8 +376,8 @@ def verified_blank_zero_by_code(doc, table_code, page, code):
 
 
 def verified_blank_column(doc, table_code, indicator):
-    """某金额列在原件网格中整列都是认证空白、且逐格命中空白约定（U-5）时，
-    返回各格观察记录（该列明确为 0）；列身份不唯一、任一格有字或未认证则返回 None。"""
+    """某金额列在原件网格中整列都是认证空白或横线、且逐格命中空白约定（U-5）时，
+    返回各格观察记录（该列明确为 0）；列身份不唯一、任一格有其他非零内容或未认证则返回 None。"""
     context, artifact = getattr(doc, 'fact_context', None), getattr(doc, 'parse_artifact', None)
     if (context is None or artifact is None
             or context.file_hash != artifact.source_file_hash
@@ -346,16 +406,18 @@ def verified_blank_column(doc, table_code, indicator):
     for cell in table.cells:
         if cell.col_idx != col or cell.is_header or cell.row_idx < table.header_row_count:
             continue
-        if cell.raw_text.strip() or cell.numeric_value is not None:
+        if not _is_native_empty_or_dash_cell(cell):
             return None
-        zero, _presence, convention = interpret_cell_value(
-            '', native_blank_verified=cell.native_blank_verified, region=context.org_name,
+        is_dash = _is_native_dash_cell(cell)
+        zero, det_presence, convention = interpret_cell_value(
+            cell.raw_text, native_blank_verified=cell.native_blank_verified, region=context.org_name,
             year=context.fiscal_year, table_code=table_code, row=cell.row_idx, column=col)
         if zero is None or not cell.bbox:
             return None
         observations.append({'source_cell_id': cell_id(table, cell), 'file_hash': context.file_hash,
                              'parse_run_uid': context.parse_run_uid, 'physical_page': cell.page_number,
-                             'bbox': list(cell.bbox), 'presence': 'blank', 'raw_text': '',
+                             'bbox': list(cell.bbox), 'presence': det_presence,
+                             'raw_text': cell.raw_text.strip() if is_dash else '',
                              'table_code': table_code, 'instance_uid': instance.instance_uid,
                              'indicator': indicator, 'budget_stage': '决算',
                              'basis': 'verified_native_grid_blank_with_scoped_convention',

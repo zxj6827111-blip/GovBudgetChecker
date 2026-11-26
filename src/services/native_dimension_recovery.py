@@ -37,6 +37,10 @@ def _columns(table, reference=None):
                          and row[start + 2] and row[start + 3]
                          for row in table.rows for start in (0, 4)):
         return {0, 1, 2, 4, 5, 6}, {3, 7}
+    if width == 6 and any(re.fullmatch(r'3\d{2}(?:\d{2})?', re.sub(r'\s+', '', str(row[start] or '')))
+                         and re.search(r'[\u4e00-\u9fff]', str(row[start + 1] or ''))
+                         for row in table.rows for start in (0, 3)):
+        return {0, 1, 3, 4}, {2, 5}
     if width in (3, 5, 7) and any(re.fullmatch(r'\d{3}(?:\d{2}){0,2}', re.sub(r'\s+', '', str(row[0] or '')))
                                  and row[1] for row in table.rows):
         return {0, 1}, set(range(2, width))
@@ -297,7 +301,7 @@ def repair_native_code_baselines(page, table):
 def repair_native_cross_page_name(previous_page, page, previous, current, physical, *, economic_name_column=None):
     """同网格续页顶端的孤立名称尾部，只能接回上一页最后一个名称格。"""
     allowed = {'FIN_06_basic_expenditure'} if economic_name_column is not None else {
-        'FIN_02_income', 'FIN_05_general_public_expenditure'}
+        'FIN_02_income', 'FIN_03_expenditure', 'FIN_05_general_public_expenditure'}
     if (previous.table_code not in allowed
             or previous.extraction_method not in {'lines', 'lines_strict'}
             or not previous.cells
@@ -308,9 +312,15 @@ def repair_native_cross_page_name(previous_page, page, previous, current, physic
             or len({len(row) for row in [*previous.rows, *current.rows]}) != 1):
         return physical
     last = len(previous.rows) - 1
-    name_col = economic_name_column if economic_name_column is not None else 1
+    first = [str(value or '').strip() for value in current.rows[0]]
+    if economic_name_column is not None:
+        name_col = economic_name_column
+    else:
+        occupied_cols = [col for col, val in enumerate(first) if val]
+        name_col = occupied_cols[0] if len(occupied_cols) == 1 and occupied_cols[0] in {1, 2, 3} else 1
+    prior_code = ''.join(re.sub(r'\s+', '', str(v or '')) for v in previous.rows[last][:name_col] if str(v or '').strip())
     names = [c for c in previous.cells if c.row_idx == last and c.col_idx == name_col and c.bbox]
-    if len(names) != 1 or not re.fullmatch(r'\d{3}(?:\d{2}){0,2}', str(previous.rows[last][name_col - 1] or '')):
+    if len(names) != 1 or not re.fullmatch(r'\d{3}(?:\d{2}){0,2}', prior_code):
         return physical
     name = names[0]
     current_names = [c for c in current.cells if c.col_idx == name_col and c.bbox]
@@ -318,27 +328,39 @@ def repair_native_cross_page_name(previous_page, page, previous, current, physic
                                    - name.bbox[i]) > 1 for i in (0, 2)):
         return physical
     height = name.bbox[3] - name.bbox[1]
+    has_orphan_cell = bool(first[name_col] and not any(value for col, value in enumerate(first) if col != name_col))
+    min_y_ratio = .72 if has_orphan_cell else .8
     if (not name.raw_text or normalize_text(name.raw_text).endswith('支出')
-            or name.bbox[3] < float(previous_page.height) * .8):
+            or name.bbox[3] < float(previous_page.height) * min_y_ratio):
         return physical
     top, bottom = current.bbox[1] - height, current.bbox[1]
-    first = [str(value or '').strip() for value in current.rows[0]]
-    if first[name_col] and not any(value for col, value in enumerate(first) if col != name_col):
+    orphan_height = height
+    if has_orphan_cell:
         orphan = [c for c in current.cells if c.row_idx == 0 and c.col_idx == name_col and c.bbox]
         if len(orphan) != 1:
             return physical
         top, bottom = orphan[0].bbox[1], orphan[0].bbox[3]
-    samples = [(i, c, _box(c)) for i, c in enumerate(page.chars or [])
+        orphan_height = max(bottom - top, height)
+    page_chars = page.chars or []
+    samples = [(i, c, _box(c)) for i, c in enumerate(page_chars)
                if _box(c) and str(c.get('text') or '').strip()
                and current.bbox[0] <= (_box(c)[0] + _box(c)[2]) / 2 < current.bbox[2]
                and top <= _box(c)[1] < _box(c)[3] <= bottom]
-    if (not samples or any(b[0] != a[0] + 1 for a, b in zip(samples, samples[1:], strict=False))
+    if not samples:
+        return physical
+    sample_indices = {s[0] for s in samples}
+    contiguous = all(
+        idx in sample_indices or (has_orphan_cell and not str(page_chars[idx].get('text') or '').strip())
+        for idx in range(samples[0][0], samples[-1][0] + 1)
+    )
+    max_v_spread = max(orphan_height, height * 2.5) if has_orphan_cell else 3
+    if (not contiguous
             or any(not name.bbox[0] <= (s[2][0] + s[2][2]) / 2 < name.bbox[2] for s in samples)
-            or max(s[2][1] for s in samples) - min(s[2][1] for s in samples) > 3):
+            or max(s[2][1] for s in samples) - min(s[2][1] for s in samples) > max_v_spread):
         return physical
     tail = ''.join(s[1]['text'] for s in samples)
-    minimum = 1 if economic_name_column is not None else 2
-    if not re.fullmatch(rf'[\u4e00-\u9fff]{{{minimum},12}}', tail) or any(t in tail for t in ('表', '单位', '科目', '说明')):
+    if (not re.fullmatch(r'[\u4e00-\u9fff（）()]{1,20}', tail)
+            or any(t in tail for t in ('表', '单位', '科目', '说明', '合计', '总计'))):
         return physical
     source_uid = name.origin_fragment_uid or previous.fragment_uid
     source_row = name.origin_row_idx if name.origin_row_idx is not None else name.row_idx
@@ -351,11 +373,17 @@ def repair_native_cross_page_name(previous_page, page, previous, current, physic
     if len(cells) != 1 or cells[0].native_text_sources:
         return physical  # 不叠加未经证明的跨格修复。
     cell = cells[0]
-    head = [(i, c, _box(c)) for i, c in enumerate(previous_page.chars or [])
+    prev_chars = previous_page.chars or []
+    head = [(i, c, _box(c)) for i, c in enumerate(prev_chars)
             if _box(c) and str(c.get('text') or '').strip()
             and cell.bbox[0] <= (_box(c)[0] + _box(c)[2]) / 2 < cell.bbox[2]
             and cell.bbox[1] <= (_box(c)[1] + _box(c)[3]) / 2 < cell.bbox[3]]
-    if (not head or any(b[0] != a[0] + 1 for a, b in zip(head, head[1:], strict=False))
+    head_indices = {s[0] for s in head}
+    head_contiguous = bool(head) and all(
+        idx in head_indices or not str(prev_chars[idx].get('text') or '').strip()
+        for idx in range(head[0][0], head[-1][0] + 1)
+    )
+    if (not head_contiguous
             or normalize_text(''.join(s[1]['text'] for s in head)) != normalize_text(cell.raw_text)):
         return physical
     proofs = []
@@ -372,6 +400,103 @@ def repair_native_cross_page_name(previous_page, page, previous, current, physic
     rows[source_row][source_col] = literal
     fixed = replace(original, rows=rows, cells=[replacement if c is cell else c for c in original.cells])
     return [fixed if t is original else t for t in physical]
+
+
+def repair_native_cross_page_code_tail(previous_page, page, previous, current, physical):
+    """双栏经济分类续页顶端仅印跨页折行 2 位编码尾数（如 303+09 -> 30309）时，接回上一页末行编码格。"""
+    if (previous.table_code != 'FIN_06_basic_expenditure'
+            or previous.extraction_method not in {'lines', 'lines_strict'}
+            or current.extraction_method not in {'lines', 'lines_strict'}
+            or not current.table_code.startswith('UNKNOWN_')
+            or not previous.cells or not previous.rows or len(current.rows) < 2
+            or current.page_number - max(c.page_number for c in previous.cells) != 1
+            or len({len(row) for row in [*previous.rows, *current.rows]}) != 1
+            or len(previous.rows[-1]) != 6):
+        return physical
+    from src.services.fiscal_table_rules import ECONOMIC_CODES
+
+    last = len(previous.rows) - 1
+    first = [re.sub(r'\s+', '', str(v or '')) for v in current.rows[0]]
+    occupied = [col for col, val in enumerate(first) if val]
+    if not occupied or not set(occupied) <= {0, 3}:
+        return physical
+    prev_chars = previous_page.chars or []
+    curr_chars = page.chars or []
+    updates = {}
+    for col in occupied:
+        tail = first[col]
+        head_text = re.sub(r'\s+', '', str(previous.rows[last][col] or ''))
+        if not re.fullmatch(r'\d{2}', tail) or not re.fullmatch(r'\d{3}', head_text):
+            return physical
+        full_code = f'{head_text}{tail}'
+        expected_name = normalize_text(ECONOMIC_CODES.get(full_code) or '')
+        row_name = normalize_text(str(previous.rows[last][col + 1] or ''))
+        if not expected_name or not row_name or not expected_name.startswith(row_name):
+            return physical
+        prev_cells = [c for c in previous.cells if c.row_idx == last and c.col_idx == col and c.bbox]
+        curr_cells = [c for c in current.cells if c.row_idx == 0 and c.col_idx == col and c.bbox]
+        if len(prev_cells) != 1 or len(curr_cells) != 1:
+            return physical
+        pcell, ccell = prev_cells[0], curr_cells[0]
+        source_uid = pcell.origin_fragment_uid or previous.fragment_uid
+        source_row = pcell.origin_row_idx if pcell.origin_row_idx is not None else pcell.row_idx
+        source_col = pcell.origin_col_idx if pcell.origin_col_idx is not None else pcell.col_idx
+        originals = [t for t in physical if t.fragment_uid == source_uid]
+        if len(originals) != 1:
+            return physical
+        original = originals[0]
+        orig_cells = [c for c in original.cells if (c.row_idx, c.col_idx) == (source_row, source_col)]
+        if len(orig_cells) != 1 or not orig_cells[0].bbox:
+            return physical
+        ocell = orig_cells[0]
+        head_samples = [(i, c, _box(c)) for i, c in enumerate(prev_chars)
+                        if _box(c) and str(c.get('text') or '').strip()
+                        and ocell.bbox[0] <= (_box(c)[0] + _box(c)[2]) / 2 < ocell.bbox[2]
+                        and ocell.bbox[1] <= (_box(c)[1] + _box(c)[3]) / 2 < ocell.bbox[3]]
+        tail_samples = [(i, c, _box(c)) for i, c in enumerate(curr_chars)
+                        if _box(c) and str(c.get('text') or '').strip()
+                        and ccell.bbox[0] <= (_box(c)[0] + _box(c)[2]) / 2 < ccell.bbox[2]
+                        and ccell.bbox[1] <= (_box(c)[1] + _box(c)[3]) / 2 < ccell.bbox[3]]
+        if (not head_samples or not tail_samples
+                or ''.join(s[1]['text'] for s in head_samples) != head_text
+                or ''.join(s[1]['text'] for s in tail_samples) != tail):
+            return physical
+        proofs = [
+            {'physical_page': ocell.page_number, 'start_char_index': head_samples[0][0],
+             'end_char_index': head_samples[-1][0] + 1, 'text': head_text,
+             'bbox': [min(s[2][0] for s in head_samples), min(s[2][1] for s in head_samples),
+                      max(s[2][2] for s in head_samples), max(s[2][3] for s in head_samples)],
+             'method': 'native_contiguous_character_flow'},
+            {'physical_page': current.page_number, 'start_char_index': tail_samples[0][0],
+             'end_char_index': tail_samples[-1][0] + 1, 'text': tail,
+             'bbox': [min(s[2][0] for s in tail_samples), min(s[2][1] for s in tail_samples),
+                      max(s[2][2] for s in tail_samples), max(s[2][3] for s in tail_samples)],
+             'method': 'native_contiguous_character_flow'},
+        ]
+        updates[(id(original), id(ocell))] = (original, ocell, source_row, source_col, full_code, proofs)
+    if not updates:
+        return physical
+    updated = list(physical)
+    by_orig = {}
+    for orig, ocell, sr, sc, full_code, proofs in updates.values():
+        by_orig.setdefault(id(orig), (orig, []))[1].append((ocell, sr, sc, full_code, proofs))
+    for orig, items in by_orig.values():
+        rows = [list(row) for row in orig.rows]
+        cell_map = {}
+        for ocell, sr, sc, full_code, proofs in items:
+            rows[sr][sc] = full_code
+            cell_map[id(ocell)] = replace(
+                ocell,
+                raw_text=full_code,
+                normalized_text=full_code,
+                numeric_value=float(full_code),
+                grid_raw_text=ocell.grid_raw_text if ocell.grid_raw_text is not None else ocell.raw_text,
+                native_text_sources=proofs,
+                native_blank_verified=False,
+            )
+        fixed = replace(orig, rows=rows, cells=[cell_map.get(id(c), c) for c in orig.cells])
+        updated = [fixed if t is orig else t for t in updated]
+    return updated
 
 
 def repaired_native_grid_shadow(first, second):

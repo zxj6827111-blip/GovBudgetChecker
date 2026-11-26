@@ -95,6 +95,16 @@ def ocr_base_url() -> str:
     return os.getenv("OCR_SERVICE_URL", "http://127.0.0.1:9010").rstrip("/")
 
 
+def _strip_nul(value: Any) -> Any:
+    if isinstance(value, str):
+        return value.replace("\x00", "") if "\x00" in value else value
+    if isinstance(value, list):
+        return [_strip_nul(item) for item in value]
+    if isinstance(value, dict):
+        return {k: _strip_nul(v) for k, v in value.items()}
+    return value
+
+
 def _normalise_blocks(raw: Any, page_number: int) -> List[OcrBlock]:
     blocks: List[OcrBlock] = []
     if not isinstance(raw, list):
@@ -102,7 +112,7 @@ def _normalise_blocks(raw: Any, page_number: int) -> List[OcrBlock]:
     for item in raw[:MAX_BLOCKS_PER_PAGE]:
         if not isinstance(item, dict):
             continue
-        text = str(item.get("text") or "")
+        text = str(item.get("text") or "").replace("\x00", "")
         try:
             score = valid_score(item.get("score"))
         except (TypeError, ValueError):
@@ -207,9 +217,9 @@ async def ocr_page(
         return OcrPageResult(
             page_number=page_number,
             blocks=blocks,
-            tables=[table for table in tables if isinstance(table, dict)],
+            tables=[_strip_nul(table) for table in tables if isinstance(table, dict)],
             elapsed_ms=int((time.monotonic() - started) * 1000),
-            provenance=provenance,
+            provenance=_strip_nul(provenance),
         )
     except Exception as exc:
         return OcrPageResult(

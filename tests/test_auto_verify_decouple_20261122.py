@@ -1498,11 +1498,19 @@ def test_recheck2_p2_t6_econ_parent_closure_and_v33251_merged_clauses():
     )
     school_doc = build_document("/tmp/school-merged.pdf", [school_text], [[]], 1000)
     school_doc.report_kind = "final"
-    with pytest.raises(RuleOutcomeSignal) as sig:
-        R33251_FunctionalDetailCompleteness().apply(school_doc)
+    try:
+        school_issues = R33251_FunctionalDetailCompleteness().apply(school_doc)
+    except RuleOutcomeSignal as sig:
+        school_issues = sig.partial_issues or []
+    # 2026-11-25 起：合并项组按正式 A-09 提示并计入章节加总，不再以未完成信号阻断；
+    # 仍不得把合并披露的项级年初预算误报成“未披露含非零年初预算”的 C-11 缺陷。
+    assert any(
+        (issue.location or {}).get("checklist_item") == "A-09" and "合并列示" in issue.message
+        for issue in school_issues
+    )
     assert not any(
         i.severity == "warn"
         and i.location.get("checklist_item") == "C-11"
         and "含非零年初预算" in i.message
-        for i in (sig.value.partial_issues or [])
+        for i in school_issues
     )

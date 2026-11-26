@@ -75,14 +75,40 @@ def resolve_check_subject(
     # 却只写“X”。“本级”是层级标注，不是名称，同一份单位材料里的“X”就是本单位。
     # 部门与本级的区分不放宽：只认目录层级为单位、封面原文写着“X”且没有自称
     # 部门预决算（“部门决算/部门预算”）的材料；部门节点、部门材料都不走这里。
+    linked_base = re.sub(r"(?:本级|本部)+$", "", _compact(linked)) if linked else ""
+    cover_base = re.sub(r"(?:本级|本部)+$", "", _compact(cover)) if cover else ""
     if (organization_id and level == "unit" and linked and cover and not cover_conflicted
             and subject_level not in {"government", "department"}
-            and _compact(linked) in {_compact(cover) + "本级", _compact(cover) + "本部"}
+            and len(cover_base) >= 4
+            and linked_base == cover_base
+            and (_compact(linked) != _compact(cover) or "(" in str(cover) or "（" in str(cover))
             and _compact(cover) in _compact(cover_text)
             and not re.search(r"部门(?:决算|预算)", _compact(cover_text))):
         return {**subject, "name": cover, "source": "verified_cover_alias",
                 "evidence": [{"page": 1, "text": cover, "source": "cover_literal",
                               "linked_name": linked, "relation": "directory_head_unit_marker"}]}
+    if (organization_id
+            and (level in {"department", "unit"}
+                 or (level is None and bool(linked and _DEPARTMENT_SUFFIX.search(_compact(linked)))))
+            and linked and cover
+            and not cover_conflicted and subject_level != "government"
+            and _compact(cover) in _compact(cover_text)
+            and _DEPARTMENT_SUFFIX.search(_compact(cover))):
+        from src.services.template_scope import cover_matches_selected_org
+
+        if cover_matches_selected_org(cover, linked) is False:
+            message = (
+                f"上传归档关联单位为“{linked}”，但原件封面单位名称为“{cover}”；"
+                f"封面归档差异已保留提示，报告内部表文与金额核对按原件主体“{cover}”继续执行。"
+            )
+            return {
+                **subject,
+                "name": cover,
+                "source": "cover",
+                "conflict": {"code": "archive_organization_mismatch", "message": message},
+                "evidence": [{"page": 1, "text": cover, "source": "cover_literal",
+                              "linked_name": linked, "relation": "archive_subject_mismatch"}],
+            }
     if (not organization_id or level not in PARENT_LEVELS or not linked or not cover
             or cover_conflicted or subject_level == "government"):
         return subject

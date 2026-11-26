@@ -54,8 +54,17 @@ def functional_name_refs(doc, code, expected_name, mention):
     if artifact is None or context is None or (artifact.source_file_hash != context.file_hash
             or artifact.parse_run_uid != context.parse_run_uid):
         return []
+    from src.services.fiscal_code_hierarchy import hierarchy_paths
+
+    all_codes = {
+        str(f.subject_code)
+        for f in context.facts
+        if f.table_code == 'FIN_05_general_public_expenditure' and str(f.subject_code or '').isdigit()
+    }
+    code_paths = hierarchy_paths(all_codes)
     facts = [f for f in context.facts if f.table_code == 'FIN_05_general_public_expenditure'
-             and f.subject_code == code and f.indicator == 'total_actual'
+             and (f.subject_code == code or code_paths.get(str(f.subject_code)) == str(code))
+             and f.indicator == 'total_actual'
              and f.fiscal_year == context.fiscal_year and f.org_name == context.org_name]
     if len(facts) != 1:
         return []

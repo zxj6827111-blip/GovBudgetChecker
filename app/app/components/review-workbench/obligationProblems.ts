@@ -41,6 +41,49 @@ export function isObligationProblem(problem: Pick<Problem, "source"> | null | un
   return problem?.source === OBLIGATION_PROBLEM_SOURCE;
 }
 
+const FUND_SCOPE_PREFIX_LABELS: Record<string, string> = {
+  general_public_budget: "一般公共预算",
+  government_fund_budget: "政府性基金预算",
+  state_capital_budget: "国有资本经营预算",
+  fiscal_allocation: "财政拨款收入",
+  superior_subsidy_income: "上级补助收入",
+  business_income: "事业收入",
+  operational_income: "经营收入",
+  subsidiary_income: "附属单位上缴收入",
+  other_income: "其他收入",
+};
+
+const RAW_TABLE_CODE_LABELS: Record<string, string> = {
+  FIN_01_income_expenditure_total: "收入支出决算总表",
+  FIN_02_income: "收入决算表",
+  FIN_03_expenditure: "支出决算表",
+  FIN_04_fiscal_grant_total: "财政拨款收入支出决算总表",
+  FIN_05_general_public_expenditure: "一般公共预算财政拨款支出决算表",
+  FIN_06_basic_expenditure: "一般公共预算财政拨款基本支出决算表",
+  FIN_07_three_public: "财政拨款“三公”经费支出决算表",
+  FIN_08_gov_fund: "政府性基金预算财政拨款收入支出决算表",
+  FIN_09_state_capital: "国有资本经营预算财政拨款收入支出决算表",
+};
+
+const BLOCK_DICT_REASON_LABELS: Record<string, string> = {
+  rule_admission_blocked: "处单元格因编码或行结构异常未纳入自动勾稽",
+  amount_column_unmapped: "个金额格未识别到子表头",
+  fact_unbound: "个金额格数值归属待确认",
+  column_identity_unconfirmed: "处列头归属未确认",
+  cell_low_confidence: "个单元格识别置信度低",
+};
+
+function formatPythonBlockDict(rawDict: string): string {
+  const parts: string[] = [];
+  const pairRe = /'([a-z_]+)'\s*:\s*(\d+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = pairRe.exec(rawDict)) !== null) {
+    const label = BLOCK_DICT_REASON_LABELS[match[1]];
+    if (label) parts.push(`${match[2]} ${label}`);
+  }
+  return parts.length ? `（${parts.join("，")}）` : "";
+}
+
 /**
  * 引擎卡点原文里的机器字段名换成人话，只改展示：如
  * “人员经费合计的total_actual/决算操作数缺失或不唯一” → “人员经费合计的决算数值没取到（或取到不止一个）”。
@@ -48,8 +91,22 @@ export function isObligationProblem(problem: Pick<Problem, "source"> | null | un
  */
 export function readableObligationReason(text: string | null | undefined): string {
   return String(text ?? "")
-    .replace(/[A-Za-z]+_[A-Za-z0-9_]*\//g, "")
+    .replace(/\{[^{}]*'([a-z_]+)'\s*:\s*\d+[^{}]*\}/g, (m) => formatPythonBlockDict(m))
+    .replace(/(?:table:)?((?:FIN|BUD)_\d+_[A-Za-z0-9_]+)/g, (_, code: string) =>
+      RAW_TABLE_CODE_LABELS[code] ? `《${RAW_TABLE_CODE_LABELS[code]}》` : "",
+    )
+    .replace(/单元格\s*[0-9a-f]{8,}:r(\d+)c(\d+)/gi, "第$1行第$2列单元格")
+    .replace(/[0-9a-f]{8,}:r(\d+)c(\d+)/gi, "第$1行第$2列单元格")
+    .replace(/([A-Za-z]+_[A-Za-z0-9_]*)\/(?=决算|预算)/g, (_, key: string) =>
+      FUND_SCOPE_PREFIX_LABELS[key] ? `${FUND_SCOPE_PREFIX_LABELS[key]}` : "",
+    )
+    .replace(/([A-Za-z]+_[A-Za-z0-9_]*)\//g, (_, key: string) =>
+      FUND_SCOPE_PREFIX_LABELS[key] ? `${FUND_SCOPE_PREFIX_LABELS[key]}` : "",
+    )
+    .replace(/\btotal的/g, "合计行的")
+    .replace(/（ambiguous）/g, "（原件数字重叠或存在歧义）")
     .replace(/(原始)?操作数缺失或不唯一/g, "数值没取到（或取到不止一个）")
+    .replace(/\s{2,}/g, " ")
     .trim();
 }
 

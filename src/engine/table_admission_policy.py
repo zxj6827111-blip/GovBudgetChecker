@@ -384,11 +384,11 @@ def reclassify_admission_deferral(document, rule_id: str, detail: str) -> str | 
     cached = getattr(document, "_table_admission_receipt", None)
     if not cached:
         return None
-    from .rule_identity import LEGACY_TABLE_INPUTS
+    from .rule_identity import LEGACY_TABLE_INPUTS, effective_legacy_table_inputs
 
     if rule_id not in LEGACY_TABLE_INPUTS:
         return None
-    codes = LEGACY_TABLE_INPUTS[rule_id]
+    codes = effective_legacy_table_inputs(rule_id, getattr(document, "fact_context", None))
     receipt = cached[1]
     blocked = [
         table
